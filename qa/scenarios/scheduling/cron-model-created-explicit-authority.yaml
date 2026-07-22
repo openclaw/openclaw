@@ -46,11 +46,11 @@ scenario:
     summary: Ask a live model with only read and cron tools to create a policy matrix, then inspect and restart the persisted jobs.
     config:
       conversationId: qa-cron-authority
-      doneMarker: CRON-AUTHORITY-PRODUCER-OK
+      sessionKey: agent:qa:qa-channel:group:group:qa-cron-authority
 
 flow:
   steps:
-    - name: restricted model creates the authority matrix
+    - name: restricted model creates omitted policy job
       actions:
         - call: waitForGatewayHealthy
           args:
@@ -79,9 +79,6 @@ flow:
         - set: futureAt
           value:
             expr: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-        - set: outboundStartIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation:
               id:
@@ -92,59 +89,156 @@ flow:
             senderName: Cron Authority Operator
             text:
               expr: |-
-                `Use the cron tool to create exactly four disabled isolated agent-turn jobs. Do not run them.
-                1. Name '${omittedName}', schedule at '${futureAt}', payload message 'omitted authority', delivery none, and omit toolsAllow.
-                2. Name '${wildcardName}', schedule at '${futureAt}', payload message 'wildcard authority', delivery none, and set toolsAllow to ["*"].
-                3. Name '${overbroadName}', schedule every 3600000 milliseconds, payload message 'overbroad authority', delivery none, and set toolsAllow to ["read", "exec"].
-                4. Name '${emptyName}', schedule every 3600000 milliseconds, payload message 'empty authority', delivery none, and set toolsAllow to [].
-                Set enabled=false on every job. After all four cron add calls succeed, reply exactly ${config.doneMarker}.`
-        - waitForOutbound:
+                `Use the cron tool once to create one disabled isolated agent-turn job. Do not run it.
+                Name it '${omittedName}', schedule it at '${futureAt}', use payload message 'omitted authority', delivery none, and omit toolsAllow.
+                Set enabled=false. After the cron add call succeeds, reply exactly CRON-AUTHORITY-OMITTED-OK.`
+        - call: waitForCondition
+          saveAs: omittedCall
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('chat.history', { sessionKey: config.sessionKey, limit: 100 }, { timeoutMs: 30000 }).then((history) => { for (const message of history.messages ?? []) { if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue; for (const item of message.content) { const args = item?.arguments ?? item?.input; if ((item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'cron' && args?.job?.name === omittedName) return { name: 'cron', arguments: args }; } } return undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
+        - call: waitForCondition
+          saveAs: omittedSession
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => { const session = result.sessions?.find((entry) => entry.key === config.sessionKey); return session && session.hasActiveRun !== true ? session : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
+        - assert:
+            expr: "omittedCall.arguments?.action === 'add' && !Object.prototype.hasOwnProperty.call(omittedCall.arguments.job.payload ?? {}, 'toolsAllow')"
+            message:
+              expr: "`model did not submit the omitted-policy job: ${JSON.stringify(omittedCall ?? null)}`"
+      detailsExpr: "`omitted-input=${JSON.stringify(omittedCall.arguments.job.payload)}`"
+
+    - name: restricted model creates wildcard policy job
+      actions:
+        - sendInbound:
             conversation:
               id:
                 ref: config.conversationId
               kind: group
-            sinceIndex:
-              ref: outboundStartIndex
-            textIncludes:
-              ref: config.doneMarker
-            timeoutMs:
-              expr: liveTurnTimeoutMs(env, 240000)
-          saveAs: authorReply
-        - set: cronToolCalls
-          value:
-            expr: "(authorReply.toolCalls ?? []).filter((toolCall) => toolCall.name === 'cron')"
+              title: Cron Authority QA
+            senderId: qa-cron-authority-operator
+            senderName: Cron Authority Operator
+            text:
+              expr: |-
+                `Use the cron tool once to create one disabled isolated agent-turn job. Do not run it.
+                Name it '${wildcardName}', schedule it at '${futureAt}', use payload message 'wildcard authority', delivery none, and set toolsAllow to ["*"].
+                Set enabled=false. After the cron add call succeeds, reply exactly CRON-AUTHORITY-WILDCARD-OK.`
+        - call: waitForCondition
+          saveAs: wildcardCall
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('chat.history', { sessionKey: config.sessionKey, limit: 100 }, { timeoutMs: 30000 }).then((history) => { for (const message of history.messages ?? []) { if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue; for (const item of message.content) { const args = item?.arguments ?? item?.input; if ((item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'cron' && args?.job?.name === wildcardName) return { name: 'cron', arguments: args }; } } return undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
+        - call: waitForCondition
+          saveAs: wildcardSession
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => { const session = result.sessions?.find((entry) => entry.key === config.sessionKey); return session && session.hasActiveRun !== true ? session : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
         - assert:
-            expr: "cronToolCalls.length === 4 && cronToolCalls.every((toolCall) => toolCall.arguments?.action === 'add' && toolCall.arguments?.job && typeof toolCall.arguments.job === 'object')"
+            expr: "wildcardCall.arguments?.action === 'add' && JSON.stringify(wildcardCall.arguments.job.payload?.toolsAllow) === JSON.stringify(['*'])"
             message:
-              expr: "`expected four cron tool calls, saw ${JSON.stringify(authorReply.toolCalls ?? [])}`"
-        - set: omittedCall
-          value:
-            expr: "cronToolCalls.find((toolCall) => toolCall.arguments.job.name === omittedName)"
-        - set: wildcardCall
-          value:
-            expr: "cronToolCalls.find((toolCall) => toolCall.arguments.job.name === wildcardName)"
-        - set: overbroadCall
-          value:
-            expr: "cronToolCalls.find((toolCall) => toolCall.arguments.job.name === overbroadName)"
-        - set: emptyCall
-          value:
-            expr: "cronToolCalls.find((toolCall) => toolCall.arguments.job.name === emptyName)"
+              expr: "`model did not submit the wildcard-policy job: ${JSON.stringify(wildcardCall ?? null)}`"
+      detailsExpr: "`wildcard-input=${JSON.stringify(wildcardCall.arguments.job.payload)}`"
+
+    - name: restricted model creates overbroad policy job
+      actions:
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+              title: Cron Authority QA
+            senderId: qa-cron-authority-operator
+            senderName: Cron Authority Operator
+            text:
+              expr: |-
+                `Use the cron tool once to create one disabled isolated agent-turn job. Do not run it.
+                Name it '${overbroadName}', schedule it every 3600000 milliseconds, use payload message 'overbroad authority', delivery none, and set toolsAllow to ["read", "exec"].
+                Set enabled=false. After the cron add call succeeds, reply exactly CRON-AUTHORITY-OVERBROAD-OK.`
+        - call: waitForCondition
+          saveAs: overbroadCall
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('chat.history', { sessionKey: config.sessionKey, limit: 100 }, { timeoutMs: 30000 }).then((history) => { for (const message of history.messages ?? []) { if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue; for (const item of message.content) { const args = item?.arguments ?? item?.input; if ((item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'cron' && args?.job?.name === overbroadName) return { name: 'cron', arguments: args }; } } return undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
+        - call: waitForCondition
+          saveAs: overbroadSession
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => { const session = result.sessions?.find((entry) => entry.key === config.sessionKey); return session && session.hasActiveRun !== true ? session : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
         - assert:
-            expr: "omittedCall && !Object.prototype.hasOwnProperty.call(omittedCall.arguments.job.payload ?? {}, 'toolsAllow')"
+            expr: "overbroadCall.arguments?.action === 'add' && JSON.stringify([...(overbroadCall.arguments.job.payload?.toolsAllow ?? [])].sort()) === JSON.stringify(['exec', 'read'])"
             message:
-              expr: "`model did not omit toolsAllow: ${JSON.stringify(omittedCall?.arguments?.job ?? null)}`"
+              expr: "`model did not submit the overbroad-policy job: ${JSON.stringify(overbroadCall ?? null)}`"
+      detailsExpr: "`overbroad-input=${JSON.stringify(overbroadCall.arguments.job.payload)}`"
+
+    - name: restricted model creates empty policy job
+      actions:
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+              title: Cron Authority QA
+            senderId: qa-cron-authority-operator
+            senderName: Cron Authority Operator
+            text:
+              expr: |-
+                `Use the cron tool once to create one disabled isolated agent-turn job. Do not run it.
+                Name it '${emptyName}', schedule it every 3600000 milliseconds, use payload message 'empty authority', delivery none, and set toolsAllow to [].
+                Set enabled=false. After the cron add call succeeds, reply exactly CRON-AUTHORITY-EMPTY-OK.`
+        - call: waitForCondition
+          saveAs: emptyCall
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('chat.history', { sessionKey: config.sessionKey, limit: 100 }, { timeoutMs: 30000 }).then((history) => { for (const message of history.messages ?? []) { if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue; for (const item of message.content) { const args = item?.arguments ?? item?.input; if ((item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'cron' && args?.job?.name === emptyName) return { name: 'cron', arguments: args }; } } return undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
+        - call: waitForCondition
+          saveAs: emptySession
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => { const session = result.sessions?.find((entry) => entry.key === config.sessionKey); return session && session.hasActiveRun !== true ? session : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
         - assert:
-            expr: "JSON.stringify(wildcardCall?.arguments?.job?.payload?.toolsAllow) === JSON.stringify(['*'])"
+            expr: "emptyCall.arguments?.action === 'add' && Array.isArray(emptyCall.arguments.job.payload?.toolsAllow) && emptyCall.arguments.job.payload.toolsAllow.length === 0"
             message:
-              expr: "`model did not request wildcard authority: ${JSON.stringify(wildcardCall?.arguments?.job ?? null)}`"
+              expr: "`model did not submit the empty-policy job: ${JSON.stringify(emptyCall ?? null)}`"
+      detailsExpr: "`empty-input=${JSON.stringify(emptyCall.arguments.job.payload)}`"
+
+    - name: stored authority matches the submitted matrix
+      actions:
+        - call: waitForCondition
+          saveAs: cronToolCalls
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('chat.history', { sessionKey: config.sessionKey, limit: 100 }, { timeoutMs: 30000 }).then((history) => { const calls = []; for (const message of history.messages ?? []) { if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue; for (const item of message.content) { const args = item?.arguments ?? item?.input; if ((item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'cron') calls.push({ name: 'cron', arguments: args }); } } return calls.length >= 4 ? calls : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 240000)
+            - 250
         - assert:
-            expr: "JSON.stringify([...(overbroadCall?.arguments?.job?.payload?.toolsAllow ?? [])].sort()) === JSON.stringify(['exec', 'read'])"
+            expr: "cronToolCalls.length === 4 && cronToolCalls.every((call) => call.arguments?.action === 'add')"
             message:
-              expr: "`model did not request overbroad authority: ${JSON.stringify(overbroadCall?.arguments?.job ?? null)}`"
-        - assert:
-            expr: "Array.isArray(emptyCall?.arguments?.job?.payload?.toolsAllow) && emptyCall.arguments.job.payload.toolsAllow.length === 0"
-            message:
-              expr: "`model did not request empty authority: ${JSON.stringify(emptyCall?.arguments?.job ?? null)}`"
+              expr: "`expected exactly four cron add calls, saw ${JSON.stringify(cronToolCalls)}`"
         - call: waitForCondition
           saveAs: jobs
           args:
@@ -184,7 +278,7 @@ flow:
             expr: "Array.isArray(emptyJob.payload.toolsAllow) && emptyJob.payload.toolsAllow.length === 0 && emptyJob.payload.toolsAllowIsDefault !== true"
             message:
               expr: "`empty policy changed: ${JSON.stringify(emptyJob?.payload)}`"
-      detailsExpr: "`runtime=${env.primaryModel}; calls=${cronToolCalls.length}; inputs=${JSON.stringify(cronToolCalls.map((call) => ({ name: call.arguments.job.name, toolsAllow: call.arguments.job.payload?.toolsAllow })))}; omitted=${JSON.stringify(omittedJob.payload.toolsAllow)}; wildcard=${JSON.stringify(wildcardJob.payload.toolsAllow)}; overbroad=${JSON.stringify(overbroadJob.payload.toolsAllow)}; empty=${JSON.stringify(emptyJob.payload.toolsAllow)}`"
+      detailsExpr: "`runtime=${env.primaryModel}; calls=${cronToolCalls.length}; omitted=${JSON.stringify(omittedJob.payload.toolsAllow)}; wildcard=${JSON.stringify(wildcardJob.payload.toolsAllow)}; overbroad=${JSON.stringify(overbroadJob.payload.toolsAllow)}; empty=${JSON.stringify(emptyJob.payload.toolsAllow)}`"
 
     - name: stored authority survives Gateway restart
       actions:
