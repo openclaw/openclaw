@@ -16,7 +16,12 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
       return html`<p class="workboard-widget__state">${t("workboard.widget.loading")}</p>`;
     }
     if (this.error) {
-      return html`<p class="workboard-widget__state" role="alert">${this.error}</p>`;
+      return html`<div class="workboard-widget__state" role="alert">
+        <span>${this.error}</span>
+        <button class="btn btn--sm" type="button" @click=${() => this.retryLoad()}>
+          ${t("common.retry")}
+        </button>
+      </div>`;
     }
     const boardId = this.readStringProp("boardId") ?? "default";
     const limit = Math.min(10, this.readPositiveIntegerProp("limit", 5));

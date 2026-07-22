@@ -164,6 +164,25 @@ describe("Workboard plugin widgets", () => {
     expect(element.querySelector("a")?.getAttribute("href")).toBe("/control/workboard?board=ops");
   });
 
+  it("retries a transient initial list failure without reconnecting", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({ cards, statuses: ["ready", "running", "done"] });
+    const element = document.createElement("openclaw-workboard-mini-widget");
+    element.widget = pluginWidget("workboard:mini", { boardId: "ops" });
+    element.sessionKey = "agent:main:test";
+    await mount(element, createContext(request), request);
+
+    expect(element.textContent).toContain("temporary failure");
+    const retry = element.querySelector("button");
+    expect(retry?.textContent?.trim()).toBe("Retry");
+    retry?.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(element.textContent).toContain("Running card"));
+  });
+
   it("queues a second refresh when a change arrives during an active list request", async () => {
     const firstList = deferred<unknown>();
     const request = vi.fn(async (method: string) => {

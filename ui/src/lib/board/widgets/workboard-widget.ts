@@ -86,6 +86,10 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
   }
 
+  protected retryLoad(): void {
+    void this.refresh(true);
+  }
+
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
     const client = this.client;
     if (!client || card.status === status) {
