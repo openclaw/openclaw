@@ -181,12 +181,8 @@ import {
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
-import {
-  renderChat,
-  renderChatResizableDivider,
-  resetChatViewState,
-  type ChatProps,
-} from "./chat-view.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
+import { renderChat, renderChatResizableDivider, type ChatProps } from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
@@ -196,6 +192,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
@@ -930,9 +927,10 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    // Close old-session portals and listener-owning popovers before the next
-    // render detaches their DOM and makes owner-scoped cleanup impossible.
-    resetChatThreadPresentationState(this.paneId, this);
+    // Close old-session listener owners before the next render detaches their
+    // DOM; thread-global portals and caches are reset separately.
+    dismissConfirmedActionPopovers(this);
+    resetChatThreadPresentationState(this.paneId);
     this.sessionDiscussionOpenUrls.clear();
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
@@ -2490,7 +2488,8 @@ class ChatPane extends OpenClawLightDomElement {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId, this);
+    dismissConfirmedActionPopovers(this);
+    resetChatViewState(this.paneId);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);

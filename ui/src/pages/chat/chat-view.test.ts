@@ -30,7 +30,8 @@ import {
 } from "./attachment-payload-store.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
 import * as chatThread from "./chat-thread.ts";
-import { renderChat, resetChatViewState } from "./chat-view.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
+import { renderChat } from "./chat-view.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
 import {
