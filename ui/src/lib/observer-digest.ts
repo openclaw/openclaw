@@ -6,7 +6,7 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 // by revision, then updatedAt, is safe.
 type ComparableObserverDigest = { revision: number; updatedAt: number };
 
-export const OBSERVER_DIGEST_HISTORY_LIMIT = 50;
+const OBSERVER_DIGEST_HISTORY_LIMIT = 50;
 
 type ProjectedObserverDigest = Pick<
   SessionObserverDigest,
@@ -32,6 +32,14 @@ export function resolveChatPaneObserverRunId(params: {
     : (activeRunIds[0] ?? null);
 }
 
+export function pickFreshestObserverDigest<T extends ComparableObserverDigest>(
+  first: T,
+  second: T,
+): T;
+export function pickFreshestObserverDigest<T extends ComparableObserverDigest>(
+  first: T | null | undefined,
+  second: T | null | undefined,
+): T | null;
 export function pickFreshestObserverDigest<T extends ComparableObserverDigest>(
   first: T | null | undefined,
   second: T | null | undefined,
@@ -132,7 +140,7 @@ export class ObserverDigestHistory {
       (candidate) => candidate.runId === digest.runId && candidate.revision === digest.revision,
     );
     if (existingIndex >= 0) {
-      const existing = history[existingIndex];
+      const existing = history[existingIndex]!;
       // Passing the live candidate first lets an exact projection tie gain the
       // richer assessment/plan fields while still using canonical freshness.
       const freshest = pickFreshestObserverDigest(digest, existing);

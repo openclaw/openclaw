@@ -3,7 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
-import { buildObserverTimeline, currentObserverDigest, renderObserverWidget } from "./observer.ts";
+import { renderObserverWidget } from "./observer.ts";
 
 const sessionKey = "agent:main:observer-card";
 
@@ -40,9 +40,6 @@ describe("observer board card", () => {
     ];
     const digests = [previous, ...current];
 
-    expect(currentObserverDigest(digests, "run-current")).toBe(current[2]);
-    expect(currentObserverDigest(digests, "missing-run")).toBeNull();
-
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -67,12 +64,6 @@ describe("observer board card", () => {
   });
 
   it("places the since-you-left divider after the newest unread block", () => {
-    const entries = buildObserverTimeline(
-      [digest(1, "on-track"), digest(2, "grinding"), digest(3, "stuck")],
-      1_500,
-    );
-    expect(entries.map((entry) => entry.unreadBoundaryAfter)).toEqual([false, true, false]);
-
     const container = document.createElement("div");
     document.body.append(container);
     render(

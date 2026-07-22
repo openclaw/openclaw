@@ -5,7 +5,7 @@ import { formatTimeMs } from "../../format.ts";
 import { pickFreshestObserverDigest } from "../../observer-digest.ts";
 import type { BoardObserverContext } from "../view-types.ts";
 
-export type ObserverTimelineEntry = {
+type ObserverTimelineEntry = {
   digest: SessionObserverDigest;
   healthTransition: boolean;
   runStart: boolean;
@@ -19,7 +19,7 @@ function sameRun(
   return first?.runId === second?.runId;
 }
 
-export function buildObserverTimeline(
+function buildObserverTimeline(
   digests: readonly SessionObserverDigest[],
   lastReadAt?: number,
 ): ObserverTimelineEntry[] {
@@ -40,7 +40,7 @@ export function buildObserverTimeline(
   });
 }
 
-export function currentObserverDigest(
+function currentObserverDigest(
   digests: readonly SessionObserverDigest[],
   activeRunId: string | null,
 ): SessionObserverDigest | null {

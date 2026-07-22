@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import { OBSERVER_DIGEST_HISTORY_LIMIT, ObserverDigestHistory } from "./observer-digest.ts";
+import { ObserverDigestHistory } from "./observer-digest.ts";
+
+const HISTORY_LIMIT = 50;
 
 function digest(
   revision: number,
@@ -56,12 +58,12 @@ describe("observer digest history", () => {
 
   it("retains the newest fifty entries across run changes", () => {
     const history = new ObserverDigestHistory();
-    for (let revision = 1; revision <= OBSERVER_DIGEST_HISTORY_LIMIT + 5; revision += 1) {
+    for (let revision = 1; revision <= HISTORY_LIMIT + 5; revision += 1) {
       history.record(digest(revision, { runId: revision < 20 ? "run-previous" : "run-current" }));
     }
 
     const entries = history.get("agent:main:observer-history");
-    expect(entries).toHaveLength(OBSERVER_DIGEST_HISTORY_LIMIT);
+    expect(entries).toHaveLength(HISTORY_LIMIT);
     expect(entries[0]?.revision).toBe(6);
     expect(entries.at(-1)?.revision).toBe(55);
     expect(new Set(entries.map((entry) => entry.runId))).toEqual(
