@@ -256,6 +256,56 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawInstalls {
+  added_at_ms: number;
+  agent_config_digest: string;
+  agent_id: string;
+  agent_owned_paths_json: string;
+  claw_name: string;
+  claw_version: string;
+  integrity: string;
+  integrity_kind: string;
+  manifest_path: string;
+  manifest_schema_version: number;
+  package_root: string;
+  plan_integrity: string;
+  schema_version: string;
+  source_byte_length: number;
+  source_kind: string;
+  status: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
+export interface ClawPackageRefs {
+  agent_id: string;
+  claw_name: string;
+  independent_owner: number;
+  installed_at_ms: number;
+  origin: string;
+  package_integrity: string;
+  package_kind: string;
+  package_ref: string;
+  package_source: string;
+  package_status: string;
+  package_version: string;
+  relationship: string;
+  schema_version: string;
+  updated_at_ms: number;
+}
+
+export interface ClawWorkspaceFiles {
+  agent_id: string;
+  content_digest: string;
+  created_at_ms: number;
+  schema_version: string;
+  source_path: string;
+  status: string;
+  target_path: string;
+  updated_at_ms: number;
+  workspace: string;
+}
+
 export interface ClawhubPromotionClaims {
   claimed_at_ms: number;
   ends_at_ms: number;
@@ -1356,6 +1406,9 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  claw_installs: ClawInstalls;
+  claw_package_refs: ClawPackageRefs;
+  claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;

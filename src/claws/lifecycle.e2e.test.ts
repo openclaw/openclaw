@@ -1,15 +1,19 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runOpenClaw(args: string[], options?: { expectFailure?: boolean }) {
-  const stateDir = await mkdtemp(join(tmpdir(), "openclaw-claws-lifecycle-e2e-"));
+async function runOpenClaw(
+  args: string[],
+  options?: { expectFailure?: boolean; stateDir?: string },
+) {
+  const stateDir = options?.stateDir ?? tempDirs.make("openclaw-claws-lifecycle-e2e-");
   const env = {
     ...process.env,
     HOME: stateDir,
@@ -32,7 +36,7 @@ async function runOpenClaw(args: string[], options?: { expectFailure?: boolean }
     if (options?.expectFailure) {
       throw new Error(`expected command to fail: ${args.join(" ")}`);
     }
-    return { ok: true as const, stdout: result.stdout, stderr: result.stderr };
+    return { ok: true as const, stdout: result.stdout, stderr: result.stderr, stateDir };
   } catch (error) {
     if (!options?.expectFailure) {
       throw error;
@@ -43,6 +47,7 @@ async function runOpenClaw(args: string[], options?: { expectFailure?: boolean }
       code: failed.code,
       stdout: failed.stdout ?? "",
       stderr: failed.stderr ?? "",
+      stateDir,
     };
   }
 }
@@ -74,10 +79,14 @@ describe("claws lifecycle cli e2e", () => {
     });
   });
 
-  it("builds a complete read-only plan with deferred package blockers", async () => {
-    const result = await runOpenClaw(["claws", "add", manifestPath, "--dry-run", "--json"], {
-      expectFailure: true,
-    });
+  it("builds a complete package-free read-only plan without network access", async () => {
+    const result = await runOpenClaw([
+      "claws",
+      "add",
+      "src/claws/fixtures/workspace-agent.claw.json",
+      "--dry-run",
+      "--json",
+    ]);
     const add = parseJson(result.stdout);
 
     expect(add).toMatchObject({
@@ -85,31 +94,168 @@ describe("claws lifecycle cli e2e", () => {
       stability: "experimental",
       dryRun: true,
       mutationAllowed: false,
-      agent: { requestedId: "incident-response", finalId: "incident-response" },
+      agent: { requestedId: "workspace-agent", finalId: "workspace-agent" },
       summary: {
-        totalActions: 8,
+        totalActions: 5,
         agentActions: 1,
-        workspaceActions: 3,
-        packageActions: 2,
-        mcpServerActions: 1,
-        cronJobActions: 1,
-        blockedActions: 2,
+        workspaceActions: 4,
+        packageActions: 0,
+        mcpServerActions: 0,
+        cronJobActions: 0,
+        blockedActions: 0,
       },
-      blockers: [
-        { code: "package_install_unavailable", phase: "plan" },
-        { code: "package_install_unavailable", phase: "plan" },
-      ],
+      blockers: [],
     });
-    expect(result.code).toBe(1);
+    expect(result.ok).toBe(true);
   });
 
-  it("fails closed when add is invoked without dry-run", async () => {
+  it("preserves implicit main and creates exactly one agent after explicit consent", async () => {
+    const preview = await runOpenClaw([
+      "claws",
+      "add",
+      "src/claws/fixtures/minimal-agent.claw.json",
+      "--dry-run",
+      "--json",
+    ]);
+    const plan = parseJson(preview.stdout) as { planIntegrity: string };
+    const result = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        "src/claws/fixtures/minimal-agent.claw.json",
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      { stateDir: preview.stateDir },
+    );
+
+    expect(parseJson(result.stdout)).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      stability: "experimental",
+      status: "complete",
+      agent: { finalId: "internal-triage" },
+      workspaceCreated: true,
+      configCommitted: true,
+      installRecord: { agentId: "internal-triage", status: "complete" },
+    });
+    const config = JSON.parse(await readFile(join(result.stateDir, "openclaw.json"), "utf8"));
+    expect(config.agents.list).toEqual([
+      { id: "main", default: true },
+      expect.objectContaining({
+        id: "internal-triage",
+        name: "Internal Triage",
+        workspace: join(result.stateDir, ".openclaw", "workspace-internal-triage"),
+      }),
+    ]);
+  });
+
+  it("creates declared bootstrap and supporting files in the new workspace", async () => {
+    const preview = await runOpenClaw([
+      "claws",
+      "add",
+      "src/claws/fixtures/workspace-agent.claw.json",
+      "--dry-run",
+      "--json",
+    ]);
+    const plan = parseJson(preview.stdout) as { planIntegrity: string };
+    const result = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        "src/claws/fixtures/workspace-agent.claw.json",
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      { stateDir: preview.stateDir },
+    );
+    const payload = parseJson(result.stdout);
+    const workspace = join(result.stateDir, ".openclaw", "workspace-workspace-agent");
+
+    expect(payload).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      status: "complete",
+      agent: { finalId: "workspace-agent", workspace },
+      workspaceFiles: [
+        expect.objectContaining({ path: "SOUL.md" }),
+        expect.objectContaining({ path: "HEARTBEAT.md" }),
+        expect.objectContaining({ path: "reference/policy.md" }),
+      ],
+      installRecord: { agentId: "workspace-agent", status: "complete" },
+    });
+    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toContain(
+      "Incident Response",
+    );
+    await expect(readFile(join(workspace, "HEARTBEAT.md"), "utf8")).resolves.toContain(
+      "Incident Heartbeat",
+    );
+    await expect(readFile(join(workspace, "reference", "policy.md"), "utf8")).resolves.toContain(
+      "operator settings",
+    );
+  });
+
+  it("blocks mutation when declared components need later lifecycle slices", async () => {
+    const root = tempDirs.make("openclaw-claws-deferred-components-");
+    const deferredManifestPath = join(root, "deferred.claw.json");
+    await writeFile(
+      deferredManifestPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "deferred-components" },
+        mcpServers: { status: { command: "status-mcp" } },
+        cronJobs: [
+          {
+            id: "status-check",
+            schedule: { cron: "0 * * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Check status",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const preview = await runOpenClaw([
+      "claws",
+      "add",
+      deferredManifestPath,
+      "--dry-run",
+      "--json",
+    ]);
+    const plan = parseJson(preview.stdout) as { planIntegrity: string };
+    const result = await runOpenClaw(
+      [
+        "claws",
+        "add",
+        deferredManifestPath,
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
+      {
+        expectFailure: true,
+        stateDir: preview.stateDir,
+      },
+    );
+
+    expect(result.code).toBe(1);
+    expect(parseJson(result.stdout)).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      status: "failed",
+      error: { code: "unsupported_components" },
+    });
+  });
+
+  it("fails closed when add is invoked without dry-run or consent", async () => {
     const result = await runOpenClaw(["claws", "add", manifestPath], {
       expectFailure: true,
     });
 
     expect(result.ok).toBe(false);
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Claw add is dry-run only");
+    expect(result.stderr).toContain("Claw add requires explicit consent");
   });
 });

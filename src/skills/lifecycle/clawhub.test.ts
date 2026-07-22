@@ -25,7 +25,8 @@ const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
 const tempDirs = createTrackedTempDirs();
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub.js")>()),
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
   fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
@@ -61,6 +62,7 @@ vi.mock("../../infra/fs-safe.js", () => ({
 
 const {
   installSkillFromClawHub,
+  preflightSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
   resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
@@ -322,6 +324,55 @@ describe("skills-clawhub", () => {
       slug: "agentreceipt",
       version: "1.0.0",
     });
+  });
+
+  it("resolves an exact skill artifact without mutating the workspace", async () => {
+    const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    downloadClawHubSkillArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/agentreceipt.zip",
+      integrity,
+      sha256Hex: "a".repeat(64),
+      artifact: "archive",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await preflightSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "agentreceipt",
+      version: "1.0.0",
+      acknowledgeClawHubRisk: true,
+    });
+
+    expect(result).toEqual({ ok: true, action: "install", integrity });
+    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a downloaded skill whose bytes do not match the consented plan", async () => {
+    const observed = `sha256-${Buffer.from("b".repeat(64), "hex").toString("base64")}`;
+    const expected = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    downloadClawHubSkillArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/agentreceipt.zip",
+      integrity: observed,
+      sha256Hex: "b".repeat(64),
+      artifact: "archive",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "agentreceipt",
+      version: "1.0.0",
+      expectedIntegrity: `sha256:${"a".repeat(64)}`,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: `ClawHub archive integrity mismatch: expected ${expected}, got ${observed}.`,
+    });
+    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses ClawHub trust checks for official skill install resolutions", async () => {
