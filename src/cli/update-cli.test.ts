@@ -1528,7 +1528,7 @@ describe("update-cli", () => {
       tag: "latest",
       version: "2026.4.10",
     });
-    mockCurrentProcessFreshDoctor({ postCoreResumeAttempt: false });
+    mockCurrentProcessFreshDoctor();
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
@@ -1570,7 +1570,7 @@ describe("update-cli", () => {
     });
     readPackageVersion.mockResolvedValue("2026.4.14");
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "latest", version: "2026.4.10" });
-    mockCurrentProcessFreshDoctor({ postCoreResumeAttempt: false });
+    mockCurrentProcessFreshDoctor();
 
     await updateCommand({ yes: true, tag: "2026.4.10", restart: false });
 
