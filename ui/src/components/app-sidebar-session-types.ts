@@ -1,5 +1,6 @@
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -50,6 +51,7 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  createdBy?: SessionCreatorIdentity;
   label: string;
   meta: string;
   /** Compact repo/branch/node line for work sessions. */
@@ -76,6 +78,7 @@ export type SidebarRecentSession = {
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
+  outboxCount?: number;
   unread: boolean;
   lastReadAt?: number;
   attention: SidebarSessionAttention;

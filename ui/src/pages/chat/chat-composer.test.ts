@@ -143,6 +143,29 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
+  it("keeps composing enabled and explains queued delivery while offline", () => {
+    const { container } = renderComposer({
+      offline: true,
+      queuedOutboxCount: 3,
+      draft: "Queue this message",
+    });
+
+    expect(container.querySelector(".agent-chat__input--offline")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+      "Offline — 3 queued; messages send when the connection returns.",
+    );
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+
+    const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
+    expect(empty.container.querySelector(".agent-chat__offline-hint")?.textContent?.trim()).toBe(
+      "Offline — messages will be queued and sent when the connection returns.",
+    );
+
+    const online = renderComposer({ queuedOutboxCount: 3 });
+    expect(online.container.querySelector(".agent-chat__offline-hint")).toBeNull();
+  });
+
   it("renders and invokes the archived-session banner action", () => {
     const onAction = vi.fn();
     const { container } = renderComposer({

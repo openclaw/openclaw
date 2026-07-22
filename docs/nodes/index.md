@@ -232,11 +232,11 @@ operators can ignore skills from every paired node with
 
 ### Headless identity state
 
-The headless node keeps three separate state records:
+The headless node keeps three separate state records in shared SQLite:
 
 - `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/state/openclaw.sqlite` (`device_identities`, key `primary`): the signed device keypair and derived cryptographic device ID.
-- `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
+- `~/.openclaw/state/openclaw.sqlite` (`device_auth_tokens`): paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
 node routing. The client instance ID is only connection metadata. Changing
@@ -244,10 +244,10 @@ node routing. The client instance ID is only connection metadata. Changing
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
 
-A retired `identity/device.json` file or interrupted Doctor claim blocks normal
-identity use. Stop the node host and run `openclaw doctor --fix`; Doctor imports
-the validated keypair into SQLite before removing the old file. The identity
-migration leaves `identity/device-auth.json` untouched.
+Retired `identity/device.json` and `identity/device-auth.json` files are
+Doctor-owned migration inputs. Stop the node host and run
+`openclaw doctor --fix`; Doctor imports and verifies their rows in SQLite before
+removing the old files.
 
 ### Allowlist the commands
 

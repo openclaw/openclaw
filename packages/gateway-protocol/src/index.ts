@@ -23,8 +23,10 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
+export { SessionCreatorIdentitySchema, type SessionCreatorIdentity } from "./schema/sessions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -103,6 +105,12 @@ import {
   ConversationTurnParamsSchema,
   ConversationTurnReplySchema,
   ConversationTurnResultSchema,
+  ChannelsPairingApproveParamsSchema,
+  ChannelsPairingApproveResultSchema,
+  ChannelsPairingDismissParamsSchema,
+  ChannelsPairingDismissResultSchema,
+  ChannelsPairingListParamsSchema,
+  ChannelsPairingListResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -271,6 +279,7 @@ import {
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
@@ -433,6 +442,8 @@ import {
   SessionObserverPlanProgressSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -775,6 +786,9 @@ export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParams
 export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAskParamsSchema);
+export const validateSessionsObserverVisibilityParams = lazyCompile(
+  SessionsObserverVisibilityParamsSchema,
+);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
@@ -872,6 +886,9 @@ export const validateTalkSessionCloseParams = lazyCompile(TalkSessionCloseParams
 export const validateTalkSpeakParams = lazyCompile(TalkSpeakParamsSchema);
 export const validateTtsSpeakParams = lazyCompile(TtsSpeakParamsSchema);
 export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSchema);
+export const validateChannelsPairingListParams = lazyCompile(ChannelsPairingListParamsSchema);
+export const validateChannelsPairingApproveParams = lazyCompile(ChannelsPairingApproveParamsSchema);
+export const validateChannelsPairingDismissParams = lazyCompile(ChannelsPairingDismissParamsSchema);
 export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
 export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSchema);
@@ -990,6 +1007,7 @@ export {
   ErrorShapeSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -1154,6 +1172,8 @@ export {
   SessionObserverPlanProgressSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -1295,6 +1315,12 @@ export {
   TtsSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
+  ChannelsPairingListParamsSchema,
+  ChannelsPairingListResultSchema,
+  ChannelsPairingApproveParamsSchema,
+  ChannelsPairingApproveResultSchema,
+  ChannelsPairingDismissParamsSchema,
+  ChannelsPairingDismissResultSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -1639,6 +1665,14 @@ export type {
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
+  ChannelsPairingListParams,
+  ChannelsPairingListResult,
+  ChannelsPairingApproveParams,
+  ChannelsPairingApproveResult,
+  ChannelsPairingDismissParams,
+  ChannelsPairingDismissResult,
+  ChannelsPairingAccount,
+  ChannelsPairingRequest,
   ChannelsStartParams,
   ChannelsStopParams,
   ChannelsLogoutParams,
@@ -1809,6 +1843,8 @@ export type {
   SessionObserverPlanProgress,
   SessionsObserverAskParams,
   SessionsObserverAskResult,
+  SessionsObserverVisibilityParams,
+  SessionsObserverVisibilityResult,
   SessionPlacementState,
   SessionPlacement,
   SessionWorktreeInfo,

@@ -7,6 +7,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import {
   toSanitizedMarkdownHtml,
   toStreamingMarkdownHtml,
@@ -60,7 +61,7 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { isPendingSendMessage, persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -267,6 +268,8 @@ type ImageRenderOptions = {
   basePath?: string;
   authToken?: string | null;
   onRequestUpdate?: () => void;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
 };
 
 type RenderableImageBlock = ImageBlock & {
@@ -278,6 +281,7 @@ type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
+const managedImageBlobUrlRetainCounts = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
@@ -292,6 +296,46 @@ function readManagedImageBlobUrl(cacheKey: string): string | undefined {
   return cached;
 }
 
+function trimManagedImageBlobUrlCache() {
+  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const evictable = [...managedImageBlobUrlResolvedCache.keys()].find(
+      (cacheKey) => (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) === 0,
+    );
+    if (!evictable) {
+      return;
+    }
+    const evicted = managedImageBlobUrlResolvedCache.get(evictable);
+    managedImageBlobUrlResolvedCache.delete(evictable);
+    if (evicted) {
+      URL.revokeObjectURL(evicted);
+    }
+  }
+}
+
+function retainManagedImageBlobUrl(cacheKey: string): (() => void) | undefined {
+  if (!managedImageBlobUrlResolvedCache.has(cacheKey)) {
+    return undefined;
+  }
+  managedImageBlobUrlRetainCounts.set(
+    cacheKey,
+    (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) + 1,
+  );
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const remaining = (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 1) - 1;
+    if (remaining <= 0) {
+      managedImageBlobUrlRetainCounts.delete(cacheKey);
+    } else {
+      managedImageBlobUrlRetainCounts.set(cacheKey, remaining);
+    }
+    trimManagedImageBlobUrlCache();
+  };
+}
+
 function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
   const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
   managedImageBlobUrlResolvedCache.delete(cacheKey);
@@ -302,18 +346,8 @@ function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
   }
 
   // Blob URLs retain browser-managed image data. Keep recent previews reusable,
-  // but revoke evicted URLs so long-lived chat sessions cannot retain them forever.
-  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
-    const oldest = managedImageBlobUrlResolvedCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    const evicted = managedImageBlobUrlResolvedCache.get(oldest.value);
-    managedImageBlobUrlResolvedCache.delete(oldest.value);
-    if (evicted) {
-      URL.revokeObjectURL(evicted);
-    }
-  }
+  // but protect an image while its lightbox still uses that object URL.
+  trimManagedImageBlobUrlCache();
 }
 
 function hasRecentManagedImageBlobUrlMiss(cacheKey: string): boolean {
@@ -797,6 +831,8 @@ type RenderMessageGroupOptions = {
   onToggleToolExpanded?: (toolCardId: string) => void;
   onRequestUpdate?: () => void;
   onAssistantAttachmentLoaded?: () => void;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userId?: string | null;
@@ -837,6 +873,9 @@ function buildGroupedMessageRenderOptions(
     boardProvider: opts.boardProvider,
     agentId: opts.agentId,
     entryId: persistedMessageEntryId(item.message) ?? undefined,
+    entryAnimated:
+      normalizeRoleForGrouping(group.role) === "user" &&
+      shouldAnimateUserTurnEntry(item.key, item.message),
     onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
@@ -852,6 +891,8 @@ function buildGroupedMessageRenderOptions(
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
     onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
+    onRequestOpenImage: opts.onRequestOpenImage,
+    onOpenImage: opts.onOpenImage,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
@@ -859,6 +900,47 @@ function buildGroupedMessageRenderOptions(
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
   };
+}
+
+/** One-shot entry animation state for submitted user turns, keyed by message
+ * key (send identity). An entry records first sight for the send's lifetime —
+ * value is the animation start, or 0 for seen-without-animating — so
+ * re-renders during the animation keep the class while later renders or
+ * virtualizer remounts of the same (possibly still pending) row never replay
+ * it. Insertion-ordered cap bounds the map instead of time-based pruning,
+ * which would forget long-lived pending rows; keys are per-send UUIDs, so the
+ * map is never reset across panes or sessions. */
+const userTurnEntrySeenByMessageKey = new Map<string, number>();
+const USER_TURN_ENTRY_ANIMATION_WINDOW_MS = 400;
+/** Only just-submitted bubbles animate; restored outbox rows render still.
+ * Accepted tradeoff: a full page reload within this window re-animates the
+ * just-submitted bubble once, which matches the fresh paint around it. */
+const USER_TURN_ENTRY_FRESH_SUBMIT_MS = 2_000;
+const USER_TURN_ENTRY_SEEN_CAP = 256;
+
+function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boolean {
+  const now = Date.now();
+  const seen = userTurnEntrySeenByMessageKey.get(messageKey);
+  if (seen !== undefined) {
+    return seen > 0 && now - seen < USER_TURN_ENTRY_ANIMATION_WINDOW_MS;
+  }
+  // Only a locally pending submit starts the animation; loaded history and
+  // remote echoes render without one.
+  if (!isPendingSendMessage(message)) {
+    return false;
+  }
+  const submittedAt = (message as { timestamp?: unknown }).timestamp;
+  const freshSubmit =
+    typeof submittedAt === "number" && now - submittedAt < USER_TURN_ENTRY_FRESH_SUBMIT_MS;
+  while (userTurnEntrySeenByMessageKey.size >= USER_TURN_ENTRY_SEEN_CAP) {
+    const oldest = userTurnEntrySeenByMessageKey.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    userTurnEntrySeenByMessageKey.delete(oldest);
+  }
+  userTurnEntrySeenByMessageKey.set(messageKey, freshSubmit ? now : 0);
+  return freshSubmit;
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -1583,51 +1665,102 @@ function resolveRenderableMessageImages(
   });
 }
 
+function openResolvedImage(
+  onOpenImage: ((item: ImageLightboxItem, requestVersion?: number) => void) | undefined,
+  src: string,
+  title: string,
+  release?: () => void,
+  requestVersion?: number,
+) {
+  const safeSrc = resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
+  if (!safeSrc) {
+    release?.();
+    return;
+  }
+  if (onOpenImage) {
+    const item: ImageLightboxItem = { src: safeSrc, title, ...(release ? { release } : {}) };
+    if (requestVersion === undefined) {
+      onOpenImage(item);
+    } else {
+      onOpenImage(item, requestVersion);
+    }
+    return;
+  }
+  release?.();
+  openExternalUrlSafe(safeSrc, { allowDataImage: true });
+}
+
 function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderOptions) {
   if (images.length === 0) {
     return nothing;
   }
 
   const openImage = (img: RenderableImageBlock, previewUrl: string) => {
-    if (
-      !isManagedOutgoingImageSource(img.displayUrl) ||
-      readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl
-    ) {
-      openExternalUrlSafe(previewUrl, { allowDataImage: true });
+    const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+    const requestVersion = opts?.onRequestOpenImage?.();
+    const managedSource = isManagedOutgoingImageSource(img.displayUrl);
+    const cacheKey = managedSource
+      ? resolveManagedOutgoingImageBlobUrlCacheKey(img.displayUrl, opts)
+      : undefined;
+    const previewIsCurrent =
+      !managedSource || readManagedOutgoingImageBlobUrl(img.displayUrl, opts) === previewUrl;
+    if (previewIsCurrent) {
+      const release =
+        opts?.onOpenImage && cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
+      openResolvedImage(opts?.onOpenImage, previewUrl, title, release, requestVersion);
       return;
     }
 
-    // Reserve the tab during the click's user activation. An evicted Blob URL
-    // must be refetched before navigation, after popup permission has expired.
-    const pendingWindow = reserveExternalWindowForDeferredNavigation();
+    // A managed-image Blob URL may have been evicted after this row rendered.
+    // Re-resolve before opening so the modal never receives a revoked URL.
+    if (!opts?.onOpenImage) {
+      const pendingWindow = reserveExternalWindowForDeferredNavigation();
+      void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
+        .then((freshUrl) => {
+          const safeUrl = freshUrl
+            ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
+            : null;
+          if (!safeUrl) {
+            pendingWindow?.close();
+          } else if (pendingWindow) {
+            pendingWindow.location.replace(safeUrl);
+          } else {
+            openExternalUrlSafe(safeUrl, { allowDataImage: true });
+          }
+        })
+        .catch(() => pendingWindow?.close());
+      return;
+    }
     void resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts)
       .then((freshUrl) => {
-        const safeUrl = freshUrl
-          ? resolveSafeExternalUrl(freshUrl, window.location.href, { allowDataImage: true })
-          : null;
-        if (!safeUrl) {
-          pendingWindow?.close();
+        if (!freshUrl) {
           return;
         }
-        if (pendingWindow) {
-          pendingWindow.location.replace(safeUrl);
-          return;
-        }
-        openExternalUrlSafe(safeUrl, { allowDataImage: true });
+        const release = cacheKey ? retainManagedImageBlobUrl(cacheKey) : undefined;
+        openResolvedImage(opts.onOpenImage, freshUrl, title, release, requestVersion);
       })
-      .catch(() => pendingWindow?.close());
+      .catch(() => {});
   };
 
-  const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
-    <img
-      src=${previewUrl}
-      alt=${img.alt ?? "Attached image"}
-      class="chat-message-image"
-      width=${img.width ?? nothing}
-      height=${img.height ?? nothing}
-      @click=${() => openImage(img, previewUrl)}
-    />
-  `;
+  const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => {
+    const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+    return html`
+      <button
+        type="button"
+        class="chat-message-image-button"
+        aria-label=${t("chat.imageLightbox.open", { title })}
+        @click=${() => openImage(img, previewUrl)}
+      >
+        <img
+          src=${previewUrl}
+          alt=${title}
+          class="chat-message-image"
+          width=${img.width ?? nothing}
+          height=${img.height ?? nothing}
+        />
+      </button>
+    `;
+  };
 
   const renderImage = (img: RenderableImageBlock) => {
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
@@ -2125,6 +2258,8 @@ function renderAssistantAttachments(
   authToken?: string | null,
   onRequestUpdate?: () => void,
   onAssistantAttachmentLoaded?: () => void,
+  onRequestOpenImage?: () => number,
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -2152,13 +2287,23 @@ function renderAssistantAttachments(
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
+          const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
           return html`
-            <img
-              src=${attachmentUrl}
-              alt=${attachment.label}
-              class="chat-message-image"
-              @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
-            />
+            <button
+              type="button"
+              class="chat-message-image-button"
+              aria-label=${t("chat.imageLightbox.open", { title })}
+              @click=${() =>
+                openResolvedImage(
+                  onOpenImage,
+                  attachmentUrl,
+                  title,
+                  undefined,
+                  onRequestOpenImage?.(),
+                )}
+            >
+              <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
+            </button>
           `;
         }
         if (attachment.kind === "audio") {
@@ -2571,10 +2716,14 @@ function renderGroupedMessage(
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
     onAssistantAttachmentLoaded?: () => void;
+    onRequestOpenImage?: () => number;
+    onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     entryId?: string;
+    /** Freshly submitted user turn: play the one-shot composer entry animation. */
+    entryAnimated?: boolean;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -2597,6 +2746,8 @@ function renderGroupedMessage(
     basePath: opts.basePath,
     authToken: opts.assistantAttachmentAuthToken,
     onRequestUpdate: opts.onRequestUpdate,
+    onRequestOpenImage: opts.onRequestOpenImage,
+    onOpenImage: opts.onOpenImage,
   };
   schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
@@ -2620,6 +2771,7 @@ function renderGroupedMessage(
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
     fileLinks: true,
+    interactiveImages: opts.onOpenImage !== undefined,
   };
 
   // Detect pure-JSON messages and render as collapsible block
@@ -2629,6 +2781,7 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
+    opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2801,6 +2954,8 @@ function renderGroupedMessage(
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
                         opts.onAssistantAttachmentLoaded,
+                        opts.onRequestOpenImage,
+                        opts.onOpenImage,
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -2865,6 +3020,8 @@ function renderGroupedMessage(
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
               opts.onAssistantAttachmentLoaded,
+              opts.onRequestOpenImage,
+              opts.onOpenImage,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

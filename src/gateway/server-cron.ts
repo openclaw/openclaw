@@ -73,6 +73,7 @@ import {
   resolveStreamStopReason,
 } from "./cron-stream-watchers.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -94,6 +95,7 @@ export type GatewayCronState = {
   stopExitWatchers?: () => void;
   reconcileStreamWatchers?: () => Promise<void>;
   stopStreamWatchers?: () => Promise<void>;
+  reconcileHeartbeatJobs?: (cfg?: OpenClawConfig) => Promise<void>;
 };
 
 function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
@@ -1273,6 +1275,7 @@ export function buildGatewayCronService(params: {
   cron.stop = () => {
     stopCron();
     stopExitWatchers();
+    stopHeartbeatReconcileRetry();
     void stopStreamWatchers().catch((err: unknown) => {
       cronLogger.warn(
         { err: formatErrorMessage(err) },
@@ -1286,8 +1289,49 @@ export function buildGatewayCronService(params: {
   cron.stopAndDrain = async () => {
     stopCron();
     stopExitWatchers();
+    stopHeartbeatReconcileRetry();
     await stopStreamWatchers();
     unregisterSessionAutomationSource(automationSource);
+  };
+  // Reconciliations serialize on one tail and only the latest requested epoch
+  // executes, so an older reload's convergence can never clobber a newer one.
+  // A failed pass schedules one bounded retry; a newer request supersedes it.
+  let heartbeatReconcileEpoch = 0;
+  let heartbeatReconcileTail: Promise<void> = Promise.resolve();
+  let heartbeatRetryTimer: NodeJS.Timeout | undefined;
+  const stopHeartbeatReconcileRetry = () => {
+    // Also invalidate any in-flight pass so a post-stop retry cannot fire.
+    heartbeatReconcileEpoch += 1;
+    if (heartbeatRetryTimer) {
+      clearTimeout(heartbeatRetryTimer);
+      heartbeatRetryTimer = undefined;
+    }
+  };
+  const reconcileHeartbeatJobs = (cfgOverride?: OpenClawConfig): Promise<void> => {
+    const epoch = ++heartbeatReconcileEpoch;
+    if (heartbeatRetryTimer) {
+      clearTimeout(heartbeatRetryTimer);
+      heartbeatRetryTimer = undefined;
+    }
+    const pass = async () => {
+      if (epoch !== heartbeatReconcileEpoch) {
+        return;
+      }
+      const { ok } = await reconcileHeartbeatMonitorJobs({
+        cron,
+        cfg: cfgOverride ?? getRuntimeConfig(),
+        logger: cronLogger,
+      });
+      if (!ok && epoch === heartbeatReconcileEpoch) {
+        heartbeatRetryTimer = setTimeout(() => {
+          heartbeatRetryTimer = undefined;
+          void reconcileHeartbeatJobs(cfgOverride);
+        }, 30_000);
+        heartbeatRetryTimer.unref?.();
+      }
+    };
+    heartbeatReconcileTail = heartbeatReconcileTail.then(pass, pass);
+    return heartbeatReconcileTail;
   };
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
@@ -1304,6 +1348,10 @@ export function buildGatewayCronService(params: {
       return;
     }
     await reconcileStreamWatchers();
+    if (generation !== streamWatcherGeneration) {
+      return;
+    }
+    await reconcileHeartbeatJobs();
     if (generation !== streamWatcherGeneration) {
       return;
     }
@@ -1328,6 +1376,7 @@ export function buildGatewayCronService(params: {
     stopExitWatchers,
     reconcileStreamWatchers,
     stopStreamWatchers,
+    reconcileHeartbeatJobs,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

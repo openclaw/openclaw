@@ -20,6 +20,13 @@ export const SESSION_OBSERVER_HEALTH_VALUES = [
   "failed",
 ] as const;
 
+/** Stable identity stamped on a session when an operator creates it. */
+export const SessionCreatorIdentitySchema = closedObject({
+  id: NonEmptyString,
+  label: Type.Optional(NonEmptyString),
+});
+export type SessionCreatorIdentity = Static<typeof SessionCreatorIdentitySchema>;
+
 /** Trajectory judgment produced for one observed agent session. */
 export const SessionObserverHealthSchema = Type.Union([
   Type.Literal("on-track"),
@@ -59,6 +66,16 @@ export const SessionsObserverAskParamsSchema = closedObject({
 export const SessionsObserverAskResultSchema = closedObject({
   answer: Type.String({ minLength: 1, maxLength: 600 }),
   digestRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+
+/** Declares whether this connection currently renders session observer output. */
+export const SessionsObserverVisibilityParamsSchema = closedObject({
+  visible: Type.Boolean(),
+});
+
+/** Acknowledges a connection's observer visibility declaration. */
+export const SessionsObserverVisibilityResultSchema = closedObject({
+  ok: Type.Literal(true),
 });
 
 /**
@@ -287,6 +304,8 @@ export const SessionsListParamsSchema = closedObject({
    */
   includeLastMessage: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),
+  /** Filter rows by their permanent creator identity. */
+  creatorId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
@@ -754,6 +773,12 @@ export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgr
 export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
 export type SessionsObserverAskParams = Static<typeof SessionsObserverAskParamsSchema>;
 export type SessionsObserverAskResult = Static<typeof SessionsObserverAskResultSchema>;
+export type SessionsObserverVisibilityParams = Static<
+  typeof SessionsObserverVisibilityParamsSchema
+>;
+export type SessionsObserverVisibilityResult = Static<
+  typeof SessionsObserverVisibilityResultSchema
+>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

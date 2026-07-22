@@ -8257,6 +8257,7 @@ describe("handleSendChat", () => {
           },
         ],
         timestamp: expect.any(Number),
+        __openclaw: { idempotencyKey: expect.stringMatching(/:user$/) },
       },
     ]);
   });
