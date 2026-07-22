@@ -1,6 +1,6 @@
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { hasProjectedAgentRunForSession } from "../../infra/agent-events.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher for Control UI-visible controllers. */
@@ -65,11 +65,17 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
   now?: number;
 }): TrackedActiveSessionRunSnapshot {
   const runs: TrackedActiveSessionRunSnapshot["runs"] = [];
+  const targetSessionId = params.sessionId?.trim() || undefined;
+  const hasProjectedRun = hasProjectedAgentRunForSession({
+    sessionKeys: [params.requestedKey, params.canonicalKey],
+    ...(targetSessionId ? { sessionId: targetSessionId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
+  });
   if (!(params.context.chatAbortControllers instanceof Map)) {
-    return { hasActiveRun: false, runs };
+    return { hasActiveRun: hasProjectedRun, runs };
   }
   const now = params.now ?? Date.now();
-  const targetSessionId = params.sessionId?.trim() || undefined;
   for (const [runId, active] of params.context.chatAbortControllers.entries()) {
     const sessionKey = active.sessionKey?.trim();
     const sessionId = active.sessionId?.trim();
@@ -131,7 +137,7 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
     });
   }
   return {
-    hasActiveRun: runs.length > 0,
+    hasActiveRun: runs.length > 0 || hasProjectedRun,
     runs: runs.toSorted((a, b) => a.runId.localeCompare(b.runId)),
   };
 }
@@ -190,13 +196,37 @@ export function isTrackedActiveSessionRunForTarget(
           { scopeUnknownByAgent: params.scopeUnknownByAgent },
         );
   const targetSessionId = params.sessionId?.trim() || undefined;
+  const targetAgentId = resolveActiveRunTargetAgentId(params);
+  const activeAgentMatchesTarget =
+    !active.agentId || !targetAgentId || normalizeAgentId(active.agentId) === targetAgentId;
   // Session-id-only controllers predate keyed run state; keyed controllers must
   // still match the diagnosed key so a reused id cannot borrow another session's run.
   const matchesSessionId =
     targetSessionId !== undefined &&
     active.sessionId === targetSessionId &&
+    activeAgentMatchesTarget &&
     (!active.sessionKey || matchesCanonicalKey || matchesRequestedKey);
   return matchesCanonicalKey || matchesRequestedKey || matchesSessionId;
+}
+
+function resolveActiveRunTargetAgentId(params: {
+  requestedKey: string;
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): string | undefined {
+  if (params.agentId) {
+    return normalizeAgentId(params.agentId);
+  }
+  const canonicalAgentId = parseAgentSessionKey(params.canonicalKey)?.agentId;
+  if (canonicalAgentId) {
+    return normalizeAgentId(canonicalAgentId);
+  }
+  const requestedAgentId = parseAgentSessionKey(params.requestedKey)?.agentId;
+  if (requestedAgentId) {
+    return normalizeAgentId(requestedAgentId);
+  }
+  return params.defaultAgentId ? normalizeAgentId(params.defaultAgentId) : undefined;
 }
 
 /** Returns true when either requested or canonical session key has a visible active run. */
@@ -256,6 +286,8 @@ export function resolveVisibleActiveSessionRunState(params: {
   const hasProjectedRun = hasProjectedAgentRunForSession({
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
   });
   return {
     active:

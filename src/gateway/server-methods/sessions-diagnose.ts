@@ -27,11 +27,8 @@ import {
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
 import {
-  collectTrackedActiveSessionRuns,
   collectTrackedActiveSessionRunSnapshot,
-  isTrackedActiveSessionRunForTarget,
   resolveVisibleActiveSessionRunState,
-  type TrackedActiveSessionRun,
 } from "./session-active-runs.js";
 import { buildDiagnoseResult } from "./sessions-diagnose-result.js";
 import {
@@ -109,32 +106,22 @@ function resolveRequestedDiagnoseAgentId(
   };
 }
 
-function hasDiagnoseTrackedActiveRun(params: {
-  activeRuns: readonly TrackedActiveSessionRun[];
-  key: string;
-  sessionId?: string;
-  agentId?: string;
-  defaultAgentId: string;
-}): boolean {
-  return params.activeRuns.some((active) =>
-    isTrackedActiveSessionRunForTarget(active, {
-      requestedKey: params.key,
-      canonicalKey: params.key,
-      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      defaultAgentId: params.defaultAgentId,
-      scopeUnknownByAgent: true,
-    }),
-  );
-}
-
 function scoreDiagnoseCandidatePreselect(params: {
   key: string;
   entry: SessionEntry;
-  activeRuns: readonly TrackedActiveSessionRun[];
+  context: GatewayRequestContext;
   agentId?: string;
   defaultAgentId: string;
 }): number {
+  const activeRunState = resolveVisibleActiveSessionRunState({
+    context: params.context,
+    requestedKey: params.key,
+    canonicalKey: params.key,
+    sessionId: params.entry.sessionId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    defaultAgentId: params.defaultAgentId,
+    scopeUnknownByAgent: true,
+  });
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.entry.sessionId,
     sessionKey: params.key,
@@ -151,15 +138,7 @@ function scoreDiagnoseCandidatePreselect(params: {
   });
   const lane = getCommandLaneSnapshot(resolveSessionLane(params.key));
   const hasActiveEvidence =
-    hasDiagnoseTrackedActiveRun({
-      activeRuns: params.activeRuns,
-      key: params.key,
-      sessionId: params.entry.sessionId,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      defaultAgentId: params.defaultAgentId,
-    }) ||
-    embeddedRun.active ||
-    Boolean(activity.activeWorkKind);
+    activeRunState.active || embeddedRun.active || Boolean(activity.activeWorkKind);
   const hasQueuedEvidence = (diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0;
   const hasProcessingEvidence = diagnostic.state === "processing";
   const hasCurrentWorkEvidence = hasActiveEvidence || hasQueuedEvidence || hasProcessingEvidence;
@@ -219,7 +198,7 @@ function listExplicitDiagnoseCandidateRows(params: {
       clone: false,
       storePath: target.storePath,
     })) {
-      if (!entry?.sessionId) {
+      if (!entry) {
         continue;
       }
       if (p.label && entry.label !== p.label) {
@@ -259,16 +238,13 @@ function listDiagnoseCandidateRows(params: {
   const targets = requestedAgentId
     ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
     : resolveAllAgentSessionStoreTargetsSync(cfg);
-  const activeRuns = collectTrackedActiveSessionRuns(context).filter(
-    (run) => !requestedAgentId || !run.agentId || run.agentId === requestedAgentId,
-  );
   const candidates: Array<{ candidate: DiagnoseCandidate; preselectScore: number }> = [];
   for (const target of targets) {
     for (const { sessionKey, entry } of listSessionEntries({
       clone: false,
       storePath: target.storePath,
     })) {
-      if (!entry?.sessionId) {
+      if (!entry) {
         continue;
       }
       const key = resolveStoredSessionKeyForAgentStore({
@@ -300,7 +276,7 @@ function listDiagnoseCandidateRows(params: {
         preselectScore: scoreDiagnoseCandidatePreselect({
           key,
           entry,
-          activeRuns,
+          context,
           agentId: candidate.agentId ?? target.agentId,
           defaultAgentId,
         }),

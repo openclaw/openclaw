@@ -9,8 +9,11 @@ import {
 import { resolveEmbeddedSessionFileKey } from "../../agents/embedded-agent-runner/session-file-key.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticRunProgressForTest } from "../../logging/diagnostic-run-activity.test-support.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { writeSessionStore } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -38,6 +41,46 @@ afterEach(() => {
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
   resetDiagnosticRunActivityForTest();
 });
+
+function writeSessionEntryJsonWithoutSessionId(params: {
+  storePath: string;
+  sessionKey: string;
+  sessionId: string;
+  entryJson: Record<string, unknown>;
+  updatedAt: number;
+}): void {
+  const target = resolveSqliteTargetFromSessionStorePath(params.storePath, { agentId: "main" });
+  const database = openOpenClawAgentDatabase({
+    agentId: target.agentId ?? "main",
+    path: target.path,
+  });
+  database.db
+    .prepare(
+      `INSERT INTO sessions (
+        session_id, session_key, session_scope, created_at, updated_at, status
+      ) VALUES (?, ?, 'conversation', ?, ?, ?)`,
+    )
+    .run(
+      params.sessionId,
+      params.sessionKey,
+      params.updatedAt,
+      params.updatedAt,
+      typeof params.entryJson.status === "string" ? params.entryJson.status : null,
+    );
+  database.db
+    .prepare(
+      `INSERT INTO session_entries (
+        session_key, session_id, entry_json, updated_at, status
+      ) VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(
+      params.sessionKey,
+      params.sessionId,
+      JSON.stringify(params.entryJson),
+      params.updatedAt,
+      typeof params.entryJson.status === "string" ? params.entryJson.status : null,
+    );
+}
 
 test("sessions.diagnose returns read-only live and stored evidence without transcript paths", async () => {
   const { dir } = await createSessionStoreDir();
@@ -208,6 +251,52 @@ test("sessions.diagnose picks a session-id-only active session beyond the bounde
       },
     },
   });
+});
+
+test("sessions.diagnose picks a lifecycle-projected active session beyond the bounded newest scan", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  const entries: Record<string, SessionEntry> = {
+    "agent:main:projected": sessionStoreEntry("sess-projected", {
+      status: "running",
+      updatedAt: 1,
+    }),
+  };
+  for (let index = 0; index < 105; index += 1) {
+    entries[`agent:main:newer-${index}`] = sessionStoreEntry(`sess-newer-${index}`, {
+      updatedAt: now + index,
+    });
+  }
+  await writeSessionStore({ entries });
+  registerAgentRunContext("run-projected", {
+    isControlUiVisible: false,
+    projectSessionActive: true,
+    sessionId: "sess-projected",
+    sessionKey: "agent:main:projected",
+    agentId: "main",
+  });
+  try {
+    const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {});
+
+    expect(result.ok).toBe(true);
+    expect(result.payload).toMatchObject({
+      outcome: "diagnosed",
+      chosenBecause: "highest live or contradictory evidence score",
+      session: {
+        key: "agent:main:projected",
+        sessionId: "sess-projected",
+        hasActiveRun: true,
+      },
+      live: {
+        gatewayRun: {
+          hasActiveRun: true,
+          runs: [],
+        },
+      },
+    });
+  } finally {
+    clearAgentRunContext("run-projected");
+  }
 });
 
 test("sessions.diagnose does not preselect a stale row from a conflicting keyed run id", async () => {
@@ -408,6 +497,43 @@ test("sessions.diagnose reports no_sessions when no stored sessions exist", asyn
     outcome: "no_sessions",
     session: { found: false },
   });
+});
+
+test("sessions.diagnose keeps label matches whose entry json lacks a session id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: {} });
+  writeSessionEntryJsonWithoutSessionId({
+    storePath,
+    sessionKey: "agent:main:no-id",
+    sessionId: "sess-column-only",
+    entryJson: {
+      label: "ops",
+      status: "running",
+      updatedAt: 10,
+    },
+    updatedAt: 10,
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    label: "ops",
+  });
+
+  expect(result.ok).toBe(true);
+  const payload = result.payload;
+  if (!payload) {
+    throw new Error("expected diagnose payload");
+  }
+  expect(payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "explicit label selector",
+    session: {
+      key: "agent:main:no-id",
+      label: "ops",
+      status: "running",
+      hasActiveRun: false,
+    },
+  });
+  expect("sessionId" in payload.session).toBe(false);
 });
 
 test("sessions.diagnose marks terminal sessions with partial delivery route as uncertain", async () => {

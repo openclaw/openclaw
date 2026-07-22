@@ -113,6 +113,37 @@ describe("session active runs", () => {
     ).toEqual({ hasActiveRun: false, runs: [] });
   });
 
+  it("does not match a session-id-only run from another agent", () => {
+    const context = contextWithRuns([
+      [
+        "run-work",
+        {
+          sessionId: "session-1",
+          agentId: "work",
+        },
+      ],
+    ]);
+
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+        defaultAgentId: "main",
+      }),
+    ).toEqual({ active: false, runIds: [] });
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+        defaultAgentId: "main",
+      }),
+    ).toEqual({ hasActiveRun: false, runs: [] });
+  });
+
   it("projects a lifecycle-owned worker run without widening event visibility", () => {
     registerAgentRunContext("worker-run", {
       isControlUiVisible: false,
@@ -129,6 +160,14 @@ describe("session active runs", () => {
           sessionId: "worker-session",
         }),
       ).toEqual({ active: true, runIds: [] });
+      expect(
+        collectTrackedActiveSessionRunSnapshot({
+          context: {},
+          requestedKey: "agent:main:worker",
+          canonicalKey: "agent:main:worker",
+          sessionId: "worker-session",
+        }),
+      ).toEqual({ hasActiveRun: true, runs: [] });
     } finally {
       clearAgentRunContext("worker-run");
     }

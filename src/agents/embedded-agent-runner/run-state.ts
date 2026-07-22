@@ -264,12 +264,6 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
   sessionFile?: string;
 }): string | undefined {
   const sessionId = params.sessionId?.trim();
-  if (
-    sessionId &&
-    (ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId))
-  ) {
-    return sessionId;
-  }
   const sessionKey = params.sessionKey?.trim();
   if (sessionKey) {
     const activeSessionId =
@@ -284,21 +278,79 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
     }
   }
   const sessionFile = params.sessionFile?.trim();
+  const sessionFileKey = sessionFile ? resolveEmbeddedSessionFileKey(sessionFile) : undefined;
   if (sessionFile) {
-    const sessionFileKey = resolveEmbeddedSessionFileKey(sessionFile);
-    const activeSessionId = ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
+    const activeSessionId = sessionFileKey
+      ? ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
+      : undefined;
     if (activeSessionId) {
       return activeSessionId;
     }
-    const abandonedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey);
+    const abandonedSessionId = sessionFileKey
+      ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
+      : undefined;
     if (abandonedSessionId) {
       return abandonedSessionId;
     }
   }
-  if (sessionId) {
+  const hasConflictingActiveIndex =
+    sessionId !== undefined &&
+    hasConflictingEmbeddedRunDiagnosticIndex({
+      sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(sessionFileKey ? { sessionFileKey } : {}),
+    });
+  if (
+    sessionId &&
+    (ACTIVE_EMBEDDED_RUNS.has(sessionId) || isReplyRunActiveForSessionId(sessionId)) &&
+    !hasConflictingActiveIndex
+  ) {
+    return sessionId;
+  }
+  if (sessionId && !hasConflictingActiveIndex) {
     return sessionId;
   }
   return undefined;
+}
+
+function hasConflictingEmbeddedRunDiagnosticIndex(params: {
+  sessionId: string;
+  sessionKey?: string;
+  sessionFileKey?: string;
+}): boolean {
+  if (
+    params.sessionKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.has(params.sessionKey) &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(params.sessionKey) !== params.sessionId
+  ) {
+    return true;
+  }
+  if (
+    params.sessionFileKey &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.has(params.sessionFileKey) &&
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(params.sessionFileKey) !== params.sessionId
+  ) {
+    return true;
+  }
+  for (const [sessionKey, indexedSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
+    if (
+      indexedSessionId === params.sessionId &&
+      params.sessionKey &&
+      sessionKey !== params.sessionKey
+    ) {
+      return true;
+    }
+  }
+  for (const [sessionFileKey, indexedSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
+    if (
+      indexedSessionId === params.sessionId &&
+      params.sessionFileKey &&
+      sessionFileKey !== params.sessionFileKey
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Projects embedded run state for read-only diagnostics without exposing prompts or messages. */

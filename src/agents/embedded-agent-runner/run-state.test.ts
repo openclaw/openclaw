@@ -96,4 +96,24 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
       hasTranscriptSnapshot: false,
     });
   });
+
+  it("does not trust an active stored session id indexed to another key", () => {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set("agent:main:other", "session-shared");
+    ACTIVE_EMBEDDED_RUNS.set("session-shared", {
+      isStreaming: () => true,
+      isCompacting: () => false,
+      queueMessage: async () => {},
+      abort: () => {},
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-shared",
+        sessionKey: "agent:main:target",
+      }),
+    ).toEqual({
+      active: false,
+      sessionKey: "agent:main:target",
+    });
+  });
 });
