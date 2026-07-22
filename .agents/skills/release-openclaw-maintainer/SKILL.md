@@ -237,13 +237,17 @@ Docker Gateway images. Treat
 on pinned current `main` as the exact command and validation contract.
 
 1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
-   approved backport PR lands. Freeze its full 40-character SHA after verifying
-   the root and every publishable official plugin have the intended version.
-   Backport the complete current-main Docker release-channel change, including
-   its workflow, promoter, policy, shared release-version classifier, tests,
-   and workflow validation changes. Do not tag yet; tag-push workflows use
-   that code, which must not route `.33+` to regular stable aliases or fail
-   from a partial copy.
+   approved backport PR lands. Verify the root and every publishable official
+   plugin have the intended version, then generate and commit the complete
+   `## YYYY.M.P` `CHANGELOG.md` section before freezing its full 40-character
+   SHA. Unlike the regular Code-SHA flow, this npm-only candidate preflight
+   packages the frozen tree, so a matching non-empty changelog section is a
+   prerequisite, not post-validation release decoration. Backport the complete
+   current-main Docker release-channel change, including its workflow, promoter,
+   policy, shared release-version classifier, tests, and workflow validation
+   changes. Do not create the final tag yet; tag-push workflows use that code,
+   which must not route `.33+` to regular stable aliases or fail from a partial
+   copy.
 2. Dispatch `openclaw-npm-release.yml` from that canonical branch with the
    frozen SHA as `tag`, `preflight_only=true`, and
    `npm_dist_tag=extended-stable`. A full SHA is a validation-only candidate
@@ -254,9 +258,10 @@ on pinned current `main` as the exact command and validation contract.
    so trusted workflow code is pinned independently from the exact product
    target. Save the successful run ID and its exact `run_attempt` from
    `gh api repos/openclaw/openclaw/actions/runs/<run-id> --jq .run_attempt`.
-4. If either candidate gate fails or another backport is needed, commit it to
-   the canonical branch, freeze its new SHA, and rerun the affected gates. Do
-   not create, delete, or move a final `vYYYY.M.P` tag for candidate validation.
+4. If either candidate gate fails or another backport is needed, update the
+   canonical branch and its matching `CHANGELOG.md` section, freeze its new
+   SHA, and rerun the affected gates. Do not create, delete, or move a final
+   `vYYYY.M.P` tag for candidate validation.
 5. Only after the candidate gates are green, re-resolve the canonical branch
    tip and require it still equals the validated SHA. Create and push the
    signed final `vYYYY.M.P` tag at that SHA. Never move or delete a final

@@ -58,10 +58,13 @@ already contain a strictly later calendar month's final version below patch
 month.
 
 On the exact extended-stable branch, bump the root package to `YYYY.M.P`, run
-`pnpm release:prep`, and verify every publishable plugin package has the
-same version. Commit and push all generated changes, then freeze and record the
-resulting full SHA. The workflows consume this prepared tree; they do not bump
-or synchronize versions for you. Do not create the final tag for a candidate.
+`pnpm release:prep`, and verify every publishable plugin package has the same
+version. Generate a complete `## YYYY.M.P` section in `CHANGELOG.md` with the
+required `### Highlights`, `### Changes`, and `### Fixes` headings, then commit
+and push all generated changes. The npm preflight packages that exact tree and
+rejects a missing or empty matching release section. Freeze and record the
+resulting full SHA; the workflows do not bump versions, synchronize packages,
+or create release notes for you. Do not create the final tag for a candidate.
 
 Before running candidate gates, backport the complete Docker release-channel
 change from current `main` as one tested unit. Its runtime files include
@@ -95,13 +98,13 @@ pins trusted workflow code while recording the exact product SHA and canonical
 branch context. Its stable validation profile is separate from the npm
 `extended-stable` dist-tag.
 
-If either candidate gate fails or another backport is needed, update the branch,
-freeze a new SHA, and rerun the affected candidate gates. Do not create, delete,
-or move a final tag during candidate validation. Once both gates are green,
-re-resolve the branch tip, require it still equals `RELEASE_SHA`, then create
-and push signed `vYYYY.M.P` at that SHA. A post-tag source change requires a
-new patch version and new candidate; final extended-stable tags are never moved
-or deleted.
+If either candidate gate fails or another backport is needed, update the branch
+and its matching changelog section, freeze a new SHA, and rerun the affected
+candidate gates. Do not create, delete, or move a final tag during candidate
+validation. Once both gates are green, re-resolve the branch tip, require it
+still equals `RELEASE_SHA`, then create and push signed `vYYYY.M.P` at that
+SHA. A post-tag source change requires a new patch version and new candidate;
+final extended-stable tags are never moved or deleted.
 
 Pushing the tag starts `Docker Release`, which publishes version-specific
 default, slim, browser, and architecture tags to both registries. It verifies their
