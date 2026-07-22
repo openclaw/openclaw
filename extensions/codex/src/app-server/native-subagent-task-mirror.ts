@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- native child lifecycle projection remains one cohesive state machine */
 /**
  * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
  * runtime rows so parent sessions can observe child progress.

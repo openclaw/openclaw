@@ -1,4 +1,5 @@
 // Codex tests cover native subagent task mirror plugin behavior.
+/* eslint-disable max-lines -- mirrors the production lifecycle matrix in one suite */
 import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,

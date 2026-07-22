@@ -138,7 +138,7 @@ export function recordTaskExecutionReceipt(params: {
           .select((eb) => eb.fn.max<number>("sequence").as("sequence"))
           .where("task_id", "=", taskId),
       );
-      const sequence = Number(current?.sequence ?? 0) + 1;
+      const sequence = (current?.sequence ?? 0) + 1;
       const row: Insertable<TaskExecutionReceiptsTable> = {
         task_id: taskId,
         sequence,
