@@ -478,7 +478,9 @@ export function createSessionMcpRuntime(params: {
     }
     try {
       const result = await request();
-      if (tracksFailureBackoff) {
+      // A caller-owned deadline cancels only this operation; it is not evidence that
+      // the shared MCP server is unhealthy.
+      if (tracksFailureBackoff && !options?.signal?.aborted) {
         serverBackoff.delete(serverName);
       }
       return result;
@@ -979,19 +981,23 @@ export function createSessionMcpRuntime(params: {
                 { timeout: session.requestTimeoutMs, signal: requestSignal },
               )) as CallToolResult,
           ),
+        options,
       );
     },
     async listTools(serverName, requestParams, options) {
       failIfDisposed();
       await getCatalog(options);
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        runWithMcpRequestSignal(options?.signal, (requestSignal) =>
-          session.client.listTools(requestParams, {
-            timeout: session.requestTimeoutMs,
-            signal: requestSignal,
-          }),
-        ),
+      return await runGuardedServerRequest(
+        serverName,
+        async () =>
+          runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+            session.client.listTools(requestParams, {
+              timeout: session.requestTimeoutMs,
+              signal: requestSignal,
+            }),
+          ),
+        options,
       );
     },
     async listResources(serverName, options) {
@@ -1024,13 +1030,16 @@ export function createSessionMcpRuntime(params: {
       failIfDisposed();
       await getCatalog(options);
       const session = requireConnectedSession(serverName);
-      return await runGuardedServerRequest(serverName, async () =>
-        runWithMcpRequestSignal(options?.signal, (requestSignal) =>
-          session.client.listResourceTemplates(requestParams, {
-            timeout: session.requestTimeoutMs,
-            signal: requestSignal,
-          }),
-        ),
+      return await runGuardedServerRequest(
+        serverName,
+        async () =>
+          runWithMcpRequestSignal(options?.signal, (requestSignal) =>
+            session.client.listResourceTemplates(requestParams, {
+              timeout: session.requestTimeoutMs,
+              signal: requestSignal,
+            }),
+          ),
+        options,
       );
     },
     async listPrompts(serverName) {

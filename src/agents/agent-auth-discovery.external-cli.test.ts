@@ -113,4 +113,15 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       },
     });
   });
+
+  it("does not load synthetic provider auth when providers are disabled", () => {
+    syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue(["fireworks"]);
+
+    resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+      env: { OPENCLAW_SKIP_PROVIDERS: "1" },
+    });
+
+    expect(syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs).not.toHaveBeenCalled();
+    expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+  });
 });
