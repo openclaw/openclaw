@@ -5,7 +5,6 @@ import type { FetchLike } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE = "ghcr.io/matrix-construct/tuwunel:v1.5.1";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
-export const MATRIX_QA_DEFAULT_PORT = 28008;
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
@@ -161,11 +160,17 @@ function renderMatrixQaCompose(params: {
   registrationToken: string;
   serverName: string;
 }) {
+  // Omitting `published` lets Docker atomically choose and bind the host port;
+  // probing a free numeric port before Compose starts races parallel harnesses.
+  const portMapping =
+    params.homeserverPort === 0
+      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
+      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
   return `services:
   ${MATRIX_QA_SERVICE}:
     image: ${params.image}
     ports:
-      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"
+${portMapping}
     environment:
       TUWUNEL_ADDRESS: "0.0.0.0"
       TUWUNEL_ALLOW_ENCRYPTION: "true"
@@ -226,4 +231,21 @@ export async function writeMatrixQaHarnessFiles(params: {
     homeserverPort: params.homeserverPort,
     registrationToken,
   };
+}
+
+export async function recordMatrixQaHarnessPort(
+  files: MatrixQaHarnessFiles,
+  homeserverPort: number,
+): Promise<void> {
+  const manifest: MatrixQaHarnessManifest = {
+    image: files.image,
+    serverName: files.serverName,
+    homeserverPort,
+    composeFile: files.composeFile,
+    dataDir: path.join(files.outputDir, "data"),
+  };
+  await fs.writeFile(files.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
 }
