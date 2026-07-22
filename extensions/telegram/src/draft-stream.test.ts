@@ -10,16 +10,17 @@ import {
 import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
+type MockSentMessage = { message_id: number; message_thread_id?: number };
 type MockSendMessage = (
   chatId: string | number,
   text: string,
   params?: Record<string, unknown>,
-) => Promise<{ message_id: number }>;
+) => Promise<MockSentMessage>;
 type MockSendRichMessage = (params: {
   rich_message?: TelegramInputRichMessage;
-}) => Promise<{ message_id: number }>;
+}) => Promise<MockSentMessage>;
 
-function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
+function createMockDraftApi(sendMessageImpl?: () => Promise<MockSentMessage>) {
   const resolveSend = sendMessageImpl ?? (async () => ({ message_id: 17 }));
   const sendRichMessage = vi.fn<MockSendRichMessage>(async () => await resolveSend());
   const editRichMessageText = vi.fn().mockResolvedValue(true);
@@ -121,6 +122,23 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  it("reports the provider response after the first persistent preview lands", async () => {
+    const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
+    const onProviderMessage = vi.fn();
+    const observedStream = createDraftStream(api, {
+      thread: { id: 99, scope: "forum" },
+      onProviderMessage,
+    });
+
+    observedStream.update("A provider-observed preview response");
+    await observedStream.flush();
+
+    expect(onProviderMessage).toHaveBeenCalledTimes(1);
+    expect(onProviderMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ message_id: 101, message_thread_id: 99 }),
+    );
+  });
+
   it("sends stream preview message with message_thread_id when provided", async () => {
     const api = createMockDraftApi();
     const stream = createForumDraftStream(api);

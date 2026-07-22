@@ -1,5 +1,6 @@
 // Telegram plugin module implements draft stream behavior.
 import type { Bot } from "grammy";
+import type { Message } from "grammy/types";
 import {
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
@@ -240,6 +241,8 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a completed page remains visible after the stream advances. */
   onRetainedPage?: (page: RetainedTelegramDraftPage) => void;
+  /** Called with Telegram's response after a new persistent preview message lands. */
+  onProviderMessage?: (message: Message) => Promise<void> | void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -453,6 +456,13 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     retainReplyTarget(sendGeneration, normalizedMessageId);
+    try {
+      await params.onProviderMessage?.(sent.message);
+    } catch (err) {
+      // Observation runs after Telegram accepted the send. Never turn a cache
+      // failure into a transport retry that could duplicate the message.
+      params.warn?.(`telegram stream preview observation failed: ${formatErrorMessage(err)}`);
+    }
     if (sendGeneration !== generation) {
       const visibleSinceMs = Date.now();
       if (repositionedSendGenerations.delete(sendGeneration)) {
