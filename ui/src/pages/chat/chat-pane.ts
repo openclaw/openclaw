@@ -52,6 +52,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -3277,6 +3278,12 @@ class ChatPane extends OpenClawLightDomElement {
     // split; bottom strips do not.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const selfUser = resolveCurrentSelfUser({
+      snapshotUser: gatewaySnapshot.selfUser,
+      presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
+      presenceInstanceId: gatewaySnapshot.client?.instanceId,
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -3584,9 +3591,9 @@ class ChatPane extends OpenClawLightDomElement {
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
-      userId: this.context.gateway.snapshot.selfUser?.id ?? null,
-      userName: this.context.gateway.snapshot.selfUser?.name ?? state.userName,
-      userAvatar: this.context.gateway.snapshot.selfUser?.avatarUrl ?? state.userAvatar,
+      userId: selfUser?.id ?? null,
+      userName: selfUser?.name ?? state.userName,
+      userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,

@@ -141,8 +141,8 @@ describe("slackSetupWizard.prepare", () => {
           messages_tab_enabled: true,
           messages_tab_read_only_enabled: false,
         },
-        assistant_view: {
-          assistant_description: "OpenClaw connects Slack assistant threads to OpenClaw agents.",
+        agent_view: {
+          agent_description: "OpenClaw connects Slack Agent View conversations to OpenClaw agents.",
           suggested_prompts: [
             {
               title: "What can you do?",
@@ -201,8 +201,7 @@ describe("slackSetupWizard.prepare", () => {
           bot_events: [
             "app_home_opened",
             "app_mention",
-            "assistant_thread_context_changed",
-            "assistant_thread_started",
+            "app_context_changed",
             "channel_rename",
             "member_joined_channel",
             "member_left_channel",
