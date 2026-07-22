@@ -1,3 +1,4 @@
+// Config load tests cover bootstrap fetch behavior and timeouts.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBootstrapConfig } from "../../../src/gateway/control-ui-contract.js";
 import { createApplicationConfigCapability } from "./config.ts";
@@ -27,7 +28,9 @@ function bootstrapResponse(serverVersion: string): Response {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("createApplicationConfigCapability", () => {
@@ -49,5 +52,63 @@ describe("createApplicationConfigCapability", () => {
 
     await expect(firstRefresh).resolves.toBeNull();
     expect(config.current.serverVersion).toBe("new");
+  });
+});
+
+describe("loadApplicationConfig", () => {
+  it("passes an AbortSignal to the config fetch", async () => {
+    const timeoutController = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+
+    const signalCapture = { signal: undefined as AbortSignal | undefined };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        signalCapture.signal = init?.signal;
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const capability = createApplicationConfigCapability({ basePath: "" });
+    await capability.refresh();
+
+    expect(signalCapture.signal).toBeDefined();
+    expect(AbortSignal.timeout).toHaveBeenCalledWith(15_000);
+  });
+
+  it("aborts a stalled config fetch when the deadline fires", async () => {
+    vi.useFakeTimers();
+    const captured = { signal: undefined as AbortSignal | undefined };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        captured.signal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      }),
+    );
+
+    const capability = createApplicationConfigCapability({ basePath: "" });
+    const refreshPromise = capability.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(captured.signal?.aborted).toBe(false);
+
+    // Just before the timeout — not yet aborted
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(captured.signal?.aborted).toBe(false);
+
+    // Past the deadline — signal aborted, fetch rejects, refresh settles
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(refreshPromise).resolves.toBeNull();
+    expect(captured.signal?.aborted).toBe(true);
+
+    // Config stays at defaults after the stalled fetch times out
+    expect(capability.current.serverVersion).toBeNull();
   });
 });
