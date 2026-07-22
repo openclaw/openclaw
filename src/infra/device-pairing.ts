@@ -159,7 +159,9 @@ const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"])
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
 
 const withLock = createAsyncLock();
-export type EffectiveOperatorDeviceIdentity = Pick<PairedDevice, "deviceId" | "publicKey">;
+export type EffectiveOperatorDeviceIdentity = Pick<PairedDevice, "deviceId" | "publicKey"> & {
+  scopes: string[];
+};
 
 const effectiveOperatorPairingListeners = new Set<
   (device: EffectiveOperatorDeviceIdentity) => void
@@ -174,12 +176,13 @@ export function onEffectiveOperatorDevicePaired(
 }
 
 function notifyEffectiveOperatorDevicePaired(device: PairedDevice): void {
-  if (!hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
+  const identity = resolveEffectiveOperatorDeviceIdentity(device);
+  if (!identity) {
     return;
   }
   for (const listener of effectiveOperatorPairingListeners) {
     try {
-      listener({ deviceId: device.deviceId, publicKey: device.publicKey });
+      listener(identity);
     } catch {
       // Pairing is already durable; observer failures cannot roll it back.
     }
@@ -312,6 +315,40 @@ export function hasEffectivePairedDeviceRole(
     return false;
   }
   return listEffectivePairedDeviceRoles(device).includes(normalized);
+}
+
+export function hasEffectivePairedDeviceScope(
+  device: Pick<PairedDevice, "role" | "roles" | "tokens">,
+  role: string,
+  scope: string,
+): boolean {
+  const normalizedRole = normalizeRole(role);
+  const token = normalizedRole ? device.tokens?.[normalizedRole] : undefined;
+  return Boolean(
+    normalizedRole &&
+    token &&
+    !token.revokedAtMs &&
+    hasEffectivePairedDeviceRole(device, normalizedRole) &&
+    roleScopesAllow({
+      role: normalizedRole,
+      requestedScopes: [scope],
+      allowedScopes: token.scopes,
+    }),
+  );
+}
+
+export function resolveEffectiveOperatorDeviceIdentity(
+  device: PairedDevice,
+): EffectiveOperatorDeviceIdentity | null {
+  const token = device.tokens?.[OPERATOR_ROLE];
+  if (!token || token.revokedAtMs || !hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
+    return null;
+  }
+  return {
+    deviceId: device.deviceId,
+    publicKey: device.publicKey,
+    scopes: normalizeDeviceAuthScopes(token.scopes),
+  };
 }
 
 /** Resolve the authenticated node pairing independently of surface approval. */
@@ -955,7 +992,7 @@ export async function approveDevicePairing(
   return await approveDevicePairingWithOptions(requestId, options, baseDir);
 }
 
-/** Approve the legacy Control UI migration only while no effective operator is paired. */
+/** Approve the legacy Control UI migration only while no pairing-capable operator is paired. */
 export async function approveControlUiDeviceAuthMigrationPairing(
   requestId: string,
   options: { callerScopes: readonly string[] },
@@ -963,7 +1000,7 @@ export async function approveControlUiDeviceAuthMigrationPairing(
 ): Promise<ApproveDevicePairingResult> {
   return await approveDevicePairingWithOptions(
     requestId,
-    { ...options, requireNoEffectiveOperator: true },
+    { ...options, requireNoPairingCapableOperator: true },
     baseDir,
   );
 }
@@ -979,7 +1016,7 @@ async function approveDevicePairingWithOptions(
           "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
         autoApproveNewDeviceScopes?: readonly string[];
-        requireNoEffectiveOperator?: boolean;
+        requireNoPairingCapableOperator?: boolean;
       }
     | undefined,
   baseDir?: string,
@@ -991,9 +1028,9 @@ async function approveDevicePairingWithOptions(
       return null;
     }
     if (
-      options?.requireNoEffectiveOperator &&
+      options?.requireNoPairingCapableOperator &&
       Object.values(state.pairedByDeviceId).some((device) =>
-        hasEffectivePairedDeviceRole(device, OPERATOR_ROLE),
+        hasEffectivePairedDeviceScope(device, OPERATOR_ROLE, "operator.pairing"),
       )
     ) {
       return { status: "forbidden", reason: "effective-operator-already-paired" };

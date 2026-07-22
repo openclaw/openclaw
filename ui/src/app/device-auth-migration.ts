@@ -93,7 +93,7 @@ export function createDeviceAuthMigrationController(params: {
       update({ deviceAuthMigrationBusy: true, deviceAuthMigrationError: null });
       try {
         await client.request("device.pair.approve", { requestId });
-        if (!params.isCurrent(client, epoch)) {
+        if (disposed || !params.isCurrent(client, epoch)) {
           return;
         }
         update({ deviceAuthMigrationRequestId: null, deviceAuthMigrationBusy: false });
@@ -101,7 +101,7 @@ export function createDeviceAuthMigrationController(params: {
         // device token; shared auth is no longer its baseline.
         params.gateway.connect();
       } catch (error) {
-        if (params.isCurrent(client, epoch)) {
+        if (!disposed && params.isCurrent(client, epoch)) {
           const message = error instanceof Error ? error.message : String(error);
           update({
             deviceAuthMigrationBusy: false,

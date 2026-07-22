@@ -43,9 +43,9 @@ import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
 import {
-  hasEffectivePairedDeviceRole,
   listDevicePairing,
   onEffectiveOperatorDevicePaired,
+  resolveEffectiveOperatorDeviceIdentity,
   type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
 import {
@@ -86,6 +86,7 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   recordRemoteNodeInfo,
   removeRemoteNodeInfo,
@@ -775,9 +776,17 @@ export async function startGatewayServer(
     });
   }
   if (controlUiDeviceAuthMigrationState?.status === "pending") {
-    const existingOperator = (await listDevicePairing()).paired.find((device) =>
-      hasEffectivePairedDeviceRole(device, "operator"),
-    );
+    const existingOperator = (await listDevicePairing()).paired
+      .map(resolveEffectiveOperatorDeviceIdentity)
+      .find(
+        (device): device is EffectiveOperatorDeviceIdentity =>
+          device !== null &&
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: ["operator.pairing"],
+            allowedScopes: device.scopes,
+          }),
+      );
     if (existingOperator) {
       try {
         controlUiDeviceAuthMigrationState = completeControlUiDeviceAuthMigration(
@@ -1326,7 +1335,14 @@ export async function startGatewayServer(
   const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
     device: EffectiveOperatorDeviceIdentity,
   ) => {
-    if (!controlUiDeviceAuthMigrationPending) {
+    if (
+      !controlUiDeviceAuthMigrationPending ||
+      !roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.pairing"],
+        allowedScopes: device.scopes,
+      })
+    ) {
       return;
     }
     const normalizedDeviceId = device.deviceId.trim();

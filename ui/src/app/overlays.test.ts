@@ -191,6 +191,49 @@ describe("device-auth upgrade migration", () => {
     overlays.dispose();
   });
 
+  it("does not reconnect when approval finishes after disposal", async () => {
+    let resolveApproval: (() => void) | undefined;
+    const approval = new Promise<void>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "device.pair.list") {
+        return Promise.resolve({
+          pending: [{ requestId: "self-request", deviceId: "browser-1" }],
+        });
+      }
+      if (method === "device.pair.approve") {
+        return approval;
+      }
+      return Promise.resolve([]);
+    });
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(request),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigrationRequestId).toBe("self-request");
+    });
+    const securing = overlays.secureThisBrowser();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("device.pair.approve", {
+        requestId: "self-request",
+      });
+    });
+    overlays.dispose();
+    resolveApproval?.();
+    await securing;
+
+    expect(harness.connect).not.toHaveBeenCalled();
+  });
+
   it("does not expose an action for another browser's request", async () => {
     const request = vi.fn<RequestFn>((method) =>
       Promise.resolve(

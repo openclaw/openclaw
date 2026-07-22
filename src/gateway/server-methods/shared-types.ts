@@ -232,7 +232,11 @@ export type GatewayRequestContext = {
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
   releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: { deviceId: string; publicKey: string }) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;

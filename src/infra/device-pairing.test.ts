@@ -14,6 +14,7 @@ import {
 } from "./device-pairing-store.js";
 import {
   approveBootstrapDevicePairing,
+  approveControlUiDeviceAuthMigrationPairing,
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
@@ -208,7 +209,7 @@ async function makeDevicePairingDir(): Promise<string> {
 describe("device pairing tokens", () => {
   test("notifies effective-operator listeners for owner and bootstrap approvals", async () => {
     const baseDir = await makeDevicePairingDir();
-    const pairedDevices: Array<{ deviceId: string; publicKey: string }> = [];
+    const pairedDevices: Array<{ deviceId: string; publicKey: string; scopes: string[] }> = [];
     const unsubscribe = onEffectiveOperatorDevicePaired((device) => {
       pairedDevices.push(device);
     });
@@ -256,12 +257,55 @@ describe("device pairing tokens", () => {
       );
 
       expect(pairedDevices).toEqual([
-        { deviceId: "listener-owner", publicKey: "listener-owner-key" },
-        { deviceId: "listener-bootstrap", publicKey: "listener-bootstrap-key" },
+        {
+          deviceId: "listener-owner",
+          publicKey: "listener-owner-key",
+          scopes: ["operator.read"],
+        },
+        {
+          deviceId: "listener-bootstrap",
+          publicKey: "listener-bootstrap-key",
+          scopes: ["operator.read"],
+        },
       ]);
     } finally {
       unsubscribe();
     }
+  });
+
+  test("allows migration approval when existing operators cannot manage pairings", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const readOnlyRequest = await requestDevicePairing(
+      {
+        deviceId: "read-only-owner",
+        publicKey: "read-only-owner-key",
+        role: "operator",
+        scopes: ["operator.read"],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(
+      readOnlyRequest.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
+    const migrationRequest = await requestDevicePairing(
+      {
+        deviceId: "migration-owner",
+        publicKey: "migration-owner-key",
+        role: "operator",
+        scopes: ["operator.pairing"],
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveControlUiDeviceAuthMigrationPairing(
+        migrationRequest.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({ status: "approved" });
   });
 
   beforeAll(async () => {

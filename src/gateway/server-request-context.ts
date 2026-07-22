@@ -60,7 +60,11 @@ type GatewayRequestContextParams = {
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
   releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
-  completeControlUiDeviceAuthMigration?: (device: { deviceId: string; publicKey: string }) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];

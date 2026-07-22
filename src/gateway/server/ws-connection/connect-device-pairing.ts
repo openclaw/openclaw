@@ -20,6 +20,7 @@ import {
   listApprovedPairedDeviceRoles,
   listDevicePairing,
   requestDevicePairing,
+  resolveEffectiveOperatorDeviceIdentity,
 } from "../../../infra/device-pairing.js";
 import {
   isMobilePairingSetupBootstrapProfile,
@@ -123,11 +124,28 @@ export async function authorizeGatewayConnectDevice(
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
     ? normalizeChromeExtensionOrigin(requestOrigin)
     : undefined;
+  const deviceAuthMigrationScopes =
+    authMethod !== "trusted-proxy" ||
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: ["operator.pairing"],
+      allowedScopes: scopes,
+    })
+      ? ["operator.pairing"]
+      : [];
   if (allowControlUiDeviceAuthMigration) {
     const pairingSnapshot = await listDevicePairing();
-    const existingOperator = pairingSnapshot.paired.find((candidate) =>
-      hasEffectivePairedDeviceRole(candidate, "operator"),
-    );
+    const existingOperator = pairingSnapshot.paired
+      .map(resolveEffectiveOperatorDeviceIdentity)
+      .find(
+        (candidate) =>
+          candidate &&
+          roleScopesAllow({
+            role: "operator",
+            requestedScopes: ["operator.pairing"],
+            allowedScopes: candidate.scopes,
+          }),
+      );
     if (existingOperator) {
       // The transition is only for installs whose retired bypass left them
       // without any trusted operator. Existing paired operators keep the
@@ -135,6 +153,7 @@ export async function authorizeGatewayConnectDevice(
       buildRequestContext().completeControlUiDeviceAuthMigration?.({
         deviceId: existingOperator.deviceId,
         publicKey: existingOperator.publicKey,
+        scopes: existingOperator.scopes,
       });
       if (!device) {
         const message =
@@ -155,7 +174,11 @@ export async function authorizeGatewayConnectDevice(
       allowControlUiDeviceAuthMigrationForUnpairedInstall = true;
     }
   }
-  if (!device && allowControlUiDeviceAuthMigrationForUnpairedInstall) {
+  if (
+    !device &&
+    allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+    deviceAuthMigrationScopes.length > 0
+  ) {
     // Plain-HTTP browsers cannot create a device identity. Preserve the exact
     // legacy shared-auth posture until the operator reopens this UI through a
     // secure context; never mint or approve a device without a signed key.
@@ -497,6 +520,7 @@ export async function authorizeGatewayConnectDevice(
         (approved?.status === "approved" || resolvedByConcurrentApproval);
       if (
         allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        deviceAuthMigrationScopes.length > 0 &&
         reason === "not-paired" &&
         !existingPairedDevice &&
         !pairingResolved &&
@@ -506,7 +530,7 @@ export async function authorizeGatewayConnectDevice(
         // approved browser. Keep only this signed, shared-authenticated
         // operator online long enough to approve its own pending request.
         connectionAdmittedForControlUiDeviceAuthMigration = true;
-        scopes = ["operator.pairing"];
+        scopes = deviceAuthMigrationScopes;
         return true;
       }
       if (!pairingResolved) {
@@ -641,7 +665,7 @@ export async function authorizeGatewayConnectDevice(
   if (connectionAdmittedForControlUiDeviceAuthMigration) {
     // Temporary upgrade admission is gateway-wide, so cap authority here before
     // client registration, hello publication, or token issuance can observe it.
-    scopes = ["operator.pairing"];
+    scopes = deviceAuthMigrationScopes;
   }
 
   const { deviceToken, bootstrapDeviceTokens } = await issueGatewayConnectDeviceTokens({
