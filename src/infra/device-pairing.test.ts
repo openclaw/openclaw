@@ -20,6 +20,7 @@ import {
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
+  onEffectiveOperatorDevicePaired,
   removePairedDevice,
   requestDevicePairing,
   rejectDevicePairing,
@@ -205,6 +206,61 @@ async function makeDevicePairingDir(): Promise<string> {
 }
 
 describe("device pairing tokens", () => {
+  test("notifies effective-operator listeners for owner and bootstrap approvals", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const pairedDeviceIds: string[] = [];
+    const unsubscribe = onEffectiveOperatorDevicePaired((deviceId) => {
+      pairedDeviceIds.push(deviceId);
+    });
+    try {
+      const nodeRequest = await requestDevicePairing(
+        {
+          deviceId: "listener-node",
+          publicKey: "listener-node-key",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(nodeRequest.request.requestId, { callerScopes: [] }, baseDir);
+
+      const ownerRequest = await requestDevicePairing(
+        {
+          deviceId: "listener-owner",
+          publicKey: "listener-owner-key",
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(
+        ownerRequest.request.requestId,
+        { callerScopes: ["operator.read"] },
+        baseDir,
+      );
+
+      const bootstrapRequest = await requestDevicePairing(
+        {
+          deviceId: "listener-bootstrap",
+          publicKey: "listener-bootstrap-key",
+          role: "operator",
+          scopes: ["operator.read"],
+          silent: true,
+        },
+        baseDir,
+      );
+      await approveBootstrapDevicePairing(
+        bootstrapRequest.request.requestId,
+        FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        baseDir,
+      );
+
+      expect(pairedDeviceIds).toEqual(["listener-owner", "listener-bootstrap"]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   beforeAll(async () => {
     suiteBaseDir = await suiteRootTracker.setup();
   });

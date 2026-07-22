@@ -461,6 +461,9 @@ describe("Control UI device-auth upgrade migration", () => {
         deviceAuthMigration: { pending: true },
         auth: { role: "operator", scopes: ["operator.pairing"] },
       });
+      const migrationClosed = new Promise<number>((resolve) => {
+        migrationWs!.once("close", resolve);
+      });
 
       const { approveDevicePairing, listDevicePairing, requestDevicePairing } =
         await import("../infra/device-pairing.js");
@@ -478,16 +481,8 @@ describe("Control UI device-auth upgrade migration", () => {
       await expect(
         approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
       ).resolves.toMatchObject({ status: "approved" });
-
-      const migrationList = await rpcReq<{
-        pending: Array<{ requestId: string; deviceId: string }>;
-      }>(migrationWs, "device.pair.list", {});
-      const migrationPending = migrationList.payload?.pending[0];
-      expect(migrationPending?.deviceId).toBe(migration.identity.deviceId);
-      const migrationApproval = await rpcReq(migrationWs, "device.pair.approve", {
-        requestId: migrationPending?.requestId,
-      });
-      expect(migrationApproval.ok).toBe(false);
+      await expect(migrationClosed).resolves.toBe(4001);
+      migrationWs = undefined;
 
       const paired = (await listDevicePairing()).paired;
       expect(paired.some((device) => device.deviceId === ownerIdentity.deviceId)).toBe(true);

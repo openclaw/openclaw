@@ -1180,48 +1180,6 @@ describe("deviceHandlers", () => {
     expect(serialized).not.toContain("pk-2");
   });
 
-  it("completes a pending migration when any effective operator is approved", async () => {
-    approveDevicePairingMock.mockResolvedValue({
-      status: "approved",
-      requestId: "req-operator",
-      device: {
-        deviceId: "device-operator",
-        publicKey: "pk-operator",
-        role: "operator",
-        roles: ["operator"],
-        approvedScopes: ["operator.pairing"],
-        tokens: {
-          operator: {
-            token: "operator-token",
-            role: "operator",
-            scopes: ["operator.pairing"],
-            createdAtMs: 175,
-          },
-        },
-        approvedAtMs: 200,
-        createdAtMs: 150,
-      },
-    });
-    const completeMigration = vi.fn();
-    const opts = createOptions(
-      "device.pair.approve",
-      { requestId: "req-operator" },
-      {
-        client: createClient(["operator.admin"], "device-1", {
-          isDeviceTokenAuth: true,
-        }),
-      },
-    );
-    opts.context.completeControlUiDeviceAuthMigration = completeMigration;
-
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
-
-    expect(completeMigration).toHaveBeenCalledWith("device-operator");
-  });
-
   it("retires the previous node generation before returning reapproval success", async () => {
     approveDevicePairingMock.mockResolvedValue({
       status: "approved",

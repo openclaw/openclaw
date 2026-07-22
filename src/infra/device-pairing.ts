@@ -159,6 +159,26 @@ const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"])
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
 
 const withLock = createAsyncLock();
+const effectiveOperatorPairingListeners = new Set<(deviceId: string) => void>();
+
+/** Subscribe to canonical pairing mutations that establish an effective operator. */
+export function onEffectiveOperatorDevicePaired(listener: (deviceId: string) => void): () => void {
+  effectiveOperatorPairingListeners.add(listener);
+  return () => effectiveOperatorPairingListeners.delete(listener);
+}
+
+function notifyEffectiveOperatorDevicePaired(device: PairedDevice): void {
+  if (!hasEffectivePairedDeviceRole(device, OPERATOR_ROLE)) {
+    return;
+  }
+  for (const listener of effectiveOperatorPairingListeners) {
+    try {
+      listener(device.deviceId);
+    } catch {
+      // Pairing is already durable; observer failures cannot roll it back.
+    }
+  }
+}
 
 /** Format a device-pairing authorization failure for CLI/API callers. */
 export function formatDevicePairingForbiddenMessage(result: DevicePairingForbiddenResult): string {
@@ -1089,6 +1109,7 @@ async function approveDevicePairingWithOptions(
       "both",
       installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
     );
+    notifyEffectiveOperatorDevicePaired(device);
     return {
       status: "approved",
       requestId,
@@ -1209,6 +1230,7 @@ export async function approveBootstrapDevicePairing(
       "both",
       installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
     );
+    notifyEffectiveOperatorDevicePaired(device);
     return {
       status: "approved",
       requestId,

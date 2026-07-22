@@ -17,7 +17,6 @@ import {
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
   getPendingDevicePairing,
-  hasEffectivePairedDeviceRole,
   listDevicePairing,
   removePairedDevice,
   type DeviceAuthToken,
@@ -408,13 +407,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
-    const approvedEffectiveOperator = hasEffectivePairedDeviceRole(approved.device, "operator");
     if (authz.isDeviceAuthMigrationCaller) {
       client!.isControlUiDeviceAuthMigration = false;
       client!.isControlUiDeviceAuthMigrationSession = false;
-    }
-    if (approvedEffectiveOperator) {
-      context.completeControlUiDeviceAuthMigration?.(normalizedDeviceId);
     }
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
     if (approved.nodePairingGenerationChanged) {

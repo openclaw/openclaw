@@ -50,6 +50,7 @@ import {
   isDiagnosticsTimelineEnabled,
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
+import { onEffectiveOperatorDevicePaired } from "../infra/device-pairing.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import {
@@ -1286,6 +1287,39 @@ export async function startGatewayServer(
       workerIngressEnabled: Boolean(workerEnvironmentService),
     }),
   );
+  const completeControlUiDeviceAuthMigrationForEffectiveOperator = (deviceId: string) => {
+    if (!controlUiDeviceAuthMigrationPending) {
+      return;
+    }
+    const normalizedDeviceId = deviceId.trim();
+    // Close the process-local grace immediately after approval. The durable
+    // receipt prevents stale legacy config from reopening it.
+    controlUiDeviceAuthMigrationPending = false;
+    for (const client of clients) {
+      if (!client.isControlUiDeviceAuthMigrationSession) {
+        continue;
+      }
+      if (
+        client.isControlUiDeviceAuthMigration &&
+        client.connect.device?.id.trim() === normalizedDeviceId
+      ) {
+        client.isControlUiDeviceAuthMigration = false;
+        client.isControlUiDeviceAuthMigrationSession = false;
+        continue;
+      }
+      client.invalidated = true;
+      client.invalidatedReason = "device-auth-migration-completed";
+      client.socket.close(4001, "device auth migration completed");
+    }
+    try {
+      completeControlUiDeviceAuthMigration(normalizedDeviceId, { env: process.env });
+    } catch (error) {
+      log.warn(`failed to persist Control UI device-auth migration completion: ${String(error)}`);
+    }
+  };
+  const unsubscribeEffectiveOperatorPairing = onEffectiveOperatorDevicePaired(
+    completeControlUiDeviceAuthMigrationForEffectiveOperator,
+  );
   resolveWorkerGatewayEndpoint = getWorkerIngressEndpoint;
   const presenceWatchedSessions = (connId: string): string[] => {
     // Presence snapshots stay small even if a long-lived client accumulates
@@ -1459,6 +1493,7 @@ export async function startGatewayServer(
   };
   const markClosePreludeStarted = () => {
     closePreludeStarted = true;
+    unsubscribeEffectiveOperatorPairing();
     gatewayInstanceDispatchReady = false;
     gatewayInstanceRuntime?.close();
     cronReconciliation.invalidate();
@@ -2061,31 +2096,8 @@ export async function startGatewayServer(
               clients,
             });
           },
-          completeControlUiDeviceAuthMigration: (deviceId: string) => {
-            if (!controlUiDeviceAuthMigrationPending) {
-              return;
-            }
-            // Close the process-local grace immediately after approval. The
-            // durable receipt prevents stale legacy config from reopening it.
-            controlUiDeviceAuthMigrationPending = false;
-            for (const client of clients) {
-              if (!client.isControlUiDeviceAuthMigrationSession) {
-                continue;
-              }
-              // Only the approving browser is cleared before this callback. Any
-              // other temporary sessions must not outlive the one-time transition.
-              client.invalidated = true;
-              client.invalidatedReason = "device-auth-migration-completed";
-              client.socket.close(4001, "device auth migration completed");
-            }
-            try {
-              completeControlUiDeviceAuthMigration(deviceId, { env: process.env });
-            } catch (error) {
-              log.warn(
-                `failed to persist Control UI device-auth migration completion: ${String(error)}`,
-              );
-            }
-          },
+          completeControlUiDeviceAuthMigration:
+            completeControlUiDeviceAuthMigrationForEffectiveOperator,
           claimControlUiDeviceAuthMigration: (deviceId: string) =>
             claimControlUiDeviceAuthMigration(deviceId, { env: process.env }),
           releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
