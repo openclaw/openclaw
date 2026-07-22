@@ -1064,6 +1064,20 @@ struct TalkModeManagerTests {
             runId: "missing-run") == nil)
     }
 
+    @Test func `native Talk chat request inherits thinking policy`() {
+        let request = TalkModeManager.makeChatSendRequest(
+            message: "hello",
+            sessionKey: "agent:main:main",
+            idempotencyKey: "talk-1")
+
+        #expect(request.method == "chat.send")
+        #expect(request.params["message"]?.value as? String == "hello")
+        #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
+        #expect(request.params["idempotencyKey"]?.value as? String == "talk-1")
+        #expect(request.params["thinking"] == nil)
+        #expect(request.params["timeoutMs"]?.value as? Int == 30000)
+    }
+
     @Test func `subscribes before sending chat completion request`() throws {
         let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let sourceURL = testsURL
@@ -1106,15 +1120,6 @@ struct TalkModeManagerTests {
         #expect(streaming.contains("OpenClawChatEventText.assistantText"))
         #expect(streaming.contains(#"chatEvent.state == "delta" || chatEvent.state == "final""#))
         #expect(!streaming.contains("OpenClawAgentEventPayload"))
-
-        let sendChatStart = try #require(source.range(of: "private func sendChat("))
-        let sendChatEnd = try #require(
-            source.range(
-                of: "private func waitForChatCompletion(",
-                range: sendChatStart.upperBound..<source.endIndex))
-        let sendChat = source[sendChatStart.lowerBound..<sendChatEnd.lowerBound]
-        #expect(sendChat.contains("thinking: nil"))
-        #expect(!sendChat.contains(#"thinking: "low""#))
     }
 
     @Test func `late incremental final cannot reopen canceled speech ownership`() async {
