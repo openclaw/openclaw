@@ -31,12 +31,11 @@ import {
 import {
   type ModelManifestNormalizationContext,
   type ModelRef,
-  findNormalizedProviderValue,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 
 // Shared model-selection helpers for config aliases, allowlists, provider
 // inference, and configured catalog rows used by CLI and runtime selectors.
