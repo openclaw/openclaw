@@ -1,5 +1,6 @@
 // Memory Core tests cover qmd manager plugin behavior.
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -876,6 +877,15 @@ describe("QmdMemoryManager", () => {
     return path.join(stateDir, "agents", selectedAgentId, "qmd", "xdg-config", "qmd", "index.yml");
   }
 
+  async function seedEmptyQmdIndex(manager: QmdMemoryManager): Promise<void> {
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    await fs.mkdir(path.dirname(indexPath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(indexPath);
+    db.exec("CREATE TABLE documents (collection TEXT, active INTEGER)");
+    db.close();
+  }
+
   async function createManager(params?: {
     mode?: "full" | "status" | "cli";
     cfg?: OpenClawConfig;
@@ -1387,6 +1397,75 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "status" });
     expect(spawnMock).not.toHaveBeenCalled();
     await manager?.close();
+  });
+
+  it("reports empty status for a missing qmd index without warning or creating state", async () => {
+    const qmdDir = path.join(stateDir, "agents", agentId, "qmd");
+    const { manager } = await createManager({ mode: "status" });
+
+    expect(manager.status()).toMatchObject({
+      backend: "qmd",
+      files: 0,
+      chunks: 0,
+    });
+    expectMockMessageNotContains(logWarnMock, "failed to read qmd index stats");
+    await expectPathMissing(qmdDir);
+  });
+
+  it("warns instead of treating a qmd index stat permission failure as missing", async () => {
+    const { manager } = await createManager({ mode: "status" });
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    const statError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation(() => {
+      throw statError;
+    });
+
+    expect(manager.status()).toMatchObject({ backend: "qmd", files: 0, chunks: 0 });
+
+    expect(statSpy).toHaveBeenCalledWith(indexPath);
+    expectMockMessageContains(logWarnMock, "failed to read qmd index stats");
+    expectMockMessageContains(logWarnMock, "permission denied");
+  });
+
+  it("skips the qmd vector probe when the index is missing", async () => {
+    const qmdDir = path.join(stateDir, "agents", agentId, "qmd");
+    cfg = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        qmd: { ...cfg.memory?.qmd, searchMode: "query" },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager({ mode: "status" });
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(manager.status().vector?.loadError).toContain("QMD index is missing");
+    await expectPathMissing(qmdDir);
+  });
+
+  it("exposes a qmd index stat I/O failure instead of reporting the index missing", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        qmd: { ...cfg.memory?.qmd, searchMode: "query" },
+      },
+    } as OpenClawConfig;
+    const { manager } = await createManager({ mode: "status" });
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    const statError = Object.assign(new Error("I/O failure"), { code: "EIO" });
+    const statSpy = vi.spyOn(fsSync, "statSync").mockImplementation(() => {
+      throw statError;
+    });
+
+    await expect(manager.probeVectorAvailability()).resolves.toBe(false);
+
+    expect(statSpy).toHaveBeenCalledWith(indexPath);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(manager.status().vector?.loadError).toContain("I/O failure");
+    expect(manager.status().vector?.loadError).not.toContain("index is missing");
   });
 
   it("initializes one-shot CLI mode without watchers or background updates", async () => {
@@ -7447,6 +7526,7 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
+    await seedEmptyQmdIndex(manager);
 
     const probe = manager.probeVectorAvailability();
     await vi.advanceTimersByTimeAsync(5000);
@@ -7524,6 +7604,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    await seedEmptyQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
@@ -7558,6 +7639,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    await seedEmptyQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(true);
     await expect(manager.probeEmbeddingAvailability()).resolves.toEqual({
@@ -7597,6 +7679,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    await seedEmptyQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(true);
     await manager.close();
@@ -7621,6 +7704,7 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig,
     });
+    await seedEmptyQmdIndex(manager);
 
     await expect(manager.probeVectorAvailability()).resolves.toBe(false);
     expect(manager.status().vector).toEqual({

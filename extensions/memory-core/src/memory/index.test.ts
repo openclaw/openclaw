@@ -1606,6 +1606,68 @@ describe("memory index", () => {
     expect(third).toBe(second);
   });
 
+  it("closes builtin managers by normalized agent identity", async () => {
+    const cfg = createCfg({});
+    cfg.agents!.list = [{ id: "main", default: true }, { id: "other" }];
+    const main = requireManager(await getMemorySearchManager({ cfg, agentId: "MAIN" }));
+    const other = requireManager(await getMemorySearchManager({ cfg, agentId: "other" }));
+    managersForCleanup.add(main);
+    managersForCleanup.add(other);
+    const mainClose = vi.spyOn(main, "close");
+    const otherClose = vi.spyOn(other, "close");
+
+    await closeMemoryIndexManagersForAgent({ cfg, agentId: "main" });
+
+    expect(mainClose).toHaveBeenCalledTimes(1);
+    expect(otherClose).not.toHaveBeenCalled();
+    const nextMain = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const nextOther = requireManager(await getMemorySearchManager({ cfg, agentId: "other" }));
+    managersForCleanup.add(nextMain);
+    expect(Object.is(nextMain, main)).toBe(false);
+    expect(nextOther).toBe(other);
+  });
+
+  it("closes old-workspace builtin managers when disabled under a new workspace", async () => {
+    const cfg = createCfg({});
+    cfg.agents!.list = [
+      { id: "main", default: true, workspace: workspaceDir },
+      { id: "other", workspace: workspaceDir },
+    ];
+    const oldMain = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const other = requireManager(await getMemorySearchManager({ cfg, agentId: "other" }));
+    managersForCleanup.add(oldMain);
+    managersForCleanup.add(other);
+    const oldMainClose = vi.spyOn(oldMain, "close");
+    const otherClose = vi.spyOn(other, "close");
+    const newWorkspaceDir = path.join(fixtureRoot, "new-workspace");
+    await fs.mkdir(newWorkspaceDir, { recursive: true });
+    const disabledCfg = {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            workspace: newWorkspaceDir,
+            memorySearch: { enabled: false },
+          },
+          { id: "other", workspace: workspaceDir },
+        ],
+      },
+    } as TestCfg;
+
+    await closeMemoryIndexManagersForAgent({ cfg: disabledCfg, agentId: "main" });
+
+    expect(oldMainClose).toHaveBeenCalledTimes(1);
+    expect(otherClose).not.toHaveBeenCalled();
+    const nextMain = requireManager(await getMemorySearchManager({ cfg, agentId: "main" }));
+    const nextOther = requireManager(await getMemorySearchManager({ cfg, agentId: "other" }));
+    managersForCleanup.add(nextMain);
+    expect(Object.is(nextMain, oldMain)).toBe(false);
+    expect(nextOther).toBe(other);
+  });
+
   it("does not reuse memory index managers across local-service hosts", async () => {
     const cfg = createCfg({});
     const firstAcquire = vi.fn(async () => undefined);
