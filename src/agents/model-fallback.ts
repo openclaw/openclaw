@@ -1070,10 +1070,17 @@ function resolveFallbackCandidatesUncached(
     }),
     manifestPlugins: params.manifestPlugins,
   });
+  // A configured provider/model pair remains explicit even when that provider is
+  // the default; a same-named alias from another provider must not rewrite it.
+  const exactProviderModelConfigured = hasExactConfiguredProviderModel({
+    cfg: params.cfg,
+    provider: normalizedPrimary.provider,
+    model: normalizedPrimary.model,
+  });
   const resolvedBareModelAlias =
     resolvedModelAlias?.alias &&
     (resolvedModelAlias.ref.provider === normalizedPrimary.provider ||
-      normalizedPrimary.provider === defaultProvider)
+      (normalizedPrimary.provider === defaultProvider && !exactProviderModelConfigured))
       ? resolvedModelAlias.ref
       : null;
   const resolvedPrimary =

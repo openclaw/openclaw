@@ -833,6 +833,25 @@ describe("runWithModelFallback", () => {
         expected: ["anthropic", "claude-sonnet-4-6"],
       },
       {
+        name: "resolves cross-provider bare alias from the default provider",
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-5.4",
+                fallbacks: [],
+              },
+              models: {
+                "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+              },
+            },
+          },
+        }),
+        provider: "openai",
+        model: "sonnet",
+        expected: ["anthropic", "claude-sonnet-4-6"],
+      },
+      {
         name: "resolves slash-form alias before provider parsing",
         cfg: makeCfg({
           agents: {
@@ -870,6 +889,60 @@ describe("runWithModelFallback", () => {
         provider: "opencode-go",
         model: "deepseek-v4-pro",
         expected: ["opencode-go", "deepseek-v4-pro"],
+      },
+      {
+        name: "keeps explicit default provider when another provider aliases the bare model id",
+        cfg: makeCfg({
+          models: {
+            providers: {
+              "cloudflare-ai-gateway": {
+                baseUrl: "https://gateway.example.test",
+                models: [
+                  {
+                    id: "gemini-2.5-flash-lite",
+                    name: "Gemini 2.5 Flash Lite via gateway",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1_000_000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+              google: {
+                baseUrl: "https://google.example.test",
+                models: [
+                  {
+                    id: "gemini-2.5-flash-lite",
+                    name: "Gemini 2.5 Flash Lite",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1_000_000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+          agents: {
+            defaults: {
+              model: {
+                primary: "cloudflare-ai-gateway/gemini-3.1-flash-lite",
+                fallbacks: [],
+              },
+              models: {
+                "cloudflare-ai-gateway/gemini-2.5-flash-lite": {
+                  alias: "cf-gemini-2.5-flash-lite",
+                },
+                "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+              },
+            },
+          },
+        }),
+        provider: "cloudflare-ai-gateway",
+        model: "gemini-2.5-flash-lite",
+        expected: ["cloudflare-ai-gateway", "gemini-2.5-flash-lite"],
       },
     ] satisfies Array<{
       name: string;
