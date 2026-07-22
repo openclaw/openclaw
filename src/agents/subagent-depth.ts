@@ -15,7 +15,6 @@ type SessionDepthEntry = {
   sessionId?: unknown;
   spawnDepth?: unknown;
   spawnedBy?: unknown;
-  parentSessionKey?: unknown;
 };
 
 function normalizeSpawnDepth(value: unknown): number | undefined {
@@ -157,8 +156,14 @@ export function getSubagentDepthFromSessionStore(
       return storedDepth;
     }
 
-    const parentKey =
-      normalizeOptionalString(entry?.spawnedBy) ?? normalizeOptionalString(entry?.parentSessionKey);
+    // Only spawnedBy is spawn lineage. parentSessionKey is UI threading
+    // (dashboard auto-parenting, forks, checkpoints) and must never add depth;
+    // sessions.create persists explicit spawnDepth for every fresh entry.
+    // Accepted tradeoff: pre-upgrade visible children carried lineage only via
+    // parentSessionKey and now resolve as roots; that transient population may
+    // spawn one extra generation (still capped by maxChildrenPerAgent), which
+    // beats permanently misclassifying operator sessions as depth-1 leaves.
+    const parentKey = normalizeOptionalString(entry?.spawnedBy);
     if (!parentKey) {
       return undefined;
     }
