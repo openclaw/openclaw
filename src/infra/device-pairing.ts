@@ -159,10 +159,16 @@ const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"])
 const BROWSER_DEVICE_CLIENT_MODE = "webchat";
 
 const withLock = createAsyncLock();
-const effectiveOperatorPairingListeners = new Set<(deviceId: string) => void>();
+export type EffectiveOperatorDeviceIdentity = Pick<PairedDevice, "deviceId" | "publicKey">;
+
+const effectiveOperatorPairingListeners = new Set<
+  (device: EffectiveOperatorDeviceIdentity) => void
+>();
 
 /** Subscribe to canonical pairing mutations that establish an effective operator. */
-export function onEffectiveOperatorDevicePaired(listener: (deviceId: string) => void): () => void {
+export function onEffectiveOperatorDevicePaired(
+  listener: (device: EffectiveOperatorDeviceIdentity) => void,
+): () => void {
   effectiveOperatorPairingListeners.add(listener);
   return () => effectiveOperatorPairingListeners.delete(listener);
 }
@@ -173,7 +179,7 @@ function notifyEffectiveOperatorDevicePaired(device: PairedDevice): void {
   }
   for (const listener of effectiveOperatorPairingListeners) {
     try {
-      listener(device.deviceId);
+      listener({ deviceId: device.deviceId, publicKey: device.publicKey });
     } catch {
       // Pairing is already durable; observer failures cannot roll it back.
     }

@@ -41,10 +41,12 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,
   onEffectiveOperatorDevicePaired,
+  type EffectiveOperatorDeviceIdentity,
 } from "../infra/device-pairing.js";
 import {
   isDiagnosticsEnabled,
@@ -188,6 +190,19 @@ ensureOpenClawCliOnPath();
 const MAX_MEDIA_TTL_HOURS = 24 * 7;
 const POST_READY_MAINTENANCE_DELAY_MS = 250;
 const RETAINED_PLUGIN_CLEANUP_DELAY_MS = 30_000;
+
+export function shouldRetainControlUiDeviceAuthMigrationSession(params: {
+  sessionDevice: { id: string; publicKey: string } | null | undefined;
+  approvedDevice: EffectiveOperatorDeviceIdentity;
+}): boolean {
+  const approvedDeviceId = params.approvedDevice.deviceId.trim();
+  const approvedPublicKey = normalizeDevicePublicKeyBase64Url(params.approvedDevice.publicKey);
+  return Boolean(
+    params.sessionDevice?.id.trim() === approvedDeviceId &&
+    approvedPublicKey &&
+    normalizeDevicePublicKeyBase64Url(params.sessionDevice.publicKey) === approvedPublicKey,
+  );
+}
 
 function approvalRequestTargetsSession(
   request: unknown,
@@ -1308,11 +1323,13 @@ export async function startGatewayServer(
       workerIngressEnabled: Boolean(workerEnvironmentService),
     }),
   );
-  const completeControlUiDeviceAuthMigrationForEffectiveOperator = (deviceId: string) => {
+  const completeControlUiDeviceAuthMigrationForEffectiveOperator = (
+    device: EffectiveOperatorDeviceIdentity,
+  ) => {
     if (!controlUiDeviceAuthMigrationPending) {
       return;
     }
-    const normalizedDeviceId = deviceId.trim();
+    const normalizedDeviceId = device.deviceId.trim();
     // Close the process-local grace immediately after approval. The durable
     // receipt prevents stale legacy config from reopening it.
     controlUiDeviceAuthMigrationPending = false;
@@ -1322,10 +1339,13 @@ export async function startGatewayServer(
       }
       if (
         client.isControlUiDeviceAuthMigration &&
-        client.connect.device?.id.trim() === normalizedDeviceId
+        shouldRetainControlUiDeviceAuthMigrationSession({
+          sessionDevice: client.connect.device,
+          approvedDevice: device,
+        })
       ) {
-        // Authorization is handshake-bound. Keep the winning socket limited
-        // to its own pairing until it reconnects with the new device token.
+        // Retention is bound to the approved key as well as its derived id.
+        // Keep only that identity long enough to receive the approval response.
         continue;
       }
       client.invalidated = true;

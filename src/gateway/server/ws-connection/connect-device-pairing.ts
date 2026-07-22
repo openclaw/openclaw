@@ -132,7 +132,10 @@ export async function authorizeGatewayConnectDevice(
       // The transition is only for installs whose retired bypass left them
       // without any trusted operator. Existing paired operators keep the
       // normal owner-approval boundary for every other browser.
-      buildRequestContext().completeControlUiDeviceAuthMigration?.(existingOperator.deviceId);
+      buildRequestContext().completeControlUiDeviceAuthMigration?.({
+        deviceId: existingOperator.deviceId,
+        publicKey: existingOperator.publicKey,
+      });
       if (!device) {
         const message =
           "control ui requires device identity (use HTTPS or localhost secure context)";

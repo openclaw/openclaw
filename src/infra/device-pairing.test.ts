@@ -208,9 +208,9 @@ async function makeDevicePairingDir(): Promise<string> {
 describe("device pairing tokens", () => {
   test("notifies effective-operator listeners for owner and bootstrap approvals", async () => {
     const baseDir = await makeDevicePairingDir();
-    const pairedDeviceIds: string[] = [];
-    const unsubscribe = onEffectiveOperatorDevicePaired((deviceId) => {
-      pairedDeviceIds.push(deviceId);
+    const pairedDevices: Array<{ deviceId: string; publicKey: string }> = [];
+    const unsubscribe = onEffectiveOperatorDevicePaired((device) => {
+      pairedDevices.push(device);
     });
     try {
       const nodeRequest = await requestDevicePairing(
@@ -255,7 +255,10 @@ describe("device pairing tokens", () => {
         baseDir,
       );
 
-      expect(pairedDeviceIds).toEqual(["listener-owner", "listener-bootstrap"]);
+      expect(pairedDevices).toEqual([
+        { deviceId: "listener-owner", publicKey: "listener-owner-key" },
+        { deviceId: "listener-bootstrap", publicKey: "listener-bootstrap-key" },
+      ]);
     } finally {
       unsubscribe();
     }

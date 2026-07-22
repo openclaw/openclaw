@@ -12,6 +12,7 @@ import {
 } from "../infra/device-identity.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { CONTROL_UI_CLIENT } from "./server.auth.test-helpers.js";
+import { shouldRetainControlUiDeviceAuthMigrationSession } from "./server.impl.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
@@ -53,6 +54,40 @@ async function signedDevice(ws: WebSocket, identityPath: string) {
 }
 
 describe("Control UI device-auth upgrade migration", () => {
+  it("retains only the migration session bound to the approved public key", () => {
+    const approvedIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(os.tmpdir(), `openclaw-device-auth-approved-${randomUUID()}.sqlite`),
+    });
+    const otherIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(os.tmpdir(), `openclaw-device-auth-other-${randomUUID()}.sqlite`),
+    });
+    const approvedPublicKey = publicKeyRawBase64UrlFromPem(approvedIdentity.publicKeyPem);
+    const otherPublicKey = publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem);
+    const approvedDevice = {
+      deviceId: approvedIdentity.deviceId,
+      publicKey: approvedPublicKey,
+    };
+
+    expect(
+      shouldRetainControlUiDeviceAuthMigrationSession({
+        sessionDevice: { id: approvedIdentity.deviceId, publicKey: approvedPublicKey },
+        approvedDevice,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetainControlUiDeviceAuthMigrationSession({
+        sessionDevice: { id: approvedIdentity.deviceId, publicKey: otherPublicKey },
+        approvedDevice,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetainControlUiDeviceAuthMigrationSession({
+        sessionDevice: { id: otherIdentity.deviceId, publicKey: approvedPublicKey },
+        approvedDevice,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps a device-less legacy browser online with secure-context remediation", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
