@@ -1,8 +1,8 @@
 ---
-summary: "Validate and preview experimental Claw agent packages"
+summary: "Validate, preview, and add experimental Claw agent packages"
 read_when:
   - You want to validate a grouped Claw manifest
-  - You want to preview adding one agent from a Claw
+  - You want to preview or add one agent from a Claw
 title: "Claws"
 ---
 
@@ -62,21 +62,31 @@ openclaw claws add ./incident-triage.claw.json --dry-run --json
 ```
 
 The plan reports the derived agent and workspace, every proposed action,
-prerequisites, blockers, and distinct capability escalations. Capability records
-show the exact package, MCP, scheduled-work, sandbox, tool, or heartbeat effect
-and are included in plan integrity. Use `--agent-id` or
-`--workspace` to preview alternatives when package defaults collide with local
-state.
+prerequisites, blockers, distinct capability escalations, and a `planIntegrity`
+digest. Capability records show the exact package, MCP, scheduled-work, sandbox,
+tool, or heartbeat effect. Review the plan before creating the agent:
 
-This initial experimental command is read-only. `claws add` requires
-`--dry-run` and does not create the agent or mutate OpenClaw state.
+```bash
+openclaw claws add ./incident-triage.claw.json \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN>
+```
+
+`--yes` alone is insufficient. OpenClaw rebuilds the plan and rejects consent
+when the source, destination, or live configuration changed after preview. Use
+`--agent-id` or `--workspace` during both preview and apply when package
+defaults collide with local state.
+
+At this stage, adding a Claw creates the new agent and workspace configuration
+and records installation provenance. Later Claws stages add managed workspace
+files and other declared resources.
 
 ## Command reference
 
 | Command                  | Purpose                                        |
 | ------------------------ | ---------------------------------------------- |
 | `claws inspect <source>` | Validate a package directory or JSON manifest. |
-| `claws add <source>`     | Preview adding one new agent and workspace.    |
+| `claws add <source>`     | Preview or create one new agent and workspace. |
 
 Use `--json` for experimental machine-readable output.
 
