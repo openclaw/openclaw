@@ -108,6 +108,7 @@ export function resolveAgentScopedOutboundMediaAccess(
     workspaceDir?: string;
     mediaAccess?: OutboundMediaAccess;
     mediaReadFile?: OutboundMediaReadFile;
+    sandboxWorkspaceDir?: string;
   } & OutboundHostMediaPolicyContext,
 ): OutboundMediaAccess {
   const resolvedWorkspaceDir =
@@ -123,8 +124,9 @@ export function resolveAgentScopedOutboundMediaAccess(
           cfg: params.cfg,
           agentId: params.agentId,
           mediaSources: params.mediaSources,
+          sandboxWorkspaceDir: params.sandboxWorkspaceDir,
         })
-      : getAgentScopedMediaLocalRoots(params.cfg, params.agentId));
+      : getAgentScopedMediaLocalRoots(params.cfg, params.agentId, params.sandboxWorkspaceDir));
   const localRoots = appendWorkspaceDirToLocalRoots(baseLocalRoots, resolvedWorkspaceDir);
   const readFile =
     params.mediaAccess?.readFile ??

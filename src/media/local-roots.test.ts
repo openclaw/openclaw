@@ -82,11 +82,66 @@ describe("local media roots", () => {
       minLength: 4,
     },
     {
-      name: "adds the active agent workspace without re-opening broad agent state roots",
+      name: "adds the active agent workspace without re-opening broad agent state or sandbox roots",
       stateDir: path.join("/tmp", "openclaw-agent-media-roots-state"),
       getRoots: () => getAgentScopedMediaLocalRoots({}, "ops"),
-      expectedContained: ["workspace-ops", "sandboxes"],
-      expectedExcluded: ["agents"],
+      expectedContained: ["workspace-ops"],
+      expectedExcluded: ["agents", "sandboxes"],
+    },
+    {
+      name: "replaces sandboxes parent with exact sandbox workspace when sandboxWorkspaceDir provided",
+      stateDir: path.join("/tmp", "openclaw-sandbox-scoped-state"),
+      getRoots: () => {
+        const sandboxWs = path.join(
+          "/tmp",
+          "openclaw-sandbox-scoped-state",
+          "sandboxes",
+          "session-a-abc123",
+        );
+        return getAgentScopedMediaLocalRoots({}, "ops", sandboxWs);
+      },
+      expectedContained: ["workspace-ops", "sandboxes/session-a-abc123"],
+      expectedExcluded: ["agents", "sandboxes"],
+      minLength: 5,
+    },
+    {
+      name: "removes sandboxes parent when sandboxWorkspaceDir is not provided (secure default)",
+      stateDir: path.join("/tmp", "openclaw-sandbox-secure-default-state"),
+      getRoots: () => getAgentScopedMediaLocalRoots({}, "ops"),
+      expectedContained: ["workspace-ops"],
+      expectedExcluded: ["agents", "sandboxes"],
+    },
+    {
+      name: "replaces sandboxes parent with sandboxWorkspaceDir when agentId is absent",
+      stateDir: path.join("/tmp", "openclaw-sandbox-no-agent-state"),
+      getRoots: () => {
+        const sandboxWs = path.join(
+          "/tmp",
+          "openclaw-sandbox-no-agent-state",
+          "sandboxes",
+          "session-a-abc123",
+        );
+        return getAgentScopedMediaLocalRoots({}, undefined, sandboxWs);
+      },
+      expectedContained: ["sandboxes/session-a-abc123"],
+      expectedExcluded: ["agents", "sandboxes"],
+      minLength: 5,
+    },
+    {
+      name: "replaces sandboxes parent with sandboxWorkspaceDir when agent workspace is unresolved",
+      stateDir: path.join("/tmp", "openclaw-sandbox-unresolved-state"),
+      getRoots: () => {
+        const sandboxWs = path.join(
+          "/tmp",
+          "openclaw-sandbox-unresolved-state",
+          "sandboxes",
+          "session-a-abc123",
+        );
+        return getAgentScopedMediaLocalRoots({}, "unresolved", sandboxWs);
+      },
+      expectedContained: ["sandboxes/session-a-abc123"],
+      expectedExcluded: ["agents", "sandboxes"],
+      minLength: 5,
     },
   ] as const)("$name", ({ stateDir, getRoots, expectedContained, expectedExcluded, minLength }) => {
     expectAgentMediaRootsCase({
