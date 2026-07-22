@@ -40,6 +40,8 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
+  pluginRuntimeSessionMismatchError,
+  rejectPluginRuntimeSessionMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementPatchError,
@@ -90,6 +92,18 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     });
     if (initialPlacementPatchError) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementPatchError));
+      return;
+    }
+    const pluginOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+    if (
+      rejectPluginRuntimeSessionMismatch({
+        client,
+        key: canonicalKey,
+        entry: lifecycleEntry,
+        respond,
+        action: "patch",
+      })
+    ) {
       return;
     }
     const lifecycleIdentities = [canonicalKey, key, lifecycleEntry?.sessionId];
@@ -174,6 +188,15 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           });
           return { primaryKey, candidateKeys: migratedTarget.storeKeys };
         },
+        authorize: ({ existingEntry }) => {
+          const mismatchError = pluginRuntimeSessionMismatchError({
+            client,
+            key: canonicalKey,
+            entry: existingEntry,
+            action: "patch",
+          });
+          return mismatchError ? { ok: false, error: mismatchError } : undefined;
+        },
         project: async ({ primaryKey, existingEntry, entries }) => {
           const projected = await projectSessionsPatchEntry({
             cfg,
@@ -183,6 +206,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             agentId: requestedAgentId,
             patch: p,
             loadGatewayModelCatalog: loadPatchModelCatalog,
+            pluginOwnerId,
           });
           if (!projected.ok) {
             return projected;

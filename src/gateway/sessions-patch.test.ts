@@ -39,6 +39,7 @@ async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
+  pluginOwnerId?: string;
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
@@ -47,6 +48,7 @@ async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    pluginOwnerId: params.pluginOwnerId,
   });
 }
 
@@ -1600,6 +1602,46 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("opencode-go");
     expect(entry.modelOverride).toBe("kimi-k2.6");
     expect(entry.authProfileOverride).toBe("work");
+  });
+
+  describe("plugin ownership", () => {
+    test("stamps pluginOwnerId when creating a new session entry", async () => {
+      const store: Record<string, SessionEntry> = {};
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          storeKey: MAIN_SESSION_KEY,
+          patch: { key: MAIN_SESSION_KEY, label: "new" },
+          pluginOwnerId: "plugin-a",
+        }),
+      );
+      expect(entry.pluginOwnerId).toBe("plugin-a");
+      expect(store[MAIN_SESSION_KEY]?.pluginOwnerId).toBe("plugin-a");
+    });
+
+    test("does not stamp pluginOwnerId on existing entries", async () => {
+      const store = mainStoreEntry({ pluginOwnerId: "plugin-a" });
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          patch: { key: MAIN_SESSION_KEY, label: "renamed" },
+          pluginOwnerId: "plugin-b",
+        }),
+      );
+      expect(entry.pluginOwnerId).toBe("plugin-a");
+    });
+
+    test("does not stamp pluginOwnerId when none is provided", async () => {
+      const store: Record<string, SessionEntry> = {};
+      const entry = expectPatchOk(
+        await runPatch({
+          store,
+          storeKey: MAIN_SESSION_KEY,
+          patch: { key: MAIN_SESSION_KEY, label: "new" },
+        }),
+      );
+      expect(entry.pluginOwnerId).toBeUndefined();
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
