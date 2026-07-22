@@ -1,4 +1,11 @@
+import type { Insertable, Selectable } from "kysely";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 // Persists monotonic machine evidence for detached task execution and supervision.
 import {
   openOpenClawStateDatabase,
@@ -6,7 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { sanitizeTaskStatusText } from "./task-status.js";
 
-export const TASK_EXECUTION_RECEIPT_KINDS = [
+const TASK_EXECUTION_RECEIPT_KINDS = [
   "heartbeat",
   "tool_call",
   "branch",
@@ -34,15 +41,12 @@ export type TaskExecutionReceipt = {
   detail?: Record<string, unknown>;
 };
 
-type ReceiptRow = {
-  task_id: string;
-  sequence: number;
-  kind: string;
-  status: string;
-  recorded_at: number;
-  summary: string | null;
-  detail_json: string | null;
-};
+type TaskExecutionReceiptsTable = OpenClawStateKyselyDatabase["task_execution_receipts"];
+type TaskExecutionReceiptDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "task_execution_receipts" | "task_runs"
+>;
+type ReceiptRow = Selectable<TaskExecutionReceiptsTable>;
 
 function redactReceiptDetailValue(value: unknown): unknown {
   if (typeof value === "string") {
@@ -119,21 +123,32 @@ export function recordTaskExecutionReceipt(params: {
   const detailJson = detail === undefined ? null : JSON.stringify(detail);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const task = db.prepare("SELECT 1 FROM task_runs WHERE task_id = ?").get(taskId);
+      const kysely = getNodeSqliteKysely<TaskExecutionReceiptDatabase>(db);
+      const task = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely.selectFrom("task_runs").select("task_id").where("task_id", "=", taskId),
+      );
       if (!task) {
         throw new Error(`Task execution receipt references missing task: ${taskId}`);
       }
-      const current = db
-        .prepare(
-          "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM task_execution_receipts WHERE task_id = ?",
-        )
-        .get(taskId) as { sequence: number };
-      const sequence = Number(current.sequence) + 1;
-      db.prepare(
-        `INSERT INTO task_execution_receipts
-          (task_id, sequence, kind, status, recorded_at, summary, detail_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(taskId, sequence, params.kind, params.status, recordedAt, summary || null, detailJson);
+      const current = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("task_execution_receipts")
+          .select((eb) => eb.fn.max<number>("sequence").as("sequence"))
+          .where("task_id", "=", taskId),
+      );
+      const sequence = Number(current?.sequence ?? 0) + 1;
+      const row: Insertable<TaskExecutionReceiptsTable> = {
+        task_id: taskId,
+        sequence,
+        kind: params.kind,
+        status: params.status,
+        recorded_at: recordedAt,
+        summary: summary || null,
+        detail_json: detailJson,
+      };
+      executeSqliteQuerySync(db, kysely.insertInto("task_execution_receipts").values(row));
       return {
         taskId,
         sequence,
@@ -155,12 +170,15 @@ export function listTaskExecutionReceipts(taskIdInput: string): TaskExecutionRec
     return [];
   }
   const { db } = openOpenClawStateDatabase();
-  const rows = db
-    .prepare(
-      `SELECT task_id, sequence, kind, status, recorded_at, summary, detail_json
-       FROM task_execution_receipts WHERE task_id = ? ORDER BY sequence ASC`,
-    )
-    .all(taskId) as ReceiptRow[];
+  const kysely = getNodeSqliteKysely<TaskExecutionReceiptDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("task_execution_receipts")
+      .selectAll()
+      .where("task_id", "=", taskId)
+      .orderBy("sequence", "asc"),
+  ).rows;
   return rows.map(parseReceiptRow);
 }
 

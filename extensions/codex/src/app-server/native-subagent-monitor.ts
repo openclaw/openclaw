@@ -49,6 +49,7 @@ type ParentState = {
   agentId?: string;
   taskRuntime?: AgentHarnessTaskRuntime;
   mirror?: CodexNativeSubagentTaskMirror;
+  isRelayHealthy?: () => boolean;
 };
 
 type ChildState = {
@@ -153,6 +154,7 @@ function registerMonitor(params: {
   agentId?: string;
   runtime?: NativeSubagentMonitorRuntime;
   retainClient?: () => (() => void) | undefined;
+  isRelayHealthy?: () => boolean;
 }): { unregister: () => void } {
   let monitor = monitors.get(params.client);
   if (!monitor) {
@@ -166,6 +168,7 @@ function registerMonitor(params: {
     requesterSessionKey: params.requesterSessionKey,
     taskRuntimeScope: params.taskRuntimeScope,
     agentId: params.agentId,
+    isRelayHealthy: params.isRelayHealthy,
   });
 }
 
@@ -248,6 +251,7 @@ class Monitor {
     requesterSessionKey?: string;
     taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
     agentId?: string;
+    isRelayHealthy?: () => boolean;
   }): { unregister: () => void } {
     const parentThreadId = params.parentThreadId.trim();
     if (!parentThreadId) {
@@ -272,6 +276,7 @@ class Monitor {
     state.requesterSessionKey ??= params.requesterSessionKey;
     state.taskRuntimeScope ??= params.taskRuntimeScope;
     state.agentId ??= params.agentId;
+    state.isRelayHealthy ??= params.isRelayHealthy;
     this.prepareParentTaskRuntime(state);
     for (const childState of this.childStates.values()) {
       if (childState.parentThreadId === parentThreadId && childState.pendingCompletion) {
@@ -319,6 +324,7 @@ class Monitor {
         requesterSessionKey: state.requesterSessionKey,
         agentId: state.agentId,
         endpoint: `codex-app-server:${getCodexAppServerClientInstanceId(this.client)}`,
+        isRelayHealthy: state.isRelayHealthy,
       },
       state.taskRuntime,
     );
@@ -858,9 +864,23 @@ class Monitor {
     }
     const runId = codexNativeSubagentRunId(completion.childThreadId);
     if (completion.status === "succeeded") {
+      const receipts = state.taskRuntime?.listExecutionReceipts(runId) ?? [];
+      const kinds = new Set(
+        receipts.filter((receipt) => receipt.status === "ok").map((receipt) => receipt.kind),
+      );
+      const gate =
+        kinds.has("deploy") || kinds.has("canary") || kinds.has("readback")
+          ? "green"
+          : kinds.has("pr")
+            ? "delivered"
+            : kinds.has("commit") || kinds.has("tests")
+              ? "built"
+              : kinds.has("branch") || kinds.has("diff")
+                ? "running_code"
+                : "healthy";
       const health = state.taskRuntime?.evaluateExecutionGate({
         runId,
-        gate: "healthy",
+        gate,
         now: eventAt,
       });
       if (health && !health.ok) {

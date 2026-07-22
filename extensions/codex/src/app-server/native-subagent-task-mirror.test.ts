@@ -183,6 +183,113 @@ describe("CodexNativeSubagentTaskMirror", () => {
     mirror.dispose();
   });
 
+  it("records only structured artifact receipts from completed runtime items", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      { parentThreadId: "parent-thread", now: () => 22_000 },
+      runtime,
+    );
+    mirror.handleNotification({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "child-thread",
+          status: { type: "active", activeFlags: [] },
+          source: {
+            subAgent: { thread_spawn: { parent_thread_id: "parent-thread", depth: 1 } },
+          },
+        },
+      },
+    });
+
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "child-thread",
+        item: {
+          type: "commandExecution",
+          status: "completed",
+          aggregatedOutput: "I created a PR and deployed green",
+          executionReceipts: [
+            { kind: "branch", status: "ok", detail: { name: "fix/receipt-gates" } },
+            { kind: "diff", status: "ok", detail: { readable: true, files: 2 } },
+          ],
+        },
+      },
+    });
+
+    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      kind: "branch",
+      status: "ok",
+      recordedAt: 22_000,
+      summary: undefined,
+      detail: { name: "fix/receipt-gates" },
+    });
+    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      kind: "diff",
+      status: "ok",
+      recordedAt: 22_000,
+      summary: undefined,
+      detail: { readable: true, files: 2 },
+    });
+    expect(runtime.recordExecutionReceipt).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "pr" }),
+    );
+    expect(runtime.recordExecutionReceipt).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "deploy" }),
+    );
+    mirror.dispose();
+  });
+
+  it("stalls when relay lifecycle drops while connector notifications continue", () => {
+    const runtime = createRuntime();
+    let relayHealthy = true;
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        now: () => 23_000,
+        isRelayHealthy: () => relayHealthy,
+      },
+      runtime,
+    );
+    mirror.handleNotification({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "child-thread",
+          status: { type: "active", activeFlags: [] },
+          source: {
+            subAgent: { thread_spawn: { parent_thread_id: "parent-thread", depth: 1 } },
+          },
+        },
+      },
+    });
+    relayHealthy = false;
+
+    mirror.handleNotification({
+      method: "turn/started",
+      params: { threadId: "child-thread", turn: { id: "turn-2" } },
+    });
+
+    expect(runtime.recordExecutionReceipt).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        kind: "relay_health",
+        status: "error",
+      }),
+    );
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        progressSummary: "Stalled: native hook relay registration is unavailable.",
+      }),
+    );
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+    mirror.dispose();
+  });
+
   it("ignores subagent threads spawned by a different parent thread", () => {
     const runtime = createRuntime();
     const mirror = new CodexNativeSubagentTaskMirror(

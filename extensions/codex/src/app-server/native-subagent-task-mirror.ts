@@ -34,6 +34,8 @@ type CodexNativeSubagentTaskMirrorParams = {
   endpoint?: string;
   supervisionPeriodMs?: number;
   now?: () => number;
+  /** Reads the native hook-relay registration lifecycle, never connector traffic. */
+  isRelayHealthy?: () => boolean;
 };
 
 /** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
@@ -96,17 +98,17 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const directThreadId = trimOptional(readString(params, "threadId"));
-    const recordsDirectHealth =
+    const recordsConnectorHealth =
       notification.method === "turn/started" ||
       notification.method === "turn/completed" ||
       notification.method === "item/completed";
     if (
-      recordsDirectHealth &&
+      recordsConnectorHealth &&
       directThreadId &&
       this.mirrorStateByThreadId.get(directThreadId) === "mirrored"
     ) {
       const runId = codexNativeSubagentRunId(directThreadId);
-      this.recordHealthy(runId, this.now());
+      this.recordConnectorHeartbeat(runId, this.now());
       if (notification.method === "item/completed") {
         const item = isJsonObject(params.item) ? params.item : undefined;
         const itemType = trimOptional(item ? readString(item, "type") : undefined);
@@ -123,6 +125,7 @@ export class CodexNativeSubagentTaskMirror {
               : `Codex tool item completed: ${itemType}.`,
             detail: { itemType },
           });
+          this.recordStructuredArtifactReceipts(runId, item, failed);
         }
       }
     }
@@ -490,6 +493,10 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private recordHealthy(runId: string, recordedAt: number): void {
+    this.recordConnectorHeartbeat(runId, recordedAt);
+  }
+
+  private recordConnectorHeartbeat(runId: string, recordedAt: number): void {
     this.runtime.recordExecutionReceipt({
       runId,
       kind: "heartbeat",
@@ -497,16 +504,58 @@ export class CodexNativeSubagentTaskMirror {
       recordedAt,
       summary: "Codex worker heartbeat observed.",
     });
-    for (const kind of ["relay_health", "connector_health"] as const) {
-      this.runtime.recordExecutionReceipt({
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "connector_health",
+      status: "ok",
+      recordedAt,
+      summary: "Codex app-server connector is healthy.",
+    });
+    const relayHealthy = this.params.isRelayHealthy?.() ?? false;
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "relay_health",
+      status: relayHealthy ? "ok" : "error",
+      recordedAt,
+      summary: relayHealthy
+        ? "Native hook relay registration is healthy."
+        : "Native hook relay registration is unavailable.",
+    });
+    if (!relayHealthy) {
+      this.runtime.recordTaskRunProgressByRunId({
         runId,
-        kind,
-        status: "ok",
-        recordedAt,
-        summary: `${kind === "relay_health" ? "Relay" : "Connector"} is healthy.`,
+        lastEventAt: recordedAt,
+        progressSummary: "Stalled: native hook relay registration is unavailable.",
       });
     }
     this.armSupervision(runId);
+  }
+
+  private recordStructuredArtifactReceipts(
+    runId: string,
+    item: JsonObject,
+    itemFailed: boolean,
+  ): void {
+    const receipts = Array.isArray(item.executionReceipts) ? item.executionReceipts : [];
+    for (const candidate of receipts) {
+      if (!isJsonObject(candidate)) {
+        continue;
+      }
+      const kind = readExecutionArtifactKind(candidate);
+      if (!kind) {
+        continue;
+      }
+      const status = readString(candidate, "status") === "error" || itemFailed ? "error" : "ok";
+      const detail = isJsonObject(candidate.detail) ? candidate.detail : undefined;
+      this.runtime.recordExecutionReceipt({
+        runId,
+        kind,
+        status,
+        recordedAt: this.now(),
+        summary: trimOptional(readString(candidate, "summary")),
+        ...(detail ? { detail } : {}),
+      });
+    }
   }
 
   private armSupervision(runId: string): void {
@@ -530,15 +579,39 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private markStalled(runId: string, summary: string, recordedAt = this.now()): void {
-    for (const kind of ["relay_health", "connector_health"] as const) {
-      this.runtime.recordExecutionReceipt({ runId, kind, status: "error", recordedAt, summary });
-    }
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "relay_health",
+      status: "error",
+      recordedAt,
+      summary,
+    });
     this.runtime.recordTaskRunProgressByRunId({
       runId,
       lastEventAt: recordedAt,
       progressSummary: `Stalled: ${summary}`,
     });
   }
+}
+
+const EXECUTION_ARTIFACT_KINDS = new Set([
+  "branch",
+  "diff",
+  "commit",
+  "tests",
+  "pr",
+  "deploy",
+  "canary",
+  "readback",
+] as const);
+
+function readExecutionArtifactKind(
+  value: JsonObject,
+): "branch" | "diff" | "commit" | "tests" | "pr" | "deploy" | "canary" | "readback" | undefined {
+  const kind = readString(value, "kind");
+  return kind && EXECUTION_ARTIFACT_KINDS.has(kind as never)
+    ? (kind as "branch" | "diff" | "commit" | "tests" | "pr" | "deploy" | "canary" | "readback")
+    : undefined;
 }
 
 /** Converts a Codex child thread id into the OpenClaw task-runtime run id. */
