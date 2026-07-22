@@ -37,6 +37,12 @@ describe("reconcileHeartbeatMonitorJobs", () => {
         declarationKey: undefined,
         payload: { kind: "systemEvent", text: "user job" },
       } as CronJob,
+      // Prefix collision without a heartbeat payload must never be pruned.
+      {
+        ...monitorJob("collider"),
+        id: "prefix-collider",
+        payload: { kind: "systemEvent", text: "not a monitor" },
+      } as CronJob,
     ]);
     const cfg = {
       agents: {
@@ -95,9 +101,7 @@ describe("reconcileHeartbeatMonitorJobs", () => {
   });
 
   it("keeps converging other agents when one convergence fails", async () => {
-    const add = vi
-      .fn(async () => ({}))
-      .mockRejectedValueOnce(new Error("store busy"));
+    const add = vi.fn(async () => ({})).mockRejectedValueOnce(new Error("store busy"));
     const remove = vi.fn(async () => ({ ok: true }));
     const list = vi.fn(async () => []);
     const cfg = {

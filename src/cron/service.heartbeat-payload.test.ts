@@ -48,6 +48,20 @@ describe("heartbeat payload execution", () => {
       await expect(cron.update(job.id, { payload: { kind: "heartbeat" } })).rejects.toThrow(
         /system-owned/,
       );
+      // Existing monitors reject every patch, not just payload-kind edits.
+      await expect(cron.update(job.id, { enabled: false })).rejects.toThrow(/system-owned/);
+      // A declarative upsert on the monitor's key cannot repurpose it either.
+      await expect(
+        cron.add({
+          declarationKey: "heartbeat:main",
+          name: "rogue-upsert",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "systemEvent", text: "hijack" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+        }),
+      ).rejects.toThrow(/system-owned/);
       const result = await cron.run(job.id, "force");
       expect(result.ok).toBe(true);
       expect(requestHeartbeat).toHaveBeenCalledWith(

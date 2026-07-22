@@ -73,7 +73,9 @@ export async function reconcileHeartbeatMonitorJobs(params: {
     const jobs = await params.cron.list({ includeDisabled: true });
     for (const job of jobs) {
       const key = job.declarationKey;
-      if (!key?.startsWith(HEARTBEAT_DECLARATION_PREFIX)) {
+      // Prune only proven monitors: prefix alone must never delete an
+      // unrelated declaration-keyed job that happens to share the namespace.
+      if (!key?.startsWith(HEARTBEAT_DECLARATION_PREFIX) || job.payload.kind !== "heartbeat") {
         continue;
       }
       if (desired.has(key.slice(HEARTBEAT_DECLARATION_PREFIX.length))) {

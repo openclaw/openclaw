@@ -759,6 +759,13 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const existing = matches[0];
 
     if (existing) {
+      // A declarative upsert may not repurpose an existing heartbeat monitor
+      // with a different payload; only the gateway's own convergence touches it.
+      if (existing.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+        throw new Error(
+          "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+        );
+      }
       const now = state.deps.nowMs();
       const nextJob = structuredClone(existing);
       applyDeclarativeJobSpec(nextJob, normalizedInput, {
@@ -846,6 +853,15 @@ async function updateLoadedJob(params: {
   await ensureLoaded(state, { skipRecompute: true });
   const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
+  // Existing monitors are config-driven: any patch (disable, reschedule,
+  // repurpose) would silently diverge from agents.*.heartbeat until the next
+  // reconcile, so updates are rejected outright. Removal stays allowed — a
+  // removed monitor self-heals at the next convergence.
+  if (job.payload.kind === "heartbeat") {
+    throw new Error(
+      "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+    );
+  }
   const now = state.deps.nowMs();
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
