@@ -167,15 +167,30 @@ export async function generateBearerTokenFromIam(params: {
     if (expiresAt !== undefined) {
       iamTokenCache.set(params.region, { token, expiresAt });
     }
+    iamTokenFailureLogged.delete(params.region);
     return token;
   } catch (error) {
-    log.debug?.("Mantle IAM token generation unavailable", {
-      region: params.region,
-      error: formatErrorMessage(error),
-    });
+    // Log once per region per process. Without this guard, hosts that do not
+    // have AWS credentials (or whose default-chain lookup fails) get the
+    // "Mantle IAM token generation unavailable" line written on every
+    // implicit-discovery call (every catalog refresh) instead of once.
+    // Fixes the per-request log spam reported in #67288.
+    if (!iamTokenFailureLogged.has(params.region)) {
+      iamTokenFailureLogged.add(params.region);
+      log.debug?.("Mantle IAM token generation unavailable", {
+        region: params.region,
+        error: formatErrorMessage(error),
+      });
+    }
     return undefined;
   }
 }
+
+/** Per-region failure-log dedupe set so the "unavailable" line is written
+ *  at most once per region per process lifetime, rather than on every
+ *  implicit-discovery call. Cleared whenever a token is successfully
+ *  generated for that region. */
+const iamTokenFailureLogged = new Set<string>();
 
 /**
  * Read a cached IAM bearer token for the given region (sync, no generation).
@@ -225,6 +240,7 @@ export async function resolveMantleRuntimeBearerToken(params: {
 /** Clear the IAM token cache for tests. */
 export function resetIamTokenCacheForTest(): void {
   iamTokenCache.clear();
+  iamTokenFailureLogged.clear();
 }
 
 // ---------------------------------------------------------------------------
