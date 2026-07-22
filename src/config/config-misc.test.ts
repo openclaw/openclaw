@@ -14,6 +14,16 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
   {
+    name: "gateway.controlUi.sessionObserver",
+    config: {
+      gateway: {
+        controlUi: {
+          sessionObserver: "yes",
+        },
+      },
+    },
+  },
+  {
     name: "gateway.controlUi.allowExternalEmbedUrls",
     config: {
       gateway: {
@@ -136,6 +146,28 @@ describe("model provider localService config", () => {
       expect(result.config.models?.providers?.[provider]?.models).toEqual([]);
       expect(result.config.models?.providers?.[provider]?.baseUrl).toBe("");
     }
+  });
+
+  it("revalidates materialized bundled provider overlays", () => {
+    const first = validateConfigObjectRaw({
+      models: {
+        providers: {
+          google: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error("expected bundled provider overlay to pass initial validation");
+    }
+    expect(first.config.models?.providers?.google?.baseUrl).toBe("");
+    expect(first.config.models?.providers?.google?.models).toEqual([]);
+
+    const second = validateConfigObjectRaw(first.config);
+    expect(second.ok).toBe(true);
   });
 
   it("rejects standalone timeout overlays for unknown model providers", () => {
@@ -569,6 +601,17 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
             allowExternalEmbedUrls: value,
           },
         },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+});
+
+describe("gateway.controlUi.sessionObserver", () => {
+  it("accepts boolean values", () => {
+    for (const value of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { sessionObserver: value } },
       });
       expect(result.success).toBe(true);
     }

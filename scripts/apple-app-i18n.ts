@@ -41,9 +41,10 @@ const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xc
 const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
+const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
 const IOS_SOURCE_PREFIXES = [
   "apps/ios/",
-  "apps/shared/OpenClawKit/Sources/OpenClawChatUI/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
 const APPLE_CATALOG_KINDS = new Set([
@@ -61,7 +62,10 @@ const IOS_CATALOG_EXCLUSIONS = new Set([
   "OpenClaw",
   "z",
 ]);
-const MACOS_SOURCE_PREFIX = "apps/macos/Sources/OpenClaw/";
+const MACOS_SOURCE_PREFIXES = [
+  "apps/macos/Sources/OpenClaw/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
+] as const;
 const MACOS_CATALOG_EXCLUSIONS = new Set([
   // Product names are intentionally verbatim.
   "OpenClaw",
@@ -550,7 +554,7 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
 function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    entry.path.startsWith(MACOS_SOURCE_PREFIX) &&
+    MACOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
     APPLE_CATALOG_KINDS.has(entry.kind) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)

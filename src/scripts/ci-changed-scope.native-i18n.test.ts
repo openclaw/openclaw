@@ -14,6 +14,7 @@ describe("native i18n changed scope", () => {
       "apps/.i18n/apple-translation-contradictions.json",
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values-sv/strings.xml",
+      "apps/android/wear/src/main/res/values-sv/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
       "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
       "apps/ios/WatchApp/sv.lproj/InfoPlist.strings",

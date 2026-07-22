@@ -79,7 +79,7 @@ export type ControlUiMockGatewayScenario = {
   }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
-    events: Array<{ event: "agent" | "session.tool"; payload: unknown }>;
+    events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
     intervalMs?: number;
   };
   /** Session run state served alongside history (hasActiveRun/activeRunIds). */

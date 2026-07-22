@@ -2,12 +2,12 @@
    GROUPED CHAT LAYOUT (Slack-style)
    ============================================= */
 
-/* Chat Group Layout - default (assistant/other on left). The bottom PADDING
-   is the thread's rhythm unit and doubles as the reveal zone for the
-   overlaid hover footer: padding (not margin) keeps the gap inside the
-   group's hover box so the pointer can travel to the footer without it
-   vanishing mid-way. */
+/* Chat Group Layout - default (assistant/other on left). Groups without a
+   footer keep the shared 26px rhythm directly. Footer-bearing groups split
+   message content and footer into separate rows so each row keeps the avatar
+   gutter while only the message row controls avatar alignment. */
 .chat-group {
+  --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   display: flex;
   gap: 10px;
   align-items: flex-start;
@@ -22,15 +22,50 @@
   justify-content: flex-start;
 }
 
+.chat-group.chat-group--with-footer {
+  --chat-group-avatar-column: 1;
+  --chat-group-content-column: 2;
+  display: grid;
+  grid-template-columns: 36px minmax(0, var(--chat-message-column-max));
+  grid-template-rows: auto auto;
+  gap: 2px 10px;
+  justify-content: start;
+  padding-bottom: 0;
+}
+
+.chat-group.user.chat-group--with-footer {
+  --chat-group-avatar-column: 2;
+  --chat-group-content-column: 1;
+  grid-template-columns: minmax(0, var(--chat-message-column-max)) 36px;
+  justify-content: end;
+}
+
+.chat-group.chat-group--with-footer .chat-avatar {
+  grid-column: var(--chat-group-avatar-column);
+  grid-row: 1;
+}
+
+.chat-group.chat-group--with-footer > .chat-group-messages {
+  grid-column: var(--chat-group-content-column);
+  grid-row: 1;
+  max-width: none;
+}
+
+.chat-group.chat-group--with-footer > .chat-group-footer {
+  grid-column: var(--chat-group-content-column);
+  grid-row: 2;
+  max-width: none;
+}
+
 .chat-group-messages {
-  position: relative; /* anchors the overlaid hover footer */
+  position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
   gap: 2px;
   flex: 1 1 auto;
-  width: 100%;
-  max-width: var(--chat-message-max-width, min(900px, 68%));
   align-items: flex-start;
+  width: 100%;
+  max-width: var(--chat-message-column-max);
   min-width: 0;
 }
 
@@ -39,34 +74,26 @@
   align-items: flex-end;
 }
 
-.chat-group.tool .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+.chat-group.tool {
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.user .chat-group-footer {
   justify-content: flex-end;
 }
 
-/* Footer at bottom of message group (role + time). Hidden until the group is
-   hovered/focused so the thread reads as a clean stream; overlaid into the
-   group's bottom margin (no reserved flow height) so message rhythm stays
-   even. Touch devices restore the in-flow always-visible footer below. */
+/* Footer at bottom of a message group (role + time). It stays in flow while
+   visually hidden so wrapped controls contribute to virtual-row measurement
+   instead of painting over the next message. */
 .chat-group-footer {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 1; /* revealed overlay paints above the next group's leading edge */
   display: flex;
-  /* Wrap instead of clipping in narrow lanes (extreme chatMessageMaxWidth,
-     slim split panes): a wrapped revealed footer may transiently overlap the
-     next group, but every control stays reachable. Hidden overlays must not
-     intercept pointer input, so hit-testing is gated on the reveal. */
+  align-self: stretch;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  width: 100%;
   min-width: 0;
-  margin-top: 1px;
+  min-height: 24px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease-out;
@@ -111,8 +138,8 @@
   margin-top: 4px;
 }
 
-/* Single line, ellipsized: the footer overlays a fixed 26px rhythm gap, so
-   long configurable sender names must never wrap it taller than the gap. */
+/* Keep long configurable sender names compact while footer actions retain
+   their reachable wrapped layout in narrow panes. */
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
@@ -428,8 +455,8 @@ img.chat-avatar {
 /* Assistant replies render as a flat text stream: only user messages keep the
    bubble card. Border collapses to 0 so the streaming border pulse and hover
    outline become no-ops without extra rules. */
-.chat-group.assistant .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+.chat-group.assistant {
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.assistant .chat-bubble {
@@ -467,12 +494,15 @@ img.chat-avatar {
   margin-inline: 0;
 }
 
-.chat-thread--direct .chat-group.assistant .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, 100%));
+.chat-thread--direct .chat-group.chat-group--with-footer {
+  --chat-group-avatar-column: 1;
+  --chat-group-content-column: 1;
+  grid-template-columns: minmax(0, var(--chat-message-column-max));
 }
 
-.chat-thread--direct .chat-group.tool .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, 100%));
+.chat-thread--direct .chat-group.assistant,
+.chat-thread--direct .chat-group.tool {
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
 }
 
 .chat-duplicate-count {
@@ -499,17 +529,14 @@ img.chat-avatar {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* No hover to reveal an overlay: restore the in-flow always-visible footer
-     and the tighter rhythm that accounts for its height. */
+  /* No hover to reveal the footer: keep it always visible and add a little
+     more separation from the next group. */
   .chat-group {
     padding-bottom: 0;
     margin-bottom: 14px;
   }
 
   .chat-group-footer {
-    position: static;
-    flex-wrap: wrap;
-    width: 100%;
     margin-top: 4px;
     opacity: 1;
     pointer-events: auto;
@@ -881,23 +908,31 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-group {
+    --chat-message-column-max: 82%;
     margin-left: 0;
     margin-right: 0;
   }
 
-  .chat-group-messages {
-    max-width: 82%;
-  }
-
-  .chat-group.tool .chat-group-messages,
-  .chat-group.assistant .chat-group-messages {
-    max-width: calc(100% - 46px);
+  .chat-group.tool,
+  .chat-group.assistant {
+    --chat-message-column-max: calc(100% - 46px);
   }
 }
 
 @media (max-width: 400px) {
-  .chat-group-messages {
-    max-width: 88%;
+  .chat-group {
+    --chat-message-column-max: 88%;
+  }
+
+  .chat-group.chat-group--with-footer {
+    --chat-group-avatar-column: 1;
+    --chat-group-content-column: 1;
+    grid-template-columns: minmax(0, var(--chat-message-column-max));
+  }
+
+  .chat-group.tool,
+  .chat-group.assistant {
+    --chat-message-column-max: calc(100% - 46px);
   }
 
   .chat-avatar,

@@ -1031,7 +1031,9 @@ openclaw-chat-page {
 }
 
 .chat-message-image {
-  max-width: 300px;
+  width: auto;
+  max-width: min(100%, 300px);
+  height: auto;
   max-height: 200px;
   border-radius: var(--radius-md);
   object-fit: contain;
