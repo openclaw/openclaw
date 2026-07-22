@@ -1,3 +1,4 @@
+import type { lookup as dnsLookupCb } from "node:dns";
 /**
  * Chrome DevTools Protocol browser operations.
  *
@@ -7,7 +8,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { PinnedHostname, SsrFPolicy } from "../infra/net/ssrf.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
@@ -75,7 +76,7 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 /** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
-  lookup?: PinnedHostname["lookup"];
+  lookup?: typeof dnsLookupCb;
   fullPage?: boolean;
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
@@ -413,7 +414,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 /** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
-  lookup?: PinnedHostname["lookup"];
+  lookup?: typeof dnsLookupCb;
   limit?: number;
   timeoutMs?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
@@ -894,7 +895,7 @@ async function buildCdpRoleSnapshot(params: {
 /** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 export async function snapshotRoleViaCdp(opts: {
   wsUrl: string;
-  lookup?: PinnedHostname["lookup"];
+  lookup?: typeof dnsLookupCb;
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;

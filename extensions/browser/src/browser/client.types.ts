@@ -3,7 +3,9 @@
  *
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
-import type { PinnedHostname } from "../infra/net/ssrf.js";
+import type { lookup as dnsLookupCb } from "node:dns";
+
+export type BrowserCdpLookup = typeof dnsLookupCb;
 
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
@@ -129,7 +131,7 @@ export type BrowserTab = {
   url: string;
   wsUrl?: string;
   /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
-  wsLookup?: PinnedHostname["lookup"];
+  wsLookup?: BrowserCdpLookup;
   type?: string;
 };
 
