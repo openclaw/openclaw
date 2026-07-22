@@ -478,14 +478,14 @@ export function createSessionMcpRuntime(params: {
     }
     try {
       const result = await request();
-      // A caller-owned deadline cancels only this operation; it is not evidence that
-      // the shared MCP server is unhealthy.
-      if (tracksFailureBackoff && !options?.signal?.aborted) {
+      if (tracksFailureBackoff) {
         serverBackoff.delete(serverName);
       }
       return result;
     } catch (error) {
-      if (tracksFailureBackoff) {
+      // A caller-owned deadline cancels only this operation; it is not evidence that
+      // the shared MCP server is unhealthy.
+      if (tracksFailureBackoff && !options?.signal?.aborted) {
         recordServerToolFailure(serverName, nowMs);
       }
       throw error;
