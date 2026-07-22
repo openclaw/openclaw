@@ -1127,7 +1127,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           cfg,
           surface: "matrix",
         });
-        const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+        const useAccessGroups = true;
         // Keep mention stripping on the command-only path so history and agent
         // prompt text continue to see the original Matrix message.
         const commandCheckText = stripMatrixMentionPrefix({

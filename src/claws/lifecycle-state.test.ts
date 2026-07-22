@@ -77,7 +77,7 @@ describe("Claw status and remove", () => {
         expectedRemovalSurfaceDigest: "sha256:unused",
         expectedState: "missing",
         fallbackWorkspace: "/tmp/old-worker",
-        config: { agents: { list: [{ id: "worker", workspace: "/tmp/new-worker" }] } },
+        config: { agents: { entries: { worker: { workspace: "/tmp/new-worker" } } } },
         onModified: () => new Error("agent recreated"),
       }),
     ).rejects.toThrow("agent recreated");
@@ -125,7 +125,7 @@ describe("Claw status and remove", () => {
     persistClawInstallRecord(current.plan, { env: current.env, status: "config_committed" });
 
     await expect(
-      readClawStatus("worker", { env: current.env, config: { agents: { list: [] } } }),
+      readClawStatus("worker", { env: current.env, config: { agents: { entries: {} } } }),
     ).resolves.toMatchObject({ summary: { claws: 1, partial: 1 } });
   });
 
@@ -187,7 +187,7 @@ describe("Claw status and remove", () => {
 
     expect(plan.actions).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "agent", target: "agents.list[worker]" }),
+        expect.objectContaining({ kind: "agent", target: 'agents.entries["worker"]' }),
         expect.objectContaining({ kind: "configBinding", target: "bindings[agentId=worker]" }),
         expect.objectContaining({ kind: "agentAllow", target: "tools.agentToAgent.allow[worker]" }),
         expect.objectContaining({ kind: "workspace", action: "trash" }),
@@ -296,7 +296,7 @@ describe("Claw status and remove", () => {
       packageRefsReleased: 1,
       workspaceFiles: [{ path: "SOUL.md", action: "deleted" }],
     });
-    expect(config.agents?.list?.some((agent) => agent.id === "worker")).toBe(false);
+    expect(config.agents?.entries?.worker).toBeUndefined();
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).rejects.toThrow();
     await expect(readClawStatus("worker", { env: current.env, config })).resolves.toMatchObject({
       summary: { claws: 0 },
@@ -499,9 +499,8 @@ describe("Claw status and remove", () => {
   it("blocks removal when the created agent config changed", async () => {
     const current = await addFixture();
     const config = current.getConfig();
-    const agentIndex = config.agents!.list!.findIndex((agent) => agent.id === "worker");
-    const agent = config.agents!.list![agentIndex]!;
-    config.agents!.list![agentIndex] = { ...agent, name: "Operator edit" };
+    const agent = config.agents!.entries!.worker!;
+    config.agents!.entries!.worker = { ...agent, name: "Operator edit" };
     const plan = await buildClawRemovePlan("worker", { env: current.env, config });
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "agent_modified" }));
     await expect(
@@ -564,8 +563,10 @@ describe("Claw status and remove", () => {
       origin: "claw-introduced",
       independentOwner: false,
     });
+    const { id: firstId, ...firstConfig } = first.plan.agent.config;
+    const { id: secondId, ...secondConfig } = second.plan.agent.config;
     let config: OpenClawConfig = {
-      agents: { list: [first.plan.agent.config, second.plan.agent.config] },
+      agents: { entries: { [firstId]: firstConfig, [secondId]: secondConfig } },
     };
     const remove = await buildClawRemovePlan("worker-a", { env: first.env, config });
     await applyClawRemovePlan(remove, {

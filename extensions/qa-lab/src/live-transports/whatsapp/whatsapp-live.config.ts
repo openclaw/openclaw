@@ -196,15 +196,17 @@ export function buildWhatsAppQaConfig(
           ...baseCfg.tools,
           media: {
             ...baseCfg.tools?.media,
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-transcribe",
+                capabilities: ["audio" as const],
+              },
+              ...(baseCfg.tools?.media?.models ?? []),
+            ],
             audio: {
               ...baseCfg.tools?.media?.audio,
               enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-4o-transcribe",
-                },
-              ],
             },
           },
         },

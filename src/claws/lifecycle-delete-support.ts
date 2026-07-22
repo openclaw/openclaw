@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   prepareLegacyWorkspaceStateReset,
   removeLegacyWorkspaceStateForReset,
@@ -107,7 +107,7 @@ export function synthesizeOrphanInstall(params: {
 }
 
 export function deletionEffects(config: OpenClawConfig, agentId: string, fallbackWorkspace = "") {
-  const agent = config.agents?.list?.find((candidate) => candidate.id === agentId);
+  const agent = listAgentEntries(config).find((candidate) => candidate.id === agentId);
   const pruned = pruneAgentConfig(config, agentId);
   const workspace = agent?.workspace ?? fallbackWorkspace;
   const agentDir = resolveAgentDir(config, agentId);

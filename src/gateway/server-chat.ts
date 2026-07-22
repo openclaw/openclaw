@@ -111,15 +111,7 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
 }
 
 function resolveHeartbeatAckMaxChars(): number {
-  try {
-    const cfg = getRuntimeConfig();
-    return Math.max(
-      0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    );
-  } catch {
-    return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  }
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {

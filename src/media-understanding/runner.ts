@@ -45,6 +45,7 @@ import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { matchesMediaEntryCapability } from "./entry-capabilities.js";
 import {
   clearLocalAudioInspectionCacheForTests,
   inspectLocalAudioSelection,
@@ -662,9 +663,17 @@ function resolveImageModelFromAgentDefaults(params: {
 }
 
 function hasExplicitImageUnderstandingConfig(params: {
-  config?: MediaUnderstandingConfig;
+  cfg: OpenClawConfig;
+  providerRegistry: ProviderRegistry;
 }): boolean {
-  return (params.config?.models?.length ?? 0) > 0;
+  return (params.cfg.tools?.media?.models ?? []).some((entry) =>
+    matchesMediaEntryCapability({
+      entry,
+      source: "shared",
+      capability: "image",
+      providerRegistry: params.providerRegistry,
+    }),
+  );
 }
 
 function isMinimaxNativeVisionModel(params: { provider: string; model?: string }): boolean {
@@ -1008,7 +1017,7 @@ export async function runCapability(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
-  const config = params.config ?? cfg.tools?.media?.[capability];
+  const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
   if (config?.enabled === false) {
     return {
       outputs: [],
@@ -1051,7 +1060,8 @@ export async function runCapability(params: {
     capability === "image" &&
     activeProvider &&
     !hasExplicitImageUnderstandingConfig({
-      config,
+      cfg,
+      providerRegistry: params.providerRegistry,
     })
   ) {
     if (

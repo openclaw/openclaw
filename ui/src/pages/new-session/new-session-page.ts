@@ -76,8 +76,6 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserTarget: BrowserTarget | null = null;
   @state() private placePopoverOpen = false;
   @state() private placePopoverHiding = false;
-  @state() private agentPopoverOpen = false;
-  @state() private agentPopoverHiding = false;
   // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
 
@@ -475,9 +473,8 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.error = null;
     this.placePopoverHiding = false;
-    this.agentPopoverHiding = false;
+    this.closeAgentDropdown();
     this.closeBrowser();
-    this.closeAgentPopover();
     this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
@@ -771,7 +768,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     // Retire hidden pickers before their late requests can mutate this submitted draft.
     this.closeBrowser();
-    this.closeAgentPopover();
     for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
       "wa-dropdown[open]",
     )) {
@@ -1097,6 +1093,15 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.isAdmin();
   }
 
+  private closeAgentDropdown() {
+    const dropdown = this.querySelector<HTMLElement & { open: boolean }>(
+      ".new-session-page__select--agent wa-dropdown",
+    );
+    if (dropdown) {
+      dropdown.open = false;
+    }
+  }
+
   private closeBrowser() {
     this.browserRequestToken += 1;
     this.browserLoading = false;
@@ -1107,16 +1112,6 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.placePopoverOpen = false;
     const popover = this.querySelector<HTMLElement & { open: boolean }>(
       ".new-session-page__place-popover",
-    );
-    if (popover) {
-      popover.open = false;
-    }
-  }
-
-  private closeAgentPopover() {
-    this.agentPopoverOpen = false;
-    const popover = this.querySelector<HTMLElement & { open: boolean }>(
-      ".new-session-page__agent-popover",
     );
     if (popover) {
       popover.open = false;
@@ -1233,17 +1228,6 @@ class NewSessionPage extends OpenClawLightDomElement {
       agents,
       agentId: this.agentId,
       disabled: this.submitting || Boolean(this.pendingCloud.sessionKey),
-      popoverOpen: this.agentPopoverOpen,
-      popoverHiding: this.agentPopoverHiding,
-      onGuardTransition: (event) => this.guardPopoverTransition(event, this.agentPopoverHiding),
-      onPopoverOpenChange: (open) => {
-        this.agentPopoverOpen = open;
-      },
-      onPopoverHidingChange: (hiding) => {
-        this.agentPopoverHiding = hiding;
-      },
-      onRestoreTrigger: () =>
-        this.restorePopoverTrigger("new-session-agent-trigger", ".new-session-page__agent-popover"),
       onSelect: (agentId) => this.selectAgentId(agentId),
     });
   }

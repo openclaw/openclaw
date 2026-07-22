@@ -3,7 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
-import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionsObserverAskResult,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -97,6 +100,7 @@ export type ChatProps = {
   observerRunId?: string | null;
   observerStartedAt?: number;
   observerLastReadAt?: number;
+  onObserverAsk?: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
@@ -669,6 +673,7 @@ export function renderChat(props: ChatProps) {
               ${props.observerHudReady
                 ? html`
                     <openclaw-chat-observer-hud
+                      .sessionKey=${props.sessionKey}
                       .digest=${props.observerDigest ?? null}
                       .running=${Boolean(props.observerRunId)}
                       .activeRunId=${props.observerRunId ?? null}
@@ -677,6 +682,7 @@ export function renderChat(props: ChatProps) {
                       .sideChatOpen=${sideChatVisible}
                       .planStatus=${props.planStatus ?? null}
                       .pullRequests=${props.pullRequests ?? []}
+                      .onAsk=${props.onObserverAsk}
                     ></openclaw-chat-observer-hud>
                   `
                 : nothing}

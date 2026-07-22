@@ -1,6 +1,6 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -145,14 +145,14 @@ describe("claws lifecycle cli e2e", () => {
       installRecord: { agentId: "internal-triage", status: "complete" },
     });
     const config = JSON.parse(await readFile(join(result.stateDir, "openclaw.json"), "utf8"));
-    expect(config.agents.list).toEqual([
-      { id: "main", default: true },
-      expect.objectContaining({
-        id: "internal-triage",
+    const canonicalStateDir = await realpath(result.stateDir);
+    expect(config.agents.entries).toEqual({
+      main: { default: true },
+      "internal-triage": expect.objectContaining({
         name: "Internal Triage",
-        workspace: join(result.stateDir, ".openclaw", "workspace-internal-triage"),
+        workspace: join(canonicalStateDir, ".openclaw", "workspace-internal-triage"),
       }),
-    ]);
+    });
   });
 
   it("creates declared bootstrap and supporting files in the new workspace", async () => {
@@ -177,7 +177,11 @@ describe("claws lifecycle cli e2e", () => {
       { stateDir: preview.stateDir },
     );
     const payload = parseJson(result.stdout);
-    const workspace = join(result.stateDir, ".openclaw", "workspace-workspace-agent");
+    const workspace = join(
+      await realpath(result.stateDir),
+      ".openclaw",
+      "workspace-workspace-agent",
+    );
 
     expect(payload).toMatchObject({
       schemaVersion: "openclaw.clawAddResult.v1",
@@ -262,7 +266,7 @@ describe("claws lifecycle cli e2e", () => {
       agentRemoved: true,
     });
     const config = JSON.parse(await readFile(join(added.stateDir, "openclaw.json"), "utf8"));
-    expect(config.agents).toEqual({ list: [{ id: "main", default: true }] });
+    expect(config.agents).toEqual({ entries: { main: { default: true } } });
   });
 
   it("blocks mutation when declared components need later lifecycle slices", async () => {

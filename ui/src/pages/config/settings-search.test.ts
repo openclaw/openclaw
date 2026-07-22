@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { findSettingsSearchBlocks } from "./settings-search.ts";

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { getRuntimeConfig } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AgentConfigPreconditionError,
@@ -15,9 +17,7 @@ import {
 
 export type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 
-export function digestClawAgentConfig(
-  agent: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number],
-): string {
+export function digestClawAgentConfig(agent: AgentConfig): string {
   return `sha256:${createHash("sha256").update(stableStringify(agent)).digest("hex")}`;
 }
 
@@ -61,7 +61,7 @@ export async function claimClawAgentConfigRemoval(params: {
       | undefined;
     await params.commitConfig((config) => {
       const effects = deletionEffects(config, params.agentId, params.fallbackWorkspace);
-      const agent = config.agents?.list?.find((candidate) => candidate.id === params.agentId);
+      const agent = listAgentEntries(config).find((candidate) => candidate.id === params.agentId);
       if (
         (agent && digestClawAgentConfig(agent) !== params.expectedDigest) ||
         digestClawAgentRemovalSurface(config, params.agentId) !==
@@ -134,7 +134,7 @@ export async function claimClawAgentConfigRemoval(params: {
       throw error;
     }
     const latestConfig = getRuntimeConfig();
-    if (latestConfig.agents?.list?.some((agent) => agent.id === params.agentId)) {
+    if (listAgentEntries(latestConfig).some((agent) => agent.id === params.agentId)) {
       throw params.onModified();
     }
     const effects = deletionEffects(latestConfig, params.agentId, params.fallbackWorkspace);

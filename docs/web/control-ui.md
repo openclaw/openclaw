@@ -16,6 +16,8 @@ It speaks **directly to the Gateway WebSocket** on the same port.
 
 While you watch a running session, the Gateway can use that agent's utility model to produce a compact status digest. Chat shows it as a one-line status pill that expands into a card with the assessment, plan progress, pull requests, and elapsed time. The card can expand once when a run becomes stuck or needs input; the `/btw` side chat takes priority over the expanded card.
 
+The expanded card also accepts short questions about the run. Answers use only the observer's current digest and sanitized bounded notes, stay in the browser for that session, and never enter or interrupt the main agent run. If the observations do not contain the answer, the observer says that it cannot know.
+
 After the first digest arrives, it owns that run's sidebar subtitle instead of heuristic live activity. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
 Session observation is enabled by default. In **Settings > Appearance > Sidebar**, you can turn it off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
@@ -399,7 +401,7 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
+    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Thread search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Threads page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Multi-selected rows (Cmd/Ctrl-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch archive/delete stays disabled unless every selected session is archivable. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
@@ -540,7 +542,7 @@ Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed u
 
 ## Chat message width
 
-The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while user bubbles stay right-aligned inside that frame. Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `gateway.controlUi.chatMessageMaxWidth`:
+The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while user bubbles stay right-aligned inside that frame. Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `ui.prefs.chatMessageMaxWidth`:
 
 ```json5
 {
@@ -591,49 +593,13 @@ The value is validated before it reaches the browser. Supported forms include pl
 
 If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. By default, OpenClaw **blocks** Control UI connections without device identity.
 
-Documented exceptions:
-
-- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
-- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
-- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+The supported device-less exception is successful operator Control UI auth
+through `gateway.auth.mode: "trusted-proxy"`. There is no persistent config
+switch that disables device identity.
 
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally at `https://<magicdns>/` (Serve) or `http://127.0.0.1:18789/` (on the gateway host).
 
 <AccordionGroup>
-  <Accordion title="Insecure-auth toggle behavior">
-    ```json5
-    {
-      gateway: {
-        controlUi: { allowInsecureAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    `allowInsecureAuth` is a local compatibility toggle only:
-
-    - It lets localhost Control UI sessions proceed without device identity in non-secure HTTP contexts.
-    - It does not bypass pairing checks.
-    - It does not relax remote (non-localhost) device identity requirements.
-
-  </Accordion>
-  <Accordion title="Break-glass only">
-    ```json5
-    {
-      gateway: {
-        controlUi: { dangerouslyDisableDeviceAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    <Warning>
-    `dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a severe security downgrade. Revert quickly after emergency use.
-    </Warning>
-
-  </Accordion>
   <Accordion title="Trusted-proxy note">
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.

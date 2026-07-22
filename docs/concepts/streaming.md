@@ -120,7 +120,7 @@ replies, after the first block, so multi-bubble responses feel more natural.
 | `natural`                         | 800-2500ms random pause |
 | `custom`                          | `minMs`/`maxMs`         |
 
-Override per agent via `agents.list[].humanDelay`. Applies only to **block
+Override per agent via `agents.entries.*.humanDelay`. Applies only to **block
 replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"

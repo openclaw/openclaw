@@ -4014,6 +4014,12 @@ export const en: TranslationMap = {
       checksPassing: "{count} passed",
       checksFailing: "{count} failed",
       checksPending: "{count} running",
+      askLabel: "Ask about this session",
+      askPlaceholder: "Why is it doing that?",
+      askSubmit: "Ask",
+      askPending: "Checking the observations…",
+      askBusy: "The observer is already answering a question.",
+      askUnavailable: "The observer cannot answer right now.",
       health: {
         "on-track": "On track",
         grinding: "Working",

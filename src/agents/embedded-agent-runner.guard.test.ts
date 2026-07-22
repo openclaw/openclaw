@@ -374,7 +374,6 @@ describe("guardSessionManager integration", () => {
   it("redacts configured text patterns before persisting transcript messages", () => {
     const cfg = {
       logging: {
-        redactSensitive: "tools",
         redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
       },
     } satisfies OpenClawConfig;

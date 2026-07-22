@@ -1679,6 +1679,17 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
+      "sessions.observer.ask": {
+        cases: [
+          {
+            match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
+            response: {
+              answer: "It is rerunning the focused test to check whether the latest fix is stable.",
+              digestRevision: 4,
+            },
+          },
+        ],
+      },
       "sessions.list": {
         cases: [
           // Child fetches must precede the catch-all page case (subset match).

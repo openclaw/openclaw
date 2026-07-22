@@ -1879,7 +1879,7 @@ describe("runCliAgent reliability", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always" as const,
       liveSession: "claude-stdio" as const,
       reliability: {

@@ -1,6 +1,6 @@
 // Tests for the experimental grouped Claws CLI.
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -105,6 +105,10 @@ async function writePackage(): Promise<{ root: string; workspace: string }> {
     "utf8",
   );
   return { root, workspace: join(root, "target-workspace") };
+}
+
+async function canonicalFuturePath(target: string): Promise<string> {
+  return join(await realpath(dirname(target)), basename(target));
 }
 
 async function runCli(args: string[]) {
@@ -225,6 +229,7 @@ describe("claws cli", () => {
 
   it("takes identity from package.json and plans one new agent", async () => {
     const { root, workspace } = await writePackage();
+    const expectedWorkspace = await canonicalFuturePath(workspace);
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
 
@@ -232,7 +237,7 @@ describe("claws cli", () => {
       schemaVersion: "openclaw.clawAddPlan.v1",
       stability: "experimental",
       claw: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
-      agent: { finalId: "demo-agent", workspace },
+      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
       summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
@@ -240,7 +245,7 @@ describe("claws cli", () => {
 
   it("blocks adding into an existing agent instead of merging", async () => {
     const { root, workspace } = await writePackage();
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent" }] } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
 
@@ -253,7 +258,7 @@ describe("claws cli", () => {
 
   it("honors an explicit unused agent id in the plan", async () => {
     const { root, workspace } = await writePackage();
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent" }] } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
 
     await runCli([
       "claws",
@@ -299,6 +304,7 @@ describe("claws cli", () => {
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const expectedWorkspace = await canonicalFuturePath(workspace);
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -323,7 +329,7 @@ describe("claws cli", () => {
       schemaVersion: "openclaw.clawAddResult.v1",
       stability: "experimental",
       status: "complete",
-      agent: { finalId: "demo-agent", workspace },
+      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
     });
   });
 

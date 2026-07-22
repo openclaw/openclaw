@@ -714,7 +714,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "google/gemini-3-pro-image-preview",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
@@ -728,7 +728,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.mediaModels.image.primary (google/gemini-3-pro-image-preview).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
@@ -1599,8 +1599,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/fal-ai/flux/dev",
+          mediaModels: {
+            image: { primary: "fal/fal-ai/flux/dev" },
           },
         },
       },
@@ -1623,7 +1623,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "fal/fal-ai/flux/dev",
     });
     expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");

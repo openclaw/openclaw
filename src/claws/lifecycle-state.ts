@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -201,7 +202,7 @@ export async function readClawStatus(
   );
   const records: ClawStatusRecord[] = [];
   for (const install of installs) {
-    const agent = config.agents?.list?.find((candidate) => candidate.id === install.agentId);
+    const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
     const packageRefs = allPackageRefs.filter(
       (packageRef) => packageRef.agentId === install.agentId,
     );
@@ -322,7 +323,7 @@ export async function buildClawRemovePlan(
       kind: "agent",
       id: record.install.agentId,
       action: "remove",
-      target: `agents.list[${record.install.agentId}]`,
+      target: `agents.entries[${JSON.stringify(record.install.agentId)}]`,
       blocked: record.agentState === "modified",
       details: {
         expectedState: record.agentState,

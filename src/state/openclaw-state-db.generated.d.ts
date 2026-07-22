@@ -375,6 +375,12 @@ export interface ConfigHealthEntries {
   updated_at_ms: number;
 }
 
+export interface ConfigMachineState {
+  state_key: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
 export interface CronJobs {
   agent_id: string | null;
   anchor_ms: number | null;
@@ -1414,6 +1420,7 @@ export interface DB {
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
+  config_machine_state: ConfigMachineState;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
