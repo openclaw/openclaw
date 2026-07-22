@@ -36,6 +36,7 @@ import {
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
 } from "../operator-approval-store.js";
+import { approvalNotFoundErrorShape } from "./approval-error.js";
 import {
   publishAppliedApprovalResolution,
   type ExecApprovalIosPushDelivery,
@@ -127,13 +128,7 @@ function resolveLegacyApprovalLabel(client: GatewayClient | null): string | null
 }
 
 function respondApprovalNotFound(respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "approval not found", {
-      details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
-    }),
-  );
+  respond(false, undefined, approvalNotFoundErrorShape({ message: "approval not found" }));
 }
 
 function respondApprovalUnavailable(params: {

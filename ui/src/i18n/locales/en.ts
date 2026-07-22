@@ -4416,6 +4416,11 @@ export const en: TranslationMap = {
       copyPath: "Copy path",
     },
   },
+  gateway: {
+    approval: {
+      notFound: "Unknown or expired approval ID.",
+    },
+  },
   languages: {
     en: "English",
     zhCN: "简体中文 (Simplified Chinese)",
