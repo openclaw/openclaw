@@ -377,6 +377,18 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
       "OpenClaw stores transport names; CLI backends receive their own type fields through runtime adapters.",
   }),
   deprecatedCompatRecord({
+    code: "doctor-mcp-server-disabled",
+    owner: "config",
+    introduced: "2026-07-15",
+    source: "mcp.servers.*.disabled",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.mcp.ts",
+    replacement: "mcp.servers.*.enabled",
+    docsPath: "/cli/mcp",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "An undocumented disabled field was sometimes set; doctor migrates it to canonical enabled: false.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-gateway-bind-host-aliases",
     owner: "gateway",
     introduced: "2026-04-26",
