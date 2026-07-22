@@ -6,12 +6,17 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createPersistentDedupeImportEntry,
+  type PersistentDedupeEntry,
+} from "openclaw/plugin-sdk/persistent-dedupe";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
+  importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
@@ -42,6 +47,9 @@ import { installMatrixTestRuntime } from "./src/test-runtime.js";
 
 function createContext(): PluginDoctorStateMigrationContext {
   return {
+    importPluginStateEntries(options, entries) {
+      importPluginStateEntriesForDoctorForTests("matrix", options, entries);
+    },
     openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> =>
       createPluginStateKeyedStoreForTests<T>("matrix", options),
   };
@@ -809,42 +817,88 @@ describe("matrix doctor contract state migrations", () => {
     });
   });
 
+  it("keeps inbound dedupe sources when retention-aware import is unavailable", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const jsonRoot = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "home",
+      "matrix.example.org__bot",
+      "token-a",
+    );
+    fs.mkdirSync(jsonRoot, { recursive: true });
+    const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        version: 1,
+        entries: [{ key: "!room:example.org|$legacy", ts: Date.now() - 60_000 }],
+      }),
+    );
+    const params = createMigrationParams(stateDir);
+    delete params.context.importPluginStateEntries;
+    const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
+
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [
+        "Failed importing Matrix inbound dedupe markers: Error: retention-aware Matrix inbound dedupe import is unavailable; left legacy sources in place",
+      ],
+    });
+    expect(fs.existsSync(jsonPath)).toBe(true);
+    expect(fs.existsSync(`${jsonPath}.migrated`)).toBe(false);
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+    });
+  });
+
   it("keeps newer runtime dedupe rows when legacy imports hit capacity", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
     tempDirs.push(stateDir);
     const io = { context: createContext(), env: { OPENCLAW_STATE_DIR: stateDir } };
     const roomId = "!room:example.org";
     const now = Date.now();
-    // Simulate the row the upgraded runtime already committed post-upgrade.
-    await expect(
-      importNewestInboundDedupeMarkers({
-        io,
-        now,
-        stateMaxEntries: 2,
-        markers: [{ accountId: "ops", roomId, eventId: "$runtime", ts: now - 1_000 }],
-      }),
-    ).resolves.toEqual({ imported: 1, total: 1 });
+    const store = createPluginStateKeyedStoreForTests<PersistentDedupeEntry>("matrix", {
+      namespace: resolveMatrixInboundDedupeStateNamespace(),
+      maxEntries: 3,
+      defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
+      env: io.env,
+    });
+    const runtimeEntry = createPersistentDedupeImportEntry({
+      key: `ops\0${roomId}\0$runtime`,
+      seenAt: now,
+    });
+    await store.register(runtimeEntry.key, runtimeEntry.value);
 
-    // Only one slot remains: the newest legacy marker wins, the runtime row survives.
+    // Both legacy rows fit, but retain their source age below the runtime row.
     await expect(
       importNewestInboundDedupeMarkers({
         io,
         now,
-        stateMaxEntries: 2,
+        stateMaxEntries: 3,
         markers: [
           { accountId: "ops", roomId, eventId: "$old", ts: now - 60_000 },
           { accountId: "ops", roomId, eventId: "$newer", ts: now - 30_000 },
         ],
       }),
-    ).resolves.toEqual({ imported: 1, total: 2 });
+    ).resolves.toEqual({ imported: 2, total: 2 });
 
-    const store = createPluginStateKeyedStoreForTests<{ key: string }>("matrix", {
-      namespace: resolveMatrixInboundDedupeStateNamespace(),
-      maxEntries: 2,
-      defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
-      env: io.env,
+    // The next runtime-equivalent insert evicts the oldest legacy row, not the
+    // newer legacy marker or the row committed after upgrade.
+    const nextRuntimeEntry = createPersistentDedupeImportEntry({
+      key: `ops\0${roomId}\0$next-runtime`,
+      seenAt: now + 1,
     });
+    await store.register(nextRuntimeEntry.key, nextRuntimeEntry.value);
     const keys = (await store.entries()).map((entry) => entry.value.key).toSorted();
-    expect(keys).toEqual([`ops\0${roomId}\0$runtime`, `ops\0${roomId}\0$newer`].toSorted());
+    expect(keys).toEqual(
+      [
+        `ops\0${roomId}\0$newer`,
+        `ops\0${roomId}\0$runtime`,
+        `ops\0${roomId}\0$next-runtime`,
+      ].toSorted(),
+    );
   });
 });

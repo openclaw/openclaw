@@ -385,10 +385,10 @@ export async function readLegacyInboundDedupeJsonSource(
 
 /**
  * Imports the globally newest legacy markers into the claimable-dedupe store.
- * Never exceeds capacity: eviction is by row creation time, so letting fresh
- * imports overflow the namespace would evict the newer rows the runtime
- * committed since the upgrade. Throws on store errors so the caller keeps the
- * legacy sources for the next doctor attempt.
+ * Never exceeds capacity, never replaces a post-upgrade destination row, and
+ * preserves source timestamps because eviction is ordered by row creation
+ * time. Throws on import or verification errors so the caller keeps the legacy
+ * sources for the next doctor attempt.
  */
 export async function importNewestInboundDedupeMarkers(params: {
   io: MatrixInboundDedupeMigrationIo;
@@ -417,30 +417,45 @@ export async function importNewestInboundDedupeMarkers(params: {
     defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
     env: params.io.env,
   });
-  let capacity = Math.max(0, stateMaxEntries - (await store.entries()).length);
-  let imported = 0;
-  for (const marker of markers) {
-    if (capacity <= 0) {
-      break;
-    }
+  const existingEntries = await store.entries();
+  const existingKeys = new Set(existingEntries.map((entry) => entry.key));
+  const missingEntries = markers.flatMap((marker) => {
     const remainingTtlMs = MATRIX_INBOUND_DEDUPE_TTL_MS - (now - marker.ts);
     if (remainingTtlMs <= 0) {
-      continue;
+      return [];
     }
     const entry = createPersistentDedupeImportEntry({
       key: marker.key,
       seenAt: marker.ts,
       ttlMs: Math.max(1, Math.floor(remainingTtlMs)),
     });
-    // Rows committed after the upgrade are newer than any legacy marker, so
-    // registerIfAbsent keeps them and only fills the missing keys.
-    const registered = await store.registerIfAbsent(entry.key, entry.value, {
-      ttlMs: entry.ttlMs ?? MATRIX_INBOUND_DEDUPE_TTL_MS,
-    });
-    if (registered) {
-      imported += 1;
-      capacity -= 1;
+    return existingKeys.has(entry.key) ? [] : [{ marker, entry }];
+  });
+  const capacity = Math.max(0, stateMaxEntries - existingEntries.length);
+  const selectedEntries = missingEntries.slice(0, capacity);
+  if (selectedEntries.length > 0) {
+    const importEntries = params.io.context.importPluginStateEntries;
+    if (!importEntries) {
+      throw new Error("retention-aware Matrix inbound dedupe import is unavailable");
+    }
+    importEntries(
+      {
+        namespace: resolveMatrixInboundDedupeStateNamespace(),
+        maxEntries: stateMaxEntries,
+        defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
+        env: params.io.env,
+      },
+      selectedEntries.map(({ marker, entry }) => ({
+        key: entry.key,
+        value: entry.value,
+        createdAt: marker.ts,
+      })),
+    );
+    const importedKeys = new Set((await store.entries()).map((entry) => entry.key));
+    const missingKey = selectedEntries.find(({ entry }) => !importedKeys.has(entry.key))?.entry.key;
+    if (missingKey) {
+      throw new Error(`retention-aware Matrix inbound dedupe import did not persist ${missingKey}`);
     }
   }
-  return { imported, total: markers.length };
+  return { imported: selectedEntries.length, total: markers.length };
 }
