@@ -22,6 +22,9 @@ extended-stable package and publication constraints.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
+- Treat the current-main Docker release workflow and its release-policy helper
+  as mandatory release infrastructure in the tagged tree, not optional
+  backport candidates. GitHub evaluates tag-push workflows from that tree.
 - Exclude ClawHub publication, GitHub Releases, native apps, mobile artifacts,
   website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.

@@ -236,8 +236,12 @@ on pinned current `main` as the exact command and validation contract.
 
 1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
    approved backport PR lands. Freeze its full 40-character SHA after verifying
-   the root and every publishable official plugin have the intended version. Do
-   not create the final tag yet.
+   the root and every publishable official plugin have the intended version.
+   Require the tree to carry the current-main
+   `.github/workflows/docker-release.yml` and
+   `scripts/lib/docker-release-policy.mjs`, then run focused workflow checks.
+   Do not create the final tag yet: tag-push workflows use the tagged copy,
+   which must not route `.33+` to regular stable aliases.
 2. Dispatch `openclaw-npm-release.yml` from that canonical branch with the
    frozen SHA as `tag`, `preflight_only=true`, and
    `npm_dist_tag=extended-stable`. A full SHA is a validation-only candidate

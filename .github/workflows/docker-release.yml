@@ -118,8 +118,18 @@ jobs:
             echo "slim_aliases=${slim_aliases}"
             echo "browser_aliases=${browser_aliases}"
           } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Docker release policy"
+            echo "- Version: ${version}"
+            echo "- Operation: ${RELEASE_OPERATION}"
+            echo "- Channel: ${channel}"
+            echo "- Default aliases: ${default_aliases:-none}"
+            echo "- Slim aliases: ${slim_aliases:-none}"
+            echo "- Browser aliases: ${browser_aliases:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   approve_manual_backfill:
+    name: Approve Docker ${{ inputs.operation }} ${{ inputs.tag }} → ${{ needs.resolve_release_policy.outputs.channel }} (${{ needs.resolve_release_policy.outputs.default_aliases }})
     if: github.event_name == 'workflow_dispatch'
     needs: [validate_manual_backfill, resolve_release_policy]
     # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.

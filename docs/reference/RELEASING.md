@@ -62,6 +62,12 @@ same version. Commit and push all generated changes, then freeze and record the
 resulting full SHA. The workflows consume this prepared tree; they do not bump
 or synchronize versions for you. Do not create the final tag for a candidate.
 
+Before running candidate gates, require the prepared tree to contain the
+current `main` versions of `.github/workflows/docker-release.yml` and
+`scripts/lib/docker-release-policy.mjs`, with focused workflow checks green.
+Tag-push workflows run from the tagged commit; older policy can incorrectly
+move regular `latest`/`main` aliases.
+
 Run the npm preflight and Full Release Validation against that frozen SHA, then
 save both run IDs and the successful Full Release Validation run attempt:
 
