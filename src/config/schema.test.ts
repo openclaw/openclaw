@@ -834,6 +834,38 @@ describe("config schema", () => {
     expect(parsed?.experimental?.planTool).toBe(true);
   });
 
+  it("accepts configured tool profiles and references them from agent scopes", () => {
+    const result = OpenClawSchema.safeParse({
+      tools: {
+        profiles: {
+          researcher: {
+            baseProfile: "minimal",
+            alsoAllow: ["group:web"],
+            deny: ["web_fetch"],
+          },
+        },
+        profile: "researcher",
+      },
+      agents: {
+        entries: {
+          main: { tools: { profile: "researcher" } },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid configured tool profile definitions and references", () => {
+    const cases = [
+      { tools: { profile: "missing" } },
+      { tools: { profiles: { broken: { baseProfile: "missing" } } } },
+      { tools: { profiles: { minimal: { baseProfile: "coding" } } } },
+    ];
+    for (const config of cases) {
+      expect(OpenClawSchema.safeParse(config).success).toBe(false);
+    }
+  });
+
   it("accepts simplified Tool Search config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ toolSearch: true })?.toolSearch).toBe(true);
     expect(

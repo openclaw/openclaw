@@ -12,10 +12,59 @@ function installZodDefaultLocale(): void {
 }
 installZodDefaultLocale();
 
+const BUILT_IN_TOOL_PROFILES = new Set(["minimal", "coding", "messaging", "full"]);
+
 export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
+  const configuredProfiles = cfg.tools?.profiles ?? {};
+  const knownProfileIds = new Set([...BUILT_IN_TOOL_PROFILES, ...Object.keys(configuredProfiles)]);
+  const validateProfileReference = (profile: string | undefined, path: PropertyKey[]) => {
+    if (profile && !knownProfileIds.has(profile)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `Unknown tool profile "${profile}".`,
+      });
+    }
+  };
+
+  for (const profileId of Object.keys(configuredProfiles)) {
+    if (BUILT_IN_TOOL_PROFILES.has(profileId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tools", "profiles", profileId],
+        message: `Configured tool profile "${profileId}" cannot replace a built-in profile.`,
+      });
+    }
+  }
+
+  validateProfileReference(cfg.tools?.profile, ["tools", "profile"]);
+  for (const [providerId, policy] of Object.entries(cfg.tools?.byProvider ?? {})) {
+    validateProfileReference(policy.profile, ["tools", "byProvider", providerId, "profile"]);
+  }
+
   const agents = Object.entries(cfg.agents?.entries ?? {}).map(([id, entry]) =>
     Object.assign({ id }, entry),
   );
+  for (const agent of agents) {
+    validateProfileReference(agent.tools?.profile, [
+      "agents",
+      "entries",
+      agent.id,
+      "tools",
+      "profile",
+    ]);
+    for (const [providerId, policy] of Object.entries(agent.tools?.byProvider ?? {})) {
+      validateProfileReference(policy.profile, [
+        "agents",
+        "entries",
+        agent.id,
+        "tools",
+        "byProvider",
+        providerId,
+        "profile",
+      ]);
+    }
+  }
   if (agents.length === 0) {
     return;
   }

@@ -38,6 +38,25 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
+  it("resolves a configured profile from one built-in base", () => {
+    const profiles = {
+      researcher: {
+        baseProfile: "minimal" as const,
+        alsoAllow: ["group:web", "read"],
+        deny: ["web_fetch"],
+      },
+    };
+
+    expect(resolveToolProfilePolicy("researcher", profiles)).toEqual({
+      allow: expect.arrayContaining(["session_status", "group:web", "read"]),
+      deny: ["web_fetch"],
+    });
+  });
+
+  it("ignores configured profiles that are absent from the supplied registry", () => {
+    expect(resolveToolProfilePolicy("missing", {})).toBeUndefined();
+  });
+
   it("includes core tool groups in group:openclaw", () => {
     const group = TOOL_GROUPS["group:openclaw"];
     expect(group).toContain("browser");

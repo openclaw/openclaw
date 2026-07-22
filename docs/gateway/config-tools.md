@@ -29,6 +29,25 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 
 `coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
 
+Define reusable profiles under `tools.profiles` when the built-ins are close but not exact:
+
+```json5
+{
+  tools: {
+    profiles: {
+      "research-assistant": {
+        baseProfile: "minimal",
+        alsoAllow: ["group:web", "read"],
+        deny: ["web_fetch"],
+      },
+    },
+    profile: "research-assistant",
+  },
+}
+```
+
+Each configured profile starts from one built-in `baseProfile`. `alsoAllow` adds tools or groups, and `deny` removes them; deny rules win after composition. Profile ids must be lowercase letters, numbers, hyphens, or underscores, and they cannot replace built-ins. Unknown selected profiles and non-built-in base profiles fail config validation. Global, agent, and provider-specific `profile` fields can select configured profiles.
+
 ### Tool groups
 
 | Group              | Tools                                                                                                                                                                                                                                                  |

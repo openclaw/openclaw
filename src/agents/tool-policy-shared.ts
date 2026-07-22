@@ -7,6 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   CORE_TOOL_GROUPS,
+  PROFILE_OPTIONS,
   resolveCoreToolProfilePolicy,
   type ToolProfileId,
 } from "./tool-catalog.js";
@@ -15,6 +16,14 @@ type ToolProfilePolicy = {
   allow?: string[];
   deny?: string[];
 };
+
+export type ToolProfileDefinition = {
+  baseProfile: ToolProfileId;
+  alsoAllow?: string[];
+  deny?: string[];
+};
+
+export type ToolProfileDefinitions = Record<string, ToolProfileDefinition>;
 
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
@@ -98,9 +107,43 @@ export function expandToolGroups(list?: string[]) {
   return uniqueStrings(expanded);
 }
 
-/** Resolves a built-in tool profile policy by id. */
-export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  return resolveCoreToolProfilePolicy(profile);
+/** Lists built-in and configured tool profiles in stable picker order. */
+export function listToolProfileOptions(definitions?: ToolProfileDefinitions) {
+  return [
+    ...PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+    ...Object.keys(definitions ?? {})
+      .toSorted((a, b) => a.localeCompare(b))
+      .map((id) => ({ id, label: id })),
+  ];
+}
+
+/** Resolves a built-in or configured tool profile policy by id. */
+export function resolveToolProfilePolicy(
+  profile?: string,
+  definitions?: ToolProfileDefinitions,
+): ToolProfilePolicy | undefined {
+  const corePolicy = resolveCoreToolProfilePolicy(profile);
+  if (corePolicy) {
+    return corePolicy;
+  }
+  if (!profile || !definitions) {
+    return undefined;
+  }
+
+  const definition = Object.hasOwn(definitions, profile) ? definitions[profile] : undefined;
+  if (!definition) {
+    return undefined;
+  }
+  const basePolicy = resolveCoreToolProfilePolicy(definition.baseProfile);
+  if (!basePolicy) {
+    return undefined;
+  }
+  const allow = uniqueStrings([...(basePolicy.allow ?? []), ...(definition.alsoAllow ?? [])]);
+  const deny = uniqueStrings([...(basePolicy.deny ?? []), ...(definition.deny ?? [])]);
+  return {
+    allow: allow.length > 0 ? allow : undefined,
+    deny: deny.length > 0 ? deny : undefined,
+  };
 }
 
 export type { ToolProfileId };

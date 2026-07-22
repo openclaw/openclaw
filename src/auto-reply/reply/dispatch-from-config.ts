@@ -999,14 +999,14 @@ async function dispatchReplyFromConfigInner(
       (configuredVisibleReplies === "message_tool" ||
         (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
-    ...(profileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
-    ...(providerProfileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, cfg.tools?.profiles),
+    [...(profileAlsoAllow ?? []), ...runtimeProfileAlsoAllow],
+  );
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(providerProfile, cfg.tools?.profiles),
+    [...(providerProfileAlsoAllow ?? []), ...runtimeProfileAlsoAllow],
+  );
   const groupResolution = resolveGroupSessionKey(ctx);
   const messageProvider = resolveOriginMessageProvider({
     originatingChannel: ctx.OriginatingChannel,

@@ -162,7 +162,10 @@ export function resolveConfiguredToolPolicies(params: {
   const profileAlsoAllow =
     resolveExplicitProfileAlsoAllow(params.agentTools) ??
     resolveExplicitProfileAlsoAllow(params.cfg.tools);
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, params.cfg.tools?.profiles),
+    profileAlsoAllow,
+  );
   if (profilePolicy) {
     policies.push(profilePolicy);
   }
@@ -410,7 +413,7 @@ export function resolveEffectiveToolPolicy(params: {
     });
     if (implicitGrants) {
       const profilePolicy = mergeAlsoAllowPolicy(
-        resolveToolProfilePolicy(profile),
+        resolveToolProfilePolicy(profile, globalTools?.profiles),
         explicitProfileAlsoAllow,
       );
       const uncoveredEntries = implicitGrants.entries
