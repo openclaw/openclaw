@@ -1,7 +1,12 @@
 // Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticUsageEvent,
+} from "../../infra/diagnostic-events.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
@@ -140,12 +145,27 @@ function primeCompletionMocks() {
   });
 }
 
+function collectTrustedUsageEvents() {
+  const events: DiagnosticUsageEvent[] = [];
+  const stop = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "model.usage") {
+      events.push(event);
+    }
+  });
+  return { events, stop };
+}
+
 describe("runtime.llm.complete", () => {
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     hoisted.prepareSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
     primeCompletionMocks();
+  });
+
+  afterEach(() => {
+    resetDiagnosticEventsForTest();
   });
 
   it("binds context-engine completions to the active session agent", async () => {
@@ -216,6 +236,33 @@ describe("runtime.llm.complete", () => {
       id: "context-engine.after-turn",
     });
     expect(result.agentId).toBe("ada");
+  });
+
+  it("attributes context-engine usage diagnostics to the owning plugin", async () => {
+    const { events, stop } = collectTrustedUsageEvents();
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    await withPluginRuntimePluginIdScope("spoofed-plugin", () =>
+      runtimeContext.llm!.complete({
+        messages: [{ role: "user", content: "summarize" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "model.usage",
+      sessionKey: "agent:main:session:abc",
+      agentId: "main",
+      pluginId: "lossless-claw",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
   });
 
   it("does not fall back to the default agent for unbound active-session hooks", async () => {
@@ -660,6 +707,158 @@ describe("runtime.llm.complete", () => {
       caller: { kind: "plugin", id: "trusted-plugin" },
       purpose: "identity-test",
     });
+  });
+
+  it("emits model usage diagnostics for scoped plugin completions", async () => {
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        allowComplete: true,
+        sessionKey: "agent:main:session:abc",
+      },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "model.usage",
+      sessionKey: "agent:main:session:abc",
+      agentId: "main",
+      pluginId: "trusted-plugin",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        promptTokens: 18,
+        total: 25,
+      },
+      costUsd: 0.0042,
+    });
+    // Plugin completion latency is not an agent-run duration. Keeping this absent
+    // prevents usage exporters from adding call samples to run-duration metrics.
+    expect(events[0]?.durationMs).toBeUndefined();
+  });
+
+  it("does not emit model usage diagnostics for zero provider usage", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+        cost: { total: 0 },
+      },
+    });
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(0);
+  });
+
+  it("emits cache-only plugin usage with canonical prompt and total counts", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 9,
+        cacheWrite: 0,
+        total: 9,
+        cost: { total: 0.0009 },
+      },
+    });
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      pluginId: "trusted-plugin",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 9,
+        cacheWrite: 0,
+        promptTokens: 9,
+        total: 9,
+      },
+      costUsd: 0.0009,
+    });
+  });
+
+  it("does not emit model usage diagnostics when the provider rejects", async () => {
+    hoisted.completeWithPreparedSimpleCompletionModel.mockRejectedValueOnce(
+      new Error("provider failed"),
+    );
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      ),
+    ).rejects.toThrow("provider failed");
+    stop();
+
+    expect(events).toHaveLength(0);
+  });
+
+  it("does not emit plugin usage when diagnostics are disabled", async () => {
+    const { events, stop } = collectTrustedUsageEvents();
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        diagnostics: { enabled: false },
+      }),
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await withPluginRuntimePluginIdScope("trusted-plugin", () =>
+      llm.complete({
+        messages: [{ role: "user", content: "Ping" }],
+      }),
+    );
+    stop();
+
+    expect(events).toHaveLength(0);
   });
 
   it("denies plugin model overrides by default", async () => {

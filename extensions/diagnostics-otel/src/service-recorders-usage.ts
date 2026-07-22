@@ -55,6 +55,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     const attrs = {
       "openclaw.channel": evt.channel ?? "unknown",
       "openclaw.agent": lowCardinalityAttr(evt.agentId),
+      "openclaw.plugin": lowCardinalityAttr(evt.pluginId, "none"),
       "openclaw.provider": evt.provider ?? "unknown",
       "openclaw.model": evt.model ?? "unknown",
     };

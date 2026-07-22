@@ -2370,6 +2370,7 @@ describe("diagnostics-otel service", () => {
       sessionKey: "session-key",
       channel: "webchat",
       agentId: "ops",
+      pluginId: "lossless-claw",
       provider: "openai",
       model: "gpt-5.4",
       usage: {
@@ -2394,6 +2395,7 @@ describe("diagnostics-otel service", () => {
     expect(tokens?.add).toHaveBeenCalledWith(12, {
       "openclaw.channel": "webchat",
       "openclaw.agent": "ops",
+      "openclaw.plugin": "lossless-claw",
       "openclaw.provider": "openai",
       "openclaw.model": "gpt-5.4",
       "openclaw.token": "input",
@@ -2464,6 +2466,7 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.counters.get("openclaw.tokens")?.add).toHaveBeenCalledWith(2, {
       "openclaw.channel": "unknown",
       "openclaw.agent": "unknown",
+      "openclaw.plugin": "none",
       "openclaw.provider": "openai",
       "openclaw.model": "gpt-5.4",
       "openclaw.token": "input",
@@ -2491,6 +2494,7 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.counters.get("openclaw.tokens")?.add).toHaveBeenCalledWith(2, {
       "openclaw.channel": "unknown",
       "openclaw.agent": "unknown",
+      "openclaw.plugin": "none",
       "openclaw.provider": "openai",
       "openclaw.model": "gpt-5.4",
       "openclaw.token": "input",
@@ -2582,6 +2586,7 @@ describe("diagnostics-otel service", () => {
       type: "model.usage",
       sessionKey: "session-key",
       sessionId: "session-id",
+      pluginId: "lossless-claw",
       provider: "anthropic",
       model: "anthropic/claude-sonnet-4.6",
       usage: {
@@ -2602,6 +2607,7 @@ describe("diagnostics-otel service", () => {
     expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe(
       "anthropic/claude-sonnet-4.6",
     );
+    expect(modelUsageOptions?.attributes?.["openclaw.plugin"]).toBe("lossless-claw");
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(150);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(40);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(30);

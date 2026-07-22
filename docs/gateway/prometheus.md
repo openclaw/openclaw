@@ -98,10 +98,10 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_model_call_total`                      | counter   | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_call_duration_seconds`           | histogram | `api`, `error_category`, `model`, `observation_unit`, `outcome`, `provider`, `transport`  |
 | `openclaw_model_failover_total`                  | counter   | `from_model`, `from_provider`, `lane`, `reason`, `suspended`, `to_model`, `to_provider`   |
-| `openclaw_model_tokens_total`                    | counter   | `agent`, `channel`, `model`, `provider`, `token_type`                                     |
+| `openclaw_model_tokens_total`                    | counter   | `agent`, `channel`, `model`, `plugin`, `provider`, `token_type`                           |
 | `openclaw_gen_ai_client_token_usage`             | histogram | `model`, `provider`, `token_type`                                                         |
-| `openclaw_model_cost_usd_total`                  | counter   | `agent`, `channel`, `model`, `provider`                                                   |
-| `openclaw_model_usage_duration_seconds`          | histogram | `agent`, `channel`, `model`, `provider`                                                   |
+| `openclaw_model_cost_usd_total`                  | counter   | `agent`, `channel`, `model`, `plugin`, `provider`                                         |
+| `openclaw_model_usage_duration_seconds`          | histogram | `agent`, `channel`, `model`, `plugin`, `provider`                                         |
 | `openclaw_skill_used_total`                      | counter   | `activation`, `agent`, `skill`, `source`                                                  |
 | `openclaw_tool_execution_total`                  | counter   | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
 | `openclaw_tool_execution_duration_seconds`       | histogram | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
@@ -160,6 +160,10 @@ Keep those series separate when comparing latency.
     Prometheus labels stay bounded and low-cardinality. The exporter does not emit raw diagnostic identifiers such as `runId`, `sessionKey`, `sessionId`, `callId`, `toolCallId`, message IDs, chat IDs, or provider request IDs.
 
     Label values are redacted and must match OpenClaw's low-cardinality character policy. Values that fail the policy are replaced with `unknown`, `other`, or `none`, depending on the metric. Labels that look like scoped agent session keys are also replaced with `unknown`.
+
+    Plugin-owned usage uses the trusted low-cardinality plugin id for `plugin`.
+    Non-plugin usage, and plugin ids rejected by low-cardinality normalization,
+    use `plugin="none"`.
 
   </Accordion>
   <Accordion title="Series cap and overflow accounting">
