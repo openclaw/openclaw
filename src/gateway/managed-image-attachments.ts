@@ -229,7 +229,7 @@ async function resizeManagedImageBufferToLimits(params: {
   };
 }
 
-function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
+export function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
   if (
     !path.isAbsolute(record.original.mediaRoot) ||
     record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
@@ -547,7 +547,7 @@ function asArray(value: string[] | undefined | null) {
     : [];
 }
 
-function parseManagedOutgoingRoute(value: string) {
+export function parseManagedOutgoingRoute(value: string) {
   try {
     const parsed = new URL(value, "http://localhost");
     const match = parsed.pathname.match(/^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/full$/);
@@ -773,7 +773,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   return index;
 }
 
-async function recordMatchesTranscriptMessage(
+export async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
 ) {

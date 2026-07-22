@@ -34,6 +34,12 @@ import {
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
+import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
+import {
+  isManagedOutgoingImageUrl,
+  resolveManagedOutgoingImageDataUrl,
+  type ManagedImageDataUrlResult,
+} from "../managed-image-blob.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
@@ -102,6 +108,8 @@ export type SessionWorkspaceHost = {
   assistantAgentId?: string | null;
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
+  password?: string | null;
+  basePath?: string;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceOpenRequest?: SessionWorkspaceOpenRequest;
   sessionWorkspaceDraftScope?: string;
@@ -206,8 +214,13 @@ function artifactSidebarContent(params: {
   mimeType: string;
   title: string;
   url?: string;
+  preview?: ManagedImageDataUrlResult | null;
+  managedImage?: boolean;
 }): SidebarContent {
-  const { data, encoding, mimeType, title, url } = params;
+  const { data, encoding, mimeType, title, url, preview, managedImage } = params;
+  if (preview?.kind === "success") {
+    return { kind: "image", title, src: preview.dataUrl, mimeType, rawText: url ?? null };
+  }
   if (encoding === "base64" && data && mimeType.startsWith("image/")) {
     return {
       kind: "image",
@@ -232,6 +245,18 @@ function artifactSidebarContent(params: {
       content: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
       rawText: decoded,
     };
+  }
+  if (managedImage) {
+    // A managed outgoing image URL is only usable by the assistant-attachment
+    // auth path (deviceToken/shared-secret + requester-session-key header).
+    // Never fall through to the generic "Open artifact" link here: it would
+    // hand the operator a URL that 401s/403s without those headers.
+    const reason =
+      preview?.kind === "denied"
+        ? "This generated image could not be loaded with the current authorization."
+        : "This generated image is currently unavailable.";
+    const content = `# ${title}\n\n${reason}`;
+    return { kind: "markdown", content, rawText: content };
   }
   if (url) {
     const content = `# ${title}\n\n[Open artifact](${url})`;
@@ -624,13 +649,29 @@ function openArtifact(
     state,
     workspace,
     `artifact:${artifactId}`,
-    (request) =>
-      state.client!.request<ArtifactDownloadResult | null>("artifacts.download", {
-        sessionKey: request.sessionKey,
-        artifactId,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
-      }),
-    (result) =>
+    async (request) => {
+      const result = await state.client!.request<ArtifactDownloadResult | null>(
+        "artifacts.download",
+        {
+          sessionKey: request.sessionKey,
+          artifactId,
+          ...(request.agentId ? { agentId: request.agentId } : {}),
+        },
+      );
+      // The gateway only returns a `url` when it cannot inline bytes (no
+      // operator.admin scope). Bytes already came back authenticated, so
+      // only a URL-mode managed image needs the authenticated re-fetch.
+      const managedImage = Boolean(result?.url && isManagedOutgoingImageUrl(result.url));
+      const preview =
+        result?.url && managedImage
+          ? await resolveManagedOutgoingImageDataUrl(result.url, {
+              authToken: resolveAssistantAttachmentAuthToken(state),
+              basePath: state.basePath,
+            })
+          : null;
+      return result ? { result, preview, managedImage } : null;
+    },
+    ({ result, preview, managedImage }) =>
       !result.artifact
         ? null
         : artifactSidebarContent({
@@ -639,6 +680,8 @@ function openArtifact(
             mimeType: result.artifact.mimeType ?? "",
             title: result.artifact.title,
             url: result.url,
+            preview,
+            managedImage,
           }),
     `Failed to load artifact ${artifactId}`,
   );

@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -8,11 +8,11 @@ import {
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
 
-function gatewayHello(methods: string[], scopes = ["operator.admin"]) {
+function gatewayHello(methods: string[], scopes = ["operator.admin"], deviceToken?: string) {
   return {
     type: "hello-ok" as const,
     protocol: 3,
-    auth: { role: "operator", scopes },
+    auth: { role: "operator", scopes, ...(deviceToken ? { deviceToken } : {}) },
     features: { methods },
   };
 }
@@ -173,4 +173,124 @@ describe("openSessionWorkspaceFile", () => {
       expect(getFile.mock.calls[0]?.[1]).toBe(expected);
     },
   );
+});
+
+describe("generated image artifacts", () => {
+  const managedUrl =
+    "/api/chat/media/outgoing/agent%3Amain%3Acurrent/11111111-1111-4111-8111-111111111111/full";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function artifactResult() {
+    return {
+      artifact: {
+        id: "artifact-image",
+        type: "image",
+        title: "Generated image",
+        mimeType: "image/png",
+        sessionKey: "agent:main:current",
+        messageSeq: 1,
+        source: "session-transcript",
+        download: { mode: "url" },
+      },
+      url: managedUrl,
+    };
+  }
+
+  it("falls back to a shared-secret fetch for URL-returning gateways", async () => {
+    const handleOpenSidebar = vi.fn();
+    const request = vi.fn().mockResolvedValue(artifactResult());
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer shared-secret-token");
+      expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:current");
+      return { ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const state = {
+      client: { request },
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello(["artifacts.download"], ["operator.read"]),
+      settings: { token: "shared-secret-token" },
+      sessionKey: "agent:main:current",
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-image");
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({
+      kind: "image",
+      src: "data:image/png;base64,cG5n",
+      mimeType: "image/png",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      managedUrl,
+      expect.objectContaining({ method: "GET", credentials: "same-origin" }),
+    );
+  });
+
+  it("previews admin-resolved managed image bytes without navigating to the protected URL", async () => {
+    const handleOpenSidebar = vi.fn();
+    const request = vi.fn().mockResolvedValue({
+      artifact: {
+        ...artifactResult().artifact,
+        download: { mode: "bytes" },
+      },
+      encoding: "base64",
+      data: "cG5n",
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const state = {
+      client: { request },
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello(
+        ["artifacts.download"],
+        ["operator.read", "operator.admin"],
+        "device-token",
+      ),
+      sessionKey: "agent:main:current",
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-image");
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(handleOpenSidebar.mock.calls[0]?.[0]).toMatchObject({
+      kind: "image",
+      src: "data:image/png;base64,cG5n",
+      mimeType: "image/png",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows authorization recovery instead of exposing the protected URL", async () => {
+    const handleOpenSidebar = vi.fn();
+    const request = vi.fn().mockResolvedValue(artifactResult());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 401 })) as unknown as typeof fetch,
+    );
+    const state = {
+      client: { request },
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello(["artifacts.download"], ["operator.read"], "under-scoped-token"),
+      sessionKey: "agent:main:current",
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-image");
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    const content = handleOpenSidebar.mock.calls[0]?.[0];
+    expect(content).toMatchObject({ kind: "markdown" });
+    expect(content.content).toContain("could not be loaded with the current authorization");
+    expect(content.content).not.toContain(managedUrl);
+  });
 });
