@@ -42,6 +42,7 @@ type ChatPaneHeaderProps = {
   workspaceAction: TemplateResult | typeof nothing;
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
+  sharingControl?: TemplateResult | typeof nothing;
   boardDockAction?: TemplateResult | typeof nothing;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
@@ -241,6 +242,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           `
         : nothing}
       ${props.presence ?? nothing} ${props.faceControl ?? nothing}
+      ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <wa-dropdown

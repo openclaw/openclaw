@@ -1,0 +1,87 @@
+import { render } from "lit";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderChatSessionSharing } from "./chat-session-sharing.ts";
+
+let container: HTMLDivElement | undefined;
+
+afterEach(() => {
+  container?.remove();
+  container = undefined;
+});
+
+function mount(template: ReturnType<typeof renderChatSessionSharing>) {
+  container = document.createElement("div");
+  document.body.append(container);
+  render(template, container);
+  return container;
+}
+
+describe("chat session sharing menu", () => {
+  it("shows the owner picker with policy-gated modes and known identities", () => {
+    const onVisibilityChange = vi.fn();
+    const onMemberChange = vi.fn();
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "read-only",
+          sharingRole: "owner",
+        },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: [{ id: "alice", label: "Alice" }],
+            role: "owner",
+            allowedVisibilities: ["shared", "read-only"],
+          },
+        },
+        onOpen: vi.fn(),
+        onVisibilityChange,
+        onMemberChange,
+      }),
+    );
+    const dropdown = root.querySelector("wa-dropdown");
+    expect(dropdown).not.toBeNull();
+    expect(root.textContent).toContain("Shared");
+    expect(root.textContent).toContain("Read-only");
+    expect(root.textContent).not.toContain("Suggest");
+    expect(root.textContent).toContain("Alice");
+
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "visibility:shared" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "member:alice" } },
+      }),
+    );
+    expect(onVisibilityChange).toHaveBeenCalledWith("shared");
+    expect(onMemberChange).toHaveBeenCalledWith("alice", true);
+  });
+
+  it("shows only the draft marker to a non-manager", () => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "draft",
+          sharingRole: "member",
+        },
+        state: undefined,
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+    expect(root.querySelector("wa-dropdown")).toBeNull();
+    expect(root.querySelector(".chat-pane__draft-indicator")?.textContent).toContain("👻");
+  });
+});

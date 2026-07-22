@@ -493,6 +493,8 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  visibility?: SessionVisibility;
+  sharingRole?: SessionSharingRole;
   spawnedBy?: string;
   controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
