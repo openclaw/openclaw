@@ -426,7 +426,10 @@ async function applyCodexPluginConfigItem(
     .map(readAppliedPluginConfigEntry)
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
   if (entries.length === 0) {
-    return markMigrationItemSkipped(item, "no selected Codex plugins");
+    return {
+      ...markMigrationItemSkipped(item, "no selected Codex plugins"),
+      deferredCompletion: true,
+    };
   }
   const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
   const configApi = resolveMigrationConfigRuntime(ctx);

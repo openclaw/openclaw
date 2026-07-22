@@ -2465,6 +2465,7 @@ describe("buildCodexMigrationProvider", () => {
     expectRecordFields(findItem(result.items, "config:codex-plugins"), {
       status: "skipped",
       reason: "no selected Codex plugins",
+      deferredCompletion: true,
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
   });
