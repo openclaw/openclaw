@@ -241,7 +241,21 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         sessionKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      await patchSessionEntry(scope, () => ({ visibility }));
+      // The entry-store write queue is separate from the sharing queue, so a
+      // reset/recreate can replace the row between the check above and this
+      // write. Re-check the instance inside the atomic patch and no-op if it
+      // changed, so a stale owner cannot stamp the replacement's visibility.
+      let sessionChanged = false;
+      await patchSessionEntry(scope, (entry) => {
+        if (entry.sessionId !== current.entry.sessionId) {
+          sessionChanged = true;
+          return null;
+        }
+        return { visibility };
+      });
+      if (sessionChanged) {
+        throw new Error("session changed before sharing mutation");
+      }
       invalidateSessionSharingSnapshot(current.canonicalKey);
       const now = Date.now();
       const actor = actorIdentity(client);

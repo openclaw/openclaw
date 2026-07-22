@@ -67,17 +67,29 @@ describe("session sharing store", () => {
     await withTempDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
-      await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
+      await upsertSessionEntry(scope, {
+        sessionId: "session-a",
+        updatedAt: 1,
+        visibility: "read-only",
+      });
       expect(
         addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
       ).toBe(true);
       expect(isSessionMember(scope, "guest")).toBe(true);
 
       // Reusing the canonical key with a new sessionId is a fresh session; a
-      // stale member must not inherit access to the replacement.
-      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 3 });
+      // stale member must not inherit access, and the replacement must start
+      // shared even if the recreated entry copied a restricted visibility.
+      await upsertSessionEntry(scope, {
+        sessionId: "session-b",
+        updatedAt: 3,
+        visibility: "read-only",
+      });
       expect(listSessionMembers(scope)).toEqual([]);
       expect(isSessionMember(scope, "guest")).toBe(false);
+      // Replacement drops the copied restriction; absent visibility reads as
+      // shared, so the fresh instance is not hidden or read-only.
+      expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
 
       // An in-place update that keeps the same sessionId preserves membership.
       expect(

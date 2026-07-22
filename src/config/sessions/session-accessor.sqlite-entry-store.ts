@@ -497,10 +497,14 @@ export function writeSessionEntry(
   });
   // A canonical key can be reused by a fresh session instance (reset/recreate);
   // the entry row is updated in place so the members FK cascade never fires.
-  // Sharing membership is bound to the instance, so a changed sessionId must
-  // drop prior members — otherwise they retain the `member` role (and its
-  // mutation rights) on a replacement session owned by someone else.
+  // A fresh instance always starts shared with no members, so a changed
+  // sessionId must reset both — otherwise a copied-forward `visibility` could
+  // leave the replacement hidden/restricted, and prior members would retain the
+  // `member` role on a session owned by someone else.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
+    // Absent visibility reads as shared; dropping the copied-forward value keeps
+    // the replacement entry minimal rather than stamping an explicit default.
+    delete normalizedEntry.visibility;
     clearSessionMembersForKey(database, sessionKey);
   }
   executeSqliteQuerySync(
