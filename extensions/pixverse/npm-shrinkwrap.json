@@ -1,14 +1,14 @@
 {
   "name": "@openclaw/pixverse-provider",
-  "version": "2026.6.33",
+  "version": "2026.6.34",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/pixverse-provider",
-      "version": "2026.6.33",
+      "version": "2026.6.34",
       "peerDependencies": {
-        "openclaw": ">=2026.6.33"
+        "openclaw": ">=2026.6.34"
       },
       "peerDependenciesMeta": {
         "openclaw": {
