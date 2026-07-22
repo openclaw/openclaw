@@ -347,6 +347,14 @@ export function readClawCronRefs(
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawCronRef[] {
   const database = openOpenClawStateDatabase(options);
+  if (
+    options.readOnly &&
+    !database.db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
+      .get()
+  ) {
+    return [];
+  }
   const rows = database.db /* sqlite-allow-raw: read Claw cron ownership rows by closed agent id. */
     .prepare(
       `SELECT schema_version, agent_id, manifest_id, declaration_key, scheduler_job_id,
