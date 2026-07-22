@@ -206,7 +206,7 @@ describe("github-copilot plugin", () => {
     });
   });
 
-  it("owns Claude replay thinking cleanup", () => {
+  it("owns session-bound replay thinking cleanup", () => {
     const provider = registerProviderWithPluginConfig({});
     const messages = [
       {
@@ -235,6 +235,19 @@ describe("github-copilot plugin", () => {
     ]);
     expect(
       provider.sanitizeReplayHistory?.({
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+        messages,
+      } as never),
+    ).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+      },
+    ]);
+    expect(
+      provider.sanitizeReplayHistory?.({
+        modelApi: "openai-completions",
         modelId: "gpt-5.4",
         messages,
       } as never),
