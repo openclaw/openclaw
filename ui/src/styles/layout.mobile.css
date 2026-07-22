@@ -300,6 +300,109 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   margin-left: auto;
 }
 
+/* ===========================================
+   Mobile bottom tab bar
+   =========================================== */
+
+/* Primary navigation the thumb can reach without a hamburger trip. The bar is a
+   fixed overlay, so the content area reserves --oc-tab-bar-height below it; the
+   short-landscape media query drops the bar and zeroes the reserve. */
+.shell--mobile-nav {
+  --oc-tab-bar-base-height: 56px;
+  --oc-tab-bar-height: calc(var(--oc-tab-bar-base-height) + var(--safe-area-bottom));
+}
+
+.mobile-tab-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* Below the drawer (70) and its backdrop (65) so an open drawer covers it. */
+  z-index: 60;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  height: var(--oc-tab-bar-height);
+  padding-bottom: var(--safe-area-bottom);
+  padding-left: var(--safe-area-left);
+  padding-right: var(--safe-area-right);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -8px 24px color-mix(in srgb, black 18%, transparent);
+}
+
+.mobile-tab-bar__tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 44px;
+  padding: 6px 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-tab-bar__icon {
+  display: inline-flex;
+}
+
+.mobile-tab-bar__icon svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mobile-tab-bar__label {
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.mobile-tab-bar__tab--active {
+  color: var(--accent);
+}
+
+/* Reserve room so the fixed bar never covers page content or the chat composer.
+   Chat is a full-height flex pane, so its pad shrinks the pane (composer rides
+   up); scrolling pages just gain bottom padding. */
+.shell--mobile-nav:not(.shell--onboarding) .content {
+  padding-bottom: calc(16px + var(--oc-tab-bar-height));
+}
+
+.shell--mobile-nav:not(.shell--onboarding) .content--chat {
+  padding-bottom: var(--oc-tab-bar-height);
+}
+
+/* The pane pad already clears the home indicator, so the composer only needs a
+   small gap above the bar (no second --safe-area-bottom). */
+.shell--mobile-nav:not(.shell--onboarding) .agent-chat__input {
+  margin-bottom: 10px;
+}
+
+/* Short landscape has no vertical room for a bottom bar: hide it and give the
+   reserved space back. The composer restores its own safe-area clearance. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .shell--mobile-nav {
+    --oc-tab-bar-height: 0px;
+  }
+
+  .shell--mobile-nav .mobile-tab-bar {
+    display: none;
+  }
+
+  .shell--mobile-nav:not(.shell--onboarding) .agent-chat__input {
+    margin-bottom: calc(10px + var(--safe-area-bottom));
+  }
+}
+
 /* Mobile-specific styles */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .shell {

@@ -673,3 +673,106 @@ h3.plugins-subheader {
     flex-direction: column;
   }
 }
+
+/* ---------- mobile rows + toolbar ---------- */
+
+@media (max-width: 640px) {
+  /* Deterministic row layout: art tile, text, and action cluster share one line
+     while row-local messages break to a full-width line below. The default
+     flex-wrap let a long description strand the tile or the action on their own
+     lines, so otherwise-identical cards rendered three different ways. Rows
+     without a tile (skills, ClawHub results) collapse to a two-column grid. */
+  .plugins-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--space-3);
+    row-gap: var(--space-2);
+  }
+
+  .plugins-item:has(> .plugins-tile) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .plugins-item > .settings-row__control {
+    width: auto;
+    max-width: none;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
+  /* Errors and acknowledge/undo messages span the whole card under the row. */
+  .plugins-item > .plugins-row-message {
+    grid-column: 1 / -1;
+  }
+
+  /* Toolbar: full-width controls, segmented filter as equal-width chips, and the
+     refresh button tucked beside the search instead of orphaned on its own line. */
+  .plugins-toolbar {
+    align-items: stretch;
+    row-gap: var(--space-3);
+  }
+
+  /* Zero basis so the input shares its row with the refresh button instead of
+     resolving to its 100% width and pushing refresh onto a line of its own. */
+  .plugins-toolbar__search {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .plugins-toolbar > .settings-segmented {
+    flex: 1 1 100%;
+    width: 100%;
+    display: flex;
+  }
+
+  .plugins-toolbar > .settings-segmented::part(radios) {
+    width: 100%;
+  }
+
+  /* 2x2 grid of equal chips: the four filter labels ("Needs Setup") are too wide
+     to share one row, and min-content kept them from shrinking, so a flat row
+     wrapped 3 + 1. A ~40% basis packs two per row into a tidy block. */
+  .plugins-toolbar > .settings-segmented .settings-segmented__btn {
+    flex: 1 1 40%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Installed plugins toolbar: search + refresh ride the first row, filter below. */
+  .plugins-toolbar:not(.plugins-toolbar--fields) .plugins-toolbar__search {
+    order: 1;
+  }
+
+  .plugins-toolbar:not(.plugins-toolbar--fields) .plugins-refresh {
+    order: 2;
+    flex: 0 0 auto;
+  }
+
+  .plugins-toolbar:not(.plugins-toolbar--fields) > .settings-segmented {
+    order: 3;
+  }
+
+  /* Skills toolbar (labelled fields): each field spans a row; the "N shown"
+     count and Refresh share the final row so nothing is left orphaned. */
+  .plugins-toolbar--fields {
+    align-items: stretch;
+  }
+
+  .plugins-toolbar--fields .plugins-field {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .plugins-toolbar--fields .plugins-toolbar__hint {
+    flex: 1 1 auto;
+    align-self: center;
+    margin-bottom: 0;
+    white-space: nowrap;
+  }
+
+  .plugins-toolbar--fields > .btn {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+  }
+}

@@ -34,6 +34,7 @@ import {
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
+import type { ChatPaneHeaderMenuAction } from "./chat-pane-header.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
@@ -780,32 +781,66 @@ function sessionWorkspaceModifiedCount(
   return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
 }
 
+/** Labeled descriptor for the workspace-files action; the merged mobile
+ * overflow menu and the inline toggle share this single source of truth. */
+export function sessionWorkspaceMenuAction(
+  sessionWorkspace: SessionWorkspaceProps | undefined,
+): ChatPaneHeaderMenuAction | null {
+  if (!sessionWorkspace) {
+    return null;
+  }
+  const expanded = !sessionWorkspace.collapsed;
+  return {
+    id: "workspace",
+    icon: icons.fileText,
+    label: expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles"),
+    badge: expanded ? 0 : sessionWorkspaceModifiedCount(sessionWorkspace),
+    onSelect: sessionWorkspace.onToggleCollapsed,
+  };
+}
+
+/** Labeled descriptor for the session-diff action; shared with the overflow
+ * menu. Null when the gateway does not advertise sessions.diff. */
+export function sessionDiffMenuAction(
+  sessionWorkspace: SessionWorkspaceProps | undefined,
+): ChatPaneHeaderMenuAction | null {
+  const onOpenDiff = sessionWorkspace?.onOpenDiff;
+  if (!onOpenDiff) {
+    return null;
+  }
+  return {
+    id: "diff",
+    icon: icons.gitBranch,
+    label: t("chat.sessionDiff.show"),
+    onSelect: () => onOpenDiff(),
+  };
+}
+
 /** Toggle used wherever the rail itself is not visible: the split pane header
  * and the single-pane floating opener. Collapsed rails render nothing, so
  * this button is the only pointer affordance (⇧⌘B still works). */
 export function renderSessionWorkspaceToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
-  if (!sessionWorkspace) {
+  const action = sessionWorkspaceMenuAction(sessionWorkspace);
+  if (!action || !sessionWorkspace) {
     return nothing;
   }
   const expanded = !sessionWorkspace.collapsed;
-  const label = expanded ? t("chat.workspaceFiles.collapse") : t("chat.workspaceFiles.showFiles");
-  const modifiedCount = sessionWorkspaceModifiedCount(sessionWorkspace);
   return html`
-    <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
+    <openclaw-tooltip .content=${`${action.label} (⇧⌘B)`}>
       <button
         class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
         type="button"
-        aria-label=${label}
+        aria-label=${action.label}
         aria-keyshortcuts="Meta+Shift+B"
         aria-expanded=${String(expanded)}
         @click=${sessionWorkspace.onToggleCollapsed}
       >
         ${icons.fileText}
-        ${!expanded && modifiedCount > 0
+        ${action.badge && action.badge > 0
           ? html`<span class="chat-workspace-toggle__badge" aria-hidden="true"
-              >${modifiedCount}</span
+              >${action.badge}</span
             >`
           : nothing}
       </button>
@@ -818,16 +853,16 @@ export function renderSessionWorkspaceToggle(
 export function renderSessionDiffToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): TemplateResult | typeof nothing {
-  if (!sessionWorkspace?.onOpenDiff) {
+  const action = sessionDiffMenuAction(sessionWorkspace);
+  if (!action || !sessionWorkspace?.onOpenDiff) {
     return nothing;
   }
-  const label = t("chat.sessionDiff.show");
   return html`
-    <openclaw-tooltip .content=${label}>
+    <openclaw-tooltip .content=${action.label}>
       <button
         class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
-        aria-label=${label}
+        aria-label=${action.label}
         @click=${sessionWorkspace.onOpenDiff}
       >
         ${icons.gitBranch}

@@ -529,4 +529,12 @@ wa-popover.new-session-page__place-popover::part(body) {
     width: auto;
     max-width: none;
   }
+
+  /* The new-session composer footer holds only the model picker (no settings
+     button or interrupt toast), so the shared chat 3-column grid strands it in
+     the 40px slot and clips the model name to "g..". Give it one flexible
+     column so the picker sizes to its label. */
+  .new-session-page__composer .agent-chat__composer-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

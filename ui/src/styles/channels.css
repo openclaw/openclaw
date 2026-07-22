@@ -297,3 +297,19 @@ wa-radio-group.channels-wizard__options::part(radios) {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+
+/* ---------- responsive ---------- */
+
+/* Add-a-channel rows keep the "Set up" action on the title line instead of
+   dropping to a full-width block: the shared <=640px rule stacks plain-button
+   controls, which stranded "Set up" below a vertical void. These rows carry
+   one short action, so they mirror the nav-row trailing-affordance treatment. */
+@media (max-width: 640px) {
+  .settings-row.channels-item > .settings-row__control {
+    width: auto;
+    max-width: 50%;
+    flex: 0 0 auto;
+    margin-left: auto;
+    justify-content: flex-end;
+  }
+}

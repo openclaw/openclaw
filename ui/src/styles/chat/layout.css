@@ -2907,9 +2907,21 @@ openclaw-chat-page {
   }
 
   .agent-chat__composer-input-row .agent-chat__input-btn--attach {
-    width: 36px;
-    min-width: 36px;
+    width: 44px;
+    min-width: 44px;
     height: 44px;
+  }
+
+  /* Split-button chevron next to the send/voice control: 20px on desktop is
+     too small to tap reliably, so widen the whole hit target on touch shells. */
+  .chat-talk-input-picker__trigger {
+    width: 44px;
+    min-width: 44px;
+  }
+
+  /* Suggestion-card primary action: keep the tap target at the touch minimum. */
+  .task-suggestion__start {
+    min-height: 44px;
   }
 
   .agent-chat__composer-combobox {
@@ -2966,13 +2978,19 @@ openclaw-chat-page {
     padding: 0 2px 0 4px;
   }
 
+  /* The composer is lifted by the mobile tab-bar reserve (--oc-tab-bar-height,
+     0 without the bar), so this viewport-anchored popover must rise by the same
+     amount; otherwise it overlaps its own trigger and swallows the close tap. */
   .agent-chat__input .chat-controls__inline-select-menu--combined {
     position: fixed;
     left: auto;
     right: max(12px, var(--safe-area-right));
-    bottom: calc(96px + var(--safe-area-bottom));
+    bottom: calc(96px + var(--safe-area-bottom) + var(--oc-tab-bar-height, 0px));
     width: min(392px, calc(100vw - 24px));
-    max-height: min(440px, calc(100vh - 116px - var(--safe-area-bottom)));
+    max-height: min(
+      440px,
+      calc(100vh - 116px - var(--safe-area-bottom) - var(--oc-tab-bar-height, 0px))
+    );
   }
 
   .chat-view-menu-wrapper {

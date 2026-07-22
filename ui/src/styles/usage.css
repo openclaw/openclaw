@@ -1994,6 +1994,62 @@ wa-tooltip.usage-summary-tooltip::part(body) {
   }
 }
 
+/* Mobile filter stack: the header filter controls wrap loosely at phone
+   widths (dangling date separator, shrink-wrapped select, odd-width segmented
+   controls). Force one deliberate full-width column with ≥40px tap targets. */
+@media (max-width: 640px) {
+  .usage-controls > .usage-presets,
+  .usage-controls > .usage-date-range,
+  .usage-controls > .usage-select,
+  .usage-controls > .chart-toggle,
+  .usage-controls > .btn {
+    width: 100%;
+  }
+
+  /* Date range stacks: start / "to" / end, each full width, separator centered. */
+  .usage-date-range {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .usage-date-input {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .usage-separator {
+    text-align: center;
+  }
+
+  .usage-select {
+    min-height: 40px;
+  }
+
+  /* Segmented controls fill the row; each option splits the width evenly. */
+  .chart-toggle {
+    display: flex;
+  }
+
+  .chart-toggle .toggle-btn {
+    flex: 1 1 0;
+    min-height: 38px;
+  }
+
+  /* Presets share the row and grow instead of clustering left. */
+  .usage-presets {
+    flex-wrap: wrap;
+  }
+
+  .usage-presets .btn {
+    flex: 1 1 auto;
+  }
+
+  /* Refresh is the last, clearly-placed full-width primary action. */
+  .usage-controls > .btn.primary {
+    min-height: 42px;
+  }
+}
+
 @keyframes usage-spin {
   to {
     transform: rotate(360deg);

@@ -16,6 +16,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
+import "../components/mobile-tab-bar.ts";
 import "../components/onboarding-memory-import.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
@@ -1575,6 +1576,16 @@ class OpenClawShell extends OpenClawLightDomElement {
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
+        ${mobileNavLayout && !onboarding
+          ? html`
+              <openclaw-mobile-tab-bar
+                .activeRouteId=${activeRoute}
+                .navDrawerOpen=${navDrawerOpen}
+                .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
+                .onOpenMenu=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
+              ></openclaw-mobile-tab-bar>
+            `
+          : nothing}
         ${navCollapsed && !onboarding
           ? html`
               <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
