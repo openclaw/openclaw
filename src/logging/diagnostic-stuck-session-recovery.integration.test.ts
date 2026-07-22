@@ -15,20 +15,20 @@ import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-regist
 import { enqueueCommandInLane, getQueueSize, resetCommandLane } from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { resetDiagnosticRunActivityForTest } from "./diagnostic-run-activity.js";
-import {
-  testing as recoveryTesting,
-  recoverStuckDiagnosticSession,
-} from "./diagnostic-stuck-session-recovery.runtime.js";
+import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   requestStuckSessionRecoveryOutcome,
   resetDiagnosticSessionRecoveryCoordinatorForTest,
 } from "./diagnostic-session-recovery-coordinator.js";
-import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
-import { logSessionStateChange, logMessageQueued } from "./diagnostic.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
+import {
+  testing as recoveryTesting,
+  recoverStuckDiagnosticSession,
+} from "./diagnostic-stuck-session-recovery.runtime.js";
+import { logSessionStateChange, logMessageQueued } from "./diagnostic.js";
 
 async function expectPendingAfterEventLoopTurn(promise: Promise<unknown>): Promise<void> {
   let settled = false;
