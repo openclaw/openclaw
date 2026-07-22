@@ -10,6 +10,7 @@ import {
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
+import { sanitizeAgentIdentityLine } from "../identity-file.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
   isAnnounceSkip,
@@ -83,8 +84,11 @@ function buildAgentSessionLines(params: {
   targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
+  const requesterName = params.requesterName
+    ? sanitizeAgentIdentityLine(params.requesterName)
+    : undefined;
   return [
-    params.requesterName ? `Agent 1 (requester) name: ${params.requesterName}.` : undefined,
+    requesterName ? `Agent 1 (requester) name: ${requesterName}.` : undefined,
     // Session keys are high-cardinality (thread/run ids), so concrete values churn the
     // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
     // low-cardinality and inform reply formatting, so they stay concrete.
