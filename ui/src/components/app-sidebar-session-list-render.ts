@@ -56,7 +56,7 @@ function renderSessionSection(params: {
   const group = section.category;
   // zonedVisibleSections removes pinned rows; AppSidebar renders them through
   // renderPinnedSidebarSession, so every section here has a header.
-  const collapsed = data.collapsed.has(section.id);
+  const collapsed = data.c.has(section.id);
   const label = section.groups
     ? t("chat.sidebar.groups")
     : section.work
@@ -73,16 +73,15 @@ function renderSessionSection(params: {
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
-  const acceptsSessions =
-    data.groups === "category" && (section.id === "ungrouped" || Boolean(group));
+  const acceptsSessions = data.g === "category" && (section.id === "ungrouped" || Boolean(group));
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
     collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
-    group && data.dragG === group ? "sidebar-recent-sessions__group--dragging" : "",
-    data.drop === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
-    group && data.gDrop?.group === group
-      ? `sidebar-recent-sessions__group--group-drop-${data.gDrop.position}`
+    group && data.dg === group ? "sidebar-recent-sessions__group--dragging" : "",
+    data.q === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
+    group && data.gd?.group === group
+      ? `sidebar-recent-sessions__group--group-drop-${data.gd.position}`
       : "",
   ]
     .filter(Boolean)
@@ -169,10 +168,10 @@ function renderSessionSection(params: {
                   title=${t("chat.sidebar.sortSessions")}
                   aria-label=${t("chat.sidebar.sortSessions")}
                   aria-haspopup="menu"
-                  aria-expanded=${String(data.sort)}
+                  aria-expanded=${String(data.z)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
-                    cb.sort(event.currentTarget as HTMLElement);
+                    cb.z(event.currentTarget as HTMLElement);
                   }}
                 >
                   ${icons.listFilter}
@@ -180,11 +179,11 @@ function renderSessionSection(params: {
                 <button
                   type="button"
                   class="sidebar-session-group-actions sidebar-new-session"
-                  title=${data.online
+                  title=${data.o
                     ? t("chat.runControls.newSession")
                     : t("chat.runControls.newSessionDisconnected")}
                   aria-label=${t("chat.runControls.newSession")}
-                  ?disabled=${!data.online}
+                  ?disabled=${!data.o}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     cb.ns();
@@ -202,7 +201,7 @@ function renderSessionSection(params: {
                   title=${t("sessionsView.groupMenu", { group })}
                   aria-label=${t("sessionsView.groupMenu", { group })}
                   aria-haspopup="menu"
-                  aria-expanded=${String(data.gMenu === group)}
+                  aria-expanded=${String(data.gm === group)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     const trigger = event.currentTarget as HTMLElement;
@@ -298,11 +297,11 @@ function renderSessionCatalogs(params: {
   const { cb } = context;
   return renderSessionCatalogGroups({
     catalogs: snapshot.catalogs,
-    connected: context.data.online,
+    connected: context.data.o,
     basePath: snapshot.basePath,
     routeSessionKey: snapshot.routeSessionKey,
     newSessionAgentId: snapshot.newSessionAgentId,
-    collapsedSections: context.data.collapsed,
+    collapsedSections: context.data.c,
     loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
     projectGrouping: snapshot.projectGrouping,
     liveRows: snapshot.liveRows,
@@ -357,8 +356,8 @@ function renderSessionListBody(params: {
         section.id === "ungrouped" &&
         section.totalRowCount === 0 &&
         !showDraft &&
-        data.status === "active" &&
-        data.drag === null
+        data.t === "active" &&
+        data.d === null
       ) {
         return nothing;
       }
@@ -386,19 +385,19 @@ export function renderSessionList(params: {
   const { data, cb } = context;
   return html`
     <section
-      class="sidebar-sessions ${data.remove ? "sidebar-sessions--removal-drop" : ""}"
+      class="sidebar-sessions ${data.r ? "sidebar-sessions--removal-drop" : ""}"
       @dragover=${(event: DragEvent) => cb.lo(event)}
       @dragleave=${(event: DragEvent) => cb.ll(event)}
       @drop=${(event: DragEvent) => cb.ld(event)}
     >
-      ${data.error
+      ${data.e
         ? html`
             <div
               class="sidebar-session-error callout danger callout--dismissible"
               role="alert"
               data-sidebar-session-error
             >
-              <span class="callout__content">${data.error}</span>
+              <span class="callout__content">${data.e}</span>
               <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                 <button
                   class="callout__dismiss"
@@ -421,12 +420,12 @@ export function renderSessionList(params: {
           visibleRowCount: params.visibleRowCount,
           showDraft: params.showDraft,
           codingTrailing:
-            data.status === "archived"
+            data.t === "archived"
               ? nothing
               : html`${renderSessionCatalogs({ context, snapshot: params.catalogs })}`,
-          codingTrailingPresent: data.status !== "archived" && params.catalogs.catalogs.length > 0,
+          codingTrailingPresent: data.t !== "archived" && params.catalogs.catalogs.length > 0,
         })}
-        ${data.status === "archived" && params.empty
+        ${data.t === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"
               >${t("sessionsView.noArchivedSessions")}</span
             >`

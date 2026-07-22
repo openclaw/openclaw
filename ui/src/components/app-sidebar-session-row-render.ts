@@ -38,30 +38,30 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export type SessionListRenderContext = {
   data: {
-    live: boolean;
-    lines: ReadonlyMap<string, string>;
-    digest: ReadonlyMap<string, SessionObserverDigest>;
-    prs: ReadonlyMap<string, SessionPullRequestIndicatorState>;
-    approval: ApprovalBadgeSnapshot;
-    select: ReadonlySet<string>;
-    drag: string | null;
-    online: boolean;
-    viewers: unknown;
-    selfId: string | undefined;
-    expanded: ReadonlySet<string>;
-    full: ReadonlySet<string>;
-    groups: SidebarSessionsGrouping;
-    collapsed: ReadonlySet<string>;
-    dragG: string | null;
-    drop: string | null;
-    gDrop: SidebarSessionGroupDropTarget | null;
-    sort: boolean;
-    menu: string | null;
-    gMenu: string | null;
-    status: SidebarSessionStatusFilter;
-    remove: boolean;
-    error: string | null;
-    owners: boolean;
+    l: boolean;
+    n: ReadonlyMap<string, string>;
+    h: ReadonlyMap<string, SessionObserverDigest>;
+    p: ReadonlyMap<string, SessionPullRequestIndicatorState>;
+    a: ApprovalBadgeSnapshot;
+    s: ReadonlySet<string>;
+    d: string | null;
+    o: boolean;
+    v: unknown;
+    i: string | undefined;
+    x: ReadonlySet<string>;
+    f: ReadonlySet<string>;
+    g: SidebarSessionsGrouping;
+    c: ReadonlySet<string>;
+    dg: string | null;
+    q: string | null;
+    gd: SidebarSessionGroupDropTarget | null;
+    z: boolean;
+    m: string | null;
+    gm: string | null;
+    t: SidebarSessionStatusFilter;
+    r: boolean;
+    e: string | null;
+    w: boolean;
   };
   cb: {
     sd: (session: SidebarRecentSession) => void;
@@ -83,7 +83,7 @@ export type SessionListRenderContext = {
     ge: () => void;
     gm: (group: string, x: number, y: number, trigger: HTMLElement | null) => void;
     section: (sectionId: string) => void;
-    sort: (trigger: HTMLElement) => void;
+    z: (trigger: HTMLElement) => void;
     ns: () => void;
     sl: (limit: number) => void;
     cl: () => void;
@@ -125,13 +125,13 @@ export function renderRecentSession(params: {
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
-    sidebarLiveActivity: data.live,
-    narrationLine: data.lines.get(session.key),
-    observerDigest: data.digest.get(session.key) ?? null,
+    sidebarLiveActivity: data.l,
+    narrationLine: data.n.get(session.key),
+    observerDigest: data.h.get(session.key) ?? null,
   });
   const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
     session,
-    data.prs.get(session.key) ?? "none",
+    data.p.get(session.key) ?? "none",
   );
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;
@@ -145,7 +145,7 @@ export function renderRecentSession(params: {
     session.isChild ? "sidebar-recent-session--child" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
-    data.select.has(session.key) ? "sidebar-recent-session--selected" : "",
+    data.s.has(session.key) ? "sidebar-recent-session--selected" : "",
     session.pinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.attention.kind === "error"
@@ -153,11 +153,11 @@ export function renderRecentSession(params: {
       : session.attention.kind !== "none"
         ? "sidebar-recent-session--attention-amber"
         : "",
-    data.drag === session.key ? "sidebar-recent-session--dragging" : "",
+    data.d === session.key ? "sidebar-recent-session--dragging" : "",
   ]
     .filter(Boolean)
     .join(" ");
-  const childrenExpanded = data.expanded.has(session.key);
+  const childrenExpanded = data.x.has(session.key);
   const row = html`
     <div
       class=${rowClass}
@@ -196,7 +196,7 @@ export function renderRecentSession(params: {
         @click=${(event: MouseEvent) => cb.rc(event, session)}
       >
         <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
-          data.owners ? session.createdBy : undefined,
+          data.w ? session.createdBy : undefined,
           "row",
         )}
         <span class="sidebar-recent-session__text">
@@ -222,8 +222,8 @@ export function renderRecentSession(params: {
             >`
           : nothing}
         <openclaw-viewer-facepile
-          .presencePayload=${data.viewers}
-          .selfInstanceId=${data.selfId}
+          .presencePayload=${data.v}
+          .selfInstanceId=${data.i}
           .sessionKey=${session.key}
           .maxVisible=${3}
           variant="session"
@@ -231,7 +231,7 @@ export function renderRecentSession(params: {
         ${renderSessionRowBadges({
           ...session,
           pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(data.approval, session.key),
+          hasApproval: sessionHasPendingApproval(data.a, session.key),
         })}
         ${pinnedState}
       </a>
@@ -291,7 +291,7 @@ export function renderRecentSession(params: {
                 aria-label=${session.pinned
                   ? t("sessionsView.unpinSession")
                   : t("sessionsView.pinSession")}
-                ?disabled=${!data.online}
+                ?disabled=${!data.o}
                 @click=${() => cb.pin(session)}
               >
                 ${icons.pin}
@@ -303,7 +303,7 @@ export function renderRecentSession(params: {
                 title=${t("chat.sidebar.openSessionMenu")}
                 aria-label=${t("chat.sidebar.openSessionMenu")}
                 aria-haspopup="menu"
-                aria-expanded=${String(data.menu === session.key)}
+                aria-expanded=${String(data.m === session.key)}
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   const trigger = event.currentTarget as HTMLElement;
@@ -326,10 +326,10 @@ export function renderSessionTree(params: {
 }): TemplateResult {
   const { context, session } = params;
   const { data, cb } = context;
-  const expanded = data.expanded.has(session.key);
+  const expanded = data.x.has(session.key);
   const visibleChildren = visibleSessionChildren({
     session,
-    fullyShownChildSessionKeys: data.full,
+    fullyShownChildSessionKeys: data.f,
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
   return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>

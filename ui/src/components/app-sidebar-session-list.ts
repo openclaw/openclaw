@@ -21,7 +21,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
-    // A fresh draft must be visible where it will live: genuinely expand a
+    // A fresh draft must be visible where it will l: genuinely expand a
     // collapsed Threads section (persisted) instead of overriding at render
     // time, so the header toggle keeps matching the visible state.
     if (
@@ -54,30 +54,30 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
 
     return {
       data: {
-        live: this.sidebarLiveActivity,
-        lines: this.sidebarNarrationLines,
-        digest: this.sidebarObserverDigests,
-        prs: pullRequestStates,
-        approval: this.approvalBadgeSnapshot(),
-        select: this.selectedSessionKeys,
-        drag: this.draggingSessionKey,
-        online: this.connected,
-        viewers: this.presencePayload,
-        selfId: this.presenceInstanceId,
-        expanded: expandedSessionKeys,
-        full: this.fullyShownChildSessionKeys,
-        groups: this.sessionsGrouping,
-        collapsed: this.collapsedSessionSections,
-        dragG: this.draggingSessionGroup,
-        drop: this.sessionDropTarget,
-        gDrop: this.sessionGroupDropTarget,
-        sort: this.sessionSortMenuPosition !== null,
-        menu: this.sessionMenu?.session.key ?? null,
-        gMenu: this.sessionGroupMenu?.group ?? null,
-        status: this.sessionsStatusFilter,
-        remove: this.sessionListRemovalDrop,
-        error: this.sessionMutationError,
-        owners: this.sessionOwnershipVisible,
+        l: this.sidebarLiveActivity,
+        n: this.sidebarNarrationLines,
+        h: this.sidebarObserverDigests,
+        p: pullRequestStates,
+        a: this.approvalBadgeSnapshot(),
+        s: this.selectedSessionKeys,
+        d: this.draggingSessionKey,
+        o: this.connected,
+        v: this.presencePayload,
+        i: this.presenceInstanceId,
+        x: expandedSessionKeys,
+        f: this.fullyShownChildSessionKeys,
+        g: this.sessionsGrouping,
+        c: this.collapsedSessionSections,
+        dg: this.draggingSessionGroup,
+        q: this.sessionDropTarget,
+        gd: this.sessionGroupDropTarget,
+        z: this.sessionSortMenuPosition !== null,
+        m: this.sessionMenu?.session.key ?? null,
+        gm: this.sessionGroupMenu?.group ?? null,
+        t: this.sessionsStatusFilter,
+        r: this.sessionListRemovalDrop,
+        e: this.sessionMutationError,
+        w: this.sessionOwnershipVisible,
       },
       cb: {
         sd: (session) => {
@@ -113,7 +113,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
         },
         gm: this.openSessionGroupMenu.bind(this),
         section: this.toggleSessionSection.bind(this),
-        sort: this.toggleSessionSortMenu.bind(this),
+        z: this.toggleSessionSortMenu.bind(this),
         ns: () => {
           this.onOpenNewSession?.(this.expandedAgentId());
         },
