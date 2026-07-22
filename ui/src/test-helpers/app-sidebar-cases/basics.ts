@@ -174,8 +174,19 @@ describe("AppSidebar viewer presence", () => {
     expect(
       footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
-    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).toBeNull();
+    expect(footerFacepile?.querySelector('.viewer-facepile [data-viewer-id="00-self"]')).toBeNull();
     expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
+    expect(footerFacepile?.querySelector(".viewer-facepile openclaw-tooltip")).toBeNull();
+    expect(
+      [
+        ...(footerFacepile?.querySelectorAll(
+          ".sidebar-presence-hover-card .sidebar-hover-card__person",
+        ) ?? []),
+      ].map((row) => row.getAttribute("data-viewer-id")),
+    ).toEqual(["00-self", "alice", "bob", "carol", "dave", "erin", "frank"]);
+    expect(footerFacepile?.querySelector(".sidebar-presence-hover-card")?.textContent).toContain(
+      "Server",
+    );
 
     const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
     expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
@@ -265,21 +276,6 @@ describe("AppSidebar brand actions", () => {
       '[data-session-section="ungrouped"] .sidebar-new-session',
     );
     expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
-  });
-
-  it("opens the archived Sessions view from the sessions-zone footer", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main", "agent:main:work"]),
-    );
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
-
-    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
   });
 });
 

@@ -383,15 +383,15 @@ describe("qa cli runtime", () => {
               {
                 test: {
                   kind: "qa-scenario",
-                  id: "dm-chat-baseline",
-                  title: "DM baseline conversation",
+                  id: "channel-top-level-reply-shape",
+                  title: "Channel top-level reply shape",
                   source: {
-                    path: "qa/scenarios/channels/dm-chat-baseline.yaml",
+                    path: "qa/scenarios/channels/channel-top-level-reply-shape.yaml",
                   },
                 },
                 coverage: [
                   {
-                    id: "channels.dm",
+                    id: "channels.group-final-reply",
                     role: "primary",
                   },
                 ],
@@ -438,9 +438,9 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         outputDir: ".artifacts/qa-e2e/smoke-ci",
         profile: "smoke-ci",
-        surface: "channel-framework",
-        category: "channel-framework.conversation-routing-and-delivery",
-        scenarioIds: ["dm-chat-baseline"],
+        surface: "channels",
+        category: "channels.outbound-delivery-and-reply-pipeline",
+        scenarioIds: ["channel-top-level-reply-shape"],
         transportId: "qa-channel",
         fastMode: true,
         concurrency: 2,
@@ -461,7 +461,7 @@ describe("qa cli runtime", () => {
         channel: "telegram",
         channelDriver: "crabline",
       });
-      expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
+      expect(suiteArgs.scenarioIds).toEqual(["channel-top-level-reply-shape"]);
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
         evidenceMode?: unknown;
@@ -489,13 +489,13 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("profile");
       expect(evidence.scorecard?.coverageIds?.fulfilled).toBe(1);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
-        id: "channel-framework.conversation-routing-and-delivery",
+        id: "channels.outbound-delivery-and-reply-pipeline",
         coverageIds: {
           fulfilled: 1,
         },
       });
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
-      expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
+      expect(JSON.stringify(evidence.scorecard)).not.toContain("channel-top-level-reply-shape");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
     } finally {
@@ -511,8 +511,8 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "release",
-      surface: "agent-runtime-and-provider-execution",
-      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      surface: "agent-runtime",
+      category: "agent-runtime.agent-turn-execution",
       providerMode: "mock-openai",
     });
 
@@ -525,7 +525,7 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "release",
-      surface: "channel-framework",
+      surface: "channels",
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline", "telegram-help-command"],
     });
@@ -542,8 +542,8 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "all",
-      surface: "agent-runtime-and-provider-execution",
-      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      surface: "agent-runtime",
+      category: "agent-runtime.agent-turn-execution",
       providerMode: "mock-openai",
     });
 
@@ -568,12 +568,12 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "smoke-ci",
-      scenarioIds: ["dm-chat-baseline", "instruction-followthrough-repo-contract"],
+      scenarioIds: ["channel-top-level-reply-shape", "control-ui-qa-channel-image-roundtrip"],
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
-    expect(suiteArgs.scenarioIds).toEqual(["dm-chat-baseline"]);
+    expect(suiteArgs.scenarioIds).toEqual(["channel-top-level-reply-shape"]);
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",
@@ -636,11 +636,11 @@ describe("qa cli runtime", () => {
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
         profile: "smoke-ci",
-        category: "channel-framework.conversation-routing-and-delivery",
+        category: "channels.outbound-delivery-and-reply-pipeline",
         scenarioIds: ["not-a-real-scenario"],
       }),
     ).rejects.toThrow(
-      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --category channel-framework.conversation-routing-and-delivery --scenario not-a-real-scenario.",
+      "qa run did not find taxonomy scenarios for --qa-profile smoke-ci --category channels.outbound-delivery-and-reply-pipeline --scenario not-a-real-scenario.",
     );
     expect(runQaSuite).not.toHaveBeenCalled();
   });
@@ -1147,6 +1147,69 @@ describe("qa cli runtime", () => {
 
     expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_UID",
+      badValue: "0x3e9",
+      label: "uid-hex",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_UID",
+      badValue: "1e3",
+      label: "uid-exponent",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_UID",
+      badValue: "1001.5",
+      label: "uid-fraction",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_GID",
+      badValue: "0x3ea",
+      label: "gid-hex",
+    },
+    {
+      envKey: "OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS",
+      badValue: "0x3e8",
+      label: "cleanup-hex",
+    },
+  ])(
+    "rejects non-decimal Telegram SUT $label before starting a gateway",
+    async ({ envKey, badValue, label }) => {
+      const candidateRoot = path.join(telegramArtifactsDir, `candidate-${label}`);
+      const boundaryDir = path.join(telegramArtifactsDir, `boundary-${label}`);
+      const launcherPath = path.join(telegramArtifactsDir, `launcher-${label}`);
+      const runtimeRoot = path.join(telegramArtifactsDir, `runtime-${label}`);
+      const runtimeTempParent = path.join(runtimeRoot, "tmp");
+      const preloadPath = path.join(runtimeRoot, "openclaw-telegram-preentry.mjs");
+      const runtimeEntryPath = path.join(candidateRoot, "dist", "index.js");
+      await fs.mkdir(path.dirname(runtimeEntryPath), { recursive: true });
+      await fs.mkdir(boundaryDir);
+      await fs.mkdir(runtimeTempParent, { recursive: true });
+      await fs.writeFile(launcherPath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+      await fs.writeFile(preloadPath, "export {};\n", { mode: 0o600 });
+      await fs.writeFile(runtimeEntryPath, "export {};\n", { mode: 0o600 });
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_FORWARDED_ENV_KEYS", "HOME,PATH");
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS", "60000");
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_GID", "1002");
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND", launcherPath);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_PRELOAD_PATH", preloadPath);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR", boundaryDir);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_RUNTIME_EXECUTABLE", process.execPath);
+      vi.stubEnv("OPENCLAW_QA_TELEGRAM_SUT_UID", "1001");
+      vi.stubEnv(envKey, badValue);
+
+      await expect(
+        runQaTelegramCommand({
+          repoRoot: candidateRoot,
+          scenarioIds: ["telegram-help-command"],
+        }),
+      ).rejects.toThrow(`${envKey} must be a positive integer.`);
+
+      expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects non-executable Telegram launcher files before starting a gateway", async () => {
     const launcherPath = path.join(telegramArtifactsDir, "non-executable-launcher");
@@ -2024,7 +2087,7 @@ describe("qa cli runtime", () => {
       await runQaCoverageReportCommand({ repoRoot: process.cwd() });
 
       expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
-      expectWriteContains(stdoutWrite, "memory.recall");
+      expectWriteContains(stdoutWrite, "session-memory.embedding-search-recall");
     });
   });
 

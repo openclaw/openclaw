@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover application-owned overlay races.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";

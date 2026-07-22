@@ -81,8 +81,7 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
   const boundaryTimezone = isRawModelRun
     ? undefined
     : resolveUserTimezone(attempt.config?.agents?.defaults?.userTimezone);
-  const includeBoundaryTimestamp =
-    !isRawModelRun && attempt.config?.agents?.defaults?.envelopeTimestamp !== "off";
+  const includeBoundaryTimestamp = !isRawModelRun;
   let currentUserTimestampOverride: CurrentUserTimestampOverride | undefined;
   const buildBoundaryOptions = (): LlmBoundaryOptions => {
     if (isRawModelRun) {

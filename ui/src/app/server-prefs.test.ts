@@ -36,6 +36,7 @@ describe("server pref extraction", () => {
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
           sidebarLiveActivity: false,
+          showAdvancedSettings: true,
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
         }),
@@ -50,6 +51,7 @@ describe("server pref extraction", () => {
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
       sidebarLiveActivity: false,
+      showAdvancedSettings: true,
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
@@ -121,6 +123,23 @@ describe("applyServerUiPrefs", () => {
     expect(loadSettings().themeMode).toBe("light");
   });
 
+  it("preserves a local sidebar edit when only another server preference changes", () => {
+    const onApplied = vi.fn();
+    const sidebarEntries = ["route:usage", "session:agent:main:test"];
+    applyServerUiPrefs(configWithPrefs({ sidebarEntries, themeMode: "dark" }), { onApplied });
+    patchSettings({ sidebarEntries: ["route:usage"] });
+
+    expect(
+      applyServerUiPrefs(
+        configWithPrefs({ sidebarEntries: [...sidebarEntries], themeMode: "light" }),
+        { onApplied },
+      ),
+    ).toBe(true);
+    expect(loadSettings().sidebarEntries).toEqual(["route:usage"]);
+    expect(loadSettings().themeMode).toBe("light");
+    expect(onApplied).toHaveBeenLastCalledWith({ themeMode: "light" });
+  });
+
   it("ignores a server custom theme until this browser imported one", () => {
     const onApplied = vi.fn();
     expect(applyServerUiPrefs(configWithPrefs({ theme: "custom" }), { onApplied })).toBe(false);
@@ -155,6 +174,14 @@ describe("changedServerUiPrefs", () => {
     expect(previous.sidebarLiveActivity).toBe(true);
     expect(changedServerUiPrefs(previous, { ...previous, sidebarLiveActivity: false })).toEqual({
       sidebarLiveActivity: false,
+    });
+  });
+
+  it("syncs the advanced settings visibility preference", () => {
+    const previous = loadSettings();
+    expect(previous.showAdvancedSettings).toBe(false);
+    expect(changedServerUiPrefs(previous, { ...previous, showAdvancedSettings: true })).toEqual({
+      showAdvancedSettings: true,
     });
   });
 
@@ -237,6 +264,40 @@ describe("pushServerUiPrefs", () => {
       }),
     ).toBe(true);
     expect(loadSettings().themeMode).toBe("light");
+  });
+
+  it("marks sidebar arrays for replacement when pinned entries are removed", async () => {
+    let hash = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: `hash-${hash}` };
+      }
+      hash += 1;
+      return {};
+    });
+    const client = { request } as unknown as Parameters<typeof pushServerUiPrefs>[0];
+    const sidebarEntries = ["route:usage", "session:agent:main:test"];
+
+    pushServerUiPrefs(client, { sidebarEntries });
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("config.patch", {
+        baseHash: "hash-0",
+        raw: JSON.stringify({ ui: { prefs: { sidebarEntries } } }),
+        replacePaths: ["ui.prefs.sidebarEntries"],
+        note: "control-ui prefs sync",
+      });
+    });
+
+    const remainingEntries = ["route:usage"];
+    pushServerUiPrefs(client, { sidebarEntries: remainingEntries });
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("config.patch", {
+        baseHash: "hash-1",
+        raw: JSON.stringify({ ui: { prefs: { sidebarEntries: remainingEntries } } }),
+        replacePaths: ["ui.prefs.sidebarEntries"],
+        note: "control-ui prefs sync",
+      });
+    });
   });
 
   it("coalesces rapid changes into serial patches instead of racing the hash", async () => {

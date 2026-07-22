@@ -143,19 +143,21 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer controls", () => {
-  it("renders and invokes an action beside the disabled reason", () => {
-    const onDisabledAction = vi.fn();
+  it("renders and invokes the archived-session banner action", () => {
+    const onAction = vi.fn();
     const { container } = renderComposer({
       canSend: false,
-      disabledReason: "This session is archived.",
-      disabledActionLabel: "Restore",
-      onDisabledAction,
+      disabledBanner: {
+        text: "This session is archived. Unarchive it to continue the conversation.",
+        actionLabel: "Unarchive",
+        onAction,
+      },
     });
 
-    const reason = container.querySelector(".agent-chat__disabled-reason");
-    expect(reason?.textContent).toContain("This session is archived.");
-    reason?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onDisabledAction).toHaveBeenCalledOnce();
+    const banner = container.querySelector(".agent-chat__disabled-banner");
+    expect(banner?.textContent).toContain("This session is archived.");
+    banner?.querySelector<HTMLButtonElement>("button")?.click();
+    expect(onAction).toHaveBeenCalledOnce();
   });
 
   it("switches the primary action between voice, send, queue, and stop", () => {

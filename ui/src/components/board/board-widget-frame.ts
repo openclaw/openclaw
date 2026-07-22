@@ -6,11 +6,40 @@ import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
+// Keep in sync with the identical literal in chat widget-card.ts: a shared
+// module is not worth its startup-bundle cost for one string.
+const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
 const TICKET_REFRESH_RETRY_MS = 1_000;
 const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+// Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the
+// sandbox port substituted. On a non-loopback host that derived port often sits
+// behind a reverse proxy or tunnel that does not route it, and the browser
+// cannot distinguish that from a real authorization failure — so the terminal
+// message keeps the authorization fact but adds the deployment hint operators
+// otherwise never find.
+function resolveBoardFrameFailureMessage(
+  widget: Pick<BoardViewWidget, "sandboxOrigin">,
+  resolvedSandboxOrigin: string,
+): string {
+  if (!widget.sandboxOrigin && resolvedSandboxOrigin) {
+    try {
+      if (!isLoopbackHostname(new URL(resolvedSandboxOrigin).hostname)) {
+        return t("board.widget.sandboxOriginRequired");
+      }
+    } catch {
+      // Fall through to the generic message for unparseable origins.
+    }
+  }
+  return t("board.widget.frameAuthorizationFailed");
+}
 
 type FrameRefresh = (name: string) => Promise<void>;
 
@@ -19,6 +48,7 @@ type BoardWidgetFrameLifecycleHost = {
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
   requestUpdate: () => void;
+  reportContentHeight: (name: string, height: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
   widget: () => BoardViewWidget | undefined;
@@ -104,13 +134,13 @@ export class BoardWidgetFrameLifecycle {
     if (this.listening) {
       return;
     }
-    window.addEventListener("message", this.handleSandboxMessage);
+    window.addEventListener("message", this.handleWindowMessage);
     this.listening = true;
   }
 
   disconnect(): void {
     if (this.listening) {
-      window.removeEventListener("message", this.handleSandboxMessage);
+      window.removeEventListener("message", this.handleWindowMessage);
       this.listening = false;
     }
     this.ticketRefresh.clear();
@@ -211,7 +241,7 @@ export class BoardWidgetFrameLifecycle {
       this.frameFailureKey = failureKey;
     }
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
-      this.setError(t("board.widget.frameAuthorizationFailed"));
+      this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
       return;
     }
     const refreshFrame = this.host.refreshFrame();
@@ -224,7 +254,7 @@ export class BoardWidgetFrameLifecycle {
       this.setError(error instanceof Error ? error.message : String(error));
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
-      this.setError(t("board.widget.frameAuthorizationFailed"));
+      this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
     }
   }
 
@@ -347,12 +377,24 @@ export class BoardWidgetFrameLifecycle {
     }
   }
 
-  private handleSandboxMessage = (event: MessageEvent): void => {
+  private handleWindowMessage = (event: MessageEvent): void => {
     if (!this.host.connected()) {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
     const widget = this.host.widget();
+    const data = event.data as { type?: unknown; height?: unknown } | null;
+    if (
+      frame &&
+      widget &&
+      event.source === frame.contentWindow &&
+      data?.type === WIDGET_SIZE_MESSAGE_TYPE &&
+      typeof data.height === "number" &&
+      Number.isFinite(data.height) &&
+      data.height > 0
+    ) {
+      this.host.reportContentHeight(widget.name, data.height);
+    }
     if (
       !frame ||
       !widget?.viewTicket ||

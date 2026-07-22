@@ -35,6 +35,7 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
@@ -324,6 +325,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const initialUserMessage = createInitialUserMessageHandoff();
   applyStartupPresentation(settings);
   const router = createApplicationRouter();
   let pendingGatewayConnection =
@@ -354,9 +356,19 @@ export function bootstrapApplication(): ApplicationRuntime {
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
-    if (options?.search !== undefined || options?.hash !== undefined) {
+    const activeMatch = router.getState().matches[0];
+    const activeDynamicPath =
+      activeMatch?.routeId === routeId && routeId === "workboard"
+        ? activeMatch.location.pathname
+        : null;
+    if (
+      options?.pathname !== undefined ||
+      options?.search !== undefined ||
+      options?.hash !== undefined
+    ) {
       return {
         ...location,
+        pathname: options?.pathname ?? activeDynamicPath ?? location.pathname,
         search: options?.search ?? "",
         hash: options?.hash ?? "",
       };
@@ -396,6 +408,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     nativeNotifications,
     webPush,
     skillWorkshopRevision,
+    initialUserMessage,
     navigate: (routeId, options) => {
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
@@ -457,6 +470,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
+      initialUserMessage.clear();
     },
   };
 }

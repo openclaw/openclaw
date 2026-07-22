@@ -23,6 +23,9 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 export const GatewayErrorDetailCodes = {
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  SESSION_OBSERVER_BUSY: "SESSION_OBSERVER_BUSY",
+  SESSION_OBSERVER_UNAVAILABLE: "SESSION_OBSERVER_UNAVAILABLE",
+  UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
 } as const;
 
 /** Missing operator-scope details shared by WebSocket and HTTP responses. */
@@ -36,8 +39,17 @@ export type McpAppViewExpiredErrorDetails = {
   code: typeof GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
 };
 
+/** Unknown agent details carried by agent-scoped method validation failures. */
+export type UnknownAgentIdErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.UNKNOWN_AGENT_ID;
+  agentId: string;
+};
+
 /** Structured details emitted by method-level authorization failures. */
-export type GatewayErrorDetails = MissingScopeErrorDetails | McpAppViewExpiredErrorDetails;
+export type GatewayErrorDetails =
+  | MissingScopeErrorDetails
+  | McpAppViewExpiredErrorDetails
+  | UnknownAgentIdErrorDetails;
 
 type GatewayErrorLike = {
   code?: unknown;

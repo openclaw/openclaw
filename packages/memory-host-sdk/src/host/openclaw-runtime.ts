@@ -97,7 +97,6 @@ export type {
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
 export {

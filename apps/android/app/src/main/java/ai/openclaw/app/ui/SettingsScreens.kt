@@ -1491,6 +1491,9 @@ private fun PhoneCapabilitiesScreen(
           SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
+    if (SensitiveFeatureConfig.accessibilityControlEnabled) {
+      FlavorPhoneCapabilitiesSettings(viewModel)
+    }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -1612,6 +1615,7 @@ private fun GatewaySettingsScreen(
   val manualTls by viewModel.manualTls.collectAsState()
   val pairedGateways by viewModel.pairedGateways.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  val connectedGatewayStableIds by viewModel.connectedGatewayStableIds.collectAsState()
   val discoveredGateways by viewModel.gateways.collectAsState()
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
   val gatewayDefaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -1879,8 +1883,17 @@ private fun GatewaySettingsScreen(
                 }
               },
               trailing = {
-                TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
-                  Text(nativeString("Forget"))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Switch(
+                    checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
+                    onCheckedChange = { enabled ->
+                      viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
+                    },
+                    enabled = entry.stableId != activeGatewayStableId,
+                  )
+                  TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
+                    Text(nativeString("Forget"))
+                  }
                 }
               },
               onClick =
@@ -2383,7 +2396,7 @@ internal fun SettingsDetailFrame(
 /**
  * Toggle row model reused by settings sections that render simple on/off controls.
  */
-private data class SettingsToggleRow(
+internal data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -2999,6 +3012,7 @@ private fun cronPayloadTextTitle(job: GatewayCronJobDetail): String =
     "systemEvent" -> nativeString("System Event Text")
     "agentTurn" -> nativeString("Agent Prompt")
     "command" -> nativeString("Command")
+    "script" -> nativeString("Script")
     else -> nativeString("Payload Text")
   }
 
@@ -3085,7 +3099,7 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 }
 
 @Composable
-private fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
+internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsToggleListRow(row)

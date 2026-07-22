@@ -15,6 +15,8 @@ import {
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
+  validateSessionsListParams,
+  validateSessionsObserverAskParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -62,6 +64,14 @@ describe("lazy protocol validators", () => {
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+  });
+
+  it("accepts every sessions.list archive filter mode", () => {
+    expect(validateSessionsListParams({})).toBe(true);
+    expect(validateSessionsListParams({ archived: false })).toBe(true);
+    expect(validateSessionsListParams({ archived: true })).toBe(true);
+    expect(validateSessionsListParams({ archived: "all" })).toBe(true);
+    expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -262,6 +272,24 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
     expect(validateSessionsSearchParams({ query: "" })).toBe(false);
     expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
+  });
+
+  it("validates bounded session observer questions", () => {
+    expect(
+      validateSessionsObserverAskParams({
+        sessionKey: "agent:main:current",
+        question: "Why is it rerunning that test?",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsObserverAskParams({ sessionKey: "agent:main:current", question: "" }),
+    ).toBe(false);
+    expect(
+      validateSessionsObserverAskParams({
+        sessionKey: "agent:main:current",
+        question: "x".repeat(401),
+      }),
+    ).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -734,8 +762,14 @@ describe("validateModelsProbeParams", () => {
   it("accepts one provider with optional profile and timeout", () => {
     expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
     expect(
-      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+      validateModelsProbeParams({
+        provider: "OpenAI",
+        profileId: "work",
+        timeoutMs: 20_000,
+        agentId: "writer",
+      }),
     ).toBe(true);
+    expect(validateModelsProbeParams({ provider: "openai", agentId: "" })).toBe(true);
   });
 
   it("rejects missing providers, invalid timeouts, and extra fields", () => {
@@ -770,11 +804,14 @@ describe("validateNodePresenceActivityPayload", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
       true,
     );
+    expect(validateNodePresenceActivityPayload({ action: "clear" })).toBe(true);
   });
 
   it("rejects negative, unbounded, and extra fields", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "clear", idleSeconds: 1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "disable" })).toBe(false);
   });
 });

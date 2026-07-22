@@ -33,7 +33,7 @@ import {
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
-const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR = "OPENCLAW_CODEX_APP_SERVER_ARGS";
+const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
   "features.apps": false,
@@ -267,12 +267,12 @@ function buildPrivateCodexAppServerStartOptions(
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
-      ([name]) => name.trim().toUpperCase() !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR,
+      ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
     ),
   );
   const clearEnv = (start.clearEnv ?? []).filter((name) => {
     const normalized = name.trim().toUpperCase();
-    return normalized !== "CODEX_HOME" && normalized !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR;
+    return normalized !== "CODEX_HOME" && normalized !== CODEX_APP_SERVER_ARGS_ENV_KEY;
   });
   return {
     ...start,
@@ -281,7 +281,7 @@ function buildPrivateCodexAppServerStartOptions(
       ...privateEnv,
       CODEX_HOME: codexHome,
     },
-    clearEnv: [...clearEnv, OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR],
+    clearEnv: [...clearEnv, CODEX_APP_SERVER_ARGS_ENV_KEY],
   };
 }
 

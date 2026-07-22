@@ -45,7 +45,8 @@ describe("MCP App sandbox HTTP origin", () => {
     );
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("widgetBridgePortOffered"));
     const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
-    expect(proxyHtml).toContain("nextInner.srcdoc = params.html");
+    expect(proxyHtml).toContain("const guardedHtml = guardDocument(params.html)");
+    expect(proxyHtml).toContain("nextInner.srcdoc = guardedHtml");
   });
 
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {

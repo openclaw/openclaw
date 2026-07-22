@@ -10,6 +10,7 @@ import {
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
+import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
@@ -24,6 +25,7 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   resetConfirmationOpen: boolean;
+  observerDigestHistory: ObserverDigestHistory;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
@@ -35,7 +37,8 @@ type TestChatPane = HTMLElement & {
   ) => void;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
-  resolveBoardView: () => { activeTabId: string; dock: string; face: string };
+  refreshBuiltinBoardSnapshot: () => void;
+  resolveBoardView: () => { activeTabId: string; dock: string; face: string; hasBoard: boolean };
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -93,6 +96,32 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it("adds the observer-only board face without replacing the default chat face", async () => {
+    const pane = createTestPane();
+    pane.boardProvider = nullBoardProvider("agent:main:observer-only");
+    pane.state.sessionKey = "agent:main:observer-only";
+    pane.observerDigestHistory.record({
+      sessionKey: "agent:main:observer-only",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Reviewing the board tests",
+      health: "on-track",
+    });
+
+    pane.refreshBuiltinBoardSnapshot();
+
+    await vi.waitFor(() =>
+      expect(pane.resolveBoardView()).toMatchObject({
+        activeTabId: "builtin-observer",
+        face: "chat",
+        hasBoard: true,
+      }),
+    );
+    pane.persistBoardSessionView({ face: "dashboard" });
+    expect(pane.resolveBoardView().face).toBe("dashboard");
+  });
+
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
@@ -379,6 +408,53 @@ describe("chat pane board shell", () => {
 
       expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
     }
+  });
+
+  it.each([
+    {
+      profile: "read-only",
+      scopes: ["operator.read"],
+      canMutate: false,
+      canGrant: false,
+    },
+    {
+      profile: "writer with approvals",
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+      canMutate: true,
+      canGrant: true,
+    },
+  ])("derives board actions from the $profile connection scopes", (profile) => {
+    window.history.replaceState({}, "", "/");
+    const pane = createTestPane();
+    const sessionKey = `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`;
+    const client = {
+      request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
+    pane.state.sessionKey = sessionKey;
+    pane.context = {
+      ...pane.context,
+      gateway: {
+        ...pane.context.gateway,
+        snapshot: {
+          client,
+          connected: true,
+          hello: {
+            auth: { role: "operator", scopes: profile.scopes },
+            features: {
+              methods: ["board.get", "board.widget.appView", "board.widget.put"],
+              capabilities: ["board-widget-put-canvas-doc"],
+            },
+          },
+        } as never,
+      },
+    };
+
+    const provider = pane.resolveBoardProvider();
+    expect(provider.canMutate).toBe(profile.canMutate);
+    expect(provider.canGrant).toBe(profile.canGrant);
+    expect(provider.canPinWidgets).toBe(profile.canMutate);
+    expect(provider.canPinMcpApps).toBe(profile.canMutate);
   });
 
   it("uses the side dock width for rail and detail breakpoints", () => {

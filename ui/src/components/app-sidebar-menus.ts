@@ -29,7 +29,6 @@ import {
   renderSidebarMoreRow,
   renderSidebarNavRoute,
   sidebarMoreMenuHoldsActiveRoute,
-  sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
@@ -318,6 +317,8 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       position,
       sidebarEntries: this.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      workboardBoards: this.workboardBoards,
+      workboardRenderers: this.workboardRenderers,
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         if (this.customizeMenuPosition !== position) {
@@ -327,6 +328,14 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onToggleRoute: (routeId) => {
         const entry = serializeSidebarEntry({ type: "route", route: routeId });
+        const canonical = this.reconciledSidebarZone().sidebarEntries;
+        const next = canonical.includes(entry)
+          ? canonical.filter((candidate) => candidate !== entry)
+          : [...canonical, entry];
+        this.onUpdateSidebarEntries?.(next);
+      },
+      onToggleWorkboardBoard: (boardId) => {
+        const entry = serializeSidebarEntry({ type: "workboard", boardId });
         const canonical = this.reconciledSidebarZone().sidebarEntries;
         const next = canonical.includes(entry)
           ? canonical.filter((candidate) => candidate !== entry)
@@ -398,6 +407,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const rows = batchRows ?? [session];
     const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
     const allUnread = rows.every((row) => row.unread);
+    const allArchived = rows.every((row) => row.archived === true);
     const sharedCategory = rows.every(
       (row) => (row.category ?? null) === (rows[0]?.category ?? null),
     )
@@ -412,7 +422,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
             icon: session.icon,
             pinned: session.pinned,
             unread: batchRows ? allUnread : session.unread,
-            archived: false,
+            archived: allArchived,
             category: batchRows ? sharedCategory : (session.category ?? null),
           }}
           .selectionCount=${rows.length}
@@ -479,7 +489,11 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 this.createSessionGroup([session]);
                 break;
               case "toggle-archived":
-                void this.archiveSessionWithUndo(session);
+                if (session.archived) {
+                  void this.patchSession(session, { archived: false });
+                } else {
+                  void this.archiveSessionWithUndo(session);
+                }
                 break;
               case "stop-cloud-worker":
                 void this.stopCloudWorker(session);
@@ -530,6 +544,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       trigger: this.sessionSortMenuTrigger,
       grouping: this.sessionsGrouping,
       sortMode: this.sessionSortMode,
+      statusFilter: this.sessionsStatusFilter,
       showCron: this.sessionsShowCron,
       onGroupingChange: (grouping) => {
         this.setSessionsGrouping(grouping);
@@ -537,6 +552,10 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onSortModeChange: (mode) => {
         this.sessionSortMode = mode;
+        this.closeSessionSortMenu({ restoreFocus: true });
+      },
+      onStatusFilterChange: (statusFilter) => {
+        this.setSessionsStatusFilter(statusFilter);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onShowCronChange: (show) => {
@@ -564,7 +583,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       href: chatSearch
         ? `${pathForRoute("chat", this.basePath)}${chatSearch}`
         : pathForRoute(routeId, this.basePath),
-      active: isSidebarRouteActive(this.activeRouteId, routeId),
+      active:
+        isSidebarRouteActive(this.activeRouteId, routeId) &&
+        !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
       onNavigate: () => {
         this.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
       },
@@ -578,6 +599,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       open: this.moreMenuPosition !== null,
       active: sidebarMoreMenuHoldsActiveRoute({
         activeRouteId: this.activeRouteId,
+        activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
+          ? this.activeWorkboardBoardId
+          : "",
         sidebarEntries: this.sidebarEntries,
         isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       }),
@@ -592,9 +616,10 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       position,
       basePath: this.basePath,
       activeRouteId: this.activeRouteId,
-      activePluginTabId: this.activePluginTabId,
+      activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
+        ? this.activeWorkboardBoardId
+        : "",
       sidebarEntries: this.sidebarEntries,
-      pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
@@ -607,10 +632,6 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeMoreMenu({ restoreFocus: true });
         this.onNavigate?.(routeId);
       },
-      onNavigatePluginTab: (search) => {
-        this.closeMoreMenu({ restoreFocus: true });
-        this.onNavigate?.("plugin", { search });
-      },
       onPreloadRoute: (routeId, event) => this.preloadRoute(routeId, event),
       onCancelPreload: this.cancelPreload,
       onEditPinnedItems: () => {
@@ -621,5 +642,14 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         }
       },
     });
+  }
+
+  private activeWorkboardBoardIsPinned(): boolean {
+    return Boolean(
+      this.activeWorkboardBoardId &&
+      this.reconciledSidebarZone().entries.some(
+        (entry) => entry.type === "workboard" && entry.boardId === this.activeWorkboardBoardId,
+      ),
+    );
   }
 }

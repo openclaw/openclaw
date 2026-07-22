@@ -30,6 +30,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => ({}) as never),
+    sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,
       block: { kind: "disabled" as const },
@@ -53,10 +54,10 @@ function makeContextParams(
     nodeSubscribe: vi.fn(),
     nodeUnsubscribe: vi.fn(),
     nodeUnsubscribeAll: vi.fn(),
-    hasConnectedTalkNode: vi.fn(() => false),
+    hasConnectedTalkNode: vi.fn(async () => false),
     clients: new Set(),
     enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
-    nodeRegistry: {} as never,
+    nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
@@ -297,9 +298,14 @@ describe("createGatewayRequestContext", () => {
     };
     const clients = new Set([target, unrelated]) as never;
     const invalidateDeviceTransports = vi.fn();
+    const invalidateConnectionForPairingChange = vi.fn();
 
     const context = createGatewayRequestContext(
-      makeContextParams({ clients, invalidateDeviceTransports }),
+      makeContextParams({
+        clients,
+        invalidateDeviceTransports,
+        nodeRegistry: { invalidateConnectionForPairingChange } as never,
+      }),
     );
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
 
@@ -308,6 +314,10 @@ describe("createGatewayRequestContext", () => {
       "device-token-rotated",
     );
     expect(target.socket.close).not.toHaveBeenCalled();
+    expect(invalidateConnectionForPairingChange).toHaveBeenCalledWith(
+      "conn-target",
+      "device-token-rotated",
+    );
 
     expect((unrelated as { invalidated?: boolean }).invalidated).toBeUndefined();
     expect(unrelated.socket.close).not.toHaveBeenCalled();

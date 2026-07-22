@@ -102,8 +102,7 @@ type ChatComposerProps = {
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
-  disabledActionLabel?: string | null;
-  onDisabledAction?: (() => void) | null;
+  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
   runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;
@@ -357,7 +356,15 @@ export function resetChatComposerState(paneId?: string) {
   goalElapsedTimers.clear();
 }
 
-const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
+type ComposerTextareaResizeObserverState = {
+  observer: ResizeObserver;
+  adjustmentFrame: number | null;
+};
+
+const composerTextareaResizeObservers = new WeakMap<
+  HTMLTextAreaElement,
+  ComposerTextareaResizeObserverState
+>();
 const questionDockResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
@@ -377,14 +384,38 @@ function observeTextareaOverflow(el: HTMLTextAreaElement) {
   if (typeof ResizeObserver !== "function" || composerTextareaResizeObservers.has(el)) {
     return;
   }
-  const observer = new ResizeObserver(() => updateTextareaOverflow(el));
+  let width = el.getBoundingClientRect().width;
+  const observer = new ResizeObserver(() => {
+    const nextWidth = el.getBoundingClientRect().width;
+    if (nextWidth !== width) {
+      width = nextWidth;
+      const state = composerTextareaResizeObservers.get(el);
+      if (state && state.adjustmentFrame === null) {
+        state.adjustmentFrame = requestAnimationFrame(() => {
+          state.adjustmentFrame = null;
+          if (composerTextareaResizeObservers.get(el) === state) {
+            adjustTextareaHeight(el);
+          }
+        });
+      }
+      return;
+    }
+    updateTextareaOverflow(el);
+  });
   observer.observe(el);
-  composerTextareaResizeObservers.set(el, observer);
+  composerTextareaResizeObservers.set(el, { observer, adjustmentFrame: null });
 }
 
 function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
-  composerTextareaResizeObservers.get(el)?.disconnect();
+  const state = composerTextareaResizeObservers.get(el);
   composerTextareaResizeObservers.delete(el);
+  if (!state) {
+    return;
+  }
+  state.observer.disconnect();
+  if (state.adjustmentFrame !== null) {
+    cancelAnimationFrame(state.adjustmentFrame);
+  }
 }
 
 function syncQuestionDockHeight(el: HTMLElement): void {
@@ -2701,6 +2732,16 @@ export function renderChatComposer(props: ChatComposerProps) {
             </div>
           `
         : nothing}
+      ${props.disabledBanner
+        ? html`
+            <div class="agent-chat__disabled-banner callout info callout--action" role="status">
+              <span class="callout__content">${props.disabledBanner.text}</span>
+              <button type="button" class="btn btn--xs" @click=${props.disabledBanner.onAction}>
+                ${props.disabledBanner.actionLabel}
+              </button>
+            </div>
+          `
+        : nothing}
       ${showComposer
         ? html`<div
             class="agent-chat__input"
@@ -2827,17 +2868,6 @@ export function renderChatComposer(props: ChatComposerProps) {
               ? html`
                   <div class="agent-chat__disabled-reason">
                     <span>${props.disabledReason}</span>
-                    ${props.disabledActionLabel && props.onDisabledAction
-                      ? html`
-                          <button
-                            type="button"
-                            class="btn btn--xs"
-                            @click=${props.onDisabledAction}
-                          >
-                            ${props.disabledActionLabel}
-                          </button>
-                        `
-                      : nothing}
                   </div>
                 `
               : nothing}

@@ -1,5 +1,6 @@
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { projectMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { SavedMedia } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -98,6 +99,18 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
   }));
 }
 
+function buildChatSendPromptMedia(
+  attachments: PreparedChatSendAttachments,
+): MediaFact[] | undefined {
+  if (!attachments.imageOrder.includes("offloaded")) {
+    return undefined;
+  }
+  const media = attachments.offloadedRefs
+    .filter((ref) => ref.mimeType.startsWith("image/"))
+    .map((ref) => ({ path: ref.path, url: ref.mediaRef, contentType: ref.mimeType }));
+  return media.length > 0 ? media : undefined;
+}
+
 function buildChatSendMessageContext(params: {
   agentId: string;
   client: GatewayRequestHandlerOptions["client"];
@@ -181,10 +194,12 @@ function buildChatSendMessageContext(params: {
   if (params.mediaPathOffloadPaths.length > 0) {
     // Pre-staged offloads must use the channel media fields and marker so the
     // dispatch path renders their prompt note without staging them a second time.
-    ctx.MediaPath = params.mediaPathOffloadPaths[0];
-    ctx.MediaPaths = params.mediaPathOffloadPaths;
-    ctx.MediaType = params.mediaPathOffloadTypes[0];
-    ctx.MediaTypes = params.mediaPathOffloadTypes;
+    ctx.media = params.mediaPathOffloadPaths.map((pathValue, index) => ({
+      path: pathValue,
+      contentType: params.mediaPathOffloadTypes[index],
+      workspaceDir: params.mediaPathOffloadWorkspaceDir,
+    }));
+    Object.assign(ctx, projectMediaFacts(ctx.media));
     ctx.MediaWorkspaceDir = params.mediaPathOffloadWorkspaceDir;
     ctx.MediaStaged = true;
   }
@@ -270,5 +285,6 @@ export function prepareChatSendUserTurn(params: {
       : attachments.parsedImages.length > 0
         ? attachments.parsedImages
         : undefined,
+    replyOptionMedia: buildChatSendPromptMedia(attachments),
   };
 }
