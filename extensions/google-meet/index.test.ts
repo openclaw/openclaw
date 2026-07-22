@@ -41,6 +41,7 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
+import { type GoogleMeetRuntimeProbeContext, testGoogleMeetSpeech } from "./src/runtime-probes.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import {
   invokeGoogleMeetGatewayMethodForTest,
@@ -1960,6 +1961,42 @@ describe("google-meet plugin", () => {
       { progress: false, scopes: ["operator.admin"] },
     );
   });
+
+  // Covers both spellings the Gateway handler accepts so a snake_case probe
+  // timeout still extends the RPC deadline, not just camelCase.
+  it.each([{ timeoutMs: 90000 }, { timeout_ms: 90000 }])(
+    "extends the tool Gateway RPC deadline for an explicit speech probe timeout (%o)",
+    async (timeoutParam) => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      try {
+        const { tools } = setup({});
+        const callGatewayFromCli = vi.fn(async () => ({ ok: true }));
+        googleMeetPluginTesting.setCallGatewayFromCliForTests(callGatewayFromCli);
+        const tool = tools[0] as {
+          execute: (id: string, params: unknown) => Promise<unknown>;
+        };
+
+        await tool.execute("id", {
+          action: "test_speech",
+          url: "https://meet.google.com/abc-defg-hij",
+          transport: "chrome",
+          mode: "bidi",
+          ...timeoutParam,
+        });
+
+        expect(callGatewayFromCli).toHaveBeenCalledWith(
+          "googlemeet.testSpeech",
+          // Default operation budget (60s) plus the requested 90s probe wait.
+          expect.objectContaining({ timeout: "150000" }),
+          expect.objectContaining(timeoutParam),
+          { progress: false, scopes: ["operator.admin"] },
+        );
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    },
+  );
 
   it("keeps Twilio calls on the agent that invoked the tool", async () => {
     const { tools, gatewayRequest } = setup(
@@ -5856,6 +5893,17 @@ describe("google-meet plugin", () => {
     ).rejects.toThrow("timeoutMs must be a positive integer");
   });
 
+  it("rejects fractional test-speech gateway timeouts", async () => {
+    const { methods } = setup({ defaultTransport: "chrome-node" });
+
+    await expect(
+      invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.testSpeech", {
+        url: "https://meet.google.com/abc-defg-hij",
+        timeoutMs: "100.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
+  });
+
   it("does not start a second realtime response for test speech", async () => {
     const runtime = new GoogleMeetRuntime({
       config: resolveGoogleMeetConfig({}),
@@ -6046,6 +6094,133 @@ describe("google-meet plugin", () => {
 
     expect(result.speechOutputVerified).toBe(true);
     expect(result.speechOutputTimedOut).toBe(false);
+  });
+
+  it("honors a speech probe timeout beyond the legacy 5s ceiling", async () => {
+    const session: GoogleMeetSession = {
+      id: "meet_1",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "agent",
+      agentId: "main",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: true,
+        strategy: "agent",
+        transcriptionProvider: "openai",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 0 },
+      },
+      notes: [],
+    };
+    let refreshCount = 0;
+    const context: GoogleMeetRuntimeProbeContext = {
+      config: resolveGoogleMeetConfig({}),
+      resolveAgentId: () => "main",
+      list: () => [],
+      join: async () => ({ session, spoken: true }),
+      isReusable: () => false,
+      hasHealthHandle: () => true,
+      refreshHealth: () => {
+        refreshCount += 1;
+        // Spoken audio only reaches the meeting after ~6s of polling, past the
+        // former Math.min(joinTimeoutMs, 5_000) cap. The probe must stay in its
+        // wait loop until the caller-supplied timeout to catch it.
+        if (refreshCount >= 60) {
+          session.chrome!.health!.lastOutputBytes = 100;
+        }
+      },
+      refreshCaptionHealth: async () => {},
+    };
+
+    vi.useFakeTimers();
+    let result: Awaited<ReturnType<typeof testGoogleMeetSpeech>>;
+    try {
+      const probe = testGoogleMeetSpeech(context, {
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "bidi",
+        timeoutMs: 8_000,
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      result = await probe;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(result.speechOutputVerified).toBe(true);
+    expect(result.speechOutputTimedOut).toBe(false);
+    // Would have stopped at 50 polls (5s) under the legacy cap.
+    expect(refreshCount).toBeGreaterThanOrEqual(60);
+  });
+
+  it("returns a manual browser blocker that appears mid-wait instead of timing out", async () => {
+    const session: GoogleMeetSession = {
+      id: "meet_1",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "agent",
+      agentId: "main",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: true,
+        strategy: "agent",
+        transcriptionProvider: "openai",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 0 },
+      },
+      notes: [],
+    };
+    let refreshCount = 0;
+    const context: GoogleMeetRuntimeProbeContext = {
+      config: resolveGoogleMeetConfig({}),
+      resolveAgentId: () => "main",
+      list: () => [],
+      join: async () => ({ session, spoken: true }),
+      isReusable: () => false,
+      hasHealthHandle: () => true,
+      refreshHealth: () => {
+        refreshCount += 1;
+        // A Meet permission/admission dialog appears a few polls in, long before
+        // the explicit 60s timeout would elapse.
+        if (refreshCount >= 3) {
+          session.chrome!.health!.manualActionRequired = true;
+        }
+      },
+      refreshCaptionHealth: async () => {},
+    };
+
+    vi.useFakeTimers();
+    let result: Awaited<ReturnType<typeof testGoogleMeetSpeech>>;
+    try {
+      const probe = testGoogleMeetSpeech(context, {
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "bidi",
+        timeoutMs: 60_000,
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      result = await probe;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(result.manualActionRequired).toBe(true);
+    expect(result.speechOutputTimedOut).toBe(false);
+    // Returned promptly on the blocker rather than polling out the 60s deadline.
+    expect(refreshCount).toBeLessThan(10);
   });
 
   it("rejects observe-only mode for test speech", async () => {

@@ -1098,6 +1098,143 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("extends the gateway RPC deadline to cover an explicit speech probe timeout", async () => {
+    const callGatewayFromCli = vi.fn(async () => ({
+      createdSession: true,
+      spoken: true,
+      speechOutputVerified: false,
+      speechOutputTimedOut: true,
+      session: {
+        id: "meet_gateway",
+        url: "https://meet.google.com/abc-defg-hij",
+        state: "active",
+        transport: "chrome",
+        mode: "bidi",
+        agentId: "main",
+        createdAt: "2026-04-25T00:00:00.000Z",
+        updatedAt: "2026-04-25T00:00:01.000Z",
+        realtime: { enabled: true, strategy: "bidi", provider: "openai" },
+        notes: [],
+      },
+    }));
+    const ensureRuntime = vi.fn(async () => {
+      throw new Error("local runtime should not be loaded");
+    });
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        callGatewayFromCli,
+        ensureRuntime: ensureRuntime as unknown as () => Promise<GoogleMeetRuntime>,
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-speech",
+          "https://meet.google.com/abc-defg-hij",
+          "--transport",
+          "chrome",
+          "--mode",
+          "bidi",
+          "--timeout-ms",
+          "90000",
+        ],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "googlemeet.testSpeech",
+        // Default operation budget (60s) plus the requested 90s probe wait.
+        { json: true, timeout: "150000" },
+        {
+          url: "https://meet.google.com/abc-defg-hij",
+          transport: "chrome",
+          mode: "bidi",
+          message: "Say exactly: Google Meet speech test complete.",
+          timeoutMs: 90000,
+        },
+        { progress: false },
+      );
+      expect(ensureRuntime).not.toHaveBeenCalled();
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("forwards an explicit speech probe timeout to the runtime", async () => {
+    const testSpeech = vi.fn(async () => ({
+      createdSession: true,
+      inCall: true,
+      manualActionRequired: false,
+      spoken: true,
+      speechOutputVerified: true,
+      speechOutputTimedOut: false,
+      session: {
+        id: "meet_1",
+        url: "https://meet.google.com/abc-defg-hij",
+        state: "active" as const,
+        transport: "chrome" as const,
+        mode: "bidi" as const,
+        agentId: "main",
+        participantIdentity: "signed-in Google Chrome profile",
+        createdAt: "2026-04-25T00:00:00.000Z",
+        updatedAt: "2026-04-25T00:00:01.000Z",
+        realtime: { enabled: true, strategy: "bidi" as const, provider: "openai" },
+        notes: [],
+      },
+    }));
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: { testSpeech },
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-speech",
+          "https://meet.google.com/abc-defg-hij",
+          "--transport",
+          "chrome",
+          "--mode",
+          "bidi",
+          "--timeout-ms",
+          "30000",
+        ],
+        { from: "user" },
+      );
+      expect(testSpeech).toHaveBeenCalledWith({
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "chrome",
+        mode: "bidi",
+        message: "Say exactly: Google Meet speech test complete.",
+        timeoutMs: 30000,
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it.each(["0x10", "1e3", "100.5"])(
+    "rejects non-integer speech timeouts: %s",
+    async (timeoutMs) => {
+      const testSpeech = vi.fn();
+
+      await expect(
+        setupCli({
+          runtime: { testSpeech },
+        }).parseAsync(
+          [
+            "googlemeet",
+            "test-speech",
+            "https://meet.google.com/abc-defg-hij",
+            "--timeout-ms",
+            timeoutMs,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("timeout-ms must be a positive integer");
+
+      expect(testSpeech).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs a listen-first health probe", async () => {
     const testListen = vi.fn(async () => ({
       createdSession: true,
