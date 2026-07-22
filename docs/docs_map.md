@@ -2778,6 +2778,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-agent sandbox and tool configuration
   - H2: Related
 
+## concepts/multi-user.md
+
+- Route: /concepts/multi-user
+- Headings:
+  - H2: Trust boundary
+  - H2: Ownership and presence
+  - H2: Turn attribution
+  - H2: Related
+
 ## concepts/oauth.md
 
 - Route: /concepts/oauth
