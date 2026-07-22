@@ -691,7 +691,7 @@ describe("CORE_HEALTH_CHECKS", () => {
                 command,
                 args: [resolverPath, markerPath],
                 jsonOnly: false,
-                trustedDirs: [dirname(command), tmp],
+                trustedDirs: [dirname(command), tmp!],
               },
             },
           },
