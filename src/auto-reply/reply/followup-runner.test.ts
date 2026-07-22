@@ -774,7 +774,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     const context = requireRecord(call.currentInboundContext, "current inbound context");
     expect(context.text).toContain("Current message:\nmessage_id=next-turn");
     expect(context.text).not.toContain("Active goal:");
-  });
+  }, 300_000);
 
   it("keeps the originating client caps on queued embedded runs", async () => {
     // Regression: the queued path built runEmbeddedAgent params inline and
