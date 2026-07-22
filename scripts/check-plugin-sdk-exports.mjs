@@ -32,6 +32,12 @@ const requiredSubpathExports = {
     "normalizeSecretInputString",
     "resolveSecretInputString",
   ],
+  "security-runtime": ["appendRegularFile", "privateFileStore", "privateFileStoreSync", "root"],
+  "realtime-voice": [
+    "createTalkSessionController",
+    "recordTalkObservabilityEvent",
+    "resolveRealtimeVoiceFastContextConsult",
+  ],
 };
 
 let missing = 0;
