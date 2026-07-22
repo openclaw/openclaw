@@ -585,7 +585,9 @@ function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     // Custom structured redaction runs at each transport boundary; avoid tslog pre-masking divergent records.
-    maskValuesOfKeys: [],
+    mask: { keys: [] },
+    // Keep the established JSONL and parser contract instead of tslog v5's `_logMeta` default.
+    meta: { property: "_meta" },
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });
@@ -717,15 +719,22 @@ export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): Pin
       level,
     );
 
+  type TsLogMethod = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
+  const forward = (method: TsLogMethod) =>
+    function forwardToTsLog(...args: unknown[]): void {
+      const write = logger[method] as (...values: unknown[]) => unknown;
+      write.apply(logger, args);
+    };
+
   return {
     level,
     child: buildChild,
-    trace: (...args: unknown[]) => logger.trace(...args),
-    debug: (...args: unknown[]) => logger.debug(...args),
-    info: (...args: unknown[]) => logger.info(...args),
-    warn: (...args: unknown[]) => logger.warn(...args),
-    error: (...args: unknown[]) => logger.error(...args),
-    fatal: (...args: unknown[]) => logger.fatal(...args),
+    trace: forward("trace"),
+    debug: forward("debug"),
+    info: forward("info"),
+    warn: forward("warn"),
+    error: forward("error"),
+    fatal: forward("fatal"),
   };
 }
 

@@ -143,7 +143,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         stderr = appendWithCap(stderr, stderrDecoder.write(buf));
       });
 
-      child.on("close", (code, signal) => {
+      child.nodeChildProcess.on("close", (code, signal) => {
         stdout = appendWithCap(stdout, stdoutDecoder.end());
         stderr = appendWithCap(stderr, stderrDecoder.end());
         // Keep the tail (consistent with the streaming appendWithCap above) so a
@@ -164,7 +164,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         resolve();
       });
 
-      child.on("error", (err) => {
+      child.nodeChildProcess.on("error", (err) => {
         deps.chatLog.addSystem(`[local] error: ${String(err)}`);
         deps.tui.requestRender();
         resolve();

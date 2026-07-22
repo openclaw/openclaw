@@ -2,7 +2,15 @@
 // Generates npm-shrinkwrap.json files that mirror pnpm lock policy for
 // published packages while stripping dev-only dependency state.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -760,10 +768,9 @@ function generateShrinkwrap(packageDir, options = {}) {
       `${JSON.stringify(packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides), null, 2)}\n`,
     );
     runNpm(npmInstallArgs, tempDir);
-    runNpm(
-      ["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund", ...peerResolutionArgs],
-      tempDir,
-    );
+    // npm 12 removed `npm shrinkwrap`; the command only promoted the generated
+    // package lock to the publish-preferred filename before normalization.
+    renameSync(path.join(tempDir, "package-lock.json"), path.join(tempDir, "npm-shrinkwrap.json"));
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
     const generated = restoreCurrentPnpmLockedPackages(
       normalizeNpmVersionDrift(

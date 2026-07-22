@@ -19,6 +19,7 @@ let slackListenerUploadCompletionClientCache = new WeakMap<
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl">;
 
 export {
+  resolveSlackProxyDispatcher,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_DEFAULT_RETRY_OPTIONS,

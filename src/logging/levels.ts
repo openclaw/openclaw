@@ -24,7 +24,7 @@ export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {
 }
 
 export function levelToMinLevel(level: LogLevel): number {
-  // tslog v4 logLevelId (src/index.ts): silly=0, trace=1, debug=2, info=3, warn=4, error=5, fatal=6
+  // tslog logLevelId: silly=0, trace=1, debug=2, info=3, warn=4, error=5, fatal=6
   // tslog filters: logLevelId < minLevel is dropped, so higher minLevel = more restrictive.
   const map: Record<LogLevel, number> = {
     trace: 1,

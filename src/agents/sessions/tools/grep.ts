@@ -178,9 +178,9 @@ export function createGrepToolDefinition(
           return true;
         };
         const stopChild = (dueToLimit = false) => {
-          if (child && !childClosed && !child.killed) {
+          if (child && !childClosed && !child.nodeChildProcess.killed) {
             killedDueToLimit = dueToLimit;
-            child.kill();
+            child.nodeChildProcess.kill();
           }
         };
         const onAbort = () => {
@@ -267,7 +267,7 @@ export function createGrepToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(spawnedChild);
+            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
             rl = createInterface({ input: spawnedChild.stdout });
             let stderr = "";
@@ -358,11 +358,11 @@ export function createGrepToolDefinition(
               }
             });
 
-            spawnedChild.on("error", (error) => {
+            spawnedChild.nodeChildProcess.on("error", (error) => {
               childClosed = true;
               settle(() => reject(new Error(`Failed to run ripgrep: ${error.message}`)));
             });
-            spawnedChild.on("close", (code) => {
+            spawnedChild.nodeChildProcess.on("close", (code) => {
               childClosed = true;
               void (async () => {
                 if (settled) {

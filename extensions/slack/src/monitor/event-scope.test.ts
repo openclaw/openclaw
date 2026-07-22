@@ -53,16 +53,12 @@ describe("resolveSlackEventScope", () => {
     const teamScopedClient = new WebClient("xoxb-test", {
       teamId: "T111",
       retryConfig: { retries: 0 },
-      adapter: async (config) => {
-        encodedRequestBody = String(config.data);
-        return {
-          data: { ok: true, ts: "123.456", channel: "C123" },
+      fetch: async (_input, init) => {
+        encodedRequestBody = String(init?.body ?? "");
+        return new Response(JSON.stringify({ ok: true, ts: "123.456", channel: "C123" }), {
           status: 200,
-          statusText: "OK",
-          headers: {},
-          config,
-          request: {},
-        };
+          headers: { "content-type": "application/json" },
+        });
       },
     });
     const methodPayload = { channel: "C123", text: "hello" };
