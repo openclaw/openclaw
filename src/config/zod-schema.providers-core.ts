@@ -73,6 +73,7 @@ const ChannelStreamingProgressSchema = z
   .object({
     label: z.union([z.string(), z.literal(false)]).optional(),
     labels: z.array(z.string()).optional(),
+    status: z.enum(["off", "minimal", "activity"]).optional(),
     maxLines: z.number().int().positive().optional(),
     maxLineChars: z.number().int().positive().optional(),
     render: z.enum(["text", "rich"]).optional(),

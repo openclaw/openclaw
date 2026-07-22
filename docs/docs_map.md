@@ -2841,6 +2841,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What users see
   - H2: Choose a mode
   - H2: Configure labels
+  - H2: Status line
   - H2: Control progress lines
   - H3: Detail mode
   - H3: Command/exec text

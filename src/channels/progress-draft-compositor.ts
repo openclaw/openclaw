@@ -1,5 +1,6 @@
 // Stateful progress-draft compositor for channel streaming previews.
 // It merges status, tool, reasoning, and commentary updates until the final reply replaces them.
+import type { StatusFooterMode } from "../config/types.base.js";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   formatReasoningProgressDisplayLine,
@@ -8,6 +9,7 @@ import {
   normalizeReasoningProgressLine,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
+import { renderStatusFooterLine } from "./status-footer.js";
 import {
   createChannelProgressDraftGate,
   type AgentPlanStep,
@@ -119,6 +121,13 @@ export function createChannelProgressReceiptTracker(params?: { now?: () => numbe
 type ChannelProgressDraftUpdateOptions = {
   flush?: boolean;
   lines?: readonly ChannelProgressDraftCompositorLine[];
+  /**
+   * Trailing status line for the live draft. Kept out of both `text` and `lines`: text
+   * placement differs per renderer (Telegram derives its heading from the text/line
+   * count), and staying out of `lines` means the rolling `maxLines` window can never
+   * evict it and id-keyed merging never claims it. Renderers append it last themselves.
+   */
+  statusLine?: string;
 };
 
 /** Creates a stateful compositor for one streaming channel reply. */
@@ -128,6 +137,8 @@ export function createChannelProgressDraftCompositor(params: {
   active: boolean;
   seed: string;
   update: (text: string, options?: ChannelProgressDraftUpdateOptions) => Promise<void> | void;
+  /** Trailing status line mode for the live draft. Default: "off". */
+  statusMode?: StatusFooterMode;
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   /** Publish when structured lines change even if the rendered text does not. */
@@ -180,6 +191,8 @@ export function createChannelProgressDraftCompositor(params: {
   let narrationText = "";
   let planSteps: AgentPlanStep[] | undefined;
   let planExplanation = "";
+  // Turn-scoped clock for the status line elapsed field; reset when a new turn begins.
+  let turnStartedAt = now();
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -230,6 +243,29 @@ export function createChannelProgressDraftCompositor(params: {
     };
   };
 
+  const resolveActivityLabel = (): string | undefined => {
+    // Only structured work lines carry a clean label/detail pair. String lines are
+    // already channel-formatted (reasoning and commentary arrive with markup), so using
+    // their text would leak `<i>` and friends into the status line.
+    const newest = lines.findLast((line) => typeof line !== "string");
+    if (!newest || typeof newest === "string" || !newest.label) {
+      return undefined;
+    }
+    return newest.detail ? `${newest.label}: ${newest.detail}` : newest.label;
+  };
+
+  const resolveStatusLine = (): string | undefined => {
+    const mode = params.statusMode ?? "off";
+    if (mode === "off") {
+      return undefined;
+    }
+    return renderStatusFooterLine({
+      mode,
+      ...(mode === "activity" ? { activityLabel: resolveActivityLabel() } : {}),
+      elapsedMs: now() - turnStartedAt,
+    });
+  };
+
   const clearProgressState = (suppressed: boolean) => {
     clearPreambleExpiryTimer();
     progressSuppressed = suppressed;
@@ -250,14 +286,21 @@ export function createChannelProgressDraftCompositor(params: {
     if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
-    const text = formatDraftText();
+    const body = formatDraftText();
     const linesChanged = params.updateOnLineChange === true && lines !== lastRenderedLines;
-    if (!text || (text === lastRenderedText && !linesChanged)) {
+    // Dedupe on the body only: the status line carries elapsed time, so folding it in
+    // here would defeat the no-op check and push an extra transport edit per event.
+    if (!body || (body === lastRenderedText && !linesChanged)) {
       return false;
     }
-    lastRenderedText = text;
+    lastRenderedText = body;
     lastRenderedLines = lines;
-    await params.update(text, { ...options, lines: [...lines] });
+    const statusLine = resolveStatusLine();
+    await params.update(body, {
+      ...options,
+      lines: [...lines],
+      ...(statusLine ? { statusLine } : {}),
+    });
     return true;
   };
 
@@ -432,6 +475,7 @@ export function createChannelProgressDraftCompositor(params: {
       }
       finalReplyStarted = false;
       finalReplyDelivered = false;
+      turnStartedAt = now();
       gate.reset();
       clearProgressState(false);
       return true;

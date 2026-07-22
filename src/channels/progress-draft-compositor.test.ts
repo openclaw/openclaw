@@ -893,3 +893,127 @@ describe("createChannelProgressDraftCompositor", () => {
     }
   });
 });
+
+describe("progress draft status line", () => {
+  type UpdateOptions = {
+    flush?: boolean;
+    lines?: readonly unknown[];
+    statusLine?: string;
+  };
+  const createUpdate = () => vi.fn<(text: string, options?: UpdateOptions) => void>();
+  type UpdateMock = ReturnType<typeof createUpdate>;
+
+  const buildCompositor = (
+    update: UpdateMock,
+    statusMode: "off" | "minimal" | "activity",
+    now: () => number,
+  ) =>
+    createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: false, maxLines: 2 } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      statusMode,
+      now,
+      update,
+    });
+
+  const pushTool = (
+    progress: ReturnType<typeof buildCompositor>,
+    id: string,
+    label: string,
+    detail?: string,
+  ) =>
+    progress.pushToolProgress(
+      {
+        id,
+        kind: "tool",
+        text: `🛠️ ${label}`,
+        label,
+        toolName: "exec",
+        ...(detail ? { detail } : {}),
+      },
+      { startImmediately: true },
+    );
+
+  const lastStatusLine = (update: UpdateMock): string | undefined =>
+    update.mock.calls.at(-1)?.[1]?.statusLine;
+
+  it("reports the newest work line as the current activity", async () => {
+    let now = 1_000;
+    const update = createUpdate();
+    const progress = buildCompositor(update, "activity", () => now);
+
+    await pushTool(progress, "tool-1", "Exec", "run tests");
+    now = 121_000;
+    await pushTool(progress, "tool-2", "Read", "src/index.ts");
+
+    expect(lastStatusLine(update)).toBe("▸ Read: src/index.ts · 2m · reply to steer");
+  });
+
+  it("keeps the status line out of the draft text and structured lines", async () => {
+    const update = createUpdate();
+    const progress = buildCompositor(update, "activity", () => 1_000);
+
+    await pushTool(progress, "tool-1", "Exec", "run tests");
+
+    const [text, options] = update.mock.calls.at(-1) ?? [];
+    expect(text).not.toContain("reply to steer");
+    expect(JSON.stringify(options?.lines ?? [])).not.toContain("reply to steer");
+    expect(options?.statusLine).toContain("reply to steer");
+  });
+
+  it("survives a maxLines overflow without evicting work lines", async () => {
+    const update = createUpdate();
+    const progress = buildCompositor(update, "activity", () => 1_000);
+
+    await pushTool(progress, "tool-1", "First");
+    await pushTool(progress, "tool-2", "Second");
+    await pushTool(progress, "tool-3", "Third");
+
+    // maxLines is 2, so the rolling window drops the oldest work line...
+    const options = update.mock.calls.at(-1)?.[1];
+    expect(options?.lines).toHaveLength(2);
+    expect(JSON.stringify(options?.lines)).not.toContain("First");
+    // ...while the status line lives outside that budget entirely and still reports the
+    // newest work, so a busy turn can never scroll it away.
+    expect(options?.statusLine).toBe("▸ Third · 0s · reply to steer");
+  });
+
+  it("renders nothing when the status mode is off", async () => {
+    const update = createUpdate();
+    const progress = buildCompositor(update, "off", () => 1_000);
+
+    await pushTool(progress, "tool-1", "Exec", "run tests");
+
+    expect(lastStatusLine(update)).toBeUndefined();
+  });
+
+  it("stops rendering once the final reply takes over", async () => {
+    const update = createUpdate();
+    const progress = buildCompositor(update, "activity", () => 1_000);
+
+    await pushTool(progress, "tool-1", "Exec", "run tests");
+    expect(lastStatusLine(update)).toBeDefined();
+
+    const callsBeforeFinal = update.mock.calls.length;
+    progress.markFinalReplyStarted();
+    await pushTool(progress, "tool-2", "Read", "src/index.ts");
+
+    expect(update.mock.calls.length).toBe(callsBeforeFinal);
+  });
+
+  it("restarts the elapsed clock on a new turn", async () => {
+    let now = 1_000;
+    const update = createUpdate();
+    const progress = buildCompositor(update, "minimal", () => now);
+
+    await pushTool(progress, "tool-1", "Exec");
+    now = 121_000;
+    progress.markFinalReplyDelivered();
+    progress.beginNewTurn({ force: true });
+    await pushTool(progress, "tool-2", "Exec");
+
+    expect(lastStatusLine(update)).toBe("▸ Working · 0s · reply to steer");
+  });
+});

@@ -53,9 +53,14 @@ export type BlockStreamingChunkConfig = {
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
+/** Trailing status line on an in-flight progress draft. */
+export type StatusFooterMode = "off" | "minimal" | "activity";
+
 export type ChannelStreamingProgressConfig = {
   /** Initial progress title. "auto" picks from labels; false hides the title. Default: "auto". */
   label?: string | false;
+  /** Trailing status line: "activity" names the current work, "minimal" shows only elapsed time. Default: "off". */
+  status?: StatusFooterMode;
   /** Candidate labels for label="auto". Defaults to OpenClaw's built-in progress labels. */
   labels?: string[];
   /** Maximum number of progress lines to keep below the label. Default: 8. */

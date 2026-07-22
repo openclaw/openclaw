@@ -60,6 +60,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 | Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
 | Label           | Optional starter/status line such as `Working`.                                   |
 | Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
+| Status line     | Trailing line naming the current work, elapsed time, and how to steer.            |
 
 For raw tool progress, the label appears once the agent starts meaningful work
 and stays busy for the initial delay.
@@ -153,6 +154,52 @@ Hide the label and show only progress lines:
   },
 }
 ```
+
+## Status line
+
+The draft ends with one deterministic status line:
+
+```text
+▸ Exec: run tests · 2m · reply to steer
+```
+
+It names the newest work the agent started, how long the turn has been running, and
+that a reply steers the run. The line is rendered from run events already on hand, so
+it costs no model call and cannot drift from what the agent is doing. It lives outside
+the rolling progress-line window, so a busy turn never scrolls it away, and it
+disappears with the draft when the turn ends.
+
+Configure with `channels.<channel>.streaming.progress.status`:
+
+| Mode       | Behavior                                                       |
+| ---------- | -------------------------------------------------------------- |
+| `off`      | No status line (default)                                        |
+| `activity` | Names the current work, e.g. `▸ Exec: run tests`                |
+| `minimal`  | Static `▸ Working` label, still with elapsed time               |
+
+```json5
+{
+  channels: {
+    telegram: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          status: "activity",
+        },
+      },
+    },
+  },
+}
+```
+
+The line is off by default: progress drafts already name the current work, so the status
+line mainly adds elapsed time and the steer hint, and enabling it changes what every
+draft in that channel looks like. Turn it on per channel when a turn's duration matters
+more than draft compactness.
+
+Because the line is part of the progress draft, it appears only when that channel runs
+`streaming.mode: "progress"`. It is transport-only: it never enters the session
+transcript or the model context.
 
 ## Control progress lines
 

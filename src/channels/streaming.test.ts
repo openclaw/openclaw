@@ -7,6 +7,7 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftStatusMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -176,6 +177,33 @@ describe("streaming config resolution", () => {
     expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
     expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
     expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");
+  });
+});
+
+describe("progress draft status mode", () => {
+  it("stays off until a channel opts in", () => {
+    expect(resolveChannelProgressDraftStatusMode(undefined)).toBe("off");
+    expect(resolveChannelProgressDraftStatusMode({ streaming: { mode: "progress" } } as never)).toBe(
+      "off",
+    );
+  });
+
+  it("honors an explicit per-channel mode", () => {
+    for (const status of ["off", "minimal", "activity"] as const) {
+      expect(
+        resolveChannelProgressDraftStatusMode({
+          streaming: { mode: "progress", progress: { status } },
+        } as never),
+      ).toBe(status);
+    }
+  });
+
+  it("falls back for an unrecognized value", () => {
+    expect(
+      resolveChannelProgressDraftStatusMode({
+        streaming: { mode: "progress", progress: { status: "loud" } },
+      } as never),
+    ).toBe("off");
   });
 });
 

@@ -8,6 +8,7 @@ import type {
   ChannelStreamingCommandTextMode,
   ChannelStreamingProgressConfig,
   ChannelStreamingConfig,
+  StatusFooterMode,
   StreamingMode,
 } from "../config/types.base.js";
 import {
@@ -918,6 +919,16 @@ export function resolveChannelProgressDraftMaxLines(
 ): number {
   const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLines);
   return configured && configured > 0 ? configured : defaultValue;
+}
+
+export function resolveChannelProgressDraftStatusMode(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue: StatusFooterMode = "off",
+): StatusFooterMode {
+  const configured = resolveChannelProgressDraftConfig(entry).status;
+  return configured === "off" || configured === "minimal" || configured === "activity"
+    ? configured
+    : defaultValue;
 }
 
 export function resolveChannelProgressDraftMaxLineChars(
