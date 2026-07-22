@@ -73,6 +73,7 @@ function createTaskFlowSessionMock() {
     finish: vi.fn(),
     fail: vi.fn(),
     requestCancel: vi.fn(),
+    finalizeCancel: vi.fn(),
     cancel: vi.fn(),
     runTask: vi.fn(),
   };

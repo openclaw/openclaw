@@ -20,7 +20,9 @@ type ManagedTaskFlowMutationErrorCode =
   | "not_found"
   | "not_managed"
   | "revision_conflict"
-  | "persist_failed";
+  | "persist_failed"
+  | "cancel_not_requested"
+  | "children_active";
 
 export type ManagedTaskFlowMutationResult =
   | {
@@ -115,7 +117,16 @@ export type BoundTaskFlowRuntime = {
   requestCancel: (params: {
     flowId: string;
     expectedRevision: number;
+    stateJson?: JsonValue | null;
     cancelRequestedAt?: number;
+    updatedAt?: number;
+  }) => ManagedTaskFlowMutationResult;
+  finalizeCancel: (params: {
+    flowId: string;
+    expectedRevision: number;
+    stateJson?: JsonValue | null;
+    updatedAt?: number;
+    endedAt?: number;
   }) => ManagedTaskFlowMutationResult;
   cancel: (params: { flowId: string; cfg: OpenClawConfig }) => Promise<BoundTaskFlowCancelResult>;
   runTask: (params: {

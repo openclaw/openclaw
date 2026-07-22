@@ -93,7 +93,12 @@ export type TaskFlowUpdateResult =
     }
   | {
       applied: false;
-      reason: "not_found" | "revision_conflict" | "persist_failed";
+      reason:
+        | "not_found"
+        | "revision_conflict"
+        | "persist_failed"
+        | "cancel_not_requested"
+        | "children_active";
       current?: TaskFlowRecord;
     };
 
@@ -538,10 +543,16 @@ function updateFlowRecordByIdUnchecked(
   return writeFlowRecord(applyFlowPatch(current, patch), current);
 }
 
-export function updateFlowRecordByIdExpectedRevision(params: {
+function updateFlowRecordByIdExpectedRevisionWithPatch(params: {
   flowId: string;
   expectedRevision: number;
-  patch: FlowRecordPatch;
+  validate?: (
+    current: TaskFlowRecord,
+  ) => Extract<
+    Exclude<TaskFlowUpdateResult, { applied: true }>["reason"],
+    "cancel_not_requested" | "children_active"
+  > | null;
+  createPatch: (current: TaskFlowRecord) => FlowRecordPatch;
 }): TaskFlowUpdateResult {
   ensureTaskFlowRegistryReady();
   const current = flows.get(params.flowId);
@@ -558,7 +569,15 @@ export function updateFlowRecordByIdExpectedRevision(params: {
       current: cloneFlowRecord(current),
     };
   }
-  const flow = writeFlowRecord(applyFlowPatch(current, params.patch), current);
+  const validationFailure = params.validate?.(current);
+  if (validationFailure) {
+    return {
+      applied: false,
+      reason: validationFailure,
+      current: cloneFlowRecord(current),
+    };
+  }
+  const flow = writeFlowRecord(applyFlowPatch(current, params.createPatch(current)), current);
   if (!flow) {
     return {
       applied: false,
@@ -570,6 +589,18 @@ export function updateFlowRecordByIdExpectedRevision(params: {
     applied: true,
     flow,
   };
+}
+
+export function updateFlowRecordByIdExpectedRevision(params: {
+  flowId: string;
+  expectedRevision: number;
+  patch: FlowRecordPatch;
+}): TaskFlowUpdateResult {
+  return updateFlowRecordByIdExpectedRevisionWithPatch({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    createPatch: () => params.patch,
+  });
 }
 
 export function setFlowWaiting(params: {
@@ -681,15 +712,52 @@ export function failFlow(params: {
 export function requestFlowCancel(params: {
   flowId: string;
   expectedRevision: number;
+  stateJson?: JsonValue | null;
   cancelRequestedAt?: number;
   updatedAt?: number;
 }): TaskFlowUpdateResult {
+  const cancelRequestedAt = params.cancelRequestedAt ?? params.updatedAt ?? Date.now();
   return updateFlowRecordByIdExpectedRevision({
     flowId: params.flowId,
     expectedRevision: params.expectedRevision,
     patch: {
-      cancelRequestedAt: params.cancelRequestedAt ?? params.updatedAt ?? Date.now(),
+      stateJson: params.stateJson,
+      cancelRequestedAt,
       updatedAt: params.updatedAt,
+    },
+  });
+}
+
+export function finalizeFlowCancel(params: {
+  flowId: string;
+  expectedRevision: number;
+  stateJson?: JsonValue | null;
+  updatedAt?: number;
+  endedAt?: number;
+  hasPendingTasks: (flowId: string) => boolean;
+}): TaskFlowUpdateResult {
+  return updateFlowRecordByIdExpectedRevisionWithPatch({
+    flowId: params.flowId,
+    expectedRevision: params.expectedRevision,
+    validate: (current) => {
+      if (current.cancelRequestedAt == null) {
+        return "cancel_not_requested";
+      }
+      return params.hasPendingTasks(current.flowId) ? "children_active" : null;
+    },
+    createPatch: (current) => {
+      const cancelRequestedAt = current.cancelRequestedAt!;
+      const endedAt = params.endedAt ?? params.updatedAt ?? cancelRequestedAt;
+      return {
+        status: "cancelled",
+        stateJson: params.stateJson,
+        waitJson: null,
+        blockedTaskId: null,
+        blockedSummary: null,
+        cancelRequestedAt,
+        endedAt,
+        updatedAt: params.updatedAt ?? endedAt,
+      };
     },
   });
 }

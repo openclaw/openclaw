@@ -42,9 +42,9 @@ import {
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   ensureTaskFlowRegistryReady,
+  finalizeFlowCancel,
   getTaskFlowById,
   syncFlowFromTaskResult,
-  updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import {
@@ -1089,17 +1089,13 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
   }
   const endedAt = task.endedAt ?? task.lastEventAt ?? Date.now();
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const result = updateFlowRecordByIdExpectedRevision({
+    const result = finalizeFlowCancel({
       flowId,
       expectedRevision: flow.revision,
-      patch: {
-        status: "cancelled",
-        blockedTaskId: null,
-        blockedSummary: null,
-        waitJson: null,
-        endedAt,
-        updatedAt: endedAt,
-      },
+      endedAt,
+      updatedAt: endedAt,
+      hasPendingTasks: (candidateFlowId) =>
+        listTasksForFlowId(candidateFlowId).some(isTaskFlowCancellationPending),
     });
     if (result.applied || result.reason === "not_found") {
       return;

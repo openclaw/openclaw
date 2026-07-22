@@ -44,6 +44,7 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
       flow: { ...baseFlow, revision: input.expectedRevision + 1, status: "failed" as const },
     })),
     requestCancel: vi.fn(),
+    finalizeCancel: vi.fn(),
     cancel: vi.fn(),
     runTask: vi.fn(),
     ...overrides,

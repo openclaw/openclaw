@@ -241,6 +241,7 @@ describe("task-flow-registry store runtime", () => {
       const cancelRequested = requestFlowCancel({
         flowId: created.flowId,
         expectedRevision: waiting.flow.revision,
+        stateJson: { phase: "cancelling" },
         cancelRequestedAt: 444,
       });
       expect(cancelRequested.applied).toBe(true);
@@ -254,7 +255,7 @@ describe("task-flow-registry store runtime", () => {
       expect(restored?.revision).toBe(2);
       expect(restored?.status).toBe("waiting");
       expect(restored?.currentStep).toBe("ask_user");
-      expect(restored?.stateJson).toEqual({ phase: "ask_user" });
+      expect(restored?.stateJson).toEqual({ phase: "cancelling" });
       expect(restored?.waitJson).toEqual({ kind: "external_event", topic: "forum" });
       expect(restored?.cancelRequestedAt).toBe(444);
     });
