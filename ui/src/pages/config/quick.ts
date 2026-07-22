@@ -10,6 +10,14 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
+import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import {
+  normalizeLocalUserIdentity,
+  resolveLocalUserName,
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+} from "../../app/user-identity.ts";
 import {
   renderSettingsGroup,
   renderSettingsNavRow,
@@ -49,6 +57,34 @@ type QuickSettingsProps = {
   systemInfo?: SystemInfoResult | null;
   systemInfoUnavailable?: boolean;
 
+  // Appearance (kept optional: renderQuickSettings no longer renders the
+  // appearance/lobster section, but the shared QuickSettingsProps shape
+  // still advertises these for the full config page).
+  theme?: ThemeName;
+  themeMode?: ThemeMode;
+  hasCustomTheme?: boolean;
+  customThemeLabel?: string | null;
+  textScale?: number;
+  setTheme?: (theme: ThemeName, context?: ThemeTransitionContext) => void;
+  setThemeMode?: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  setTextScale?: (value: number) => void;
+  lobsterPetVisits?: boolean;
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  lobsterPetSounds?: boolean;
+  setLobsterPetSounds?: (enabled: boolean) => void;
+  onOpenCustomThemeImport?: () => void;
+  onChannelConfigure?: () => void;
+  onBrowseSkills?: () => void;
+  onConfigureMcp?: () => void;
+  onSecurityConfigure?: () => void;
+  canPairDevice?: boolean;
+  onPairMobile?: () => void;
+  onBrowserEnabledToggle?: (enabled: boolean) => void;
+  onToolProfileChange?: (profile: string) => void;
+  userAvatar?: string | null;
+  userAvatarError?: string | null;
+  onUserAvatarChange?: (next: string | null) => void;
+
   // Config staging state (quick edits auto-save through the shared draft)
   configLoading?: boolean;
   configSaving?: boolean;
@@ -66,6 +102,13 @@ type QuickSettingsProps = {
   connected: boolean;
   assistantName: string;
   version: string;
+  assistantAvatar?: string | null;
+  assistantAvatarUrl?: string | null;
+  assistantAvatarSource?: string | null;
+  assistantAvatarStatus?: string | null;
+  assistantAvatarReason?: string | null;
+  assistantAvatarOverride?: string | null;
+  basePath?: string;
 };
 
 // The compact General hub intentionally omits "minimal"; the full list stays
@@ -334,6 +377,69 @@ function renderSystemSection(props: QuickSettingsProps) {
     `,
   );
 }
+function renderPersonalSection(props: QuickSettingsProps) {
+  // Local user identity: avatar preview + editable avatar text, plus a
+  // visible error when a save to local storage fails (see setLocalUserAvatar
+  // in config-page.ts). The error is rendered as role="alert" so it is
+  // announced to assistive tech instead of being silently dropped.
+  const identity = normalizeLocalUserIdentity({
+    name: null,
+    avatar: props.userAvatar ?? null,
+  });
+  const avatarUrl = resolveLocalUserAvatarUrl(identity);
+  const avatarText = resolveLocalUserAvatarText(identity) ?? "";
+  const displayName = resolveLocalUserName(identity);
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.personal,
+    { title: t("quickSettings.personal.title") },
+    html`
+      <section class="config-identity" aria-label=${t("quickSettings.personal.localIdentity")}>
+        ${avatarUrl
+          ? html`<img class="config-identity__preview" src=${avatarUrl} alt=${displayName} />`
+          : html`<div class="config-identity__preview" aria-hidden="true">${avatarText}</div>`}
+        <div class="config-identity__copy">
+          <div class="config-identity__eyebrow">${t("quickSettings.personal.user")}</div>
+          <div class="config-identity__title">${displayName}</div>
+          <div class="config-identity__actions">
+            <label class="config-identity__field">
+              <span class="config-identity__field-label">
+                ${t("quickSettings.personal.avatarText")}
+              </span>
+              <input
+                class="settings-input"
+                type="text"
+                maxlength="16"
+                .value=${avatarText}
+                placeholder=${t("quickSettings.personal.avatarPlaceholder")}
+                @input=${(e: Event) => {
+                  const value = (e.target as HTMLInputElement).value;
+                  props.onUserAvatarChange?.(value.trim() ? value : null);
+                }}
+              />
+            </label>
+            <div class="config-identity__repair">
+              <button
+                type="button"
+                class="btn btn--sm btn--ghost"
+                ?disabled=${!identity.avatar}
+                @click=${() => {
+                  props.onUserAvatarChange?.(null);
+                }}
+              >
+                ${t("quickSettings.personal.clearAvatar")}
+              </button>
+            </div>
+            ${props.userAvatarError
+              ? html`<div class="config-identity__error" role="alert">
+                  ${props.userAvatarError}
+                </div>`
+              : nothing}
+          </div>
+        </div>
+      </section>
+    `,
+  );
+}
 
 function renderConnectionFooter(props: QuickSettingsProps) {
   const detail = [props.assistantName, props.version ? `v${props.version}` : ""]
@@ -384,6 +490,6 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       onApply: () => props.onApplyConfig?.(),
     })}
     ${renderModelSection(props)} ${renderGeneralSection(props)} ${renderSystemSection(props)}
-    ${renderConnectionFooter(props)}
+    ${renderPersonalSection(props)} ${renderConnectionFooter(props)}
   `);
 }

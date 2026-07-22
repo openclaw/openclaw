@@ -17,10 +17,13 @@ import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
+  loadLocalUserIdentity,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
+  saveLocalUserIdentity,
+  type LocalUserIdentity,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -233,6 +236,8 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
+  @state() private userAvatarError: string | null = null;
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private sessionObserverModels: ModelCatalogEntry[] = [];
@@ -340,6 +345,25 @@ export class ConfigPage extends OpenClawLightDomElement {
     super.connectedCallback();
     this.settings = loadSettings();
     this.syncRouteData();
+  }
+
+  private setLocalUserAvatar(avatar: string | null) {
+    let identity: LocalUserIdentity;
+    try {
+      identity = saveLocalUserIdentity({
+        ...loadLocalUserIdentity(),
+        avatar,
+      });
+    } catch (error) {
+      // Preserve the previously saved avatar if persistence fails (e.g. storage
+      // quota or security restrictions) and surface the error to the UI instead
+      // of silently losing it, so the UI never claims a save that did not happen.
+      this.userAvatarError = error instanceof Error ? error.message : "Failed to save user avatar";
+      this.requestUpdate();
+      return;
+    }
+    this.userAvatar = identity.avatar;
+    this.userAvatarError = null;
   }
 
   override disconnectedCallback() {
@@ -1102,6 +1126,33 @@ export class ConfigPage extends OpenClawLightDomElement {
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
+      onChannelConfigure: () => this.navigate("communications"),
+      onBrowseSkills: () => this.navigate("skills"),
+      onConfigureMcp: () => this.navigate("mcp"),
+      onSecurityConfigure: () => {
+        this.selections = {
+          ...this.selections,
+          config: { activeSection: "auth", activeSubsection: null },
+        };
+      },
+      canPairDevice:
+        runtimeConfig.state.connected &&
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
+      onBrowserEnabledToggle: (enabled: boolean) =>
+        runtimeConfig.patchForm(["browser", "enabled"], enabled),
+      onToolProfileChange: (profile: string) =>
+        runtimeConfig.patchForm(["tools", "profile"], profile),
+      assistantAvatar: appConfig.assistantIdentity.avatar,
+      assistantAvatarUrl: appConfig.assistantIdentity.avatar,
+      assistantAvatarSource: appConfig.assistantIdentity.avatarSource,
+      assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
+      assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
+      assistantAvatarOverride: null,
+      userAvatar: this.userAvatar,
+      userAvatarError: this.userAvatarError,
+      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
+      basePath: this.context.basePath,
     });
   }
 

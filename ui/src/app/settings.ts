@@ -47,6 +47,7 @@ import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { normalizePinnedAgentIds } from "./settings-normalizers.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
+export type { LocalUserIdentity };
 
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
@@ -522,6 +523,17 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   } catch {
     return normalizeLocalUserIdentity();
   }
+}
+
+export function saveLocalUserIdentity(next: LocalUserIdentity): LocalUserIdentity {
+  const storage = getSafeLocalStorage();
+  const normalized = normalizeLocalUserIdentity(next);
+  if (normalized.name === null && normalized.avatar === null) {
+    storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
+  } else {
+    storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
+  }
+  return normalized;
 }
 
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1036" height="160" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="13">
+<rect width="1036" height="160" fill="#0b0e14"/>
+<rect x="0" y="0" width="1036" height="30" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="38" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="58" cy="15" r="6" fill="#27c93f"/>
+<text x="518" y="19" fill="#8b949e" font-size="11" text-anchor="middle">proof&#160;PR#111306&#160;avatar-save-error&#160;fix(ui)</text>
+<text x="14" y="61" fill="#3fb950" xml:space="preserve">&#160;[32m✓[39m&#160;[30m[45m&#160;ui&#160;[49m[39m&#160;../../ui/src/pages/config/config-page.test.ts&#160;[2m([22m[2m10&#160;tests[22m[2m)[22</text>
+<text x="14" y="78" fill="#3fb950" xml:space="preserve">[2m&#160;Test&#160;Files&#160;[22m&#160;[1m[32m1&#160;passed[39m[22m[90m&#160;(1)[39m</text>
+<text x="14" y="95" fill="#3fb950" xml:space="preserve">[2m&#160;&#160;&#160;&#160;&#160;&#160;Tests&#160;[22m&#160;[1m[32m10&#160;passed[39m[22m[90m&#160;(10)[39m</text>
+</svg>

@@ -10,6 +10,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { loadLocalUserIdentity } from "../../app/settings.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
@@ -44,6 +45,75 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("ConfigPage local user identity", () => {
+  it("persists avatar selections while preserving the local display name", () => {
+    localStorageMock.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({ name: "Buns", avatar: "old" }),
+    );
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      userAvatar: string | null;
+      setLocalUserAvatar: (avatar: string | null) => void;
+    };
+
+    state.setLocalUserAvatar("🦞");
+
+    expect(state.userAvatar).toBe("🦞");
+    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "🦞" });
+  });
+
+  it("surfaces a visible error instead of silently dropping the avatar when persistence fails", () => {
+    localStorageMock.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({ name: "Buns", avatar: "old" }),
+    );
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      userAvatar: string | null;
+      userAvatarError: string | null;
+      setLocalUserAvatar: (avatar: string | null) => void;
+    };
+
+    // Simulate a storage write failure (quota / security restriction).
+    vi.spyOn(localStorageMock, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+
+    state.setLocalUserAvatar("🦞");
+
+    // The failure must not be swallowed: an error is recorded and the in-memory
+    // avatar keeps its prior value rather than pretending the save succeeded.
+    expect(state.userAvatarError).toBe("QuotaExceededError");
+    expect(state.userAvatar).toBe("old");
+    expect(loadLocalUserIdentity()).toEqual({ name: "Buns", avatar: "old" });
+  });
+
+  it("clears the avatar error after a successful save", () => {
+    localStorageMock.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({ name: "Buns", avatar: "old" }),
+    );
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      userAvatar: string | null;
+      userAvatarError: string | null;
+      setLocalUserAvatar: (avatar: string | null) => void;
+    };
+
+    vi.spyOn(localStorageMock, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    state.setLocalUserAvatar("🦞");
+    expect(state.userAvatarError).toBe("QuotaExceededError");
+
+    vi.spyOn(localStorageMock, "setItem").mockRestore();
+    state.setLocalUserAvatar("🐱");
+    expect(state.userAvatarError).toBeNull();
+    expect(state.userAvatar).toBe("🐱");
+  });
 });
 
 describe("configSelectionFromSearch", () => {
