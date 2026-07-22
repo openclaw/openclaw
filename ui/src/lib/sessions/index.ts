@@ -1,3 +1,4 @@
+import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -32,7 +33,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import { readSessionCustomGroupNames } from "./custom-groups.ts";
-import { scopedAgentListParamsForSession } from "./navigation.ts";
+import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
@@ -43,6 +44,7 @@ import {
 } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
@@ -70,6 +72,8 @@ type SessionState = {
 
 type SessionGroupMutationResult = "completed" | "stale";
 
+export type { SessionArchivedFilter } from "./navigation.ts";
+
 export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
@@ -81,7 +85,7 @@ export type SessionListOptions = {
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
-  showArchived?: boolean;
+  archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
 
@@ -177,7 +181,7 @@ type SessionConnectionScope = {
 
 type SessionCreateReconciliation = "blocking" | "background";
 
-type SessionMessageSubscription = {
+export type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
 };
@@ -203,9 +207,13 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
-  hasOpenPullRequest: (key: string) => boolean;
-  captureOpenPullRequestEpoch: (key: string) => symbol;
-  setOpenPullRequest: (key: string, hasOpenPullRequest: boolean, epoch?: symbol) => void;
+  pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
+  capturePullRequestEpoch: (key: string) => symbol;
+  setPullRequestSummary: (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
@@ -286,6 +294,7 @@ export {
   filterVisibleSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
+  sessionMatchesArchivedFilter,
   scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
@@ -350,11 +359,13 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
   }
-  if (options.showArchived === true) {
+  if (options.archivedFilter === "archived") {
     params.archived = true;
+  } else if (options.archivedFilter === "all") {
+    params.archived = "all";
   }
   const activeMinutes =
-    options.showArchived === true
+    options.archivedFilter === "archived" || options.archivedFilter === "all"
       ? 0
       : typeof options.activeMinutes === "number" && options.activeMinutes > 0
         ? Math.floor(options.activeMinutes)
@@ -501,7 +512,7 @@ function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
 
-async function subscribeSessionMessages(
+async function requestSessionMessageSubscription(
   client: SessionRequestClient,
   key: string,
   options: { agentId?: string | null } = {},
@@ -519,7 +530,7 @@ async function subscribeSessionMessages(
   };
 }
 
-export function unsubscribeSessionMessages(
+function requestSessionMessageUnsubscribe(
   client: SessionRequestClient,
   subscription: SessionMessageSubscription,
 ): Promise<void> {
@@ -529,6 +540,90 @@ export function unsubscribeSessionMessages(
       buildSessionRequestParams(subscription.key, subscription.agentId),
     )
     .then(() => undefined);
+}
+
+type SessionMessageSubscriptionEntry = {
+  key: string;
+  agentId: string | null;
+  owners: number;
+  result: Promise<SessionMessageSubscription>;
+};
+
+const sessionMessageSubscriptionRegistries = new WeakMap<
+  GatewayBrowserClient,
+  Set<SessionMessageSubscriptionEntry>
+>();
+const sessionMessageSubscriptionOwners = new WeakMap<
+  SessionMessageSubscription,
+  {
+    client: GatewayBrowserClient;
+    entry: SessionMessageSubscriptionEntry;
+    registry: Set<SessionMessageSubscriptionEntry>;
+    onRelease: (subscription: SessionMessageSubscription) => void;
+  }
+>();
+
+function resetSessionMessageSubscriptionRegistry(client: GatewayBrowserClient): void {
+  sessionMessageSubscriptionRegistries.get(client)?.clear();
+  sessionMessageSubscriptionRegistries.delete(client);
+}
+
+async function acquireSessionMessageSubscription(
+  client: GatewayBrowserClient,
+  key: string,
+  options: { agentId?: string | null } = {},
+  onRelease: (subscription: SessionMessageSubscription) => void = () => undefined,
+): Promise<SessionMessageSubscription> {
+  const normalizedKey = key.trim();
+  const agentId =
+    isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
+      ? normalizeAgentId(options.agentId)
+      : null;
+  const registry = sessionMessageSubscriptionRegistries.get(client) ?? new Set();
+  sessionMessageSubscriptionRegistries.set(client, registry);
+  let entry = [...registry].find(
+    (candidate) =>
+      candidate.agentId === agentId && areUiSessionKeysEquivalent(candidate.key, normalizedKey),
+  );
+  if (!entry) {
+    const result = requestSessionMessageSubscription(client, normalizedKey, { agentId });
+    entry = { key: normalizedKey, agentId, owners: 0, result };
+    registry.add(entry);
+    void result.catch(() => registry.delete(entry!));
+  }
+  entry.owners += 1;
+  try {
+    const resolved = await entry.result;
+    const subscription: SessionMessageSubscription = {
+      key: resolved.key,
+      agentId: resolved.agentId ?? null,
+    };
+    sessionMessageSubscriptionOwners.set(subscription, { client, entry, registry, onRelease });
+    return subscription;
+  } catch (error) {
+    entry.owners -= 1;
+    throw error;
+  }
+}
+
+async function releaseSessionMessageSubscription(
+  subscription: SessionMessageSubscription,
+): Promise<void> {
+  const owner = sessionMessageSubscriptionOwners.get(subscription);
+  if (!owner) {
+    return;
+  }
+  sessionMessageSubscriptionOwners.delete(subscription);
+  owner.onRelease(subscription);
+  owner.entry.owners -= 1;
+  if (
+    owner.entry.owners > 0 ||
+    sessionMessageSubscriptionRegistries.get(owner.client) !== owner.registry ||
+    !owner.registry.delete(owner.entry)
+  ) {
+    return;
+  }
+  await requestSessionMessageUnsubscribe(owner.client, subscription);
 }
 
 async function listSessionCheckpoints(
@@ -733,14 +828,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     { token: symbol; previous: string | null | undefined }
   >();
   const swarmActivity = new SwarmActivityTracker();
-  const openPullRequestSessionKeys = new Set<string>();
-  const openPullRequestEpochs = new Map<string, symbol>();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
+  const pullRequestEpochs = new Map<string, symbol>();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
+  const ownedMessageSubscriptions = new Set<SessionMessageSubscription>();
 
   const captureConnection = (): SessionConnectionScope | null => {
     const snapshot = gateway.snapshot;
@@ -777,34 +873,43 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const hasOpenPullRequest = (key: string): boolean => openPullRequestSessionKeys.has(key.trim());
+  const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
+    pullRequestSummaries.get(key.trim());
 
-  const captureOpenPullRequestEpoch = (key: string): symbol => {
+  const capturePullRequestEpoch = (key: string): symbol => {
     const normalizedKey = key.trim();
     const epoch = Symbol(normalizedKey);
-    openPullRequestEpochs.set(normalizedKey, epoch);
+    pullRequestEpochs.set(normalizedKey, epoch);
     return epoch;
   };
 
-  const retireOpenPullRequest = (key: string) => {
+  const retirePullRequestSummary = (key: string) => {
     const normalizedKey = key.trim();
-    openPullRequestEpochs.delete(normalizedKey);
-    openPullRequestSessionKeys.delete(normalizedKey);
+    pullRequestEpochs.delete(normalizedKey);
+    pullRequestSummaries.delete(normalizedKey);
   };
 
-  const setOpenPullRequest = (key: string, open: boolean, epoch?: symbol) => {
+  const setPullRequestSummary = (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => {
     const normalizedKey = key.trim();
-    if (
-      !normalizedKey ||
-      (epoch !== undefined && openPullRequestEpochs.get(normalizedKey) !== epoch) ||
-      openPullRequestSessionKeys.has(normalizedKey) === open
-    ) {
+    if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
       return;
     }
-    if (open) {
-      openPullRequestSessionKeys.add(normalizedKey);
+    const previous = pullRequestSummaries.get(normalizedKey);
+    const unchanged =
+      previous?.state === summary?.state &&
+      previous?.numbers.length === summary?.numbers.length &&
+      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
+    if (unchanged || (!previous && !summary)) {
+      return;
+    }
+    if (summary) {
+      pullRequestSummaries.set(normalizedKey, summary);
     } else {
-      openPullRequestSessionKeys.delete(normalizedKey);
+      pullRequestSummaries.delete(normalizedKey);
     }
     publish({ ...state });
   };
@@ -1314,7 +1419,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
           };
     if (reconciled.deletedKey) {
-      retireOpenPullRequest(reconciled.deletedKey);
+      retirePullRequestSummary(reconciled.deletedKey);
     }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
       publish({
@@ -1357,7 +1462,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
-      retireOpenPullRequest(key);
+      retirePullRequestSummary(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1406,7 +1511,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     if (deleted.length > 0 && isCurrentConnection(scope)) {
       for (const key of deleted) {
-        retireOpenPullRequest(key);
+        retirePullRequestSummary(key);
       }
       publish({
         ...state,
@@ -1523,20 +1628,21 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope) {
       throw new Error("Session message subscription requires an active Gateway connection");
     }
-    const subscription = await subscribeSessionMessages(scope.client, key, options);
+    const subscription = await acquireSessionMessageSubscription(
+      scope.client,
+      key,
+      options,
+      (released) => ownedMessageSubscriptions.delete(released),
+    );
+    ownedMessageSubscriptions.add(subscription);
     if (!isCurrentConnection(scope)) {
+      await releaseSessionMessageSubscription(subscription).catch(() => undefined);
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
     return subscription;
   };
 
-  const unsubscribeMessages = async (subscription: SessionMessageSubscription) => {
-    const scope = captureConnection();
-    if (!scope) {
-      return;
-    }
-    await unsubscribeSessionMessages(scope.client, subscription);
-  };
+  const unsubscribeMessages = releaseSessionMessageSubscription;
 
   const listCheckpoints = async (
     key: string,
@@ -1651,23 +1757,28 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const stopGateway = gateway.subscribe((next) => {
+    const previousClient = connectionClient;
     const connectionChanged =
       next.client !== connectionClient || next.connected !== connectionConnected;
     connectionClient = next.client;
     connectionConnected = next.connected;
     if (connectionChanged) {
-      const hadOpenPullRequests = openPullRequestSessionKeys.size > 0;
+      const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       connectionEpoch += 1;
+      if (previousClient) {
+        resetSessionMessageSubscriptionRegistry(previousClient);
+      }
+      ownedMessageSubscriptions.clear();
       invalidateGroupsLoad();
       swarmActivity.clear();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
-      openPullRequestSessionKeys.clear();
-      openPullRequestEpochs.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
       // A connected client replacement needs its own invalidation publish;
       // disconnects publish the cleared state in the branch immediately below.
-      if (hadOpenPullRequests && next.connected && next.client) {
+      if (hadPullRequestSummaries && next.connected && next.client) {
         publish({ ...state });
       }
     }
@@ -1724,7 +1835,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
-        showArchived: lastListOptions.showArchived,
+        archivedFilter: lastListOptions.archivedFilter,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
       // Catalog mutations from other clients invalidate the per-connection
@@ -1743,7 +1854,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       if (reconciled.deletedKey) {
-        retireOpenPullRequest(reconciled.deletedKey);
+        retirePullRequestSummary(reconciled.deletedKey);
         // Preserve remote-deletion navigation before the canonical refresh
         // clears transient event state.
         publish({
@@ -1776,9 +1887,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
-    hasOpenPullRequest,
-    captureOpenPullRequestEpoch,
-    setOpenPullRequest,
+    pullRequestSummary,
+    capturePullRequestEpoch,
+    setPullRequestSummary,
     delete: remove,
     deleteMany: removeMany,
     reset,
@@ -1809,6 +1920,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(listener);
     },
     dispose() {
+      for (const subscription of ownedMessageSubscriptions) {
+        void releaseSessionMessageSubscription(subscription).catch(() => undefined);
+      }
       disposed = true;
       connectionEpoch += 1;
       invalidateGroupsLoad();
@@ -1818,8 +1932,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       subscribedClient = null;
       pendingModelPatches.clear();
       swarmActivity.clear();
-      openPullRequestSessionKeys.clear();
-      openPullRequestEpochs.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
       stopGateway();
       stopEvents();
       createdListeners.clear();

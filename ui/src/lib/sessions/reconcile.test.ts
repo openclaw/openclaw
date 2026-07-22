@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
@@ -288,5 +289,21 @@ describe("reconcileSessionChanged", () => {
     });
 
     expect(next.row?.thinkingLevel).toBeUndefined();
+  });
+
+  it("keeps archive-state changes in an all-status result", () => {
+    const key = "agent:main:thread";
+    const result = buildResult([{ key, kind: "direct", updatedAt: 1, sessionId: "s1" }]);
+
+    const next = reconcileSessionHistory(
+      result,
+      { key, kind: "direct", updatedAt: 2, sessionId: "s1", archived: true },
+      undefined,
+      { archivedFilter: "all" },
+    );
+
+    expect(next?.sessions).toEqual([
+      expect.objectContaining({ key, archived: true, updatedAt: 2 }),
+    ]);
   });
 });

@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
@@ -69,6 +70,10 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
+import {
+  applySubagentLaunchAuthorization,
+  type SubagentLaunchAuthorization,
+} from "./subagent-launch-authorization.js";
 import {
   completeCollectorLaunchCleanup,
   listSwarmRunsForGroup,
@@ -235,6 +240,7 @@ type SpawnSubagentResult = {
 
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
+  authorization?: SubagentLaunchAuthorization,
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.patch / sessions.delete → admin, agent → write).  When each call
@@ -246,18 +252,29 @@ async function callSubagentGateway(
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" -> write) keep their least-privilege scope. The params-aware
   // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  const authorizedParams =
+    params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
+      ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
+      : params.params;
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
-    params.params,
+    authorizedParams,
   );
+  const allowModelOverride = authorization !== undefined;
+  const hasInProcessGateway = subagentSpawnDeps.hasInProcessGatewayContext();
+  const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
-    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
+    params.scopes ??
+    (leastPrivilegeScopes.includes(ADMIN_SCOPE) || needsOutOfProcessModelOverrideAuth
+      ? [ADMIN_SCOPE]
+      : undefined);
   const request = {
     ...params,
+    params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
   if (
-    subagentSpawnDeps.hasInProcessGatewayContext() &&
+    hasInProcessGateway &&
     request.params != null &&
     typeof request.params === "object" &&
     !Array.isArray(request.params)
@@ -272,6 +289,7 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
+        ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
         ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
@@ -793,7 +811,7 @@ async function waitForProvisionalSessionDeletion(
       return;
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -850,7 +868,7 @@ async function terminateAcceptedCollectorRun(params: {
       }
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -1299,6 +1317,16 @@ export async function spawnSubagentDirect(
       };
     }
     const { resolvedModel, thinkingOverride } = plan;
+    const resolvedLaunchModel = splitModelRef(resolvedModel);
+    const launchAuthorization: SubagentLaunchAuthorization | undefined =
+      modelOverride?.trim() && resolvedLaunchModel.model
+        ? {
+            modelOverride: {
+              ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
+              model: resolvedLaunchModel.model,
+            },
+          }
+        : undefined;
     if (params.outputSchema) {
       const outputModelError = await resolveCollectorOutputModelError({
         cfg,
@@ -1586,12 +1614,28 @@ export async function spawnSubagentDirect(
         : {}),
       ...publicSpawnedMetadata,
     };
+    const childLaunch = {
+      request: childLaunchRequest,
+      ...(launchAuthorization ? { authorization: launchAuthorization } : {}),
+      timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+    };
+    const queuedLaunch =
+      params.collect && swarmSchedulerGroupKey
+        ? {
+            ...childLaunch,
+            schedulerGroupKey: swarmSchedulerGroupKey,
+            maxConcurrent: swarmConfig.maxConcurrent,
+          }
+        : undefined;
     const launchChildRun = async () =>
-      await callSubagentGateway({
-        method: "agent",
-        params: childLaunchRequest,
-        timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-      });
+      await callSubagentGateway(
+        {
+          method: "agent",
+          params: childLaunch.request,
+          timeoutMs: childLaunch.timeoutMs,
+        },
+        childLaunch.authorization,
+      );
 
     // "spawned"/"started" hooks mean an accepted Gateway run. Direct runs emit
     // after the shared pipeline; queued collectors emit from the scheduler start.
@@ -1765,15 +1809,7 @@ export async function spawnSubagentDirect(
             : undefined,
           outputSchema: params.outputSchema,
           groupId: swarmGroupId,
-          queuedLaunch:
-            params.collect && swarmSchedulerGroupKey
-              ? {
-                  request: childLaunchRequest,
-                  timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-                  schedulerGroupKey: swarmSchedulerGroupKey,
-                  maxConcurrent: swarmConfig.maxConcurrent,
-                }
-              : undefined,
+          queuedLaunch,
           queued: params.collect === true,
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
@@ -1838,10 +1874,7 @@ export async function spawnSubagentDirect(
             } catch {
               // The child is stopped; retry only the durable terminal write.
               await new Promise<void>((resolve) => {
-                const timer = setTimeout(
-                  resolve,
-                  process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000,
-                );
+                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
                 timer.unref?.();
               });
             }

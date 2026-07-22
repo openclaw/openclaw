@@ -1,4 +1,5 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
+import { kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** One ordered runtime attachment; array position is its alignment identity. */
@@ -15,6 +16,20 @@ export type MediaFact = {
 export type MediaFactInput = {
   [Key in keyof MediaFact]?: MediaFact[Key] | null;
 };
+
+const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
+
+/** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
+export function attachRuntimePromptMediaFacts<T extends object>(
+  message: T,
+  media: readonly MediaFact[],
+): T {
+  Object.defineProperty(message, RUNTIME_PROMPT_MEDIA_FACTS, {
+    configurable: true,
+    value: normalizeMediaFacts(media),
+  });
+  return message;
+}
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   kind?: MediaKind;
@@ -33,21 +48,33 @@ export type MediaFactLegacyProjection = {
   MediaTranscribedIndexes?: number[];
 };
 
+type MediaFactSource = MediaFactLegacyProjection & {
+  media?: readonly MediaFactInput[];
+  MediaStaged?: boolean | null;
+  MediaWorkspaceDir?: string | null;
+};
+
 function normalizeMediaFact<TInput extends MediaFactInput>(
   media: TInput,
   index: number,
   defaults: MediaFactDefaults<TInput> = {},
 ): MediaFact {
   const workspaceDir = normalizeOptionalString(media.workspaceDir) ?? defaults.workspaceDir;
+  const contentType = normalizeOptionalString(media.contentType);
   return {
     path: normalizeOptionalString(media.path),
     url: normalizeOptionalString(media.url),
-    contentType: normalizeOptionalString(media.contentType),
-    kind: media.kind ?? defaults.kind,
+    contentType,
+    kind: media.kind ?? defaults.kind ?? kindFromMime(contentType),
     transcribed: media.transcribed === true || defaults.transcribed?.(media, index) === true,
     messageId: normalizeOptionalString(media.messageId) ?? defaults.messageId,
     ...(workspaceDir ? { workspaceDir } : {}),
   };
+}
+
+/** True when a consumer must use the already-staged legacy path projection. */
+export function hasStagedMediaProjection(source: MediaFactSource): boolean {
+  return source.MediaStaged === true || Boolean(normalizeOptionalString(source.MediaWorkspaceDir));
 }
 
 export function normalizeMediaFacts<TInput extends MediaFactInput>(
@@ -57,6 +84,62 @@ export function normalizeMediaFacts<TInput extends MediaFactInput>(
   return Array.isArray(media)
     ? media.map((entry, index) => normalizeMediaFact(entry, index, defaults))
     : [];
+}
+
+// Empty slots exist only to keep legacy parallel-array positions aligned;
+// presence/counting sites must ignore them or blank projections ({MediaPaths: [""]})
+// route media-less messages into inbound-media handling.
+function isMeaningfulMediaFact(fact: MediaFact): boolean {
+  return Boolean(
+    fact.path?.trim() ||
+    fact.url?.trim() ||
+    fact.contentType ||
+    (fact.kind && fact.kind !== "unknown"),
+  );
+}
+
+/** Resolves facts and drops alignment-only empty slots for presence/count consumers. */
+export function resolveMeaningfulMediaFacts(source: MediaFactSource): MediaFact[] {
+  return resolveMediaFacts(source).filter(isMeaningfulMediaFact);
+}
+
+/** Normalizes canonical facts or, for compatibility callers, legacy parallel fields. */
+export function resolveMediaFacts(source: MediaFactSource): MediaFact[] {
+  const canonical = normalizeMediaFacts(source.media);
+  const paths = Array.isArray(source.MediaPaths) ? source.MediaPaths : [];
+  const urls = Array.isArray(source.MediaUrls) ? source.MediaUrls : [];
+  const types = Array.isArray(source.MediaTypes) ? source.MediaTypes : [];
+  const count = Math.max(
+    canonical.length,
+    paths.length,
+    urls.length,
+    types.length,
+    source.MediaPath || source.MediaUrl ? 1 : 0,
+  );
+  const transcribed = new Set(source.MediaTranscribedIndexes ?? []);
+  return Array.from({ length: count }, (_, index) => {
+    const fact = canonical[index];
+    return normalizeMediaFact(
+      {
+        path: fact?.path ?? paths[index] ?? (index === 0 ? source.MediaPath : undefined),
+        url:
+          fact?.url ??
+          urls[index] ??
+          (paths.length > 0 || index === 0 ? source.MediaUrl : undefined),
+        contentType:
+          fact?.contentType ??
+          normalizeOptionalString(types[index]) ??
+          (index === 0 ? source.MediaType : undefined),
+        kind: fact?.kind,
+        transcribed: fact?.transcribed === true || transcribed.has(index),
+        messageId: fact?.messageId,
+        workspaceDir:
+          normalizeOptionalString(fact?.workspaceDir) ??
+          normalizeOptionalString(source.MediaWorkspaceDir),
+      },
+      index,
+    );
+  });
 }
 
 function projectStrings(

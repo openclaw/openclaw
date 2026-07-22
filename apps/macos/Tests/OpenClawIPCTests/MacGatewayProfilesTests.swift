@@ -26,6 +26,15 @@ struct MacGatewayProfilesTests {
             MacGatewayProfileStore.profileID(url: rootPath))
     }
 
+    @Test func `profiles sharing an authority keep independent TLS pin owners`() throws {
+        let url = try #require(URL(string: "wss://studio.example"))
+        let first = MacGatewayProfile(id: "first", name: "First", url: url)
+        let second = MacGatewayProfile(id: "second", name: "Second", url: url)
+
+        #expect(MacGatewayProfileStore.tlsRoute(for: first)?.params.storeKey == "profile:first")
+        #expect(MacGatewayProfileStore.tlsRoute(for: second)?.params.storeKey == "profile:second")
+    }
+
     @Test func `profile URL rejects dashboard schemes`() {
         #expect(throws: MacGatewayProfileError.invalidURL) {
             try MacGatewayProfileStore.canonicalURL(

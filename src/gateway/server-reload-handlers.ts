@@ -655,14 +655,24 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
           params.onCronRestart?.();
-          state.cronState.cron.stop();
-          state.cronState.stopExitWatchers?.();
+          if (state.cronState.cron.stopAndDrain) {
+            await state.cronState.cron.stopAndDrain();
+          } else {
+            state.cronState.cron.stop();
+            state.cronState.stopExitWatchers?.();
+            await state.cronState.stopStreamWatchers?.();
+          }
           startGatewayCronWithLogging({
             cronState: nextState.cronState,
             cronReconciliation: params.cronReconciliation,
             reason: "reload",
             config: nextConfig,
-            afterStart: nextState.cronState.reconcileExitWatchers,
+            afterStart: async () => {
+              await Promise.all([
+                nextState.cronState.reconcileExitWatchers?.(),
+                nextState.cronState.reconcileStreamWatchers?.(),
+              ]);
+            },
             logCron: params.logCron,
             onStartError: (err) => {
               if (
@@ -949,7 +959,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      await refreshPreparedModelRuntimeSnapshots(nextConfig);
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, { catalogMode: "static" });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return;
