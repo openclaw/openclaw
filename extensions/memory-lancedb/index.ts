@@ -782,7 +782,7 @@ const LEADING_CURRENT_MESSAGE_CONTEXT_RE = /^\s*Current message:[ \t]*(?:\n|$)/;
 const LEADING_CURRENT_MESSAGE_REPLY_LINE_RE = /^\s*\[Replying to:[^\n]{0,1000}\]\s*\n/;
 const LEADING_CURRENT_MESSAGE_ID_SENDER_RE = /^#\d+\s+[^\n:]{1,100}:\s*/;
 
-const UNTRUSTED_CONTEXT_HEADER_RE = /^Context:[ \t]*$/m;
+const CONTEXT_HEADER_RE = /^Context:[ \t]*$/m;
 
 /**
  * Matches JSON blobs that look like OpenClaw transport envelope metadata.
@@ -917,7 +917,7 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
 
   // Check for the "Context:" header alone at the start of a line
   // to avoid false-positives on user messages that quote the phrase mid-line.
-  if (UNTRUSTED_CONTEXT_HEADER_RE.test(text)) {
+  if (CONTEXT_HEADER_RE.test(text)) {
     return true;
   }
 

@@ -150,7 +150,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
       })) {
         const snapshot = readSqliteTranscriptSnapshot(database, instance.sessionId);
         const changedEvents = snapshot.events.reduce(
-          (count, event) => count + (normalizeLegacyInboundContextLabels(event) ? 1 : 0),
+          (count: number, event) => count + (normalizeLegacyInboundContextLabels(event) ? 1 : 0),
           0,
         );
         if (changedEvents === 0) {

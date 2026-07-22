@@ -12,7 +12,7 @@ enum ChatMarkdownPreprocessor {
         "Forwarded message context:",
         "Chat history since last reply:",
     ]
-    private static let untrustedContextHeader =
+    private static let contextHeader =
         "Context:"
     private static let envelopeChannels = [
         "WebChat",
@@ -137,7 +137,7 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func stripInboundContextBlocks(_ raw: String) -> String {
-        guard self.inboundContextHeaders.contains(where: raw.contains) || raw.contains(self.untrustedContextHeader)
+        guard self.inboundContextHeaders.contains(where: raw.contains) || raw.contains(self.contextHeader)
         else {
             return raw
         }
@@ -198,7 +198,7 @@ enum ChatMarkdownPreprocessor {
     }
 
     private static func shouldStripTrailingUntrustedContext(lines: [String], index: Int) -> Bool {
-        guard lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.untrustedContextHeader else {
+        guard lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.contextHeader else {
             return false
         }
         let endIndex = min(lines.count, index + 8)

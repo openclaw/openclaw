@@ -34,7 +34,7 @@ const INBOUND_META_SENTINELS = [
   CHAT_HISTORY_SENTINEL,
 ] as const;
 
-const UNTRUSTED_CONTEXT_HEADER = "Context:";
+const CONTEXT_HEADER = "Context:";
 const CHAT_WINDOW_CONTEXT_FAST_SENTINEL = "(chronological";
 const CHAT_WINDOW_CONTEXT_HEADER_RE = /^.+ \(chronological(?:, [^)]+)?\):$/;
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
@@ -46,7 +46,7 @@ const SENTINEL_FAST_RE = new RegExp(
   [
     ...INBOUND_META_SENTINELS,
     ...MESSAGE_TOOL_DELIVERY_HINTS,
-    UNTRUSTED_CONTEXT_HEADER,
+    CONTEXT_HEADER,
     CHAT_WINDOW_CONTEXT_FAST_SENTINEL,
   ]
     .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
@@ -152,7 +152,7 @@ function firstNonEmptyString(...values: unknown[]): string | null {
 }
 
 function shouldStripTrailingUntrustedContext(lines: string[], index: number): boolean {
-  if (lines[index]?.trim() !== UNTRUSTED_CONTEXT_HEADER) {
+  if (lines[index]?.trim() !== CONTEXT_HEADER) {
     return false;
   }
   const probe = lines.slice(index + 1, Math.min(lines.length, index + 8)).join("\n");
@@ -181,10 +181,7 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
     if (line === undefined) {
       break;
     }
-    if (
-      line.trim() === UNTRUSTED_CONTEXT_HEADER &&
-      lines[index + 1]?.trim() === ACTIVE_MEMORY_OPEN_TAG
-    ) {
+    if (line.trim() === CONTEXT_HEADER && lines[index + 1]?.trim() === ACTIVE_MEMORY_OPEN_TAG) {
       let closeIndex = -1;
       for (let probe = index + 2; probe < lines.length; probe += 1) {
         if (lines[probe]?.trim() === ACTIVE_MEMORY_CLOSE_TAG) {
