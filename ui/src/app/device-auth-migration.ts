@@ -85,6 +85,7 @@ export function createDeviceAuthMigrationController(params: {
         !client ||
         !requestId ||
         !params.gateway.snapshot.connected ||
+        !params.isCurrent(client, epoch) ||
         snapshot.deviceAuthMigrationBusy ||
         disposed
       ) {
