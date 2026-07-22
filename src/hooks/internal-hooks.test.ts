@@ -116,6 +116,20 @@ describe("hooks", () => {
       expect(specificHandler).toHaveBeenCalledWith(event);
     });
 
+    it("should trigger handlers registered with underscore variant", async () => {
+      const handler = vi.fn();
+      registerInternalHook("message_sending", handler);
+
+      const event = createInternalHookEvent("message", "sending", "test-session", {
+        to: "+1234567890",
+        content: "hello",
+        channelId: "telegram",
+      });
+      await triggerInternalHook(event);
+
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+
     it("should handle async handlers", async () => {
       const handler = vi.fn(async () => {
         await Promise.resolve();
