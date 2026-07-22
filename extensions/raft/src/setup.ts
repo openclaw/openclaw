@@ -19,7 +19,7 @@ import {
   type ResolvedRaftAccount,
 } from "./accounts.js";
 
-type RaftSetupInput = ChannelSetupInput & {
+export type RaftSetupInput = ChannelSetupInput & {
   profile?: string;
 };
 

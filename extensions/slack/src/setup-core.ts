@@ -35,7 +35,7 @@ import {
 
 const t = createSetupTranslator();
 
-type SlackSetupInput = ChannelSetupInput & {
+export type SlackSetupInput = ChannelSetupInput & {
   botToken?: string;
   appToken?: string;
   userToken?: string;

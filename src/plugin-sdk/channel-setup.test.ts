@@ -20,12 +20,11 @@ describe("ChannelSetupInput", () => {
 
     expectTypeOf<ChannelSetupInput["botToken"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ChannelSetupInput["appToken"]>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ChannelSetupInput["signalNumber"]>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ChannelSetupInput["homeserver"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<ChannelSetupInput["mode"]>().toEqualTypeOf<
       "socket" | "http" | "relay" | undefined
     >();
-    expectTypeOf<ChannelSetupInput["identity"]>().toEqualTypeOf<"bot" | "user" | undefined>();
+    expectTypeOf<ChannelSetupInput["privateKey"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["password"]>().toEqualTypeOf<string | undefined>();
 
     const assignable: ChannelSetupInput = {} as ThirdPartySetupInput;
     expectTypeOf(assignable).toEqualTypeOf<ChannelSetupInput>();

@@ -18,6 +18,7 @@ import {
   applyClickClackCredentialConfig,
   clickClackSetupAdapter,
   normalizeClickClackBaseUrl,
+  type ClickClackSetupInput,
 } from "./setup-core.js";
 
 // Structural stand-in for the internal claim error: the setup formatter
@@ -29,7 +30,7 @@ function makeClaimError(status: number, detail: string): Error {
 function validate(params: {
   cfg?: OpenClawConfig;
   accountId?: string;
-  input: Parameters<NonNullable<typeof clickClackSetupAdapter.validateInput>>[0]["input"];
+  input: ClickClackSetupInput;
 }) {
   return clickClackSetupAdapter.validateInput?.({
     cfg: params.cfg ?? {},
@@ -38,12 +39,7 @@ function validate(params: {
   });
 }
 
-async function prepare(
-  input: Parameters<
-    NonNullable<typeof clickClackSetupAdapter.prepareAccountConfigInput>
-  >[0]["input"],
-  cfg: OpenClawConfig = {},
-) {
+async function prepare(input: ClickClackSetupInput, cfg: OpenClawConfig = {}) {
   return await clickClackSetupAdapter.prepareAccountConfigInput?.({
     cfg,
     accountId: DEFAULT_ACCOUNT_ID,
@@ -331,7 +327,7 @@ describe("ClickClack setup adapter", () => {
           defaultTo: " channel:general ",
           allowFrom: ["*"],
           agentActivity: true,
-        },
+        } as ClickClackSetupInput,
       }),
     ).toEqual({
       channels: {
@@ -432,7 +428,7 @@ describe("ClickClack setup adapter", () => {
           token: "ccb_default",
           baseUrl: "https://clickclack.example/",
           workspace: " default ",
-        },
+        } as ClickClackSetupInput,
       }),
     ).toEqual({
       channels: {
@@ -455,7 +451,7 @@ describe("ClickClack setup adapter", () => {
           tokenFile: "/run/secrets/clickclack",
           baseUrl: "https://work.clickclack.example/",
           workspace: "wsp_work",
-        },
+        } as ClickClackSetupInput,
       }),
     ).toEqual({
       channels: {
@@ -485,7 +481,7 @@ describe("ClickClack setup adapter", () => {
           useEnv: true,
           baseUrl: "https://clickclack.example/",
           workspace: "default",
-        },
+        } as ClickClackSetupInput,
       }),
     ).toEqual({
       channels: {
@@ -522,7 +518,7 @@ describe("ClickClack setup adapter", () => {
         token: "ccb_new",
         baseUrl: "https://clickclack.example",
         workspace: "default",
-      },
+      } as ClickClackSetupInput,
     });
     expect(withToken.channels?.clickclack).toMatchObject({ token: "ccb_new" });
     expect(withToken.channels?.clickclack).not.toHaveProperty("tokenFile");
@@ -541,7 +537,7 @@ describe("ClickClack setup adapter", () => {
         tokenFile: "/run/secrets/new-token",
         baseUrl: "https://clickclack.example",
         workspace: "default",
-      },
+      } as ClickClackSetupInput,
     });
     expect(withFile.channels?.clickclack).toMatchObject({
       tokenFile: "/run/secrets/new-token",
@@ -584,7 +580,7 @@ describe("ClickClack setup adapter", () => {
         token: "ccb_work",
         baseUrl: "https://clickclack.example",
         workspace: "work",
-      },
+      } as ClickClackSetupInput,
     });
     expect(namedWithToken.channels?.clickclack).not.toHaveProperty("tokenFile");
     expect(namedWithToken.channels?.clickclack?.accounts).toMatchObject({
