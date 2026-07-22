@@ -92,7 +92,7 @@ export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
     providerConnected: boolean;
     realtimeReady: boolean;
   }): RealtimeVoiceSessionHarnessHealth;
-  handleBargeIn(options: RealtimeVoiceBargeInOptions, flushOutput: () => void): void;
+  handleBargeIn(options: RealtimeVoiceBargeInOptions, flushOutput?: () => void): void;
   isLikelyAssistantEchoTranscript(text: string): boolean;
   isOutputPlaybackWindowActive(): boolean;
   recordInputAudio(audio: Buffer): boolean;
@@ -107,6 +107,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   talkback?: Omit<RealtimeVoiceAgentTalkbackQueueParams, "isStopped">;
   forcedConsults?: RealtimeVoiceForcedConsultCoordinatorOptions;
   echoSuppression?: RealtimeVoiceSessionHarnessEchoSuppression;
+  transcriptLookbackMs?: number;
+  captureBridgeEvents?: boolean;
 }): RealtimeVoiceSessionHarness<TForcedConsultContext> {
   let closed = false;
   let bridge: RealtimeVoiceBridgeSession | undefined;
@@ -121,6 +123,8 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   const transcript: RealtimeVoiceTranscriptEntry[] = [];
   const bridgeEvents: RealtimeVoiceBridgeEventLogEntry[] = [];
   const outputActivity = createRealtimeVoiceOutputActivityTracker();
+  const transcriptLookbackMs =
+    params.transcriptLookbackMs ?? params.echoSuppression?.transcriptLookbackMs;
   const forcedConsults = createRealtimeVoiceForcedConsultCoordinator<TForcedConsultContext>(
     params.forcedConsults,
   );
@@ -173,7 +177,9 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
           bridgeParams.onTranscript?.(role, text, isFinal);
         },
         onEvent: (event) => {
-          recordRealtimeVoiceBridgeEvent(bridgeEvents, event);
+          if (params.captureBridgeEvents !== false) {
+            recordRealtimeVoiceBridgeEvent(bridgeEvents, event);
+          }
           bridgeParams.onEvent?.(event);
         },
       });
@@ -218,18 +224,18 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       suppressInputUntilMs = 0;
       const flushGeneration = outputFlushGeneration;
       bridge?.handleBargeIn(options);
-      if (flushGeneration === outputFlushGeneration) {
+      if (fallbackFlush && flushGeneration === outputFlushGeneration) {
         flushOutput(fallbackFlush);
       }
     },
     isLikelyAssistantEchoTranscript(text) {
-      return params.echoSuppression
-        ? isLikelyRealtimeVoiceAssistantEchoTranscript({
+      return transcriptLookbackMs === undefined
+        ? false
+        : isLikelyRealtimeVoiceAssistantEchoTranscript({
             transcript,
             text,
-            lookbackMs: params.echoSuppression.transcriptLookbackMs,
-          })
-        : false;
+            lookbackMs: transcriptLookbackMs,
+          });
     },
     isOutputPlaybackWindowActive() {
       return Date.now() <= Math.max(lastOutputPlayableUntilMs, suppressInputUntilMs);
