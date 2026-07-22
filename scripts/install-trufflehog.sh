@@ -24,6 +24,17 @@ run_as_root() {
   sudo "$@"
 }
 
+ensure_trufflehog_bin_dir() {
+  if [[ -d "$trufflehog_bin_dir" ]]; then
+    return 0
+  fi
+  if [[ -e "$trufflehog_bin_dir" ]]; then
+    log "install path exists but is not a directory: $trufflehog_bin_dir"
+    return 1
+  fi
+  run_as_root install -d -m 0755 "$trufflehog_bin_dir"
+}
+
 trufflehog_arch() {
   case "$1" in
     x86_64 | amd64) printf '%s\n' "amd64" ;;
@@ -92,7 +103,7 @@ install_trufflehog() {
     return 1
   fi
 
-  run_as_root install -d -m 0755 "$trufflehog_bin_dir"
+  ensure_trufflehog_bin_dir
   candidate="$(run_as_root mktemp "${target}.tmp.XXXXXX")"
   if ! run_as_root install -m 0755 "$tmp_dir/trufflehog" "$candidate" ||
     ! trufflehog_binary_ready "$candidate" ||

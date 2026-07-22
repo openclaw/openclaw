@@ -113,6 +113,28 @@ describe("scripts/install-trufflehog.sh", () => {
     expect(existsSync(sudoMarker)).toBe(false);
   });
 
+  it("does not change permissions on an existing writable install directory", () => {
+    const root = makeTempDir(tempDirs, "openclaw-trufflehog-existing-bin-");
+    const binDir = join(root, "bin");
+    const fakeBin = join(root, "fake-bin");
+    const installMarker = join(root, "install-used");
+    mkdirSync(binDir);
+    mkdirSync(fakeBin);
+    const fakeInstall = join(fakeBin, "install");
+    writeFileSync(
+      fakeInstall,
+      `#!/bin/sh\nprintf used >${JSON.stringify(installMarker)}\nexit 99\n`,
+    );
+    chmodSync(fakeInstall, 0o755);
+
+    runBash(`source ${SCRIPT}\nensure_trufflehog_bin_dir`, {
+      OPENCLAW_TRUFFLEHOG_BIN_DIR: binDir,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(existsSync(installMarker)).toBe(false);
+  });
+
   it("verifies the archive before extraction and replaces the binary atomically", () => {
     const script = readFileSync(SCRIPT, "utf8");
     expect(script).toContain('"$binary" --no-update --version');
