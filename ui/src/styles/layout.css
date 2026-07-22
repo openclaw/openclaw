@@ -1936,7 +1936,9 @@ html.openclaw-native-macos
   height: 100%;
 }
 
-.viewer-avatar__fallback {
+/* Two classes on purpose: `.viewer-avatar > span` below sets display and
+   outranks a lone class, which showed image + initials side by side. */
+.viewer-avatar > .viewer-avatar__fallback {
   display: none;
 }
 
