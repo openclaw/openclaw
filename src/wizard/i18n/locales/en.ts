@@ -165,6 +165,9 @@ export const en = {
       scanDisclosure:
         "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
       scanning: "Scanning installed apps…",
+      scanningCandidate: "Found 1 app — searching plugins and skills for {sample}…",
+      scanningCandidates: "Found {count} apps — searching plugins and skills for {sample}…",
+      scanningMatch: "Asking your model to pick the best matches…",
       select: "Install recommended plugins and skills",
       skillTrust: "Trust and install the ClawHub skill {name}?",
       skipped: "App recommendations skipped: {reason}",
