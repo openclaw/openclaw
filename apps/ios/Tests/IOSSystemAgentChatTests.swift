@@ -128,8 +128,9 @@ struct IOSSystemAgentChatTests {
         let model = IOSSystemAgentChatModel(
             accessState: .ready,
             routeIdentity: "gateway-a",
-            captureRoute: {
+            captureRoute: { _ in
                 IOSSystemAgentChatRouteLease(
+                    route: nil,
                     request: { method, params, timeoutMs in
                         await suspended.perform(method: method, params: params, timeoutMs: timeoutMs)
                     },
@@ -250,8 +251,9 @@ struct IOSSystemAgentChatTests {
         let model = IOSSystemAgentChatModel(
             accessState: .ready,
             routeIdentity: "gateway-a",
-            captureRoute: {
+            captureRoute: { _ in
                 IOSSystemAgentChatRouteLease(
+                    route: nil,
                     request: { _, _, _ in
                         throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
                     },
@@ -268,8 +270,9 @@ struct IOSSystemAgentChatTests {
         let model = IOSSystemAgentChatModel(
             accessState: .ready,
             routeIdentity: "gateway-a",
-            captureRoute: {
+            captureRoute: { _ in
                 IOSSystemAgentChatRouteLease(
+                    route: nil,
                     request: { method, params, timeoutMs in
                         await suspended.perform(method: method, params: params, timeoutMs: timeoutMs)
                     },
@@ -387,7 +390,10 @@ struct IOSSystemAgentChatTests {
         #expect(source.contains("guard phase == .active else"))
         #expect(source.contains("self.cancelSystemAgentSupportRetry()"))
         #expect(source.contains(".accessibilityLabel(\"Enter secret\")"))
+        #expect(source.contains("currentRoute(ifGatewayID: gatewayID)"))
         #expect(source.contains("supportsServerMethod(\n            \"openclaw.chat\""))
+        #expect(source.contains("matchesGatewayIdentity(gatewayID)"))
+        #expect(source.contains("cachedSystemAgentMethodSupport(gatewayID: gatewayID, route: route)"))
         #expect(source.contains("isCurrentSystemAgentSupportCheck(checkID, gatewayID: gatewayID)"))
         #expect(source.contains("currentRoute == route"))
         #expect(source.contains("retrySystemAgentSupportCheck(checkID, gatewayID: gatewayID)"))
@@ -434,8 +440,9 @@ struct IOSSystemAgentChatTests {
         IOSSystemAgentChatModel(
             accessState: accessState,
             routeIdentity: "gateway-a",
-            captureRoute: {
+            captureRoute: { _ in
                 IOSSystemAgentChatRouteLease(
+                    route: nil,
                     request: { method, params, timeoutMs in
                         try await recorder.perform(method: method, params: params, timeoutMs: timeoutMs)
                     },

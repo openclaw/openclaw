@@ -4,12 +4,14 @@ import OpenClawKit
 import SwiftUI
 
 struct IOSSystemAgentChatRouteLease: Sendable {
+    let route: GatewayNodeSessionRoute?
     let request: @Sendable (_ method: String, _ params: [String: AnyCodable], _ timeoutMs: Double) async throws -> Data
     let isCurrent: @Sendable () async -> Bool
 
-    static func live(session: GatewayNodeSession) async -> Self? {
-        guard let route = await session.currentRoute() else { return nil }
+    static func live(session: GatewayNodeSession, gatewayID: String?) async -> Self? {
+        guard let route = await session.currentRoute(ifGatewayID: gatewayID) else { return nil }
         return Self(
+            route: route,
             request: { method, params, timeoutMs in
                 try await session.request(
                     method: method,
@@ -19,7 +21,7 @@ struct IOSSystemAgentChatRouteLease: Sendable {
                     distinguishPreDispatchRouteChange: true)
             },
             isCurrent: {
-                await session.currentRoute() == route
+                await session.currentRoute(ifGatewayID: gatewayID) == route
             })
     }
 }
@@ -63,7 +65,7 @@ final class IOSSystemAgentChatModel {
         let agentID: String?
     }
 
-    typealias CaptureRoute = @Sendable () async -> IOSSystemAgentChatRouteLease?
+    typealias CaptureRoute = @Sendable (_ gatewayID: String?) async -> IOSSystemAgentChatRouteLease?
 
     private struct ChatResult: Decodable {
         let reply: String
@@ -92,6 +94,7 @@ final class IOSSystemAgentChatModel {
     private var started = false
     private var requestGeneration: UInt64? = 0
     private var requestTask: Task<Void, Never>?
+    private var systemAgentMethodSupport: (gatewayID: String?, route: GatewayNodeSessionRoute, value: Bool)?
 
     init(
         accessState: AccessState,
@@ -109,14 +112,15 @@ final class IOSSystemAgentChatModel {
     convenience init(appModel: NodeAppModel) {
         let session = appModel.operatorSession
         let captureRoute: CaptureRoute = if appModel.isScreenshotFixtureModeEnabled {
-            {
+            { _ in
                 IOSSystemAgentChatRouteLease(
+                    route: nil,
                     request: { _, params, _ in try Self.screenshotFixtureReply(params: params) },
                     isCurrent: { true })
             }
         } else {
-            {
-                await IOSSystemAgentChatRouteLease.live(session: session)
+            { gatewayID in
+                await IOSSystemAgentChatRouteLease.live(session: session, gatewayID: gatewayID)
             }
         }
         self.init(
@@ -195,6 +199,7 @@ final class IOSSystemAgentChatModel {
 
         if routeChanged {
             self.invalidateCurrentRequest()
+            self.clearSystemAgentMethodSupport()
             self.rotateConversation()
             return
         }
@@ -215,6 +220,33 @@ final class IOSSystemAgentChatModel {
     }
 
     @discardableResult
+    func matchesGatewayIdentity(_ gatewayID: String?) -> Bool {
+        self.routeIdentity == gatewayID
+    }
+
+    func cachedSystemAgentMethodSupport(
+        gatewayID: String?,
+        route: GatewayNodeSessionRoute) -> Bool?
+    {
+        guard let systemAgentMethodSupport,
+              systemAgentMethodSupport.gatewayID == gatewayID,
+              systemAgentMethodSupport.route == route
+        else { return nil }
+        return systemAgentMethodSupport.value
+    }
+
+    func cacheSystemAgentMethodSupport(
+        gatewayID: String?,
+        route: GatewayNodeSessionRoute,
+        value: Bool)
+    {
+        self.systemAgentMethodSupport = (gatewayID, route, value)
+    }
+
+    func clearSystemAgentMethodSupport() {
+        self.systemAgentMethodSupport = nil
+    }
+
     private func rotateConversation() {
         self.started = false
         self.routeLease = nil
@@ -338,7 +370,7 @@ final class IOSSystemAgentChatModel {
         if let routeLease = self.routeLease {
             return routeLease
         }
-        guard let routeLease = await self.captureRoute() else {
+        guard let routeLease = await self.captureRoute(self.routeIdentity) else {
             guard self.isCurrentRequest(generation) else { throw CancellationError() }
             throw NSError(
                 domain: "Gateway",
@@ -448,9 +480,6 @@ struct SettingsSystemAgentChatScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: IOSSystemAgentChatModel
-    @State private var systemAgentMethodSupported: Bool?
-    @State private var systemAgentSupportGatewayID: String?
-    @State private var systemAgentSupportRoute: GatewayNodeSessionRoute?
     @State private var systemAgentSupportCheckID = UUID()
     @State private var systemAgentSupportRetryTask: Task<Void, Never>?
     @State private var isScreenActive = false
@@ -715,9 +744,7 @@ struct SettingsSystemAgentChatScreen: View {
     }
 
     private func enterCheckingSystemAgentSupport(gatewayID: String?) {
-        self.systemAgentMethodSupported = nil
-        self.systemAgentSupportGatewayID = nil
-        self.systemAgentSupportRoute = nil
+        self.model.clearSystemAgentMethodSupport()
         self.model.updateAccess(
             connected: self.appModel.isOperatorGatewayConnected,
             hasAdminScope: self.appModel.hasOperatorAdminScope,
@@ -748,21 +775,21 @@ struct SettingsSystemAgentChatScreen: View {
         let hasAdminScope = self.appModel.hasOperatorAdminScope
         let isFixture = self.appModel.isScreenshotFixtureModeEnabled
 
-        if forceRefresh || self.systemAgentSupportGatewayID != gatewayID || !connected || !hasAdminScope {
-            self.systemAgentMethodSupported = isFixture ? true : nil
-            self.systemAgentSupportGatewayID = nil
-            self.systemAgentSupportRoute = nil
+        if forceRefresh || !connected || !hasAdminScope || !self.model.matchesGatewayIdentity(gatewayID) {
+            self.enterCheckingSystemAgentSupport(gatewayID: gatewayID)
+        }
+
+        guard connected, hasAdminScope else { return }
+        if isFixture {
             self.model.updateAccess(
                 connected: connected,
                 hasAdminScope: hasAdminScope,
-                supportsSystemAgent: self.systemAgentMethodSupported,
+                supportsSystemAgent: true,
                 routeIdentity: gatewayID)
-        }
-
-        guard !isFixture, connected, hasAdminScope else {
             self.model.startIfNeeded()
             return
         }
+
         guard let route = await self.appModel.operatorSession.currentRoute(ifGatewayID: gatewayID) else {
             guard self.isCurrentSystemAgentSupportCheck(checkID, gatewayID: gatewayID) else { return }
             self.enterCheckingSystemAgentSupport(gatewayID: gatewayID)
@@ -772,9 +799,7 @@ struct SettingsSystemAgentChatScreen: View {
         guard self.isCurrentSystemAgentSupportCheck(checkID, gatewayID: gatewayID) else { return }
 
         if !forceRefresh,
-           self.systemAgentSupportGatewayID == gatewayID,
-           self.systemAgentSupportRoute == route,
-           let support = self.systemAgentMethodSupported
+           let support = self.model.cachedSystemAgentMethodSupport(gatewayID: gatewayID, route: route)
         {
             self.model.updateAccess(
                 connected: connected,
@@ -785,12 +810,7 @@ struct SettingsSystemAgentChatScreen: View {
             return
         }
 
-        self.systemAgentMethodSupported = nil
-        self.model.updateAccess(
-            connected: connected,
-            hasAdminScope: hasAdminScope,
-            supportsSystemAgent: nil,
-            routeIdentity: gatewayID)
+        self.enterCheckingSystemAgentSupport(gatewayID: gatewayID)
         let support = await self.appModel.operatorSession.supportsServerMethod(
             "openclaw.chat",
             ifCurrentRoute: route)
@@ -803,6 +823,7 @@ struct SettingsSystemAgentChatScreen: View {
         }
         guard self.isCurrentSystemAgentSupportCheck(checkID, gatewayID: gatewayID) else { return }
         guard currentRoute == route else {
+            self.enterCheckingSystemAgentSupport(gatewayID: gatewayID)
             self.retrySystemAgentSupportCheck(checkID, gatewayID: gatewayID)
             return
         }
@@ -810,9 +831,7 @@ struct SettingsSystemAgentChatScreen: View {
             self.retrySystemAgentSupportCheck(checkID, gatewayID: gatewayID)
             return
         }
-        self.systemAgentMethodSupported = support
-        self.systemAgentSupportGatewayID = gatewayID
-        self.systemAgentSupportRoute = route
+        self.model.cacheSystemAgentMethodSupport(gatewayID: gatewayID, route: route, value: support)
         self.model.updateAccess(
             connected: self.appModel.isOperatorGatewayConnected,
             hasAdminScope: self.appModel.hasOperatorAdminScope,
