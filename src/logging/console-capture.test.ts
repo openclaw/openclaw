@@ -125,6 +125,35 @@ describe("enableConsoleCapture", () => {
     expect(firstArg.endsWith(` ${payload}`)).toBe(true);
   });
 
+  it("wraps console passthrough output when console style is JSON", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "json" });
+    const warn = vi.fn();
+    console.warn = warn;
+    enableConsoleCapture();
+
+    console.warn("tool failed", { attempt: 1 });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+      level: "warn",
+      message: "tool failed { attempt: 1 }",
+    });
+  });
+
+  it("wraps forced stderr passthrough output when console style is JSON", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "error", consoleStyle: "json" });
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    routeLogsToStderr();
+    enableConsoleCapture();
+
+    console.error(`Authorization: Bearer ${secret}`);
+
+    expect(stderrWrite).toHaveBeenCalledTimes(1);
+    const written = firstMockArgAsString(stderrWrite);
+    expect(JSON.parse(written)).toMatchObject({ level: "error" });
+    expect(written).not.toContain(secret);
+  });
+
   it("keeps diagnostics on stderr while runtime JSON stays on stdout", () => {
     setLoggerOverride({ level: "info", file: tempLogPath() });
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);

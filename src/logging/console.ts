@@ -185,6 +185,16 @@ export function formatConsoleTimestamp(style: ConsoleStyle): string {
   return formatTimestamp(now, { style: "long" });
 }
 
+function formatJsonConsolePassthrough(level: LogLevel, message: string): string {
+  return redactSensitiveText(
+    JSON.stringify({
+      time: formatConsoleTimestamp("json"),
+      level,
+      message: stripAnsi(message),
+    }),
+  );
+}
+
 function hasTimestampPrefix(value: string): boolean {
   return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
     value,
@@ -255,11 +265,13 @@ export function enableConsoleCapture(): void {
         return;
       }
       const trimmed = stripAnsi(formatted).trimStart();
+      const consoleStyle = getConsoleSettings().style;
       const shouldPrefixTimestamp =
-        loggingState.consoleTimestampPrefix && trimmed.length > 0 && !hasTimestampPrefix(trimmed);
-      const timestamp = shouldPrefixTimestamp
-        ? formatConsoleTimestamp(getConsoleSettings().style)
-        : "";
+        consoleStyle !== "json" &&
+        loggingState.consoleTimestampPrefix &&
+        trimmed.length > 0 &&
+        !hasTimestampPrefix(trimmed);
+      const timestamp = shouldPrefixTimestamp ? formatConsoleTimestamp(consoleStyle) : "";
       try {
         const resolvedLogger = getLoggerLazy();
         // Map console levels to file logger
@@ -283,7 +295,12 @@ export function enableConsoleCapture(): void {
         // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
           const redacted = redactSensitiveText(formatted);
-          const line = timestamp ? `${timestamp} ${redacted}` : redacted;
+          const line =
+            consoleStyle === "json"
+              ? formatJsonConsolePassthrough(level, formatted)
+              : timestamp
+                ? `${timestamp} ${redacted}`
+                : redacted;
           process.stderr.write(`${line}\n`);
         } catch (err) {
           if (isEpipeError(err)) {
@@ -294,6 +311,10 @@ export function enableConsoleCapture(): void {
       } else {
         try {
           const redacted = redactSensitiveText(formatted);
+          if (consoleStyle === "json") {
+            orig.call(console, formatJsonConsolePassthrough(level, formatted));
+            return;
+          }
           if (!timestamp) {
             if (args.length === 0) {
               orig.apply(console, args as []);

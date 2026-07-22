@@ -471,7 +471,19 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         ) {
           return;
         }
-        writeConsoleLine("info", message);
+        const consoleSettings = getConsoleSettings();
+        writeConsoleLine(
+          "info",
+          consoleSettings.style === "json"
+            ? formatConsoleLine({
+                level: "info",
+                subsystem: resolvedSubsystem,
+                message,
+                style: "json",
+              })
+            : message,
+          { redacted: consoleSettings.style === "json" },
+        );
       }
     },
     child(name) {

@@ -6,15 +6,15 @@ import { getLogger } from "./logging/logger.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
-const subsystemPrefixRe = /^([a-z][a-z0-9-]{1,20}):\s+(.*)$/i;
+const subsystemPrefixRe = /^(?:\[([a-z][a-z0-9-]{1,20})\]|([a-z][a-z0-9-]{1,20}):)\s+(.*)$/i;
 
 function splitSubsystem(message: string) {
   const match = message.match(subsystemPrefixRe);
   if (!match) {
     return null;
   }
-  const subsystem = match.at(1);
-  const rest = match.at(2);
+  const subsystem = match.at(1) ?? match.at(2);
+  const rest = match.at(3);
   if (subsystem === undefined || rest === undefined) {
     return null;
   }
