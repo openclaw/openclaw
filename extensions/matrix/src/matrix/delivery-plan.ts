@@ -53,6 +53,7 @@ export type MatrixDeliveryPlanRegistration = {
 
 export type MatrixDeliveryIdentity = {
   queueId: string;
+  queueStateDir?: string;
   payloadIndex: number;
   partIndex: number;
 };
@@ -74,22 +75,26 @@ function requireDeliveryIndex(value: number, label: string): number {
   return value;
 }
 
-function queueDigest(queueId: string): string {
-  return createHash("sha256").update(queueId).digest("hex");
+function queueLocationDigest(identity: Pick<MatrixDeliveryIdentity, "queueId" | "queueStateDir">) {
+  return createHash("sha256")
+    .update(JSON.stringify([identity.queueId, identity.queueStateDir ?? null]))
+    .digest("hex");
 }
 
 function planPrefix(identity: MatrixDeliveryIdentity): string {
   const payloadIndex = requireDeliveryIndex(identity.payloadIndex, "payload index");
   const partIndex = requireDeliveryIndex(identity.partIndex, "part index");
-  return `${queueDigest(identity.queueId)}.${payloadIndex}.${partIndex}`;
+  return `${queueLocationDigest(identity)}.${payloadIndex}.${partIndex}`;
 }
 
-function payloadPrefix(queueId: string, payloadIndex: number): string {
-  return `${queueDigest(queueId)}.${requireDeliveryIndex(payloadIndex, "payload index")}.`;
+function payloadPrefix(
+  identity: Pick<MatrixDeliveryIdentity, "queueId" | "queueStateDir" | "payloadIndex">,
+): string {
+  return `${queueLocationDigest(identity)}.${requireDeliveryIndex(identity.payloadIndex, "payload index")}.`;
 }
 
-function queuePrefix(queueId: string): string {
-  return `${queueDigest(queueId)}.`;
+function queuePrefix(identity: Pick<MatrixDeliveryIdentity, "queueId" | "queueStateDir">): string {
+  return `${queueLocationDigest(identity)}.`;
 }
 
 function planHeaderKey(identity: MatrixDeliveryIdentity): string {
@@ -165,6 +170,8 @@ export function createMatrixDeliveryTransactionId(
   const digest = createHash("sha256")
     .update(identity.queueId)
     .update("\0")
+    .update(identity.queueStateDir ?? "")
+    .update("\0")
     .update(String(requireDeliveryIndex(identity.payloadIndex, "payload index")))
     .update("\0")
     .update(String(requireDeliveryIndex(identity.partIndex, "part index")))
@@ -191,6 +198,7 @@ export async function loadMatrixDeliveryPlan(params: {
   }
   if (
     plan.queueId !== params.identity.queueId ||
+    plan.queueStateDir !== params.identity.queueStateDir ||
     plan.accountId !== (params.accountId ?? "") ||
     plan.payloadIndex !== params.identity.payloadIndex ||
     plan.partIndex !== params.identity.partIndex
@@ -237,7 +245,6 @@ export async function loadMatrixDeliveryPlan(params: {
 
 export async function persistMatrixDeliveryPlan(params: {
   identity: MatrixDeliveryIdentity;
-  queueStateDir?: string;
   accountId?: string;
   roomId: string;
   transactionScopeId: string;
@@ -258,7 +265,9 @@ export async function persistMatrixDeliveryPlan(params: {
     kind: "plan",
     version: DELIVERY_PLAN_VERSION,
     queueId: params.identity.queueId,
-    ...(params.queueStateDir !== undefined ? { queueStateDir: params.queueStateDir } : {}),
+    ...(params.identity.queueStateDir !== undefined
+      ? { queueStateDir: params.identity.queueStateDir }
+      : {}),
     accountId: params.accountId ?? "",
     roomId: params.roomId,
     wireEventType: params.wireEventType,
@@ -373,6 +382,7 @@ export async function pruneMatrixTerminalDeliveryPlans(): Promise<MatrixDelivery
       entry.key !==
       planHeaderKey({
         queueId: plan.queueId,
+        ...(plan.queueStateDir !== undefined ? { queueStateDir: plan.queueStateDir } : {}),
         payloadIndex: plan.payloadIndex,
         partIndex: plan.partIndex,
       })
@@ -421,10 +431,11 @@ export async function ensureMatrixDeliveryPlanGarbageCollection(): Promise<Matri
 
 export async function deleteMatrixDeliveryPlansForPayload(params: {
   queueId: string;
+  queueStateDir?: string;
   payloadIndex: number;
 }): Promise<void> {
   const store = createDeliveryPlanStore();
-  const prefix = payloadPrefix(params.queueId, params.payloadIndex);
+  const prefix = payloadPrefix(params);
   try {
     const entries = await store.entries();
     await Promise.all(
@@ -445,17 +456,17 @@ export async function cleanupMatrixDeliveryPlansAfterTerminalFailure(ctx: {
   deliveryQueueStateDir?: string;
 }): Promise<void> {
   const store = createDeliveryPlanStore();
-  const prefix = queuePrefix(ctx.queueId);
+  const prefix = queuePrefix({
+    queueId: ctx.queueId,
+    ...(ctx.deliveryQueueStateDir !== undefined
+      ? { queueStateDir: ctx.deliveryQueueStateDir }
+      : {}),
+  });
   try {
     const entries = await store.entries();
     await Promise.all(
       entries
-        .filter(
-          (entry) =>
-            entry.key.startsWith(prefix) &&
-            (!isDeliveryPlan(entry.value) ||
-              entry.value.queueStateDir === ctx.deliveryQueueStateDir),
-        )
+        .filter((entry) => entry.key.startsWith(prefix))
         .map(async (entry) => await store.delete(entry.key)),
     );
   } catch (error) {
@@ -466,6 +477,7 @@ export async function cleanupMatrixDeliveryPlansAfterTerminalFailure(ctx: {
 
 export async function cleanupMatrixDeliveryPlanAfterCommit(ctx: {
   deliveryQueueId?: string;
+  deliveryQueueStateDir?: string;
   deliveryPayloadIndex?: number;
 }): Promise<void> {
   if (ctx.deliveryQueueId === undefined || ctx.deliveryPayloadIndex === undefined) {
@@ -474,6 +486,9 @@ export async function cleanupMatrixDeliveryPlanAfterCommit(ctx: {
   try {
     await deleteMatrixDeliveryPlansForPayload({
       queueId: ctx.deliveryQueueId,
+      ...(ctx.deliveryQueueStateDir !== undefined
+        ? { queueStateDir: ctx.deliveryQueueStateDir }
+        : {}),
       payloadIndex: ctx.deliveryPayloadIndex,
     });
   } catch (error) {
@@ -499,8 +514,14 @@ async function requireMatrixTransactionScopeId(client: MatrixClient): Promise<st
   return transactionScopeId;
 }
 
-async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
-  const prefix = queuePrefix(queueId);
+async function loadQueuePlans(
+  queueId: string,
+  queueStateDir?: string,
+): Promise<MatrixDeliveryPlan[]> {
+  const prefix = queuePrefix({
+    queueId,
+    ...(queueStateDir !== undefined ? { queueStateDir } : {}),
+  });
   const entries = await createDeliveryPlanStore().entries();
   return entries
     .filter((entry) => entry.key.startsWith(prefix) && entry.key.endsWith(".plan"))
@@ -516,7 +537,7 @@ export async function reconcileMatrixUnknownSend(
   ctx: ChannelMessageUnknownSendContext,
 ): Promise<ChannelMessageUnknownSendReconciliationResult> {
   try {
-    const plans = await loadQueuePlans(ctx.queueId);
+    const plans = await loadQueuePlans(ctx.queueId, ctx.deliveryQueueStateDir);
     if (plans.length === 0) {
       if (ctx.durableDeliveryProtocol !== MATRIX_DURABLE_DELIVERY_PROTOCOL) {
         return {
@@ -542,7 +563,11 @@ export async function reconcileMatrixUnknownSend(
           ctx.payloadSourceIndexes ?? ctx.payloads.map((_, index) => index),
         );
         for (const plan of plans) {
-          if (plan.queueId !== ctx.queueId || plan.accountId !== (ctx.accountId ?? "")) {
+          if (
+            plan.queueId !== ctx.queueId ||
+            plan.queueStateDir !== ctx.deliveryQueueStateDir ||
+            plan.accountId !== (ctx.accountId ?? "")
+          ) {
             throw new MatrixDeliveryPlanInvariantError(
               "Matrix durable delivery plan identity no longer matches the queued delivery",
             );
@@ -553,6 +578,7 @@ export async function reconcileMatrixUnknownSend(
             await createDeliveryPlanStore().delete(
               planHeaderKey({
                 queueId: plan.queueId,
+                ...(plan.queueStateDir !== undefined ? { queueStateDir: plan.queueStateDir } : {}),
                 payloadIndex: plan.payloadIndex,
                 partIndex: plan.partIndex,
               }),
@@ -568,6 +594,7 @@ export async function reconcileMatrixUnknownSend(
             await createDeliveryPlanStore().delete(
               planHeaderKey({
                 queueId: plan.queueId,
+                ...(plan.queueStateDir !== undefined ? { queueStateDir: plan.queueStateDir } : {}),
                 payloadIndex: plan.payloadIndex,
                 partIndex: plan.partIndex,
               }),
@@ -583,6 +610,7 @@ export async function reconcileMatrixUnknownSend(
             await createDeliveryPlanStore().delete(
               planHeaderKey({
                 queueId: plan.queueId,
+                ...(plan.queueStateDir !== undefined ? { queueStateDir: plan.queueStateDir } : {}),
                 payloadIndex: plan.payloadIndex,
                 partIndex: plan.partIndex,
               }),
@@ -598,6 +626,7 @@ export async function reconcileMatrixUnknownSend(
             await createDeliveryPlanStore().delete(
               planHeaderKey({
                 queueId: plan.queueId,
+                ...(plan.queueStateDir !== undefined ? { queueStateDir: plan.queueStateDir } : {}),
                 payloadIndex: plan.payloadIndex,
                 partIndex: plan.partIndex,
               }),
@@ -620,6 +649,7 @@ export async function reconcileMatrixUnknownSend(
 
 export function resolveMatrixDurableDeliveryIdentity(params: {
   queueId?: string;
+  queueStateDir?: string;
   payloadIndex?: number;
   partIndex?: number;
 }): MatrixDeliveryIdentity | null {
@@ -631,6 +661,7 @@ export function resolveMatrixDurableDeliveryIdentity(params: {
   }
   return {
     queueId: params.queueId,
+    ...(params.queueStateDir !== undefined ? { queueStateDir: params.queueStateDir } : {}),
     payloadIndex: requireDeliveryIndex(params.payloadIndex, "payload index"),
     partIndex: requireDeliveryIndex(params.partIndex, "part index"),
   };

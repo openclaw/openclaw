@@ -121,6 +121,9 @@ describe("Matrix durable delivery plans", () => {
     expect(createMatrixDeliveryTransactionId(identity, 0)).toBe(first);
     expect(createMatrixDeliveryTransactionId({ ...identity, payloadIndex: 1 }, 0)).not.toBe(first);
     expect(createMatrixDeliveryTransactionId({ ...identity, partIndex: 1 }, 0)).not.toBe(first);
+    expect(
+      createMatrixDeliveryTransactionId({ ...identity, queueStateDir: "/other-state" }, 0),
+    ).not.toBe(first);
     expect(createMatrixDeliveryTransactionId(identity, 1)).not.toBe(first);
     expect(first).toMatch(/^oc_[A-Za-z0-9_-]{43}$/);
   });
@@ -207,9 +210,53 @@ describe("Matrix durable delivery plans", () => {
     expect(records.size).toBe(1);
   });
 
+  it("isolates identical queue ids across queue state roots", async () => {
+    const customIdentity = { ...identity, queueStateDir: "/custom-state" };
+    const defaultPlan = await persistMatrixDeliveryPlan({
+      identity,
+      roomId: "!room:example",
+      transactionScopeId: "SCOPE-1",
+      events: [{ receiptKind: "text", content: { msgtype: "m.text", body: "default" } }],
+    });
+    const customPlan = await persistMatrixDeliveryPlan({
+      identity: customIdentity,
+      roomId: "!room:example",
+      transactionScopeId: "SCOPE-1",
+      events: [{ receiptKind: "text", content: { msgtype: "m.text", body: "custom" } }],
+    });
+
+    expect(records.size).toBe(2);
+    expect(defaultPlan.plan.events[0]?.content.body).toBe("default");
+    expect(customPlan.plan.events[0]?.content.body).toBe("custom");
+    expect(customPlan.plan.events[0]?.transactionId).not.toBe(
+      defaultPlan.plan.events[0]?.transactionId,
+    );
+
+    await cleanupMatrixDeliveryPlanAfterCommit({
+      deliveryQueueId: customIdentity.queueId,
+      deliveryQueueStateDir: customIdentity.queueStateDir,
+      deliveryPayloadIndex: customIdentity.payloadIndex,
+    });
+
+    await expect(
+      loadMatrixDeliveryPlan({
+        identity,
+        roomId: "!room:example",
+        transactionScopeId: "SCOPE-1",
+      }),
+    ).resolves.toEqual(defaultPlan.plan);
+    await expect(
+      loadMatrixDeliveryPlan({
+        identity: customIdentity,
+        roomId: "!room:example",
+        transactionScopeId: "SCOPE-1",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("returns replay_safe only when every committed plan matches the active device and room", async () => {
     await persistMatrixDeliveryPlan({
-      identity,
+      identity: { ...identity, queueStateDir: "/custom-state" },
       accountId: "default",
       roomId: "!room:example",
       transactionScopeId: "SCOPE-1",
@@ -228,7 +275,7 @@ describe("Matrix durable delivery plans", () => {
       payloads: [{ text: "hello" }],
     };
     await expect(reconcileMatrixUnknownSend(ctx)).resolves.toEqual({ status: "replay_safe" });
-    await markMatrixDeliveryPlanDispatchStarted(identity);
+    await markMatrixDeliveryPlanDispatchStarted({ ...identity, queueStateDir: "/custom-state" });
 
     const mismatchedClient = {
       getTransactionScopeId: () => "SCOPE-2",
@@ -559,10 +606,10 @@ describe("Matrix durable delivery plans", () => {
       await persistMatrixDeliveryPlan({
         identity: {
           queueId,
+          ...(queueId === "queue-failed" ? { queueStateDir: "/custom-state" } : {}),
           payloadIndex: 0,
           partIndex: 0,
         },
-        ...(queueId === "queue-failed" ? { queueStateDir: "/custom-state" } : {}),
         roomId: "!room:example",
         transactionScopeId: "SCOPE-1",
         events: [{ receiptKind: "text", content: { msgtype: "m.text", body: queueId } }],

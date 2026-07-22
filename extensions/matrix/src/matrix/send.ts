@@ -169,6 +169,7 @@ export async function sendMessageMatrix(
   }
   const durableIdentity = resolveMatrixDurableDeliveryIdentity({
     queueId: opts.deliveryQueueId,
+    queueStateDir: opts.deliveryQueueStateDir,
     payloadIndex: opts.deliveryPayloadIndex,
     partIndex: opts.deliveryPartIndex,
   });
@@ -318,7 +319,6 @@ export async function sendMessageMatrix(
           if (durableIdentity) {
             const registration = await persistMatrixDeliveryPlan({
               identity: durableIdentity,
-              queueStateDir: opts.deliveryQueueStateDir,
               accountId: opts.accountId,
               roomId,
               transactionScopeId: transactionScopeId!,
