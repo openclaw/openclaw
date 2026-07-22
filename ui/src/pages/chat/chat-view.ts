@@ -1,4 +1,3 @@
-// Control UI view renders chat screen composition.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -309,8 +308,7 @@ export function renderChat(props: ChatProps) {
   };
   const sideChatVisible = isSideChatPanelVisible(sideChatProps);
   let chatSection: HTMLElement | null = null;
-  // Nested dragenter/dragleave events must stay balanced so crossing transcript
-  // children does not flicker the pane-level file drop affordance.
+  // Balance nested drag events so transcript children do not flicker the pane drop affordance.
   let attachmentDragDepth = 0;
   const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
     const target = event.currentTarget;
@@ -388,8 +386,7 @@ export function renderChat(props: ChatProps) {
       onSetReply: props.onSetReply,
       onRewindMessage: props.onRewindMessage,
       onForkMessage: props.onForkMessage,
-      // Archived/non-composable sessions must not offer selection actions:
-      // withholding the callback keeps the popup from rendering at all.
+      // Withhold the callback so archived/non-composable sessions show no selection actions.
       onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
       onOpenSession: props.onSessionSelect,
       backgroundTasks: props.backgroundTasks,
