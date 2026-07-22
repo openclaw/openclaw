@@ -394,6 +394,19 @@ describe("imessageApprovalNativeRuntime", () => {
       actionsMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;-;+15551230000");
     });
 
+    it("attests approval sends as host-originated, not delegated", async () => {
+      // #99905: unstamped operations fail closed to "delegated". Approval
+      // delivery targets come from approval routing/config, never model input,
+      // so the send must carry its real authority.
+      await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
+
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        expect.any(String),
+        expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
+      );
+    });
+
     it("sends the hintless prompt and threads a poll under it", async () => {
       const entry = await imessageApprovalNativeRuntime.transport.deliverPending(pollDeliverArgs);
 

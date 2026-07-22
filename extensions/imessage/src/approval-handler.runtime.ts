@@ -155,6 +155,13 @@ function buildIMessageApprovalPollCaption(view: PendingApprovalView): string {
  * the prompt so no bridge call ever delays approval delivery; a failure here
  * leaves the prompt intact and the caller restores the tapback hint.
  *
+ * Conversation-read authority: `chatGuid` is resolved from the approval's own
+ * routing target (origin session or a configured approver), so this read is
+ * host-originated, not delegated. The bridge runtime seam does not yet accept
+ * an attested `conversationReadOrigin` the way `sendMessageIMessage` does; the
+ * safety here rests on the target never being caller-supplied. Route this
+ * through the attested seam once it exists rather than widening the target.
+ *
  * The question stays short on purpose: imsg echoes it as a separate best-effort
  * caption message and the poll payload is capped at 4096 bytes, so the full
  * approval text must remain on the prompt message instead.
@@ -254,6 +261,8 @@ async function recoverIMessageApprovalReactionHint(params: {
   try {
     const result = await sendMessageIMessage(params.target.to, hint, {
       config: params.cfg,
+      // Same host-originated authority as the prompt it follows up.
+      conversationReadOrigin: "direct-operator",
       ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
       replyToId: params.promptMessageId,
     });
@@ -357,6 +366,13 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       const result = await sendMessageIMessage(preparedTarget.to, promptText, {
         config: cfg,
         approvalKind: view.approvalKind,
+        // Approval delivery is host-originated: the target comes from the
+        // approval's own routing (origin session or a configured approver),
+        // never from model input. Attest that so #99905's conversation-read
+        // policy sees the real authority instead of failing closed to
+        // "delegated". If the target ever becomes caller-influenced, this
+        // must go back to delegated.
+        conversationReadOrigin: "direct-operator",
         ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
       });
       // Approval reaction bindings must use the GUID-only id (matches the
