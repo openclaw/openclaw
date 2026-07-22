@@ -1,9 +1,10 @@
-// @vitest-environment node
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
+  subscribeStoredChatOutboxChanges,
   summarizeStoredChatOutboxes,
 } from "./outbox-store.ts";
 
@@ -12,10 +13,44 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("stored outbox summaries", () => {
+  it("bridges matching cross-tab storage changes until the last subscriber leaves", () => {
+    const addEventListener = vi.spyOn(window, "addEventListener");
+    const removeEventListener = vi.spyOn(window, "removeEventListener");
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    const unsubscribeFirst = subscribeStoredChatOutboxChanges(firstListener);
+    const unsubscribeSecond = subscribeStoredChatOutboxChanges(secondListener);
+
+    expect(addEventListener).toHaveBeenCalledWith("storage", expect.any(Function));
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "openclaw.control.chatComposer.v2:gateway" }),
+    );
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(secondListener).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.control.settings.v1" }));
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(secondListener).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: "openclaw.control.chatComposer.v1:gateway" }),
+    );
+    expect(firstListener).toHaveBeenCalledTimes(2);
+    expect(secondListener).toHaveBeenCalledTimes(2);
+
+    unsubscribeFirst();
+    expect(removeEventListener).not.toHaveBeenCalledWith("storage", expect.any(Function));
+
+    unsubscribeSecond();
+    expect(removeEventListener).toHaveBeenCalledWith("storage", expect.any(Function));
+  });
+
   it("routes shipped bare-main rows to the known default agent", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;

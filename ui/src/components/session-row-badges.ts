@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
@@ -35,6 +35,28 @@ function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"])
 function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSummary): string {
   const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
   return `${numbers} · ${pullRequestStateLabel(summary.state)}`;
+}
+
+function renderSessionRowBadge(
+  label: string,
+  icon: TemplateResult,
+  modifier = "",
+  count = 0,
+  pullRequestState?: SessionCatalogPullRequestSummary["state"],
+  placementState?: SessionPlacementState,
+  workspaceConflictCount = 0,
+) {
+  return html`<openclaw-tooltip .content=${label}>
+    <span
+      class=${`session-row-badge${modifier ? ` ${modifier}` : ""}`}
+      data-pull-request-state=${pullRequestState ?? nothing}
+      data-placement-state=${placementState ?? nothing}
+      data-workspace-conflicts=${workspaceConflictCount ? String(workspaceConflictCount) : nothing}
+      role="img"
+      aria-label=${label}
+      >${icon}${count ? html`<span aria-hidden="true">${count}</span>` : nothing}</span
+    >
+  </openclaw-tooltip>`;
 }
 
 export function renderSessionRowBadges(params: {
@@ -99,54 +121,37 @@ export function renderSessionRowBadges(params: {
       : "";
   return html`<span class="session-row-badges">
     ${hasAutomation
-      ? html`<span
-          class="session-row-badge"
-          role="img"
-          aria-label=${t("sessionsView.automationAttached")}
-          title=${t("sessionsView.automationAttached")}
-          >${icons.clock}</span
-        >`
+      ? renderSessionRowBadge(t("sessionsView.automationAttached"), icons.clock)
       : nothing}
     ${pullRequestLabel
-      ? html`<span
-          class="session-row-badge session-row-badge--pull-request"
-          data-pull-request-state=${pullRequestState ?? nothing}
-          role="img"
-          aria-label=${pullRequestLabel}
-          title=${pullRequestLabel}
-          >${icons.gitPullRequest}</span
-        >`
+      ? renderSessionRowBadge(
+          pullRequestLabel,
+          icons.gitPullRequest,
+          "session-row-badge--pull-request",
+          0,
+          pullRequestState,
+        )
       : nothing}
     ${params.hasApproval
-      ? html`<span
-          class="session-row-badge session-row-badge--approval"
-          role="img"
-          aria-label=${t("sessionsView.approvalNeeded")}
-          title=${t("sessionsView.approvalNeeded")}
-          >${icons.alertTriangle}</span
-        >`
+      ? renderSessionRowBadge(
+          t("sessionsView.approvalNeeded"),
+          icons.alertTriangle,
+          "session-row-badge--approval",
+        )
       : nothing}
     ${outboxCount > 0
-      ? html`<span
-          class="session-row-badge session-row-badge--queued"
-          role="img"
-          aria-label=${outboxLabel}
-          title=${outboxLabel}
-          >${icons.clock}<span aria-hidden="true">${outboxCount}</span></span
-        >`
+      ? renderSessionRowBadge(outboxLabel, icons.clock, "session-row-badge--queued", outboxCount)
       : nothing}
     ${displayedPlacementState || hasWorkspaceConflict
-      ? html`<span
-          class="session-row-badge session-row-badge--cloud"
-          data-placement-state=${displayedPlacementState ?? nothing}
-          data-workspace-conflicts=${hasWorkspaceConflict
-            ? String(workspaceConflictCount)
-            : nothing}
-          role="img"
-          aria-label=${cloudLabel}
-          title=${cloudLabel}
-          >${icons.globe}</span
-        >`
+      ? renderSessionRowBadge(
+          cloudLabel,
+          icons.globe,
+          "session-row-badge--cloud",
+          0,
+          undefined,
+          displayedPlacementState,
+          hasWorkspaceConflict ? workspaceConflictCount : 0,
+        )
       : nothing}
   </span>`;
 }
@@ -160,17 +165,20 @@ export function renderOfflineSidebarStatus(props: {
   const offline = t("common.offline");
   const count = props.queuedOutboxCount;
   const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
-  return html`<button
-    type="button"
-    class="sidebar-footer-bar__status"
-    aria-live="polite"
-    aria-label=${`${offline} — ${t("connection.retryNow")}${queued ? ` — ${queued}` : ""}`}
-    title=${props.title ?? nothing}
-    @click=${props.onRetry}
-  >
-    <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
-      class="sidebar-footer-bar__status-detail"
-      >· ${props.reconnecting}</span
-    >${queued ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>` : nothing}
-  </button>`;
+  return html`<openclaw-tooltip .content=${props.title ?? ""}>
+    <button
+      type="button"
+      class="sidebar-footer-bar__status"
+      aria-live="polite"
+      aria-label=${`${offline} — ${t("connection.retryNow")}${queued ? ` — ${queued}` : ""}`}
+      @click=${props.onRetry}
+    >
+      <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
+        class="sidebar-footer-bar__status-detail"
+        >· ${props.reconnecting}</span
+      >${queued
+        ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>`
+        : nothing}
+    </button>
+  </openclaw-tooltip>`;
 }

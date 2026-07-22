@@ -277,11 +277,19 @@ export async function installClawMcpServers(
   return refs;
 }
 
-function readClawMcpServerRefs(
+export function readClawMcpServerRefs(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
   const database = openOpenClawStateDatabase(options);
+  if (
+    options.readOnly &&
+    !database.db /* sqlite-allow-raw: read-only Claw MCP table-existence probe. */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_mcp_server_refs'")
+      .get()
+  ) {
+    return [];
+  }
   const rows = database.db /* sqlite-allow-raw: read Claw MCP refs for one agent. */
     .prepare(
       `SELECT schema_version, agent_id, name, config_digest, relationship, origin,
@@ -295,11 +303,19 @@ function readClawMcpServerRefs(
   return rows.map(rowToRef);
 }
 
-function readClawMcpServerRefsByName(
+export function readClawMcpServerRefsByName(
   name: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawMcpServerRef[] {
   const database = openOpenClawStateDatabase(options);
+  if (
+    options.readOnly &&
+    !database.db /* sqlite-allow-raw: read-only Claw MCP table-existence probe. */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_mcp_server_refs'")
+      .get()
+  ) {
+    return [];
+  }
   const rows = database.db /* sqlite-allow-raw: read sibling Claw MCP refs by server name. */
     .prepare(
       `SELECT schema_version, agent_id, name, config_digest, relationship, origin,
