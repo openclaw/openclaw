@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, vi } from "vitest";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { McpLoopbackRequestContext } from "../gateway/mcp-grant-store.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -502,7 +502,7 @@ export function createWeatherSkillFixture(root: string, materialized: boolean) {
 
 type SupervisorSpawnMock = (typeof import("./cli-runner.test-support.js"))["supervisorSpawnMock"];
 
-export type ClaudeLiveRunFixture = ReturnType<typeof mockClaudeLiveRun>;
+type ClaudeLiveRunFixture = ReturnType<typeof mockClaudeLiveRun>;
 
 export function mockClaudeLiveRun(
   spawnMock: SupervisorSpawnMock,
