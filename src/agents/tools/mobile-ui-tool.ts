@@ -21,6 +21,8 @@ const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
 const MOBILE_UI_CAPABILITY = "mobileUI";
 const MAX_WAIT_MS = 100_000;
 const MAX_SWIPE_DURATION_MS = 60_000;
+const GLOBAL_ACTION_NAMES = ["back", "home", "recents", "notifications"] as const;
+type GlobalActionName = (typeof GLOBAL_ACTION_NAMES)[number];
 
 const MobileUiActionSchema = Type.Union(
   [
@@ -50,7 +52,7 @@ const MobileUiActionSchema = Type.Union(
     }),
     Type.Object({
       type: Type.Literal("global_action"),
-      name: stringEnum(["back", "home", "recents", "notifications"] as const),
+      name: stringEnum(GLOBAL_ACTION_NAMES),
     }),
     Type.Object({
       type: Type.Literal("wait"),
@@ -87,7 +89,7 @@ type MobileUiAction =
   | { type: "scroll"; ref: string; direction: "forward" | "backward" }
   | { type: "tap"; x: number; y: number }
   | { type: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs: number }
-  | { type: "global_action"; name: "back" | "home" | "recents" | "notifications" }
+  | { type: "global_action"; name: GlobalActionName }
   | { type: "wait"; ms: number };
 
 type MobileUiNode = {
@@ -186,10 +188,10 @@ function readMobileUiAction(input: Record<string, unknown>): MobileUiAction {
       };
     case "global_action": {
       const name = readStringParam(action, "name", { required: true });
-      if (!(["back", "home", "recents", "notifications"] as const).includes(name as never)) {
+      if (!(GLOBAL_ACTION_NAMES as readonly string[]).includes(name)) {
         throw new ToolInputError("name must be back, home, recents, or notifications");
       }
-      return { type, name: name as Extract<MobileUiAction, { type: "global_action" }>["name"] };
+      return { type, name: name as GlobalActionName };
     }
     case "wait":
       return { type, ms: readInteger(action, "ms", { minimum: 0, maximum: MAX_WAIT_MS }) };
