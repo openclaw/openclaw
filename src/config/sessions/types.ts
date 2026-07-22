@@ -220,17 +220,10 @@ export type PendingSkillSuggestion = {
   detectedAt: number;
 };
 
-export type RestartRecoveryRun = {
-  runId: string;
-  lifecycleGeneration: string;
-};
+export type RestartRecoveryRun = { runId: string; lifecycleGeneration: string };
 
 export type SessionEntry = SessionRestartRecoveryState &
   SessionEntryProvenance & {
-    /**
-     * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
-     * Stored on the main session entry.
-     */
     lastHeartbeatText?: string;
     /** Timestamp (ms) when lastHeartbeatText was delivered. */
     lastHeartbeatSentAt?: number;
