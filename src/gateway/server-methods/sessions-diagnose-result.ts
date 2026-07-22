@@ -167,6 +167,9 @@ function summarizeDiagnose(params: {
   const hasError = params.findings.some((finding) => finding.severity === "error");
   const hasWarn = params.findings.some((finding) => finding.severity === "warn");
   const hasQueued = params.findings.some((finding) => finding.code === "queued_without_active_run");
+  const hasLowConfidence = params.findings.some(
+    (finding) => finding.code === "unknown_low_confidence",
+  );
   const hasActive = params.findings.some(
     (finding) => finding.code === "active_run_visible" || finding.code === "active_progress_fresh",
   );
@@ -181,13 +184,45 @@ function summarizeDiagnose(params: {
           : isDiagnoseRowTerminal(params.row)
             ? "done"
             : "unknown";
+  const headlineFinding = selectDiagnoseSummaryHeadlineFinding({
+    findings: params.findings,
+    state,
+  });
   return {
     state,
-    confidence: hasWarn || hasError ? "medium" : "high",
+    confidence: hasLowConfidence ? "low" : hasWarn || hasError ? "medium" : "high",
     headline:
-      params.findings[0]?.message ??
+      headlineFinding?.message ??
       "No dominant stuck-session signal was found from the available evidence.",
   };
+}
+
+function selectDiagnoseSummaryHeadlineFinding(params: {
+  findings: DiagnoseFinding[];
+  state: DiagnoseSummary["state"];
+}): DiagnoseFinding | undefined {
+  if (params.state === "queued") {
+    return (
+      params.findings.find((finding) => finding.code === "queued_without_active_run") ??
+      params.findings.find((finding) => finding.severity === "warn")
+    );
+  }
+  if (params.state === "stalled") {
+    return params.findings.find((finding) => finding.severity === "warn");
+  }
+  if (params.state === "active") {
+    return params.findings.find(
+      (finding) =>
+        finding.code === "active_progress_fresh" || finding.code === "active_run_visible",
+    );
+  }
+  if (params.state === "unknown") {
+    return (
+      params.findings.find((finding) => finding.severity === "error") ??
+      params.findings.find((finding) => finding.code === "unknown_low_confidence")
+    );
+  }
+  return params.findings[0];
 }
 
 async function readDiagnoseTranscriptEvidence(params: {

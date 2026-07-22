@@ -458,6 +458,7 @@ export function hasProjectedAgentRunForSession(params: {
   sessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
 }): boolean {
   const lifecycleGeneration = getAgentEventState().lifecycleGeneration;
   const targetAgentId = resolveProjectedRunTargetAgentId(params);
@@ -486,7 +487,12 @@ function resolveProjectedRunTargetAgentId(params: {
   sessionKeys: readonly string[];
   agentId?: string;
   defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
 }): string | undefined {
+  const onlyUnknownKeys = params.sessionKeys.every((sessionKey) => sessionKey === "unknown");
+  if (onlyUnknownKeys && params.scopeUnknownByAgent !== true) {
+    return undefined;
+  }
   if (params.agentId) {
     return normalizeAgentId(params.agentId);
   }

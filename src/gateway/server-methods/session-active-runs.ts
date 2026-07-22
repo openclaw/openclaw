@@ -71,6 +71,9 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
     ...(targetSessionId ? { sessionId: targetSessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
+    ...(params.scopeUnknownByAgent !== undefined
+      ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+      : {}),
   });
   if (!(params.context.chatAbortControllers instanceof Map)) {
     return { hasActiveRun: hasProjectedRun, runs };
@@ -288,6 +291,9 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(sessionId ? { sessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
+    ...(params.scopeUnknownByAgent !== undefined
+      ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+      : {}),
   });
   return {
     active:

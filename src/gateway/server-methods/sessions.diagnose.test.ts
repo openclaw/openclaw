@@ -17,6 +17,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { writeSessionStore } from "../test-helpers.js";
 import {
   directSessionReq,
+  seedLinearSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
   writeSingleLineSession,
@@ -534,6 +535,104 @@ test("sessions.diagnose keeps label matches whose entry json lacks a session id"
     },
   });
   expect("sessionId" in payload.session).toBe(false);
+});
+
+test("sessions.diagnose returns low confidence when no dominant signal exists", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-quiet", {
+        status: "running",
+        updatedAt: 10,
+      }),
+    },
+  });
+  await seedLinearSessionTranscript({
+    contents: ["quiet transcript line"],
+    sessionId: "sess-quiet",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    key: "agent:main:main",
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    summary: {
+      state: "unknown",
+      confidence: "low",
+      headline: "No dominant stuck-session signal was found from the available evidence.",
+    },
+    findings: [
+      expect.objectContaining({
+        code: "unknown_low_confidence",
+      }),
+    ],
+  });
+});
+
+test("sessions.diagnose uses the warning headline for stalled active sessions", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        status: "running",
+        updatedAt: 10,
+      }),
+    },
+  });
+
+  const nowSpy = vi.spyOn(Date, "now");
+  try {
+    nowSpy.mockReturnValue(1_700_000_000_000);
+    markDiagnosticRunProgressForTest({
+      runId: "run-main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      reason: "tool.running",
+    });
+    nowSpy.mockReturnValue(1_700_000_130_000);
+
+    const result = await directSessionReq<SessionsDiagnoseResult>(
+      "sessions.diagnose",
+      { key: "agent:main:main" },
+      {
+        context: {
+          chatAbortControllers: new Map([
+            [
+              "run-main",
+              {
+                controller: new AbortController(),
+                sessionId: "sess-main",
+                sessionKey: "agent:main:main",
+                agentId: "main",
+                startedAtMs: Date.now() - 1_000,
+                expiresAtMs: Date.now() + 60_000,
+                kind: "agent",
+              },
+            ],
+          ]),
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.payload).toMatchObject({
+      summary: {
+        state: "stalled",
+        confidence: "medium",
+        headline: "Active work exists, but diagnostic progress has not advanced recently.",
+      },
+      findings: expect.arrayContaining([
+        expect.objectContaining({ code: "active_run_visible" }),
+        expect.objectContaining({ code: "last_progress_stale" }),
+      ]),
+    });
+  } finally {
+    nowSpy.mockRestore();
+  }
 });
 
 test("sessions.diagnose marks terminal sessions with partial delivery route as uncertain", async () => {

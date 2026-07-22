@@ -172,6 +172,41 @@ describe("session active runs", () => {
       clearAgentRunContext("worker-run");
     }
   });
+
+  it("preserves unscoped unknown fallback behavior for lifecycle projections", () => {
+    registerAgentRunContext("unknown-run", {
+      isControlUiVisible: false,
+      projectSessionActive: true,
+      sessionId: "session-main",
+      sessionKey: "unknown",
+      agentId: "main",
+    });
+    try {
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: "unknown",
+          canonicalKey: "unknown",
+          sessionId: "session-work",
+          agentId: "work",
+          defaultAgentId: "main",
+        }),
+      ).toEqual({ active: true, runIds: [] });
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: "unknown",
+          canonicalKey: "unknown",
+          sessionId: "session-work",
+          agentId: "work",
+          defaultAgentId: "main",
+          scopeUnknownByAgent: true,
+        }),
+      ).toEqual({ active: false, runIds: [] });
+    } finally {
+      clearAgentRunContext("unknown-run");
+    }
+  });
 });
 
 describe("collectTrackedActiveSessionRunSnapshot", () => {
