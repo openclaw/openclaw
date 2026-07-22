@@ -179,7 +179,13 @@ function isMcpMethodNotFoundError(error: unknown): boolean {
     return true;
   }
   const message = String(error);
-  return message.includes("-32601") || /method not found/i.test(message);
+  // Some resource-only servers and proxies report an unsupported optional
+  // tools/list request as code -32000 / "Unknown method" instead of the
+  // standard -32601 / "Method not found". Treat that wording as an unsupported
+  // method too. This matcher is only consulted on the optional best-effort
+  // tools/list discovery path (see listAllToolsBestEffort); genuine tool
+  // request failures never reach it and continue to propagate.
+  return message.includes("-32601") || /method not found|unknown method/i.test(message);
 }
 
 async function listAllToolsBestEffort(params: {
