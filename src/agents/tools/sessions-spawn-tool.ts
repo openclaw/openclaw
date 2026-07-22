@@ -11,7 +11,6 @@ import {
 } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import { readSnakeCaseParamRaw, resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -93,16 +92,6 @@ function addRoleToFailureResult<T extends { status: string }>(
   return { ...result, role };
 }
 
-function resolveTrackedSpawnMode(params: {
-  requestedMode?: "run" | "session";
-  threadRequested: boolean;
-}): "run" | "session" {
-  if (params.requestedMode === "run" || params.requestedMode === "session") {
-    return params.requestedMode;
-  }
-  return params.threadRequested ? "session" : "run";
-}
-
 function readToolsAllowParam(params: Record<string, unknown>): string[] | undefined {
   const raw = readSnakeCaseParamRaw(params, "toolsAllow");
   if (raw === undefined) {
@@ -119,26 +108,6 @@ function readToolsAllowParam(params: Record<string, unknown>): string[] | undefi
       return entry.trim();
     })
     .filter(Boolean);
-}
-
-async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
-  const key = sessionKey.trim();
-  if (!key) {
-    return;
-  }
-  try {
-    await callGateway({
-      method: "sessions.delete",
-      params: {
-        key,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    // Best-effort cleanup only.
-  }
 }
 
 type SessionsSpawnThreadAvailability = {

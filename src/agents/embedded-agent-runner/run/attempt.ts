@@ -157,7 +157,7 @@ export async function runEmbeddedAttempt(
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     // When toolsAllow is set, strip the skills catalog from the prompt.
     const hasRuntimeToolsAllow = params.toolsAllow !== undefined;
-    const effectiveSkillsPrompt = hasRuntimeToolsAllow ? undefined : skillsPrompt;
+    const effectiveSkillsPrompt = hasRuntimeToolsAllow ? "" : skillsPrompt;
     if (isRawModelRun && log.isEnabled("debug")) {
       log.debug(
         `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
