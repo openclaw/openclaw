@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   loadMetadata: vi.fn(),
   loadOwner: vi.fn(),
   resolveImplicitProviders: vi.fn(),
-  resolveProviderOwners: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles/store.js", () => ({
@@ -24,17 +23,35 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: mocks.loadMetadata,
 }));
 
-vi.mock("../../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForProviderRef: mocks.resolveProviderOwners,
-}));
-
 import {
   hasProviderRuntimeCatalogForFilter,
   hasProviderStaticCatalogForFilter,
   loadProviderCatalogModelsForList,
 } from "./list.provider-catalog.js";
 
-const emptyMetadataSnapshot = { manifestRegistry: { plugins: [] } } as never;
+const emptyMetadataSnapshot = {
+  manifestRegistry: { plugins: [] },
+  owners: {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  },
+} as never;
+
+function metadataWithCatalogOwner(provider: string, pluginId: string) {
+  return {
+    ...emptyMetadataSnapshot,
+    owners: {
+      ...emptyMetadataSnapshot.owners,
+      modelCatalogProviders: new Map([[provider, [pluginId]]]),
+    },
+  } as never;
+}
 
 function ownerSnapshot(modelCatalog: unknown, metadataSnapshot = emptyMetadataSnapshot) {
   return {
@@ -51,7 +68,6 @@ describe("model-list provider catalog", () => {
     mocks.loadMetadata.mockReturnValue(emptyMetadataSnapshot);
     mocks.loadOwner.mockReset();
     mocks.resolveImplicitProviders.mockReset();
-    mocks.resolveProviderOwners.mockReset();
   });
 
   it("projects a filtered provider through targeted plugin discovery", async () => {
@@ -146,7 +162,6 @@ describe("model-list provider catalog", () => {
   });
 
   it("keeps static provider-hook rows separate from runtime ownership", async () => {
-    mocks.resolveProviderOwners.mockReturnValue([]);
     mocks.loadOwner.mockResolvedValue(
       ownerSnapshot({
         entries: [{ provider: "moonshot", id: "kimi-runtime", name: "Kimi Runtime" }],
@@ -186,9 +201,9 @@ describe("model-list provider catalog", () => {
     expect(mocks.loadOwner).toHaveBeenCalledWith(expect.objectContaining({ readOnly: true }));
   });
 
-  it("uses manifest ownership without activating a prepared runtime", async () => {
+  it("uses model-catalog manifest ownership without activating a prepared runtime", async () => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/model-list-state" };
-    mocks.resolveProviderOwners.mockReturnValue(["moonshot"]);
+    mocks.loadMetadata.mockReturnValue(metadataWithCatalogOwner("moonshot", "moonshot"));
 
     await expect(
       hasProviderRuntimeCatalogForFilter({
@@ -199,10 +214,26 @@ describe("model-list provider catalog", () => {
         providerFilter: "moonshot",
       }),
     ).resolves.toBe(true);
-    expect(mocks.resolveProviderOwners).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "moonshot", env }),
-    );
     expect(mocks.loadOwner).not.toHaveBeenCalled();
+  });
+
+  it("does not treat generic provider ownership as runtime catalog ownership", async () => {
+    mocks.loadMetadata.mockReturnValue({
+      ...emptyMetadataSnapshot,
+      owners: {
+        ...emptyMetadataSnapshot.owners,
+        providers: new Map([["auth-only", ["auth-only"]]]),
+        cliBackends: new Map([["auth-only", ["auth-only"]]]),
+      },
+    });
+
+    await expect(
+      hasProviderRuntimeCatalogForFilter({
+        cfg: {},
+        agentDir: "/tmp/agent",
+        providerFilter: "auth-only",
+      }),
+    ).resolves.toBe(false);
   });
 
   it("derives the matching directory for an explicit agent", async () => {

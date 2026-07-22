@@ -16,7 +16,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveOwningPluginIdsForProviderRef } from "../../plugins/providers.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 
 type ProviderCatalogListParams = {
@@ -145,15 +144,7 @@ export async function hasProviderRuntimeCatalogForFilter(
   if (!providerFilter) {
     return false;
   }
-  return Boolean(
-    resolveOwningPluginIdsForProviderRef({
-      provider: providerFilter,
-      config: params.cfg,
-      ...(metadataSnapshot.workspaceDir ? { workspaceDir: metadataSnapshot.workspaceDir } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      metadataSnapshot,
-    })?.length,
-  );
+  return Boolean(metadataSnapshot.owners.modelCatalogProviders.get(providerFilter)?.length);
 }
 
 /** Returns true when the prepared generation captured static provider-hook rows. */
