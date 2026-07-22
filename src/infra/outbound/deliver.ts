@@ -2640,6 +2640,7 @@ async function deliverOutboundPayloadsCore(
   const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
     resolveOutboundMediaAccessForSend(params, channel, mediaSources);
   let platformSendAttemptedForPayload: boolean;
+  let nativeDeliveryAttemptedForBatch = false;
   let currentPayloadIndex: number;
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
@@ -2668,6 +2669,7 @@ async function deliverOutboundPayloadsCore(
         // No await occurs between this callback and adapter invocation. Keep
         // pre-send persistence failures outside the public message_sent lifecycle.
         platformSendAttemptedForPayload = true;
+        nativeDeliveryAttemptedForBatch = true;
       },
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
@@ -2806,7 +2808,11 @@ async function deliverOutboundPayloadsCore(
       payloadOutcomes,
       stage: "unknown",
     });
-    throw ownsLifecycleHooks ? markMessageSentHookOwned(deliveryError) : deliveryError;
+    throw ownsLifecycleHooks
+      ? markMessageSentHookOwned(deliveryError)
+      : nativeDeliveryAttemptedForBatch
+        ? deliveryError
+        : markNativeDeliveryNotAttempted(deliveryError);
   }
   if (normalization.fatal?.scope === "batch" && !params.bestEffort) {
     recordKnownFatalNormalizationOutcomes(normalization.fatal.error);
@@ -2816,7 +2822,11 @@ async function deliverOutboundPayloadsCore(
       payloadOutcomes,
       stage: "unknown",
     });
-    throw ownsLifecycleHooks ? markMessageSentHookOwned(deliveryError) : deliveryError;
+    throw ownsLifecycleHooks
+      ? markMessageSentHookOwned(deliveryError)
+      : nativeDeliveryAttemptedForBatch
+        ? deliveryError
+        : markNativeDeliveryNotAttempted(deliveryError);
   }
   const normalizedPayloadByIndex = new Map(
     normalization.payloads.map((entry) => [entry.index, entry] as const),
@@ -2909,13 +2919,15 @@ async function deliverOutboundPayloadsCore(
         stage: "unknown",
       });
       // Normalization failed before native dispatch, so no message_sent event is
-      // valid. Claim ownership to prevent outer callers from synthesizing one.
+      // valid. Inner owners claim it; caller-owned lifecycles receive an explicit no-attempt mark.
       throw ownsLifecycleHooks
         ? attachMessageSentHookEvents(
             markMessageSentHookOwned(deliveryError),
             deferredMessageSentEvents,
           )
-        : deliveryError;
+        : nativeDeliveryAttemptedForBatch
+          ? deliveryError
+          : markNativeDeliveryNotAttempted(deliveryError);
     }
     const planEntry = initialPlanBySourceIndex.get(payloadIndex);
     if (!planEntry) {
@@ -3353,7 +3365,9 @@ async function deliverOutboundPayloadsCore(
               markMessageSentHookOwned(deliveryError),
               deferredMessageSentEvents,
             )
-          : deliveryError;
+          : nativeDeliveryAttemptedForBatch
+            ? deliveryError
+            : markNativeDeliveryNotAttempted(deliveryError);
       }
       params.onError?.(err, payloadSummary);
     }

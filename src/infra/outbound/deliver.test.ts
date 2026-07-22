@@ -6667,6 +6667,89 @@ describe("deliverOutboundPayloads", () => {
     expect(isMessageSentHookOwned(results)).toBe(false);
   });
 
+  it("marks caller-owned adapter normalization failures as native-not-attempted", async () => {
+    const normalizePayload = vi.fn(() => {
+      throw new Error("adapter normalization failed");
+    });
+    const sendText = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", normalizePayload, sendText },
+          }),
+        },
+      ]),
+    );
+
+    let deliveryError: unknown;
+    try {
+      await deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        lifecycleHookOwner: "caller",
+        skipQueue: true,
+      });
+    } catch (error) {
+      deliveryError = error;
+    }
+
+    expect(sendText).not.toHaveBeenCalled();
+    expect(isNativeDeliveryNotAttempted(deliveryError)).toBe(true);
+    expect(isMessageSentHookOwned(deliveryError)).toBe(false);
+  });
+
+  it("does not mark a caller-owned batch unattempted after an earlier payload sent", async () => {
+    const normalizePayload = vi.fn(({ payload }: { payload: ReplyPayload }) => {
+      if (payload.text === "second") {
+        throw new Error("second normalization failed");
+      }
+      return payload;
+    });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "first-id",
+      roomId: "!room:example",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", normalizePayload, sendText },
+          }),
+        },
+      ]),
+    );
+
+    let deliveryError: unknown;
+    try {
+      await deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }, { text: "second" }],
+        lifecycleHookOwner: "caller",
+        skipQueue: true,
+      });
+    } catch (error) {
+      deliveryError = error;
+    }
+
+    expect(sendText).toHaveBeenCalledTimes(1);
+    expect(isNativeDeliveryNotAttempted(deliveryError)).toBe(false);
+    expect(deliveryError).toMatchObject({
+      results: [expect.objectContaining({ messageId: "first-id" })],
+    });
+  });
+
   it("defers caller-owned message_sent when a durable attempt remains queued", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
