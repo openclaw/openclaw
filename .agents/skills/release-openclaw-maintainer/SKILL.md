@@ -224,7 +224,7 @@ this release skill, not as a separate release workflow.
 
 The backport ability owns the complete mainline inventory, private-security
 reconciliation, candidate decisions, maintainer approval, coordinated staging
-PR, and proof handoff. After that PR lands, use the dedicated npm-only sequence
+PR, and proof handoff. After that PR lands, use the dedicated extended-stable sequence
 below. Never route `.33+` through the regular beta/stable release sequence.
 
 ## Publish extended-stable releases
@@ -272,8 +272,15 @@ on pinned current `main` as the exact command and validation contract.
    version, use the approved credential-isolated release tooling for manual
    plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
    republish an immutable version.
-9. Do not create a GitHub Release or publish macOS, Windows, Docker, mobile,
-   website, ClawHub, or private dist-tag artifacts from this path.
+9. Require the tag-triggered `Docker Release` run to publish and verify the
+   exact default, slim, browser, and architecture images in GHCR and Docker
+   Hub. It must advance only `extended-stable`, `extended-stable-slim`, and
+   `extended-stable-browser`. If immutable images already exist but channel
+   aliases need repair, dispatch `docker-release.yml` from current `main` with
+   the exact tag and `operation=promote-channel`; never rebuild or move the
+   immutable release tag just to repair aliases.
+10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
+   ClawHub, or private dist-tag artifacts from this path.
 
 ## Keep release channel naming aligned
 

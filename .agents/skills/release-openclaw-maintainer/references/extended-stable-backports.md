@@ -1,6 +1,6 @@
 # Extended-Stable Backport Preparation
 
-Prepare the next npm maintenance patch for the active `extended-stable` line.
+Prepare the next npm and Docker maintenance patch for the active `extended-stable` line.
 Discover the complete candidate set, obtain maintainer approval, and prepare
 the approved commits as one coordinated PR. Treat commits as canonical; use
 PRs, issues, ClawSweeper reports, and advisories as supporting context.
@@ -15,15 +15,15 @@ extended-stable package and publication constraints.
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
   workflows from a pinned current `origin/main` before resolving the line.
-- Target npm `extended-stable` and the canonical
+- Target npm and Docker `extended-stable` and the canonical
   `extended-stable/YYYY.M.33` branch. The user-facing `extended-stable` update
   channel resolves that selector; user-facing `stable` continues to resolve
   npm `latest`.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
-- Exclude ClawHub publication, GitHub Releases, native apps, Docker images,
-  mobile artifacts, website downloads, and private-repository dist-tags.
+- Exclude ClawHub publication, GitHub Releases, native apps, mobile artifacts,
+  website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
@@ -148,9 +148,10 @@ contracts.
 
 ## Filter by Publication Surface
 
-Include only fixes that affect the core package or an npm-publishable official
-plugin in the exact release inventory. Prove package inclusion rather than
-inferring it from the source path alone.
+Include only fixes that affect the core package, an npm-publishable official
+plugin in the exact release inventory, or the official Docker image/runtime
+path. Prove package or image inclusion rather than inferring it from the source
+path alone.
 
 - Do not exclude `extensions/**` by path. Determine whether the package appears
   in the canonical `all-publishable` inventory.
@@ -158,8 +159,8 @@ inferring it from the source path alone.
   at the same intended version and can verify its exact package and selector.
 - Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
   out of scope.
-- Treat native-only, Docker-only, mobile-only, website-only, and GitHub
-  Release-only fixes as `skip` for this npm-only line.
+- Treat native-only, mobile-only, website-only, and GitHub Release-only fixes
+  as `skip` for this extended-stable line.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 

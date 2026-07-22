@@ -14,8 +14,9 @@ OpenClaw currently exposes three user-facing update channels:
 - dev: the moving head of `main`
 
 Separately, release operators can publish the trailing completed month's core
-package to npm `extended-stable`, beginning at patch `33`. The current-month
-regular final line continues on npm `latest`; this operator-side publication
+package to npm `extended-stable` and its official Docker images to dedicated
+extended-stable aliases, beginning at patch `33`. The current-month regular
+final line continues on npm `latest` and Docker `latest`/`main`; the publication
 split does not by itself change CLI update-channel resolution.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
@@ -34,7 +35,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
 - `extended-stable` means the supported trailing-month npm package, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- The dedicated monthly extended-stable path publishes the core npm package and every npm-publishable official plugin at the same exact version. It does not publish plugins to ClawHub or publish macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, Docker images, mobile artifacts, or website downloads.
+- The dedicated monthly extended-stable path publishes the core npm package and every npm-publishable official plugin at the same exact version. Its release tag also publishes exact Docker images to GHCR and Docker Hub, then advances only `extended-stable`, `extended-stable-slim`, and `extended-stable-browser`. It does not publish plugins to ClawHub or publish macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, mobile artifacts, or website downloads.
 - Every regular final release ships the npm package, macOS app, signed standalone Android APK, and signed Windows Hub installers together. Beta releases normally validate and publish the npm/package path first, with native app build/sign/notarize/promote reserved for regular final unless explicitly requested.
 
 ## Release cadence
@@ -44,7 +45,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - If a beta tag has been pushed or published and needs a fix, maintainers cut the next `-beta.N` tag instead of deleting or recreating the old one
 - Detailed release procedure, approvals, credentials, and recovery notes are maintainer-only
 
-## Monthly npm-only extended-stable publication
+## Monthly extended-stable publication
 
 This is a dedicated exception to the regular release procedure below. For a
 completed month `YYYY.M`, create `extended-stable/YYYY.M.33`; publish
@@ -90,6 +91,12 @@ re-resolve the branch tip, require it still equals `RELEASE_SHA`, then create
 and push immutable `vYYYY.M.P` at that SHA. A post-tag source change requires a
 new patch version and new candidate; final extended-stable tags are never moved
 or deleted.
+
+Pushing the tag starts `Docker Release`. For a final patch `33` or later, that
+workflow publishes immutable default, slim, browser, and architecture tags to
+GHCR and Docker Hub. It advances only the three extended-stable Docker aliases;
+it must not move `latest`, `main`, or their variants. Require the Docker run and
+its attestation verification to succeed before declaring the release complete.
 
 After both runs succeed, publish every npm-publishable official plugin from the
 same exact branch tip. Patch `P` must be `33` or greater. Pass the full release
@@ -162,7 +169,7 @@ same exact-version publication path.
 
 The regular checklist below continues to own beta, `latest`, GitHub Release,
 plugins, macOS, Windows, and other platform publication. Do not run those
-steps for this npm-only extended-stable path.
+steps for this extended-stable path.
 
 ## Regular release operator checklist
 
@@ -472,7 +479,7 @@ For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or `tel
 
 For beta, `latest`, plugin, GitHub Release, and platform publication,
 `OpenClaw Release Publish` is the normal mutating entrypoint. The monthly
-`.33+` npm-only extended-stable path does not use this orchestrator. The
+`.33+` extended-stable path does not use this orchestrator. The
 regular workflow orchestrates the trusted-publisher workflows in the order the
 release needs:
 
@@ -631,7 +638,7 @@ Rules:
 
 ## Regular beta/latest stable release sequence
 
-This legacy sequence is for the regular orchestrated release that also owns plugins, GitHub Release, Windows, and other platform work. It is not the monthly `.33+` npm-only extended-stable path documented at the top of this page.
+This legacy sequence is for the regular orchestrated release that also owns plugins, GitHub Release, Windows, and other platform work. It is not the monthly `.33+` extended-stable path documented at the top of this page.
 
 When cutting a regular orchestrated stable release:
 
