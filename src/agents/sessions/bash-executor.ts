@@ -7,7 +7,7 @@
  */
 
 import { createStreamingBinaryOutputSanitizer } from "../shell-utils.js";
-import type { BashOperations, BashOutputStream } from "./tools/bash-operations.js";
+import type { BashOperations } from "./tools/bash-operations.js";
 import { OutputAccumulator } from "./tools/output-accumulator.js";
 
 // ============================================================================
@@ -56,7 +56,7 @@ export async function executeBashWithOperations(
     },
   });
 
-  const onData = (data: Buffer, stream?: BashOutputStream) => {
+  const onData = (data: Buffer, stream?: "stdout" | "stderr") => {
     const text = output.append(data, stream);
     options?.onChunk?.(text);
   };

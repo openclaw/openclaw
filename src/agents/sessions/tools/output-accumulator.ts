@@ -23,14 +23,14 @@ interface OutputAccumulatorOptions {
   createTextTransform?: () => (text: string) => string;
 }
 
+type OutputStream = "stdout" | "stderr";
+
 /** Per-stream decode state. Streams are independent pipes and must not share it. */
 interface DecodeLane {
   decoder: TextDecoder;
   transform?: (text: string) => string;
+  spillDecoded: boolean;
 }
-
-/** Lane key for chunks that arrive without a stream tag. */
-const UNTAGGED_LANE = "";
 
 interface OutputSnapshot {
   content: string;
@@ -55,7 +55,7 @@ export class OutputAccumulator {
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
   private readonly createTextTransform?: () => (text: string) => string;
-  private readonly lanes = new Map<string, DecodeLane>();
+  private readonly lanes = new Map<OutputStream | undefined, DecodeLane>();
 
   private spillChunks: Buffer[] = [];
   private tailText = "";
@@ -80,16 +80,22 @@ export class OutputAccumulator {
     this.createTextTransform = options.createTextTransform;
   }
 
-  private lane(stream: string): DecodeLane {
+  private lane(stream?: OutputStream): DecodeLane {
     let lane = this.lanes.get(stream);
     if (!lane) {
-      lane = { decoder: new TextDecoder(), transform: this.createTextTransform?.() };
+      lane = {
+        decoder: new TextDecoder(),
+        transform: this.createTextTransform?.(),
+        // Tagged streams must spill decoded text because raw pipe bytes can
+        // interleave inside a UTF-8 character. Keep untagged raw spills stable.
+        spillDecoded: stream !== undefined || this.createTextTransform !== undefined,
+      };
       this.lanes.set(stream, lane);
     }
     return lane;
   }
 
-  append(data: Buffer, stream = UNTAGGED_LANE): string {
+  append(data: Buffer, stream?: OutputStream): string {
     if (this.finished) {
       throw new Error("Cannot append to a finished output accumulator");
     }
@@ -100,9 +106,8 @@ export class OutputAccumulator {
     const text = lane.transform?.(decodedText) ?? decodedText;
     this.appendDecodedText(text);
 
-    // Transformed output must spill exactly what callers see so sanitization
-    // cannot be bypassed by reading the full-output file.
-    const spillChunk = this.createTextTransform ? Buffer.from(text, "utf-8") : data;
+    // Decoded/transformed output must spill exactly what callers see.
+    const spillChunk = lane.spillDecoded ? Buffer.from(text, "utf-8") : data;
     if (this.tempFileStream || this.shouldUseTempFile()) {
       this.ensureTempFile();
     }
@@ -124,7 +129,7 @@ export class OutputAccumulator {
         continue;
       }
       this.appendDecodedText(text);
-      if (this.createTextTransform) {
+      if (lane.spillDecoded) {
         this.appendSpillChunk(Buffer.from(text, "utf-8"));
       }
       flushed += text;

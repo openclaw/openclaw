@@ -22,7 +22,7 @@ import {
   killProcessTree,
 } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import type { BashOperations, BashOutputStream } from "./bash-operations.js";
+import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
@@ -375,7 +375,7 @@ export function createBashToolDefinition(
         onUpdate({ content: [], details: undefined });
       }
 
-      const handleData = (data: Buffer, stream?: BashOutputStream) => {
+      const handleData = (data: Buffer, stream?: "stdout" | "stderr") => {
         if (!acceptingOutput) {
           return;
         }

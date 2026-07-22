@@ -1,5 +1,5 @@
 // OutputAccumulator tests cover bounded UTF-8 tails and private spill files.
-import { rm, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { OutputAccumulator } from "./output-accumulator.js";
 
@@ -54,5 +54,24 @@ describe("OutputAccumulator", () => {
     const flushed = accumulator.finish();
 
     expect(flushed).toBe("��");
+  });
+
+  it("spills tagged streams in decoded delivery order", async () => {
+    const accumulator = new OutputAccumulator({
+      maxBytes: 1,
+      maxLines: 10,
+      tempFilePrefix: "openclaw-output-test",
+    });
+
+    accumulator.append(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
+    accumulator.append(Buffer.from("E"), "stderr");
+    accumulator.append(Buffer.from([0xa5]), "stdout");
+    accumulator.finish();
+    const snapshot = accumulator.snapshot({ persistIfTruncated: true });
+    await accumulator.closeTempFile();
+
+    expect(snapshot.fullOutputPath).toBeDefined();
+    expect(await readFile(snapshot.fullOutputPath!, "utf8")).toBe("E日");
+    await rm(snapshot.fullOutputPath!, { force: true });
   });
 });
