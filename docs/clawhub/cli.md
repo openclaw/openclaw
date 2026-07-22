@@ -22,6 +22,7 @@ Two command-line surfaces talk to ClawHub:
 openclaw skills search "calendar"
 openclaw skills install @owner/<slug>
 openclaw skills install @owner/<slug> --version <version> --global
+openclaw skills install skills-sh/<owner>/<repo>/<slug>
 openclaw skills update @owner/<slug>
 openclaw skills update --all --acknowledge-clawhub-risk
 openclaw skills verify @owner/<slug> --card
@@ -38,6 +39,10 @@ Skill installs target the active workspace `skills/` directory by default; add
 explicit `clawhub:` prefix to force ClawHub resolution over npm, git, or a
 local path. Full flag reference: [`openclaw skills`](/cli/skills) and
 [`openclaw plugins`](/cli/plugins).
+
+`skills-sh/` is a discovery reference only. OpenClaw sends it to ClawHub and
+installs the security-approved, commit-pinned GitHub source returned by
+ClawHub; it never downloads skill content from skills.sh directly.
 
 ### Release trust
 

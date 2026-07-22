@@ -435,9 +435,14 @@ export function registerSkillsCli(program: Command) {
           return;
         }
         for (const entry of results) {
+          const installRef = normalizeOptionalString(entry.installRef);
           const ownerHandle = normalizeOptionalString(entry.ownerHandle);
           const slug = formatClawHubSearchText(entry.slug);
-          const skillRef = ownerHandle ? `@${formatClawHubSearchText(ownerHandle)}/${slug}` : slug;
+          const skillRef = installRef?.startsWith("skills-sh/")
+            ? formatClawHubSearchText(installRef)
+            : ownerHandle
+              ? `@${formatClawHubSearchText(ownerHandle)}/${slug}`
+              : slug;
           const version = entry.version ? ` v${formatClawHubSearchText(entry.version)}` : "";
           const summary = entry.summary ? `  ${formatClawHubSearchText(entry.summary)}` : "";
           const displayName = formatClawHubSearchText(entry.displayName);
@@ -454,7 +459,7 @@ export function registerSkillsCli(program: Command) {
     .description("Install a skill from ClawHub, git, or a local directory")
     .argument(
       "<skill-ref>",
-      "ClawHub skill ref (@owner/slug), git:<repo>, or local skill directory",
+      "ClawHub skill ref (@owner/slug or skills-sh/owner/repo/slug), git:<repo>, or local skill directory",
     )
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
@@ -471,7 +476,10 @@ export function registerSkillsCli(program: Command) {
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .option("--as <slug>", "Install a git/local skill under this slug")
-    .addHelpText("after", "\nExamples:\n  openclaw skills install @owner/weather\n")
+    .addHelpText(
+      "after",
+      "\nExamples:\n  openclaw skills install @owner/weather\n  openclaw skills install skills-sh/owner/repo/weather\n",
+    )
     .action(
       async (
         slug: string,
@@ -490,6 +498,11 @@ export function registerSkillsCli(program: Command) {
         try {
           const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
           if (!workspaceDir) {
+            return;
+          }
+          if (slug.trim().startsWith("skills-sh:")) {
+            defaultRuntime.error(`Invalid skills.sh skill reference: ${slug}`);
+            defaultRuntime.exit(1);
             return;
           }
           if (isSkillSourceInstallSpec(slug)) {
@@ -522,6 +535,11 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.error(
               "--as is only supported for git and local directory skill installs.",
             );
+            defaultRuntime.exit(1);
+            return;
+          }
+          if (slug.trim().startsWith("skills-sh/") && opts.version) {
+            defaultRuntime.error("--version is not supported for skills-sh references.");
             defaultRuntime.exit(1);
             return;
           }
@@ -685,6 +703,9 @@ export function registerSkillsCli(program: Command) {
             const verification = await fetchClawHubSkillVerification({
               slug: target.slug,
               ...(target.ownerHandle ? { ownerHandle: target.ownerHandle } : {}),
+              ...(target.requestedReference
+                ? { requestedReference: target.requestedReference }
+                : {}),
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,

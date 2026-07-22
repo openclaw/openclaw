@@ -394,6 +394,25 @@ describe("skills cli commands", () => {
     expect(runtimeLogs).toEqual(["legacy-calendar  Legacy Calendar"]);
   });
 
+  it("shows skills.sh entries in normal ClawHub search results", async () => {
+    searchSkillsFromClawHubMock.mockResolvedValue([
+      {
+        slug: "weather",
+        installRef: "skills-sh/openclaw/skills/weather",
+        displayName: "Weather",
+        summary: "Forecast helpers",
+      },
+    ]);
+
+    await runCommand(["skills", "search", "weather"]);
+
+    expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
+      query: "weather",
+      limit: undefined,
+    });
+    expect(runtimeLogs).toEqual(["skills-sh/openclaw/skills/weather  Weather  Forecast helpers"]);
+  });
+
   it("keeps multiline ClawHub search metadata on one terminal line", async () => {
     searchSkillsFromClawHubMock.mockResolvedValue([
       {
@@ -486,6 +505,43 @@ describe("skills cli commands", () => {
         line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
       ),
     ).toBe(true);
+  });
+
+  it("routes skills-sh refs through ClawHub without translating them", async () => {
+    const reference = "skills-sh/openclaw/skills/weather";
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "weather",
+      version: "a".repeat(40),
+      targetDir: "/tmp/workspace/skills/weather",
+    });
+
+    await runCommand(["skills", "install", reference]);
+
+    expect(mockFirstObjectArg(installSkillFromClawHubMock).slug).toBe(reference);
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects --version for skills-sh refs", async () => {
+    await expect(
+      runCommand(["skills", "install", "skills-sh/openclaw/skills/weather", "--version", "1.2.3"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("--version is not supported for skills-sh references.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects the reverted skills-sh colon syntax", async () => {
+    await expect(
+      runCommand(["skills", "install", "skills-sh:openclaw/skills/weather"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Invalid skills.sh skill reference: skills-sh:openclaw/skills/weather",
+    );
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
   });
 
   it("documents owner-qualified ClawHub install refs in command help", () => {
