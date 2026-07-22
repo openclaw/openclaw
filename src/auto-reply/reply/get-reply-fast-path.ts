@@ -214,6 +214,9 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
+    ...((resetTriggered || !existingEntry) && ctx.SessionCreator
+      ? { createdBy: { ...ctx.SessionCreator } }
+      : {}),
     sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),

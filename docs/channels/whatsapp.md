@@ -80,14 +80,19 @@ openclaw gateway
 
   </Step>
 
-  <Step title="Approve the first pairing request (pairing mode)">
+  <Step title="Approve the first DM access request (pairing mode)">
+
+    Open **Settings → Channels → DM access requests**, find the WhatsApp account,
+    and approve the sender. If you prefer the CLI:
 
 ```bash
 openclaw pairing list whatsapp
 openclaw pairing approve whatsapp <CODE>
 ```
 
-    Pairing requests expire after 1 hour; pending requests are capped at 3 per account.
+    DM access requests expire after 1 hour; pending requests are capped at 3 per
+    account. This approval is separate from the WhatsApp login QR used to link the
+    account itself.
 
   </Step>
 </Steps>

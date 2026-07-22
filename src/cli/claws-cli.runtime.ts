@@ -11,6 +11,11 @@ import {
 } from "../claws/add.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
+  CLAW_EXPORT_RESULT_SCHEMA_VERSION,
+  ClawExportError,
+  exportClawAgent,
+} from "../claws/export.js";
+import {
   applyClawRemovePlan,
   buildClawRemovePlan,
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
@@ -38,6 +43,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type {
   ClawsAddOptions,
+  ClawsExportOptions,
   ClawsInspectOptions,
   ClawsRemoveOptions,
   ClawsStatusOptions,
@@ -444,6 +450,42 @@ export async function runClawsRemoveCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, {
         schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        status: "failed",
+        error: { code, message },
+      });
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1);
+  }
+}
+
+export async function runClawsExportCommand(
+  agentId: string,
+  opts: ClawsExportOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  assertExperimentalClawsEnabled();
+  try {
+    const result = await exportClawAgent(agentId, opts.out, { config: getRuntimeConfig() });
+    if (opts.json) {
+      writeRuntimeJson(runtime, result);
+      return;
+    }
+    logExperimentalWarning(runtime);
+    runtime.log(`Exported agent: ${result.agentId}`);
+    runtime.log(`Package directory: ${result.outputDirectory}`);
+    runtime.log(
+      `Workspace files: ${result.manifest.workspace.files.length + Object.keys(result.manifest.workspace.bootstrapFiles).length}`,
+    );
+    runtime.log(`Packages: ${result.manifest.packages.length}`);
+  } catch (error) {
+    const code = error instanceof ClawExportError ? error.code : "export_failed";
+    const message = error instanceof Error ? error.message : String(error);
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
         stability: CLAW_OUTPUT_STABILITY,
         status: "failed",
         error: { code, message },
