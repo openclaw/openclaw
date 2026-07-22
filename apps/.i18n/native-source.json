@@ -41402,6 +41402,22 @@
       "id": "native.apple.b737f84578f558eb"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 769,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift",
+      "source": "Retry",
+      "surface": "apple",
+      "id": "native.apple.9a4c4bd6b41420ae"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 784,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayConnectionProblem.swift",
+      "source": "Check certificate",
+      "surface": "apple",
+      "id": "native.apple.2ace7dd34f4ca3a2"
+    },
+    {
       "kind": "conditional-branch",
       "line": 7,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayDiscoveryStatusText.swift",
