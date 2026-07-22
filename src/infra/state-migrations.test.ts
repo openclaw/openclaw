@@ -634,6 +634,24 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("does not let scoped automatic preflight satisfy a later full pass", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+
+    const scoped = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      allowCurrentStateSchemaFastPath: true,
+    });
+    const full = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(scoped.skipped).toBe(false);
+    expect(full.skipped).toBe(false);
+  });
+
   it("checks automatic migrations independently for each state directory", async () => {
     const root = await createTempDir();
     const stateDirs = [path.join(root, "state-a"), path.join(root, "state-b")];

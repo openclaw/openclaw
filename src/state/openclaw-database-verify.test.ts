@@ -327,7 +327,9 @@ describe("OpenClaw database integrity verifier", () => {
         message: expect.stringContaining("corrupt index"),
       }),
     );
-    expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+    expect(
+      repairOpenClawStateDatabaseSchema({ env, allowCurrentSchemaFastPath: true }).warnings,
+    ).toEqual([]);
     expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
   });
 });

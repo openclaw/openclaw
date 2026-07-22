@@ -191,6 +191,7 @@ describe("ensureConfigReady", () => {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        allowCurrentStateSchemaFastPath: true,
       });
     }
   });
@@ -212,6 +213,7 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
+      allowCurrentStateSchemaFastPath: true,
     });
   });
 
@@ -228,6 +230,7 @@ describe("ensureConfigReady", () => {
         migrateLegacyConfig: false,
         invalidConfigNote: false,
         observe: false,
+        allowCurrentStateSchemaFastPath: true,
       });
     },
   );
@@ -243,6 +246,7 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       observe: false,
+      allowCurrentStateSchemaFastPath: true,
     });
   });
 
@@ -285,6 +289,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      allowCurrentStateSchemaFastPath: true,
     });
   });
 
@@ -308,6 +313,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      allowCurrentStateSchemaFastPath: true,
     });
   });
 
@@ -332,6 +338,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      allowCurrentStateSchemaFastPath: true,
     });
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       migratedSnapshot.runtimeConfig,

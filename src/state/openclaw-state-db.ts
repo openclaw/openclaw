@@ -55,6 +55,7 @@ import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalStateSchemaShape,
+  detectOpenClawStateDatabaseSchemaMigrations,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   repairAgentDatabasesCompositePrimaryKey,
@@ -132,7 +133,46 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
-export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
+function canSkipCurrentStateDatabaseSchemaRepair(options: OpenClawStateDatabaseOptions): boolean {
+  const pathname = resolveDatabasePath(options);
+  if (terminalOpenLatch.get(pathname)) {
+    return false;
+  }
+  try {
+    if (readOpenClawDatabaseQuarantine(pathname, { env: options.env })) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const sqlite = requireNodeSqlite();
+  let db: DatabaseSync | undefined;
+  try {
+    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    assertSupportedSchemaVersion(db, pathname);
+    if (readSqliteUserVersion(db) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+      return false;
+    }
+    if (!tableExists(db, "schema_meta")) {
+      return false;
+    }
+    assertSqliteTableIntegrity(db, pathname, "schema_meta");
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+  try {
+    return detectOpenClawStateDatabaseSchemaMigrations(options).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function repairOpenClawStateDatabaseSchema(
+  options: OpenClawStateDatabaseOptions & { allowCurrentSchemaFastPath?: boolean } = {},
+): {
   changes: string[];
   warnings: string[];
 } {
@@ -142,6 +182,12 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     return { changes: [], warnings: [] };
   }
   ensureOpenClawStatePermissions(pathname, env);
+  // Automatic CLI preflight may use the same current-schema gate as normal
+  // runtime opens. Explicit Doctor and pending schema migrations still take
+  // the default full-file integrity path below.
+  if (options.allowCurrentSchemaFastPath && canSkipCurrentStateDatabaseSchemaRepair(options)) {
+    return { changes: [], warnings: [] };
+  }
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
   try {

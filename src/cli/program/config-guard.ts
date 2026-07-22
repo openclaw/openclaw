@@ -223,6 +223,7 @@ export async function ensureConfigReady(
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
+  const requiresStartupMigrationCheckpoint = shouldRequireStartupMigrationCheckpoint(commandPath);
   const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;
     const runDoctorConfigPreflight = async () =>
@@ -231,9 +232,9 @@ export async function ensureConfigReady(
         migrateLegacyConfig: false,
         invalidConfigNote: false,
         ...(commandName === "status" ? { observe: false } : {}),
-        ...(shouldRequireStartupMigrationCheckpoint(commandPath)
+        ...(requiresStartupMigrationCheckpoint
           ? { requireStartupMigrationCheckpoint: true }
-          : {}),
+          : { allowCurrentStateSchemaFastPath: true }),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),

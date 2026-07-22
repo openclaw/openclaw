@@ -877,6 +877,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
+  allowCurrentStateSchemaFastPath?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -894,6 +895,7 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const oauthDir = resolveOAuthDir(env, stateDir);
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+    allowCurrentSchemaFastPath: params.allowCurrentStateSchemaFastPath,
   });
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
@@ -1199,6 +1201,7 @@ export async function autoMigrateLegacyState(params: {
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  allowCurrentStateSchemaFastPath?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -1209,8 +1212,9 @@ export async function autoMigrateLegacyState(params: {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const migrationMode = params.doctorOnlyStateMigrations === true ? "doctor-repair" : "automatic";
+  const schemaPreflightMode = params.allowCurrentStateSchemaFastPath ? "scoped" : "full";
   const initialStateDir = resolveStateDir(env, homedir);
-  const checkKey = `${path.resolve(initialStateDir)}\0${migrationMode}`;
+  const checkKey = `${path.resolve(initialStateDir)}\0${migrationMode}\0${schemaPreflightMode}`;
   if (autoMigrateChecked.has(checkKey)) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
   }
@@ -1222,9 +1226,10 @@ export async function autoMigrateLegacyState(params: {
     log: params.log,
   });
   const stateDir = resolveStateDir(env, homedir);
-  autoMigrateChecked.add(`${path.resolve(stateDir)}\0${migrationMode}`);
+  autoMigrateChecked.add(`${path.resolve(stateDir)}\0${migrationMode}\0${schemaPreflightMode}`);
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+    allowCurrentSchemaFastPath: params.allowCurrentStateSchemaFastPath,
   });
   if (stateSchema.warnings.length > 0) {
     return {

@@ -407,6 +407,8 @@ export async function runDoctorConfigPreflight(
     skipPristineStartupStateMigrations?: boolean;
     /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
     doctorOnlyStateMigrations?: boolean;
+    /** Keep automatic CLI preflight on the current-schema scoped-integrity path. */
+    allowCurrentStateSchemaFastPath?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -583,6 +585,9 @@ export async function runDoctorConfigPreflight(
             await autoMigrateLegacyPluginDoctorState({
               config: pluginDoctorOnlyConfig,
               env: process.env,
+              ...(options.allowCurrentStateSchemaFastPath
+                ? { allowCurrentStateSchemaFastPath: true }
+                : {}),
             }),
           );
         } else if (stateMigrationInput.cfg) {
@@ -614,6 +619,9 @@ export async function runDoctorConfigPreflight(
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
               doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+              ...(options.allowCurrentStateSchemaFastPath
+                ? { allowCurrentStateSchemaFastPath: true }
+                : {}),
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -621,6 +629,9 @@ export async function runDoctorConfigPreflight(
             await autoMigrateLegacyPluginDoctorState({
               config: stateMigrationInput.pluginDoctorConfig,
               env: process.env,
+              ...(options.allowCurrentStateSchemaFastPath
+                ? { allowCurrentStateSchemaFastPath: true }
+                : {}),
             }),
           );
           noteStartupStateMigrationResult(
