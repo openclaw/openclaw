@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createThrowingRuntime } from "../onboard-non-interactive.test-helpers.js";
+import type { RuntimeEnv } from "../../runtime.js";
 
 const commitNonInteractiveOnboardConfigMock = vi.hoisted(() =>
   vi.fn(async (_params: { nextConfig: OpenClawConfig }) => undefined),
@@ -14,7 +14,13 @@ vi.mock("../../config/logging.js", () => ({ logConfigUpdated: vi.fn() }));
 const { runNonInteractiveRemoteSetup } = await import("./remote.js");
 
 describe("runNonInteractiveRemoteSetup", () => {
-  const runtime = createThrowingRuntime();
+  const runtime: RuntimeEnv = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: (code) => {
+      throw new Error(`unexpected exit ${code}`);
+    },
+  };
   const remoteUrl = "wss://gateway.example.test";
 
   beforeEach(() => {
