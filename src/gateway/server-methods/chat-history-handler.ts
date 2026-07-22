@@ -179,6 +179,7 @@ async function buildChatStartupMetadataResult(params: {
         config: params.cfg,
         snapshot: params.modelCatalog,
       },
+      preloadedOnly: true,
       ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
   } catch (err) {

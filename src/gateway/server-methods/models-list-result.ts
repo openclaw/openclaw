@@ -455,6 +455,7 @@ type BuildModelsListResultParams = {
     snapshot: ModelCatalogSnapshot;
   };
   catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
+  preloadedOnly?: boolean;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 };
 
@@ -491,6 +492,9 @@ export async function buildModelsListResult(
       if (preloadedCatalog && loadedReadOnly) {
         usedPreloadedCatalog = true;
         return preloadedCatalog.snapshot;
+      }
+      if (params.preloadedOnly) {
+        return { entries: [], routeVariants: [] };
       }
       loadedSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
         ...(params.agentId ? { agentId: params.agentId } : {}),

@@ -152,6 +152,30 @@ describe("models.list OpenAI routes", () => {
     expect(evaluateEntry).not.toHaveBeenCalled();
   });
 
+  it("does not start full discovery when restricted to a preloaded catalog", async () => {
+    const config = {} as OpenClawConfig;
+    const loadGatewayModelCatalogSnapshot = vi.fn();
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({
+        context,
+        params: { view: "all" },
+        preloadedCatalog: {
+          agentId: "main",
+          config,
+          snapshot: { entries: [catalogEntry("stale", "openai-responses")], routeVariants: [] },
+        },
+        preloadedOnly: true,
+      }),
+    ).resolves.toEqual({ models: [] });
+    expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses the published fallback owner's agent identity for projection", async () => {
     const config = {
       agents: {
