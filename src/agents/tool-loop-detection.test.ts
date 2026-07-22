@@ -1188,5 +1188,123 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck && loopResult.level).not.toBe("critical");
     });
   });
+
+  describe("global circuit breaker reachability (#109435)", () => {
+    function recordLoopVeto(
+      state: SessionState,
+      toolName: string,
+      params: unknown,
+      index: number,
+    ): void {
+      const toolCallId = `veto-${index}`;
+      recordToolCall(state, toolName, params, toolCallId, enabledLoopDetectionConfig);
+      recordToolCallOutcome(state, {
+        toolName,
+        toolParams: params,
+        toolCallId,
+        result: {
+          content: [{ type: "text", text: "blocked" }],
+          details: { status: "blocked", deniedReason: "tool-loop" },
+        },
+        config: enabledLoopDetectionConfig,
+      });
+    }
+
+    it("stays frozen at the critical block before any post-critical veto (dead breaker)", () => {
+      // Build a no-progress loop to the critical threshold. The next identical call is vetoed
+      // by the critical block; with the bug, those vetoes are recorded hash-less and the
+      // no-progress streak freezes below the global breaker threshold.
+      const fixture = createReadNoProgressFixture();
+      const state = createState();
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: CRITICAL_THRESHOLD,
+      });
+
+      // One loop veto past critical keeps the streak below the global breaker (30), so the
+      // critical block is what fires here, not the global circuit breaker.
+      recordLoopVeto(state, fixture.toolName, fixture.params, 0);
+      const loopResult = detectToolCallLoop(
+        state,
+        fixture.toolName,
+        fixture.params,
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).not.toBe("global_circuit_breaker");
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("escalates continued post-critical loop vetoes to the global circuit breaker", () => {
+      const fixture = createReadNoProgressFixture();
+      const state = createState();
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: CRITICAL_THRESHOLD,
+      });
+
+      // The agent keeps retrying the identical call after the critical block trips; each retry
+      // is vetoed and recorded. The global breaker is GLOBAL_CIRCUIT_BREAKER_THRESHOLD (30),
+      // so it must fire once the streak (20 real no-progress outcomes + vetoes) reaches it.
+      const vetoesToBreaker = GLOBAL_CIRCUIT_BREAKER_THRESHOLD - CRITICAL_THRESHOLD;
+      for (let i = 0; i < vetoesToBreaker; i += 1) {
+        recordLoopVeto(state, fixture.toolName, fixture.params, i);
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        fixture.toolName,
+        fixture.params,
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.message).toContain("global circuit breaker");
+      }
+    });
+
+    it("records non-loop blocked denials with their own hash, not the loop-veto sentinel", () => {
+      // Policy/approval denials (deniedReason != "tool-loop") must keep a real result hash and
+      // never receive the loop-veto sentinel, so only the loop detector's own veto extends the
+      // streak unconditionally (the distinction ClawSweeper flagged for #109435).
+      const state = createState();
+      const fixture = createReadNoProgressFixture();
+      const toolCallId = "plugin-veto";
+      recordToolCall(
+        state,
+        fixture.toolName,
+        fixture.params,
+        toolCallId,
+        enabledLoopDetectionConfig,
+      );
+      recordToolCallOutcome(state, {
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        toolCallId,
+        result: {
+          content: [{ type: "text", text: "blocked" }],
+          details: { status: "blocked", deniedReason: "plugin-before-tool-call" },
+        },
+        config: enabledLoopDetectionConfig,
+      });
+
+      const entry = state.toolCallHistory?.find((call) => call.toolCallId === toolCallId);
+      expect(entry?.resultHash).toBeTypeOf("string");
+      // The sentinel is the recognizable constant "tool-loop-veto"; a real outcome is a sha256
+      // hex digest, so a non-loop denial must never collide with the sentinel.
+      expect(entry?.resultHash).not.toBe("tool-loop-veto");
+      expect(entry?.resultHash).toMatch(/^[a-f0-9]{64}$/);
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

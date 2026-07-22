@@ -284,6 +284,14 @@ function isLoopVetoResult(details: Record<string, unknown>): boolean {
   return details.status === "blocked" && details.deniedReason === "tool-loop";
 }
 
+// A tool-loop veto is an explicit no-progress outcome. Recording it with a distinct
+// sentinel (rather than no hash) lets the no-progress streak keep advancing once critical
+// blocking begins, so the global circuit breaker stays reachable instead of freezing below
+// its threshold (#109435). The sentinel is a recognizable constant, never a sha256 digest,
+// so it cannot collide with a real outcome hash, and only isLoopVetoResult ever yields it,
+// keeping it distinct from policy/approval/abort denials that keep their own hash.
+const LOOP_VETO_RESULT_HASH = "tool-loop-veto";
+
 function hashToolOutcome(
   toolName: string,
   params: unknown,
@@ -303,10 +311,12 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
-  // The loop detector's own veto is not real progress; giving it no result hash keeps a
-  // critical loop block sticky instead of letting the block reset the streak (#89090).
+  // The loop detector's own veto is not real progress, but it IS an explicit no-progress
+  // outcome. Recording it with the loop-veto sentinel (rather than no hash) keeps a critical
+  // block sticky instead of letting it reset the streak (#89090) while still letting the
+  // streak advance so the global circuit breaker can fire (#109435).
   if (isLoopVetoResult(details)) {
-    return { resultHash: undefined };
+    return { resultHash: LOOP_VETO_RESULT_HASH };
   }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
@@ -395,12 +405,21 @@ function getNoProgressStreak(
     if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
       continue;
     }
+    if (record.resultHash === LOOP_VETO_RESULT_HASH) {
+      // A tool-loop veto is an explicit no-progress outcome. Count it and keep scanning so
+      // the streak advances past criticalThreshold once blocking begins — otherwise the
+      // global circuit breaker is unreachable dead code (#109435). The veto carries no
+      // concrete result identity, so the streak keeps being anchored by the surrounding
+      // real no-progress outcomes rather than resetting on the sentinel.
+      streak += 1;
+      continue;
+    }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
       continue;
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
-      streak = 1;
+      streak += 1;
       continue;
     }
     if (record.resultHash !== latestResultHash) {
