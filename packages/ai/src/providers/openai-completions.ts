@@ -18,6 +18,7 @@ import {
   calculateCost,
   clampThinkingLevel,
 } from "../model-utils.js";
+import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -32,6 +33,12 @@ import type {
   Tool,
   ToolCall,
 } from "../types.js";
+import {
+  clearPendingCommentaryText,
+  rememberPendingCommentaryTags,
+  tagPendingCommentaryText,
+  type PendingCommentaryTags,
+} from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -177,6 +184,7 @@ export const streamOpenAICompletions: StreamFunction<
       stopReason: "stop",
       timestamp: Date.now(),
     };
+    const provisionalCommentaryTags: PendingCommentaryTags = new Map();
 
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
@@ -498,11 +506,15 @@ export const streamOpenAICompletions: StreamFunction<
             appendPartitionedContent(refusalText, Boolean(foundReasoningField));
           }
 
-          if (choiceDelta.tool_calls) {
+          if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
             flushPartitionedContent();
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
+            rememberPendingCommentaryTags(
+              provisionalCommentaryTags,
+              tagPendingCommentaryText(output.content),
+            );
             for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
@@ -578,6 +590,12 @@ export const streamOpenAICompletions: StreamFunction<
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+      if (output.stopReason !== "toolUse") {
+        clearPendingCommentaryText(provisionalCommentaryTags);
+      }
+      if (output.stopReason === "toolUse") {
+        tagPendingCommentaryText(output.content);
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -797,51 +815,57 @@ function buildParams(
     }
   }
 
+  // Provider compat is authoritative; keep model-level and literal values as fallbacks
+  // for catalogs that have not adopted reasoningEffortMap.
+  const reasoningEffortMap = resolveOpenAIReasoningEffortMap(model);
+  const reasoningEffort =
+    options?.reasoningEffort === undefined
+      ? undefined
+      : (reasoningEffortMap[options.reasoningEffort] ??
+        model.thinkingLevelMap?.[options.reasoningEffort] ??
+        options.reasoningEffort);
+  const reasoningEnabled = reasoningEffort !== undefined;
+  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
+
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.thinking = options?.reasoningEffort
+    params.thinking = reasoningEnabled
       ? { type: "enabled", clear_thinking: false }
       : { type: "disabled" };
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    params.enable_thinking = reasoningEnabled;
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
     params.chat_template_kwargs = {
-      enable_thinking: Boolean(options?.reasoningEffort),
+      enable_thinking: reasoningEnabled,
       preserve_thinking: true,
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
-    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
-    if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      params.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    params.thinking = { type: reasoningEnabled ? "enabled" : "disabled" };
+    if (reasoningEnabled && compat.supportsReasoningEffort) {
+      params.reasoning_effort = reasoningEffort;
     }
   } else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
     // OpenRouter normalizes reasoning across providers via a nested reasoning object.
     const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
-    if (options?.reasoningEffort) {
-      openRouterParams.reasoning = {
-        effort: model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort,
-      };
-    } else if (model.thinkingLevelMap?.off !== null) {
-      openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+    if (reasoningEnabled) {
+      openRouterParams.reasoning = { effort: reasoningEffort };
+    } else if (offReasoningEffort !== null) {
+      openRouterParams.reasoning = { effort: offReasoningEffort ?? "none" };
     }
   } else if (compat.thinkingFormat === "together" && model.reasoning) {
     const togetherParams = params as Omit<typeof params, "reasoning_effort"> & {
       reasoning?: { enabled: boolean };
       reasoning_effort?: string;
     };
-    togetherParams.reasoning = { enabled: Boolean(options?.reasoningEffort) };
-    if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-      togetherParams.reasoning_effort =
-        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    togetherParams.reasoning = { enabled: reasoningEnabled };
+    if (reasoningEnabled && compat.supportsReasoningEffort) {
+      togetherParams.reasoning_effort = reasoningEffort;
     }
-  } else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+  } else if (reasoningEnabled && model.reasoning && compat.supportsReasoningEffort) {
     // OpenAI-style reasoning_effort
-    params.reasoning_effort =
-      model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
-  } else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-    const offValue = model.thinkingLevelMap?.off;
-    if (typeof offValue === "string") {
-      params.reasoning_effort = offValue;
+    params.reasoning_effort = reasoningEffort;
+  } else if (model.reasoning && compat.supportsReasoningEffort) {
+    if (typeof offReasoningEffort === "string") {
+      params.reasoning_effort = offReasoningEffort;
     }
   }
 

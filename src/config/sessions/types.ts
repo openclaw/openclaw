@@ -7,6 +7,7 @@ import type {
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
@@ -251,6 +252,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Operator identity captured once for this session generation. */
+    createdBy?: SessionCreatorIdentity;
     updatedAt: number;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;

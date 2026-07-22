@@ -6,6 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type {
   ApplicationContext,
@@ -14,6 +15,10 @@ import type {
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays.ts";
+import type {
+  SidebarWorkboardBoard,
+  SidebarWorkboardRenderers,
+} from "../components/app-sidebar-workboard.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -28,16 +33,26 @@ type SessionState = SessionCapability["state"];
 
 export type SidebarLifecycleState = HTMLElement & {
   activeRouteId?: string;
+  activeWorkboardBoardId: string;
+  enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
+  offline: boolean;
+  lastError: string | null;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  workboardBoards: readonly SidebarWorkboardBoard[];
+  workboardBoardsReady: boolean;
+  workboardRenderers?: SidebarWorkboardRenderers;
   sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
-  onNavigate: (routeId: string, options?: { search?: string; hash?: string }) => void;
+  onNavigate: (
+    routeId: string,
+    options?: { pathname?: string; search?: string; hash?: string },
+  ) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
@@ -48,6 +63,7 @@ export type SidebarLifecycleState = HTMLElement & {
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -66,6 +82,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -186,6 +203,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   );
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
+  const setCreatorFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
   );
@@ -227,6 +245,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     delete: deleteSession,
     deleteMany,
     list,
+    setCreatorFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -248,6 +267,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteSession,
     deleteMany,
     list,
+    setCreatorFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
