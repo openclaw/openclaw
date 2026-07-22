@@ -13,11 +13,9 @@ OpenClaw currently exposes three user-facing update channels:
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
-Separately, release operators can publish the trailing completed month's core
-package to npm `extended-stable` and its official Docker images to dedicated
-extended-stable aliases, beginning at patch `33`. The current-month regular
-final line continues on npm `latest` and Docker `latest`/`main`; the publication
-split does not by itself change CLI update-channel resolution.
+Operators can publish the trailing completed month to npm `extended-stable`
+and matching Docker aliases beginning at patch `33`. This does not move npm
+`latest`, Docker `latest`/`main`, or the CLI update channel.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -35,7 +33,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
 - `extended-stable` means the supported trailing-month npm package, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- The dedicated monthly extended-stable path publishes the core npm package and every npm-publishable official plugin at the same exact version. Its release tag also publishes exact Docker images to GHCR and Docker Hub, then advances only `extended-stable`, `extended-stable-slim`, and `extended-stable-browser`. It does not publish plugins to ClawHub or publish macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, mobile artifacts, or website downloads.
+- The monthly extended-stable path publishes the core and every npm-publishable official plugin at one version. Its tag publishes Docker images to GHCR and Docker Hub and moves only `extended-stable`, `extended-stable-slim`, and `extended-stable-browser`. It excludes ClawHub, native apps, GitHub Releases, private dist-tags, mobile artifacts, and website downloads.
 - Every regular final release ships the npm package, macOS app, signed standalone Android APK, and signed Windows Hub installers together. Beta releases normally validate and publish the npm/package path first, with native app build/sign/notarize/promote reserved for regular final unless explicitly requested.
 
 ## Release cadence
@@ -98,16 +96,12 @@ and push immutable `vYYYY.M.P` at that SHA. A post-tag source change requires a
 new patch version and new candidate; final extended-stable tags are never moved
 or deleted.
 
-Pushing the tag starts `Docker Release`. For a final patch `33` or later, that
-workflow publishes immutable default, slim, browser, and architecture tags to
-GHCR and Docker Hub. It advances only the three extended-stable Docker aliases;
-it must not move `latest`, `main`, or their variants. Require the Docker run and
-its attestation verification to succeed before declaring the release complete.
-If immutable images exist but a moving alias needs repair, dispatch `Docker
-Channel Promotion` from current `main` with the exact release tag. The separate
-workflow requires `docker-release` environment approval, verifies every source
-image manifest and its required SBOM/provenance attestations before moving any
-alias, and does not rebuild immutable images.
+Pushing the tag starts `Docker Release`, which publishes immutable default,
+slim, browser, and architecture tags to both registries and moves only the
+three extended-stable aliases. Require the run and attestation checks to pass.
+For alias-only repair, dispatch `Docker Channel Promotion` from current `main`
+with the exact tag. It requires `docker-release` approval and verifies source
+manifests, SBOMs, and provenance without rebuilding images.
 
 After both runs succeed, publish every npm-publishable official plugin from the
 same exact branch tip. Patch `P` must be `33` or greater. Pass the full release

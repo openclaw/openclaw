@@ -1,9 +1,9 @@
 # Extended-Stable Backport Preparation
 
-Prepare the next npm and Docker maintenance patch for the active `extended-stable` line.
-Discover the complete candidate set, obtain maintainer approval, and prepare
-the approved commits as one coordinated PR. Treat commits as canonical; use
-PRs, issues, ClawSweeper reports, and advisories as supporting context.
+Prepare the next npm and Docker patch for the active `extended-stable` line.
+Discover the complete candidate set, obtain approval, and prepare one
+coordinated PR. Commits are canonical; PRs, issues, ClawSweeper reports, and
+advisories provide context.
 
 Read `backport-discovery.md` first. Its evidence-driven inventory, detached
 baseline applicability probes, advisory reconciliation, and durable unreleased
@@ -15,16 +15,13 @@ extended-stable package and publication constraints.
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
   workflows from a pinned current `origin/main` before resolving the line.
-- Target npm and Docker `extended-stable` and the canonical
-  `extended-stable/YYYY.M.33` branch. The user-facing `extended-stable` update
-  channel resolves that selector; user-facing `stable` continues to resolve
-  npm `latest`.
+- Target npm and Docker `extended-stable` on
+  `extended-stable/YYYY.M.33`; user-facing `stable` remains npm `latest`.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
-- Treat the current-main Docker release workflow and its release-policy helper
-  as mandatory release infrastructure in the tagged tree, not optional
-  backport candidates. GitHub evaluates tag-push workflows from that tree.
+- Carry the current-main Docker release workflow and policy helper in the
+  tagged tree; tag-push workflows use that copy.
 - Exclude ClawHub publication, GitHub Releases, native apps, mobile artifacts,
   website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.
