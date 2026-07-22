@@ -1,6 +1,6 @@
 /**
- * Public model-reference parser retained at its shipped Plugin SDK declaration
- * path. Provider/model normalization itself lives in model-ref-shared.
+ * Internal declaration anchor for parser and lookup exports consumed by the
+ * public Plugin SDK barrel. Provider/model normalization lives in model-ref-shared.
  */
 import { findNormalizedProviderValue as findNormalizedProviderValueCore } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
