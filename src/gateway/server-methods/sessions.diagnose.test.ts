@@ -8,10 +8,9 @@ import {
 } from "../../agents/embedded-agent-runner/run-state.js";
 import { resolveEmbeddedSessionFileKey } from "../../agents/embedded-agent-runner/session-file-key.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  markDiagnosticRunProgressForTest,
-  resetDiagnosticRunActivityForTest,
-} from "../../logging/diagnostic-run-activity.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticRunProgressForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import { writeSessionStore } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -255,13 +254,11 @@ test("sessions.diagnose picks an embedded active session beyond the bounded newe
 });
 
 test("sessions.diagnose keeps file-indexed embedded active sessions during final ranking", async () => {
-  const { dir } = await createSessionStoreDir();
-  const sessionFile = path.join(dir, "sess-file-indexed.jsonl");
+  const { storePath } = await createSessionStoreDir();
   const now = Date.now();
   await writeSessionStore({
     entries: {
       "agent:main:file-indexed": sessionStoreEntry("sess-stored-file-indexed", {
-        sessionFile,
         status: "running",
         updatedAt: 1,
       }),
@@ -270,8 +267,17 @@ test("sessions.diagnose keeps file-indexed embedded active sessions during final
       }),
     },
   });
+  const persistedEntry = loadSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:file-indexed",
+    storePath,
+  });
+  const persistedSessionFile = persistedEntry?.sessionFile;
+  if (!persistedSessionFile) {
+    throw new Error("expected persisted sessionFile");
+  }
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
-    resolveEmbeddedSessionFileKey(sessionFile),
+    resolveEmbeddedSessionFileKey(persistedSessionFile),
     "sess-live-file-indexed",
   );
   ACTIVE_EMBEDDED_RUNS.set("sess-live-file-indexed", {
@@ -425,6 +431,7 @@ test("sessions.diagnose keeps the source agent for global fallback rows", async 
   });
   await writeSessionStore({
     storePath: workStorePath,
+    agentId: "work",
     entries: {
       global: sessionStoreEntry("sess-work-global", { updatedAt: 20 }),
     },
@@ -487,6 +494,7 @@ test("sessions.diagnose scopes unknown fallback active runs to the requested age
   });
   await writeSessionStore({
     storePath: workStorePath,
+    agentId: "work",
     entries: {
       unknown: sessionStoreEntry("sess-work-unknown", { updatedAt: 20 }),
     },
@@ -592,6 +600,7 @@ test("sessions.diagnose rejects ambiguous label selectors across agent global ro
   });
   await writeSessionStore({
     storePath: workStorePath,
+    agentId: "work",
     entries: {
       global: sessionStoreEntry("sess-work-global", { label: "ops", updatedAt: 2 }),
     },
@@ -638,6 +647,7 @@ test("sessions.diagnose rejects ambiguous session-id selectors across agent unkn
   });
   await writeSessionStore({
     storePath: workStorePath,
+    agentId: "work",
     entries: {
       unknown: sessionStoreEntry("sess-shared", { updatedAt: 2 }),
     },

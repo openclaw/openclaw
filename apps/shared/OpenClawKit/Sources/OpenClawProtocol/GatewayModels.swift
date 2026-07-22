@@ -4572,13 +4572,13 @@ public struct SessionsDiagnoseParams: Codable, Sendable {
     public let tail: Int?
 
     public init(
-        key: String?,
-        sessionid: String?,
-        label: String?,
+        key: String? = nil,
+        sessionid: String? = nil,
+        label: String? = nil,
         agentid: String? = nil,
-        includeglobal: Bool?,
-        includeunknown: Bool?,
-        tail: Int?)
+        includeglobal: Bool? = nil,
+        includeunknown: Bool? = nil,
+        tail: Int? = nil)
     {
         self.key = key
         self.sessionid = sessionid
@@ -4619,12 +4619,12 @@ public struct SessionsDiagnoseResult: Codable, Sendable {
         ts: Int,
         outcome: AnyCodable,
         selector: [String: AnyCodable],
-        chosenbecause: String?,
+        chosenbecause: String? = nil,
         summary: [String: AnyCodable],
         session: [String: AnyCodable],
         live: [String: AnyCodable],
-        transcript: [String: AnyCodable]?,
-        delivery: [String: AnyCodable]?,
+        transcript: [String: AnyCodable]? = nil,
+        delivery: [String: AnyCodable]? = nil,
         findings: [[String: AnyCodable]],
         nextchecks: [String])
     {
