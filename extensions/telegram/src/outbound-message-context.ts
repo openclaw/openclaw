@@ -146,6 +146,9 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(params.promptContextProjection
         ? { promptContextProjection: params.promptContextProjection }
         : {}),
+      ...(params.message.message_thread_id !== undefined
+        ? { providerObservedThreadId: params.message.message_thread_id }
+        : {}),
       ...(params.messageThreadId !== undefined ? { threadId: params.messageThreadId } : {}),
     });
     const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);

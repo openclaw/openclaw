@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
+import {
+  createTelegramMessageCache,
+  hasProviderObservedTelegramThreadBinding,
+  resolveTelegramMessageCacheScope,
+} from "./message-cache.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
@@ -103,6 +107,41 @@ describe("recordOutboundMessageForPromptContext", () => {
       },
     });
     expect(cached?.sourceMessage.from).not.toHaveProperty("last_name");
+  });
+
+  it("binds topics only when the successful provider response identifies the thread", async () => {
+    const common = {
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1001,
+      messageId: 700,
+      text: "Bot just replied",
+      messageThreadId: 77,
+    } as const;
+    const callerOnlyThread = await recordAndRead({
+      ...common,
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 700,
+        text: "Bot just replied",
+      },
+    });
+    expect(hasProviderObservedTelegramThreadBinding(callerOnlyThread, 77)).toBe(false);
+
+    const providerThread = await recordAndRead({
+      ...common,
+      messageId: 701,
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_701,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 701,
+        message_thread_id: 77,
+        text: "Bot replied in the topic",
+      },
+    });
+    expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
   });
 
   it("falls back to the Telegram bot name when no configured name exists", async () => {
