@@ -17,7 +17,7 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 
 type SessionMemberDatabase = Pick<OpenClawAgentKyselyDatabase, "session_members">;
 
-export type SessionMember = {
+type SessionMember = {
   identityId: string;
   addedBy: string;
   addedAt: number;

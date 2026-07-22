@@ -1,16 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   allowedSessionVisibilities,
   authorizeSessionMutation,
   canReceiveSessionEvent,
-  canMutateSession,
   filterDraftSessionsForClient,
-  resolveSessionMutationTarget,
   resolveSessionSharingRole,
   resolveSessionVisibility,
-  type SessionSharingTarget,
 } from "./session-sharing.js";
+
+afterEach(() => closeOpenClawAgentDatabasesForTest());
+
+type SharingTarget = Parameters<typeof resolveSessionSharingRole>[0]["target"];
 
 function client(params: {
   user?: string;
@@ -57,7 +61,11 @@ function client(params: {
   };
 }
 
-function target(createdActor?: { type: "human"; id: string; label?: string }): SessionSharingTarget {
+function target(createdActor?: {
+  type: "human";
+  id: string;
+  label?: string;
+}): SharingTarget {
   return {
     agentId: "main",
     canonicalKey: "agent:main:main",
@@ -75,7 +83,6 @@ describe("session sharing policy", () => {
   it("keeps identity-less solo mode owner-equivalent for restricted sessions", () => {
     const role = resolveSessionSharingRole({ client: client({}), target: target() });
     expect(role).toBe("owner");
-    expect(canMutateSession({ role, visibility: "draft" })).toBe(true);
   });
 
   it("uses only the trusted operator identity prepared during connection admission", () => {
@@ -128,30 +135,55 @@ describe("session sharing policy", () => {
     ]);
   });
 
-  it("keeps agent scope with indirect run and approval targets", () => {
-    const context = {
-      chatAbortControllers: new Map([["run-1", { sessionKey: "global", agentId: "work" }]]),
-      execApprovalManager: {
-        lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
-        getSnapshot: () => ({ request: { sessionKey: "global", agentId: "work" } }),
-      },
-    } as never;
-    expect(
-      resolveSessionMutationTarget({
-        cfg: {},
-        method: "sessions.abort",
-        requestParams: { runId: "run-1" },
-        context,
-      }),
-    ).toEqual({ sessionKey: "global", agentId: "work" });
-    expect(
-      resolveSessionMutationTarget({
-        cfg: {},
-        method: "exec.approval.resolve",
-        requestParams: { id: "approval-1" },
-        context,
-      }),
-    ).toEqual({ sessionKey: "global", agentId: "work" });
+  it("keeps agent scope for indirect run and approval authorization", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "global" },
+        { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
+      );
+      await upsertSessionEntry(
+        { agentId: "work", sessionKey: "global" },
+        {
+          sessionId: "session-work-global",
+          updatedAt: 1,
+          visibility: "read-only",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:solo-draft" },
+        { sessionId: "session-solo-draft", updatedAt: 1, visibility: "draft" },
+      );
+      const context = {
+        chatAbortControllers: new Map([["run-1", { sessionKey: "global", agentId: "work" }]]),
+        execApprovalManager: {
+          lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
+          getSnapshot: () => ({ request: { sessionKey: "global", agentId: "work" } }),
+        },
+      } as never;
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      } as never;
+      const outsider = client({ user: "outsider@example.com" });
+
+      for (const [method, requestParams] of [
+        ["sessions.abort", { runId: "run-1" }],
+        ["exec.approval.resolve", { id: "approval-1" }],
+      ] as const) {
+        expect(
+          authorizeSessionMutation({ cfg, client: outsider, method, requestParams, context }),
+        ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      }
+      expect(
+        authorizeSessionMutation({
+          cfg,
+          client: client({}),
+          method: "chat.send",
+          requestParams: { sessionKey: "agent:main:solo-draft" },
+          context,
+        }),
+      ).toBeNull();
+    });
   });
 
   it("fails closed when a required session mutation has no target", () => {

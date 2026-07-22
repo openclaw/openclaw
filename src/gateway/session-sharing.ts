@@ -25,7 +25,7 @@ import {
 const ADMIN_SCOPE = "operator.admin";
 const SNAPSHOT_CACHE_LIMIT = 2_048;
 
-export type SessionSharingTarget = {
+type SessionSharingTarget = {
   agentId: string;
   canonicalKey: string;
   entry: SessionEntry;
@@ -135,7 +135,7 @@ export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
 }
 
-export function canMutateSession(params: {
+function canMutateSession(params: {
   role: SessionSharingRole;
   visibility: SessionVisibility;
 }): boolean {
@@ -289,7 +289,7 @@ function resolveApprovalSessionTarget(
     : undefined;
 }
 
-export function resolveSessionMutationTargets(params: {
+function resolveSessionMutationTargets(params: {
   cfg: OpenClawConfig;
   method: string;
   requestParams: unknown;
@@ -345,15 +345,6 @@ export function resolveSessionMutationTargets(params: {
   return run
     ? [{ sessionKey: run.sessionKey, ...(run.agentId ? { agentId: run.agentId } : {}) }]
     : undefined;
-}
-
-export function resolveSessionMutationTarget(params: {
-  cfg: OpenClawConfig;
-  method: string;
-  requestParams: unknown;
-  context: GatewayRequestContext;
-}): SessionMutationTarget | undefined {
-  return resolveSessionMutationTargets(params)?.[0];
 }
 
 export function authorizeSessionMutation(params: {

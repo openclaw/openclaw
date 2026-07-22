@@ -26,7 +26,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
-export type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
+type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionOrigin = {
   label?: string;
