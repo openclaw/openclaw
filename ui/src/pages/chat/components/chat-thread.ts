@@ -47,6 +47,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
 import { resolveTurnRecap } from "../chat-progress.ts";
+import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -117,6 +118,8 @@ type ChatThreadProps = {
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
+  /** Coarse startup stage shown until assistant or tool activity becomes visible. */
+  startupStatus?: ChatRunStartupStatus | null;
   /** Re-labels the working spark while the active run is parked on an approval. */
   waitingApproval?: boolean;
   planStatus?: PlanStatus | null;
@@ -1289,6 +1292,7 @@ function renderChatThreadContents(
         questionPrompts,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
+        startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
@@ -1380,6 +1384,7 @@ function renderChatThreadContents(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
+    props.startupStatus?.phase,
     Boolean(props.waitingApproval),
     props.planStatus,
     props.questionPrompts,
