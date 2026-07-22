@@ -11,6 +11,7 @@ const digest = `sha256:${"1".repeat(64)}`;
 
 type WorkflowStep = {
   env?: Record<string, string>;
+  if?: string;
   name?: string;
   run?: string;
   uses?: string;
@@ -141,9 +142,11 @@ describe("Docker channel promotion", () => {
     );
   });
 
-  it("gates every registry mutation behind approval and attestation verification", () => {
+  it("uses the same attestation-gated promotion path for releases and repairs", () => {
     const workflow = readWorkflow(".github/workflows/docker-channel-promote.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/docker-release.yml");
+    const createManifest = requireJob(releaseWorkflow, "create-manifest");
+    const verifyAttestations = requireJob(releaseWorkflow, "verify-attestations");
     const resolve = requireJob(workflow, "resolve");
     const approve = requireJob(workflow, "approve");
     const promote = requireJob(workflow, "promote");
@@ -154,6 +157,38 @@ describe("Docker channel promotion", () => {
       "cancel-in-progress": false,
       queue: "max",
     });
+    expect(verifyAttestations.permissions).toEqual({ contents: "read", packages: "write" });
+
+    const manifestTagStep = createManifest.steps?.find(
+      (step) => step.name === "Resolve manifest tags",
+    );
+    expect(manifestTagStep?.run).not.toContain("alias");
+    expect(manifestTagStep?.env).not.toHaveProperty("DEFAULT_ALIASES");
+
+    const releaseSteps = verifyAttestations.steps ?? [];
+    const resolveRefsStep = releaseSteps.find((step) => step.name === "Resolve image refs");
+    expect(resolveRefsStep?.run).not.toContain("alias");
+    expect(resolveRefsStep?.env).not.toHaveProperty("DEFAULT_ALIASES");
+    const releaseAttestationIndex = releaseSteps.findIndex(
+      (step) => step.name === "Verify Docker attestations",
+    );
+    const releasePromotionIndex = releaseSteps.findIndex(
+      (step) => step.name === "Promote and verify channel aliases",
+    );
+    expect(releaseAttestationIndex).toBeGreaterThan(-1);
+    expect(releasePromotionIndex).toBeGreaterThan(releaseAttestationIndex);
+    expect(releaseSteps[releasePromotionIndex]?.if).toBe(
+      "${{ github.event_name != 'workflow_dispatch' && needs.resolve_release_policy.outputs.channel != 'beta' }}",
+    );
+    expect(releaseSteps[releasePromotionIndex]?.run).toContain(
+      "node scripts/docker-channel-promote.mjs",
+    );
+    expect(
+      Object.values(releaseWorkflow.jobs ?? {}).flatMap((job) =>
+        (job.steps ?? []).filter((step) => step.run?.includes("docker-channel-promote.mjs")),
+      ),
+    ).toHaveLength(1);
+
     expect(resolve.permissions).toEqual({ contents: "read" });
     expect(resolve.steps?.find((step) => step.uses?.startsWith("actions/checkout@"))?.with).toEqual(
       expect.objectContaining({ ref: "${{ github.sha }}", "persist-credentials": false }),
