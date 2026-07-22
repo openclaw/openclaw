@@ -25,11 +25,12 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
-      "Intro",
-      "  ```js\n  const x = 1;\n  ```",
-      "Outro",
-    ]);
+    // #42106: non-final per-paragraph deliveries carry their trailing "\n\n" so the
+    // separate deliveries reconstruct the inter-paragraph separator; the fence stays
+    // intact and the terminal delivery stays trimmed.
+    const indentedDelivered = extractTextPayloads(onBlockReply.mock.calls);
+    expect(indentedDelivered).toEqual(["Intro\n\n", "  ```js\n  const x = 1;\n  ```\n\n", "Outro"]);
+    expect(indentedDelivered.join("")).toBe(text);
   });
   it("accepts longer fence markers for close", () => {
     const onBlockReply = vi.fn();
@@ -46,6 +47,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     const payloadTexts = extractTextPayloads(onBlockReply.mock.calls);
-    expect(payloadTexts).toEqual(["Intro", "````md\nline1\nline2\n````", "Outro"]);
+    // #42106: non-final deliveries carry their trailing "\n\n"; the longer-marker fence
+    // stays intact and the deliveries reconstruct the source.
+    expect(payloadTexts).toEqual(["Intro\n\n", "````md\nline1\nline2\n````\n\n", "Outro"]);
+    expect(payloadTexts.join("")).toBe(text);
   });
 });
