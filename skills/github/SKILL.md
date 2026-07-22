@@ -32,7 +32,21 @@ gh auth status
 gh auth login
 ```
 
-Gateway HOME can differ from operator HOME. If `gh` auth exists elsewhere, set `GH_CONFIG_DIR` in the gateway service env and restart.
+### Restart after installing `gh`
+
+Skill availability is snapshotted when the Gateway starts. If you installed `gh`
+(or changed your `PATH`) while OpenClaw was already running, restart the Gateway
+so the GitHub skill can load:
+
+```bash
+openclaw gateway restart
+```
+
+### Gateway `HOME` vs operator `HOME`
+
+Gateway `HOME` can differ from your shell `HOME`. If `gh auth status` works in
+your terminal but the GitHub skill still cannot see your login, set
+`GH_CONFIG_DIR` in the Gateway service environment and restart the Gateway.
 
 ## PRs
 
