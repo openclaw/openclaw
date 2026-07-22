@@ -27,7 +27,7 @@ const INVALID_BASE_URL_ERROR = "ClickClack base URL must be a valid http(s) URL.
 const SETUP_CODE_CONFLICT_ERROR =
   "ClickClack --code cannot be combined with --token, --token-file, or --use-env.";
 
-export type ClickClackSetupInput = ChannelSetupInput & {
+type ClickClackSetupInput = ChannelSetupInput & {
   baseUrl?: string;
   code?: string;
   workspace?: string;

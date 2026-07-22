@@ -1,5 +1,6 @@
 // ClickClack tests cover non-interactive setup validation and config writes.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,8 +19,14 @@ import {
   applyClickClackCredentialConfig,
   clickClackSetupAdapter,
   normalizeClickClackBaseUrl,
-  type ClickClackSetupInput,
 } from "./setup-core.js";
+
+type ClickClackSetupInput = ChannelSetupInput & {
+  baseUrl?: string;
+  code?: string;
+  workspace?: string;
+  agentActivity?: boolean;
+};
 
 // Structural stand-in for the internal claim error: the setup formatter
 // duck-types on a numeric `status`, so tests need only that shape.
