@@ -434,6 +434,76 @@ describe("session-memory hook", () => {
     });
   });
 
+  it("writes into a configured subdir with date tokens", async () => {
+    await withEnvAsync({ TZ: "UTC" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg: {
+          agents: { defaults: { workspace: tempDir } },
+          hooks: {
+            internal: {
+              entries: {
+                "session-memory": { enabled: true, subdir: "sessions/{YYYY-MM}" },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        previousSessionEntry: { sessionId: "subdir-session" },
+      });
+      event.timestamp = new Date("2026-01-01T04:30:15.000Z");
+
+      await handler(event);
+      await flushSessionMemoryWritesForTest();
+
+      const nestedDir = path.join(tempDir, "memory", "sessions", "2026-01");
+      await expect(fs.readdir(nestedDir)).resolves.toEqual(["2026-01-01-0430.md"]);
+
+      // Top level of memory/ stays free of session-note files.
+      const topLevel = await fs.readdir(path.join(tempDir, "memory"));
+      expect(topLevel.filter((entry) => entry.endsWith(".md"))).toEqual([]);
+    });
+  });
+
+  it("ignores subdir path traversal and stays inside memory/", async () => {
+    await withEnvAsync({ TZ: "UTC" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg: {
+          agents: { defaults: { workspace: tempDir } },
+          hooks: {
+            internal: {
+              entries: {
+                "session-memory": { enabled: true, subdir: "../../escape" },
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        previousSessionEntry: { sessionId: "traversal-session" },
+      });
+      event.timestamp = new Date("2026-01-01T04:30:15.000Z");
+
+      await handler(event);
+      await flushSessionMemoryWritesForTest();
+
+      // Leading `../` is stripped; the note lands under memory/escape, never above memory/.
+      await expect(fs.readdir(path.join(tempDir, "memory", "escape"))).resolves.toEqual([
+        "2026-01-01-0430.md",
+      ]);
+    });
+  });
+
+  it("keeps top-level behavior when subdir is unset (backward compatible)", async () => {
+    await withEnvAsync({ TZ: "UTC" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+      const { files } = await runNewWithPreviousSessionEntry({
+        tempDir,
+        timestamp: new Date("2026-01-01T04:30:15.000Z"),
+        previousSessionEntry: { sessionId: "no-subdir" },
+      });
+      expect(files).toEqual(["2026-01-01-0430.md"]);
+    });
+  });
+
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
