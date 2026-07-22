@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MeetingBrowserJoinSession,
   MeetingManualActionCategory,
-  MeetingPlatformAdapter,
+  MeetingRuntimePlatformAdapter,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
@@ -234,7 +234,7 @@ function classifyMeetManualAction(
   };
 }
 
-export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingPlatformAdapter<
+export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
   MeetingBrowserJoinSession<GoogleMeetMode>,
   GoogleMeetMode,
   GoogleMeetChromeHealth,

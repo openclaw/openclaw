@@ -2,7 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MeetingBrowserJoinSession,
   MeetingManualActionCategory,
-  MeetingPlatformAdapter,
+  MeetingRuntimePlatformAdapter,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsMode } from "../config.js";
 import {
@@ -257,7 +257,7 @@ function parseTranscript(
   };
 }
 
-export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
+export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
   MeetingBrowserJoinSession<TeamsMeetingsMode>,
   TeamsMeetingsMode,
   TeamsMeetingsChromeHealth,
