@@ -79,6 +79,22 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     ],
   }),
   deprecatedCompatRecord({
+    code: "doctor-model-compat-catalog-ownership",
+    deprecated: "2026-07-21",
+    warningStarts: "2026-07-21",
+    removeAfter: "2026-09-22",
+    owner: "provider",
+    introduced: "2026-07-21",
+    source: "model compat capability ownership moved from known-model config to provider catalogs",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.models.ts",
+    replacement: "provider catalog compat metadata, with config compat reserved for custom routes",
+    docsPath: "/gateway/config-tools",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.models.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-tier-eval-tranche",
     deprecated: "2026-07-20",
     warningStarts: "2026-07-20",

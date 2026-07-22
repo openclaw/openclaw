@@ -226,9 +226,7 @@ const ModelCompatSchema = z
     requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
-    nativeWebSearchTool: z.boolean().optional(),
     toolCallArgumentsEncoding: z.string().optional(),
-    requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()

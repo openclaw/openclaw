@@ -192,6 +192,8 @@ describe("dead config keys", () => {
     "cloudWorkers.profiles.default.lifetime",
     "mcp.servers.docs.workingDirectory",
     "nodeHost.mcp.servers.docs.workingDirectory",
+    "models.providers.custom.models.0.compat.requiresMistralToolIds",
+    "models.providers.custom.models.0.compat.nativeWebSearchTool",
   ] as const)("rejects retired tuning knob %s", (fullPath) => {
     const segments = fullPath.split(".");
     const key = segments.pop() ?? "";
