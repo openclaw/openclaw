@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { TalkEvent, TalkEventType } from "./talk-events.js";
 
-export type TalkActivityState = "idle" | "listening" | "thinking" | "speaking" | "error";
+type TalkActivityState = "idle" | "listening" | "thinking" | "speaking" | "error";
 
 type TalkActivityEventBase = {
   activityId: string;
   timestamp: string;
 };
 
-export type TalkActivityEvent = TalkActivityEventBase &
+type TalkActivityEvent = TalkActivityEventBase &
   (
     | { type: "started" }
     | { type: "state"; state: TalkActivityState }
@@ -17,7 +17,7 @@ export type TalkActivityEvent = TalkActivityEventBase &
     | { type: "ended" }
   );
 
-export type TalkActivityListener = (event: TalkActivityEvent) => void | Promise<void>;
+type TalkActivityListener = (event: TalkActivityEvent) => void | Promise<void>;
 
 type Activity = {
   id: string;

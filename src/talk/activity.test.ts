@@ -14,7 +14,9 @@ function createTalk(sessionId: string) {
 describe("Talk activity", () => {
   it("publishes anonymous lifecycle and speech activity", async () => {
     const events: Array<Record<string, unknown>> = [];
-    const stop = watchTalkActivity((event) => events.push(event));
+    const stop = watchTalkActivity((event) => {
+      events.push(event);
+    });
     const talk = createTalk("private-session-id");
 
     talk.emit({ type: "session.ready", payload: {} });
