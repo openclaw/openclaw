@@ -40,6 +40,7 @@ type ToolCatalogEntry = {
   optional?: boolean;
   risk?: "low" | "medium" | "high";
   tags?: string[];
+  parameters?: string[];
   defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
 };
 
@@ -64,6 +65,7 @@ function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): Tool
       label: tool.label,
       description: tool.description,
       source: "core",
+      parameters: tool.parameters,
       defaultProfiles: resolveCoreToolProfiles(tool.id),
     })),
   }));
@@ -220,6 +222,7 @@ function buildToolsCatalogResult(params: {
     agentId,
     profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
     groups,
+    tools: groups.flatMap((group) => group.tools),
   };
 }
 

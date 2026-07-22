@@ -40,6 +40,7 @@ type CoreToolSection = {
     id: string;
     label: string;
     description: string;
+    parameters?: string[];
   }>;
 };
 
@@ -49,6 +50,7 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
+  parameters?: string[];
   includeInOpenClawGroup?: boolean;
 };
 
@@ -171,6 +173,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
+    parameters: [],
     includeInOpenClawGroup: true,
   },
   {
@@ -179,6 +182,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
+    parameters: ["sessionKey", "limit", "includeTools"],
     includeInOpenClawGroup: true,
   },
   {
@@ -227,6 +231,62 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
+    parameters: [
+      "task",
+      "taskName",
+      "runtime",
+      "mode",
+      "agentId",
+      "client_request_id",
+      "idempotency_key",
+      "gateway_lease_id",
+      "metadata",
+    ],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "subagents.allowLease.acquire",
+    label: "subagents.allowLease.acquire",
+    description: "Acquire an Agentic OS runtime contract allow lease",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    parameters: [
+      "client_lease_id",
+      "idempotency_key",
+      "run_id",
+      "phase",
+      "transition_id",
+      "agent_id",
+      "requester_agent_id",
+      "ttl_ms",
+    ],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "subagents.allowLease.status",
+    label: "subagents.allowLease.status",
+    description: "List active Agentic OS runtime contract allow leases",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    parameters: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "subagents.allowLease.release",
+    label: "subagents.allowLease.release",
+    description: "Release an Agentic OS runtime contract allow lease",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    parameters: [
+      "client_lease_id",
+      "idempotency_key",
+      "run_id",
+      "phase",
+      "transition_id",
+      "agent_id",
+      "requester_agent_id",
+      "gateway_lease_id",
+    ],
     includeInOpenClawGroup: true,
   },
   {
@@ -259,6 +319,15 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "sessions_status",
+    label: "sessions_status",
+    description: "Read Agentic OS runtime contract session status",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    parameters: ["session_key"],
     includeInOpenClawGroup: true,
   },
   {
@@ -556,6 +625,7 @@ export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreT
       id: tool.id,
       label: tool.label,
       description: tool.description,
+      parameters: tool.parameters ? [...tool.parameters] : undefined,
     })),
   })).filter((section) => section.tools.length > 0);
 }

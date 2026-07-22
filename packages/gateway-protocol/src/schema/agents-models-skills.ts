@@ -822,6 +822,7 @@ export const ToolCatalogEntrySchema = closedObject({
     Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
   ),
   tags: Type.Optional(Type.Array(NonEmptyString)),
+  parameters: Type.Optional(Type.Array(NonEmptyString)),
   defaultProfiles: Type.Array(
     Type.Union([
       Type.Literal("minimal"),
@@ -846,6 +847,7 @@ export const ToolsCatalogResultSchema = closedObject({
   agentId: NonEmptyString,
   profiles: Type.Array(ToolCatalogProfileSchema),
   groups: Type.Array(ToolCatalogGroupSchema),
+  tools: Type.Optional(Type.Array(ToolCatalogEntrySchema)),
 });
 
 /** Effective tool entry after session/profile/channel/plugin filtering. */

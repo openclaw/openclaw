@@ -89,6 +89,12 @@ const SessionStatusToolSchema = Type.Object({
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
+export function createSessionsStatusToolSchema() {
+  return Type.Object({
+    session_key: Type.String(),
+  });
+}
+
 const SessionStatusOriginSchema = Type.Object(
   {
     provider: Type.Optional(Type.String()),
@@ -535,6 +541,7 @@ export function createSessionStatusTool(opts?: {
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
   activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
+  void createSessionsStatusToolSchema;
   return {
     label: "Session Status",
     name: "session_status",
