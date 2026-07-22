@@ -453,6 +453,9 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "board.prompt.authorize", scope: "operator.read", since: "2026.7" },
   { name: "board.data.read", scope: "operator.read", since: "2026.7" },
   { name: "board.action", scope: "operator.write", since: "2026.7" },
+  // Exact session subscription gates the already-sanitized observer context;
+  // the answer is ephemeral and never mutates the run or its transcript.
+  { name: "sessions.observer.ask", scope: "operator.read", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

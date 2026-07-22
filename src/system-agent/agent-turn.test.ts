@@ -202,6 +202,8 @@ describe("runSystemAgentTurn", () => {
         authProfileId: "openai:p2",
         authFingerprint,
         agentHarnessId: "openclaw",
+        modelId: executionRoute.model,
+        modelApi: "openai-responses",
       },
       deps: authDeps,
     });
@@ -754,9 +756,9 @@ describe("runSystemAgentTurn", () => {
 
   it("rejects an executable-policy change and invalidates CLI continuity", async () => {
     useTempStateDir();
-    const configForGlobalPolicy = (security: "full" | "deny", ask: "off" | "always") =>
+    const configForGlobalPolicy = (mode: "full" | "deny") =>
       ({
-        tools: { exec: { security, ask } },
+        tools: { exec: { mode } },
         agents: {
           defaults: {
             cliBackends: { "claude-cli": { command: "claude" } },
@@ -768,7 +770,7 @@ describe("runSystemAgentTurn", () => {
               default: true,
               // Keep the model owner's policy stable. OpenClaw executes with
               // its own identity and therefore follows the changing global policy.
-              tools: { exec: { security: "allowlist", ask: "on-miss" } },
+              tools: { exec: { mode: "ask" } },
             },
           ],
         },
@@ -784,10 +786,10 @@ describe("runSystemAgentTurn", () => {
     }));
     const readConfigFileSnapshot = vi
       .fn()
-      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full", "off")))
-      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full", "off")))
-      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("deny", "always")));
-    const { session, deps } = await createVerifiedSession(configForGlobalPolicy("full", "off"));
+      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full")))
+      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("full")))
+      .mockResolvedValueOnce(configSnapshot(configForGlobalPolicy("deny")));
+    const { session, deps } = await createVerifiedSession(configForGlobalPolicy("full"));
     const turn = async () =>
       await runSystemAgentTurnWithDeps(
         {

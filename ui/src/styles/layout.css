@@ -1936,7 +1936,9 @@ html.openclaw-native-macos
   height: 100%;
 }
 
-.viewer-avatar__fallback {
+/* Two classes on purpose: `.viewer-avatar > span` below sets display and
+   outranks a lone class, which showed image + initials side by side. */
+.viewer-avatar > .viewer-avatar__fallback {
   display: none;
 }
 
@@ -3919,21 +3921,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   to {
     opacity: 1;
   }
-}
-
-/* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */
-.sidebar-agent-section__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
-  color: var(--text-strong);
-  font-size: 11px;
-  font-weight: 600;
-  flex: none;
 }
 
 .sidebar-recent-session--draft {

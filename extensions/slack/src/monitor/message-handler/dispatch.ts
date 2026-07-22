@@ -487,7 +487,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     enabled: statusReactionsEnabled,
     adapter: slackStatusAdapter,
     initialEmoji: prepared.ackReactionValue || "eyes",
-    emojis: cfg.messages?.statusReactions?.emojis,
+    emojis: undefined,
     timing: DEFAULT_TIMING,
     onError: (err) => {
       logAckFailure({

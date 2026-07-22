@@ -133,7 +133,7 @@ describe("Claw root install provenance", () => {
       planIntegrity: plan.planIntegrity,
       agentId: "worker",
       workspace: plan.agent.workspace,
-      agentOwnedPaths: ['agents.list["worker"]'],
+      agentOwnedPaths: ['agents.entries["worker"]'],
       status: "complete",
       addedAtMs: 42,
     });
@@ -228,7 +228,7 @@ describe("applyClawAddPlan", () => {
     let config: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/operator/default" },
-        list: [{ id: "main", default: true }],
+        entries: { main: { default: true } },
       },
     };
 
@@ -250,16 +250,15 @@ describe("applyClawAddPlan", () => {
       installRecord: { agentId: "worker" },
     });
     expect(config.agents?.defaults).toEqual({ workspace: "/operator/default" });
-    expect(config.agents?.list).toEqual([
-      { id: "main", default: true },
-      {
-        id: "worker",
+    expect(config.agents?.entries).toEqual({
+      main: { default: true },
+      worker: {
         name: "Worker",
         identity: { name: "Work" },
         tools: { deny: ["exec"] },
         workspace: plan.agent.workspace,
       },
-    ]);
+    });
     await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
   });
 
@@ -275,10 +274,10 @@ describe("applyClawAddPlan", () => {
       },
     });
 
-    expect(config.agents?.list).toEqual([
-      { id: "main", default: true },
-      expect.objectContaining({ id: "worker" }),
-    ]);
+    expect(config.agents?.entries).toEqual({
+      main: { default: true },
+      worker: expect.any(Object),
+    });
   });
 
   it("rejects overlap with the implicit main workspace before materializing it", async () => {
@@ -313,7 +312,7 @@ describe("applyClawAddPlan", () => {
       applyClawAddPlan(plan, {
         consentPlanIntegrity: plan.planIntegrity,
         commitConfig: async (transform) => {
-          transform({ agents: { list: [{ id: "worker" }] } });
+          transform({ agents: { entries: { worker: {} } } });
         },
       }),
     ).resolves.toMatchObject({
@@ -333,7 +332,7 @@ describe("applyClawAddPlan", () => {
         env: stateEnv(root),
         consentPlanIntegrity: plan.planIntegrity,
         commitConfig: async (transform) => {
-          transform({ agents: { list: [{ id: " Worker " }] } });
+          transform({ agents: { entries: { " Worker ": {} } } });
         },
       }),
     ).resolves.toMatchObject({
@@ -362,7 +361,7 @@ describe("applyClawAddPlan", () => {
         commitConfig: async (transform) => {
           transform({
             agents: {
-              list: [{ id: "other", workspace: join(aliasParent, "workspace-worker") }],
+              entries: { other: { workspace: join(aliasParent, "workspace-worker") } },
             },
           });
         },
@@ -496,7 +495,7 @@ describe("applyClawAddPlan", () => {
       workspaceCreated: true,
       configCommitted: true,
     });
-    expect(config.agents?.list).toContainEqual(expect.objectContaining({ id: "worker" }));
+    expect(config.agents?.entries?.worker).toBeDefined();
     expect(readInstallRow("worker", root)?.status).toBe("complete");
   });
 
@@ -519,7 +518,7 @@ describe("applyClawAddPlan", () => {
 
     expect(result.status).toBe("complete");
     await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
-    expect(config.agents?.list).toContainEqual(expect.objectContaining({ id: "worker" }));
+    expect(config.agents?.entries?.worker).toBeDefined();
   });
 
   it("rejects a non-directory replacement for a workspace-ready record", async () => {
@@ -542,7 +541,7 @@ describe("applyClawAddPlan", () => {
       }),
     ).rejects.toMatchObject({ code: "workspace_collision" });
 
-    expect(config.agents?.list).toBeUndefined();
+    expect(config.agents?.entries).toBeUndefined();
     expect(readClawInstallRecord("worker", { env: stateEnv(root) })?.status).toBe(
       "workspace_ready",
     );
@@ -585,7 +584,7 @@ describe("applyClawAddPlan", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "provenance_failed" });
-    expect(config.agents?.list).toBeUndefined();
+    expect(config.agents?.entries).toBeUndefined();
   });
 
   it("rejects mutation when consent does not bind the current plan", async () => {

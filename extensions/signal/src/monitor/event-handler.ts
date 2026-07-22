@@ -326,6 +326,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
+      sessionTranscript: { historyLimit: entry.isGroup ? deps.historyLimit : 0 },
       access: {
         ...(entry.isGroup
           ? {
@@ -421,7 +422,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               },
             },
             initialEmoji: ackReaction,
-            emojis: resolveSignalStatusReactionEmojis(statusReactionsConfig.emojis),
+            emojis: resolveSignalStatusReactionEmojis(undefined),
             timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
@@ -613,7 +614,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             controller: statusReactionController,
             outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
             hasFinalResponse,
-            removeAckAfterReply: deps.cfg.messages?.removeAckAfterReply ?? false,
+            removeAckAfterReply: false,
             timing: statusReactionTiming,
           }).catch((err: unknown) => {
             logVerbose(`signal: status reaction finalize failed: ${String(err)}`);

@@ -303,7 +303,7 @@ jobs:
           pnpm openclaw qa run \
             --repo-root . \
             --qa-profile "${QA_PROFILE}" \
-            --concurrency 2 \
+            --concurrency 6 \
             --fast \
             --output-dir "${output_dir}" || qa_exit_code=$?
 

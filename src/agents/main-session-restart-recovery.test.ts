@@ -894,6 +894,161 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it.each([
+    {
+      label: "same-process lifecycle rotation",
+      sessionKey: "agent:main:telegram:group:-100:topic:2",
+      sessionId: "topic-2-session",
+      restartRecoveryRuns: [
+        {
+          runId: "announce:v1:agent:main:subagent:child:run-1",
+          lifecycleGeneration: "generation-old",
+        },
+      ],
+      userMessage: { role: "user", content: "earlier human request" },
+    },
+    {
+      label: "full restart",
+      sessionKey: "agent:main:telegram:group:-100:topic:8893",
+      sessionId: "topic-8893-session",
+      restartRecoveryRuns: undefined,
+      userMessage: {
+        role: "user",
+        content: "A background task finished.",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      },
+    },
+  ])("reconciles an interrupted completion after $label", async (fixture) => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      [fixture.sessionKey]: {
+        sessionId: fixture.sessionId,
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: fixture.restartRecoveryRuns,
+      },
+    });
+    await writeTranscript(sessionsDir, fixture.sessionId, [
+      fixture.userMessage,
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+      skipped: 1,
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey: fixture.sessionKey, storePath })).toMatchObject({
+      status: "killed",
+      abortedLastRun: false,
+    });
+    expect(readStore(storePath)[fixture.sessionKey]).not.toHaveProperty("restartRecoveryRuns");
+  });
+
+  it("resumes an explicit human run despite stale completion provenance", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:telegram:group:-100:topic:41818";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-41818-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "human-run-2", lifecycleGeneration: "generation-old" }],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41818-session", [
+      {
+        role: "user",
+        content: "A background task finished.",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams().sessionKey).toBe(sessionKey);
+  });
+
+  it("retries when a human recovery run appears during announce reconciliation", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100:topic:41819";
+    const announceRun = {
+      runId: "announce:v1:agent:main:subagent:child:run-race",
+      lifecycleGeneration: "generation-old",
+    };
+    const humanRun = { runId: "human-run-race", lifecycleGeneration: "generation-old" };
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-41819-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [announceRun],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41819-session", [
+      { role: "user", content: "earlier human request" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    const updateSessionEntry = sessionAccessor.updateSessionEntry;
+    let injectedHumanRun = false;
+    const updateSpy = vi
+      .spyOn(sessionAccessor, "updateSessionEntry")
+      .mockImplementation(async (scope, update, options) => {
+        if (!injectedHumanRun) {
+          injectedHumanRun = true;
+          await updateSessionEntry(scope, (entry) => ({
+            restartRecoveryRuns: [...(entry.restartRecoveryRuns ?? []), humanRun],
+          }));
+        }
+        return await updateSessionEntry(scope, update, options);
+      });
+
+    try {
+      await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+        recovered: 0,
+        failed: 1,
+        skipped: 0,
+      });
+    } finally {
+      updateSpy.mockRestore();
+    }
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryRuns: [announceRun, humanRun],
+    });
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
   it("delivers resumed marked sessions through the current run recovery context", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

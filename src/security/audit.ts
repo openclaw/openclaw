@@ -27,6 +27,7 @@ import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
+  resolveExecModePolicy,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import {
@@ -573,22 +574,6 @@ async function collectPluginSecurityAuditFindings(
   return collectorResults.flat();
 }
 
-function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const redact = cfg.logging?.redactSensitive;
-  if (redact !== "off") {
-    return [];
-  }
-  return [
-    {
-      checkId: "logging.redact_off",
-      severity: "warn",
-      title: "Tool summary redaction is disabled",
-      detail: `logging.redactSensitive="off" can leak secrets into logs and status output.`,
-      remediation: `Set logging.redactSensitive="tools".`,
-    },
-  ];
-}
-
 function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
@@ -796,7 +781,11 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       [
         {
           id: DEFAULT_AGENT_ID,
-          security: cfg.tools?.exec?.security ?? "deny",
+          security: resolveExecModePolicy({
+            mode: cfg.tools?.exec?.mode,
+            security: cfg.tools?.exec?.security ?? "deny",
+            ask: cfg.tools?.exec?.ask ?? "off",
+          }).security,
           host: cfg.tools?.exec?.host ?? "auto",
         },
         ...agents
@@ -804,11 +793,22 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
             (entry): entry is NonNullable<(typeof agents)[number]> =>
               Boolean(entry) && typeof entry === "object" && typeof entry.id === "string",
           )
-          .map((entry) => ({
-            id: entry.id,
-            security: entry.tools?.exec?.security ?? cfg.tools?.exec?.security ?? "deny",
-            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
-          })),
+          .map((entry) => {
+            const inherited = resolveExecModePolicy({
+              mode: cfg.tools?.exec?.mode,
+              security: cfg.tools?.exec?.security ?? "deny",
+              ask: cfg.tools?.exec?.ask ?? "off",
+            });
+            return {
+              id: entry.id,
+              security: resolveExecModePolicy({
+                mode: entry.tools?.exec?.mode,
+                security: entry.tools?.exec?.security ?? inherited.security,
+                ask: entry.tools?.exec?.ask ?? inherited.ask,
+              }).security,
+              host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
+            };
+          }),
       ].map((entry) => [entry.id, entry] as const),
     ).values(),
   );
@@ -827,7 +827,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),
       remediation:
-        'Prefer tools.exec.security="allowlist" with ask prompts, and reserve "full" for tightly scoped break-glass agents only.',
+        'Prefer tools.exec.mode="ask" or "allowlist", and reserve "full" for tightly scoped break-glass agents only.',
     });
   }
 
@@ -838,7 +838,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       title: "Claude permission mode is ignored under YOLO exec",
       detail: `claude-cli sets ${claudePermissionModeHits.map((hit) => `${hit.argSet}=${hit.mode}`).join(", ")}, but OpenClaw exec is YOLO for: ${yoloExecScopeIds.join(", ")}. Managed Claude live sessions use --permission-mode bypassPermissions.`,
       remediation:
-        "Restrict OpenClaw tools.exec.security/tools.exec.ask, or remove the Claude --permission-mode override.",
+        "Restrict OpenClaw tools.exec.mode, or remove the Claude --permission-mode override.",
     });
   }
 
@@ -1417,7 +1417,6 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }),
   );
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
-  findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));
   findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));

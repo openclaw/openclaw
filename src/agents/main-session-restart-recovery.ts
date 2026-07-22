@@ -24,6 +24,7 @@ import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnExpectedState,
   type SessionTranscriptTurnLifecyclePatch,
+  updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -38,16 +39,22 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
+  hasInterSessionUserProvenance,
+  isCompletionReportInputProvenance,
+} from "../sessions/input-provenance.js";
+import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../sessions/session-lifecycle-admission.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { isAnnounceRunId } from "./announce-idempotency.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "./embedded-agent-runner/run-state.js";
+import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import {
   isMainRestartRecoveryCandidate,
   transitionMainSessionRecovery,
@@ -432,6 +439,67 @@ function getMessageRole(message: unknown): string | undefined {
   }
   const role = (message as { role?: unknown }).role;
   return typeof role === "string" ? role : undefined;
+}
+
+function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
+  const runs = entry.restartRecoveryRuns;
+  return Boolean(runs?.length && runs.every((run) => isAnnounceRunId(run.runId)));
+}
+
+function hasCompletionReportUserTail(messages: readonly unknown[]): boolean {
+  const message = messages.findLast((candidate) => getMessageRole(candidate) === "user");
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const userMessage = message as { role?: unknown; provenance?: unknown };
+  return (
+    hasInterSessionUserProvenance(userMessage) &&
+    isCompletionReportInputProvenance(userMessage.provenance)
+  );
+}
+
+async function reconcileInterruptedCompletionReport(params: {
+  entry: SessionEntry;
+  source: "announce_runs" | "transcript";
+  storePath: string;
+  sessionKey: string;
+}): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
+  let didReconcile = false;
+  const current = await updateSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    (entry) => {
+      const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
+      const stillMatchesSource =
+        params.source === "announce_runs" ? hasOnlyAnnounceRecoveryRuns(entry) : !hasRecoveryRuns;
+      if (
+        entry.sessionId !== params.entry.sessionId ||
+        entry.status !== "running" ||
+        entry.abortedLastRun !== true ||
+        !stillMatchesSource
+      ) {
+        return null;
+      }
+      didReconcile = true;
+      const endedAt = Date.now();
+      return {
+        ...buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: false }),
+        ...buildMainSessionRecoveryClearPatch(entry),
+        status: "killed",
+        abortedLastRun: false,
+        endedAt,
+        lastRunError: undefined,
+        runtimeMs:
+          typeof entry.startedAt === "number" ? Math.max(0, endedAt - entry.startedAt) : undefined,
+        updatedAt: endedAt,
+      };
+    },
+    { requireWriteSuccess: true },
+  );
+  if (didReconcile) {
+    log.info(`reconciled interrupted completion report to non-running: ${params.sessionKey}`);
+    return { outcome: "reconciled" };
+  }
+  return { outcome: "changed", entry: current };
 }
 
 function findSourceTurnRange(params: {
@@ -1799,6 +1867,36 @@ async function recoverStore(params: {
         gatewayRuntime: params.gatewayRuntime,
       });
       recordResumeResult(resumed);
+      continue;
+    }
+
+    // Completion reports are delivery turns, not human work. Same-process
+    // rotation retains their announce run ids; a full restart can recover the
+    // same fact from the already-persisted user-message provenance.
+    const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
+    const completionSource = hasOnlyAnnounceRecoveryRuns(entry)
+      ? "announce_runs"
+      : !hasRecoveryRuns && hasCompletionReportUserTail(messages)
+        ? "transcript"
+        : undefined;
+    if (completionSource) {
+      const reconciliation = await reconcileInterruptedCompletionReport({
+        entry,
+        source: completionSource,
+        storePath: params.storePath,
+        sessionKey,
+      });
+      if (reconciliation.outcome === "reconciled") {
+        params.resumedSessionKeys.add(resumeDedupeKey);
+        result.skipped++;
+      } else if (
+        reconciliation.entry?.status === "running" &&
+        reconciliation.entry.abortedLastRun === true
+      ) {
+        result.failed++;
+      } else {
+        result.skipped++;
+      }
       continue;
     }
 

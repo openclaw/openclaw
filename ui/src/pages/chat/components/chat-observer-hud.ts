@@ -1,6 +1,9 @@
-import { html, nothing } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionsObserverAskResult,
+} from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
@@ -10,8 +13,77 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 
 const EXPANDED_STORAGE_KEY = "openclaw.chat.observerHud.expanded";
+const MAX_ASK_EXCHANGES = 6;
+const OBSERVER_BUSY_DETAIL_CODE = "SESSION_OBSERVER_BUSY";
 
 export type ObserverHudMode = "hidden" | "pill" | "card";
+export type ObserverAskHint = "busy" | "unavailable";
+export type ObserverAskExchange = {
+  question: string;
+  answer?: string;
+  hint?: ObserverAskHint;
+};
+
+function errorDetailCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  const details = (error as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return null;
+  }
+  const code = (details as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+export class ChatObserverAskState {
+  sessionKey = "";
+  exchanges: ObserverAskExchange[] = [];
+  pending = false;
+  private generation = 0;
+
+  switchSession(sessionKey: string): void {
+    if (sessionKey === this.sessionKey) {
+      return;
+    }
+    this.sessionKey = sessionKey;
+    this.exchanges = [];
+    this.pending = false;
+    this.generation += 1;
+  }
+
+  async submit(
+    question: string,
+    ask: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>,
+  ): Promise<void> {
+    const normalized = question.trim();
+    if (!normalized || !this.sessionKey || this.pending) {
+      return;
+    }
+    const sessionKey = this.sessionKey;
+    const generation = this.generation;
+    const exchange: ObserverAskExchange = { question: normalized };
+    this.exchanges = [...this.exchanges, exchange].slice(-MAX_ASK_EXCHANGES);
+    this.pending = true;
+    try {
+      const result = await ask(sessionKey, normalized);
+      if (generation === this.generation && sessionKey === this.sessionKey) {
+        exchange.answer = result.answer;
+        this.exchanges = [...this.exchanges];
+      }
+    } catch (error) {
+      if (generation === this.generation && sessionKey === this.sessionKey) {
+        exchange.hint =
+          errorDetailCode(error) === OBSERVER_BUSY_DETAIL_CODE ? "busy" : "unavailable";
+        this.exchanges = [...this.exchanges];
+      }
+    } finally {
+      if (generation === this.generation && sessionKey === this.sessionKey) {
+        this.pending = false;
+      }
+    }
+  }
+}
 
 export type ObserverHudInput = {
   running: boolean;
@@ -127,7 +199,8 @@ function renderPlanStep(step: PlanStatus["steps"][number]) {
   `;
 }
 
-class ChatObserverHudElement extends OpenClawLightDomElement {
+export class ChatObserverHudElement extends OpenClawLightDomElement {
+  @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) digest: SessionObserverDigest | null = null;
   @property({ attribute: false }) running = false;
   @property({ attribute: false }) activeRunId: string | null = null;
@@ -136,14 +209,28 @@ class ChatObserverHudElement extends OpenClawLightDomElement {
   @property({ attribute: false }) sideChatOpen = false;
   @property({ attribute: false }) planStatus: PlanStatus | null = null;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
+  @property({ attribute: false }) onAsk?: (
+    sessionKey: string,
+    question: string,
+  ) => Promise<SessionsObserverAskResult>;
   @state() private now = Date.now();
+  @state() private question = "";
+  @state() private askRevision = 0;
 
   private readonly hudState = new ChatObserverHudState();
+  private readonly askState = new ChatObserverAskState();
   private clock: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   override disconnectedCallback() {
     this.stopClock();
     super.disconnectedCallback();
+  }
+
+  protected override willUpdate(changedProperties: PropertyValues<this>) {
+    if (changedProperties.has("sessionKey")) {
+      this.askState.switchSession(this.sessionKey);
+      this.question = "";
+    }
   }
 
   override updated() {
@@ -189,6 +276,53 @@ class ChatObserverHudElement extends OpenClawLightDomElement {
   private expand() {
     this.hudState.expand();
     this.requestUpdate();
+  }
+
+  private async submitQuestion() {
+    const question = this.question.trim();
+    if (!question || !this.onAsk || this.askState.pending) {
+      return;
+    }
+    this.question = "";
+    const pending = this.askState.submit(question, this.onAsk);
+    this.askRevision += 1;
+    await pending;
+    this.askRevision += 1;
+  }
+
+  private renderAskThread() {
+    // Reading the revision makes mutations in the deliberately small state
+    // machine visible to Lit without moving this client-only thread upstream.
+    void this.askRevision;
+    if (this.askState.exchanges.length === 0) {
+      return nothing;
+    }
+    return html`
+      <div class="chat-observer-hud__ask-thread" aria-live="polite">
+        ${this.askState.exchanges.map(
+          (exchange, index) => html`
+            <div class="chat-observer-hud__ask-exchange">
+              <div class="chat-observer-hud__ask-question">${exchange.question}</div>
+              ${exchange.answer
+                ? html`<div class="chat-observer-hud__ask-answer">${exchange.answer}</div>`
+                : exchange.hint
+                  ? html`<div class="chat-observer-hud__ask-hint">
+                      ${t(
+                        exchange.hint === "busy"
+                          ? "chat.observer.askBusy"
+                          : "chat.observer.askUnavailable",
+                      )}
+                    </div>`
+                  : this.askState.pending && index === this.askState.exchanges.length - 1
+                    ? html`<div class="chat-observer-hud__ask-hint">
+                        ${t("chat.observer.askPending")}
+                      </div>`
+                    : nothing}
+            </div>
+          `,
+        )}
+      </div>
+    `;
   }
 
   private renderPullRequests() {
@@ -309,6 +443,37 @@ class ChatObserverHudElement extends OpenClawLightDomElement {
           <span>${this.running ? t("chat.observer.running") : label}</span>
           ${elapsed ? html`<span aria-hidden="true">·</span><span>${elapsed}</span>` : nothing}
         </footer>
+        ${this.renderAskThread()}
+        <form
+          class="chat-observer-hud__ask-form"
+          @submit=${(event: SubmitEvent) => {
+            event.preventDefault();
+            void this.submitQuestion();
+          }}
+        >
+          <label class="chat-observer-hud__ask-field">
+            <span class="sr-only">${t("chat.observer.askLabel")}</span>
+            <input
+              class="chat-observer-hud__ask-input"
+              type="text"
+              maxlength="400"
+              autocomplete="off"
+              .value=${this.question}
+              placeholder=${t("chat.observer.askPlaceholder")}
+              ?disabled=${this.askState.pending || !this.onAsk}
+              @input=${(event: InputEvent) => {
+                this.question = (event.currentTarget as HTMLInputElement).value;
+              }}
+            />
+          </label>
+          <button
+            class="btn btn--ghost chat-observer-hud__ask-submit"
+            type="submit"
+            ?disabled=${this.askState.pending || !this.question.trim() || !this.onAsk}
+          >
+            ${t("chat.observer.askSubmit")}
+          </button>
+        </form>
       </section>
     `;
   }

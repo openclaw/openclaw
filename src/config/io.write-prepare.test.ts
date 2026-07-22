@@ -254,9 +254,8 @@ describe("config io write prepare", () => {
             },
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -270,7 +269,7 @@ describe("config io write prepare", () => {
               },
             },
           },
-        ],
+        },
       },
       gateway: { port: 18789 },
     };
@@ -299,9 +298,8 @@ describe("config io write prepare", () => {
             },
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3.1-pro-preview",
               fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -315,7 +313,7 @@ describe("config io write prepare", () => {
               },
             },
           },
-        ],
+        },
       },
       gateway: { port: 18789 },
     };
@@ -347,14 +345,14 @@ describe("config io write prepare", () => {
         alias: "Gemini",
       },
     });
-    expect(persisted.agents?.list?.[0]?.model).toEqual({
+    expect(persisted.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-    expect(persisted.agents?.list?.[0]?.utilityModel).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.models).toEqual({
+    expect(persisted.agents?.entries?.ops?.utilityModel).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Ops Gemini",
       },

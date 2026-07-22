@@ -335,6 +335,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       thinkingLevel: p.thinkingLevel,
       allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
+      spawnDepth: p.spawnDepth,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {

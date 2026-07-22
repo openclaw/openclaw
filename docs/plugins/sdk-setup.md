@@ -350,6 +350,47 @@ Use `createSetupTranslator(...)` for fixed setup wizard copy. It uses the first 
 
 The setup patch adapters stay hot-path safe on import. Their bundled single-account promotion contract-surface lookup is lazy, so importing `plugin-sdk/setup-runtime` does not eagerly load bundled contract-surface discovery before the adapter is actually used.
 
+### Channel-owned setup input fields
+
+`ChannelSetupInput` is a generic envelope shared by setup callers and channel
+plugins. Its permanently typed fields are `name`, `token`, `tokenFile`,
+`useEnv`, `allowFrom`, and `defaultTo`. Additional plugin-owned keys can still
+be present on the runtime input object, but the shared type does not declare an
+index signature. Each plugin must declare and narrow its own setup fields or
+validate them with a plugin-owned schema at the adapter boundary:
+
+```typescript
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+
+type AcmeSetupInput = ChannelSetupInput & {
+  workspaceId?: string;
+  webhookUrl?: string;
+};
+
+export const acmeSetupAdapter: ChannelSetupAdapter = {
+  applyAccountConfig: ({ cfg, input }) => {
+    const setupInput = input as AcmeSetupInput;
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        acme: {
+          token: setupInput.token,
+          workspaceId: setupInput.workspaceId,
+          webhookUrl: setupInput.webhookUrl,
+        },
+      },
+    };
+  },
+};
+```
+
+Channel-specific fields that were previously declared directly on
+`ChannelSetupInput` remain temporarily typed for external source compatibility.
+They are deprecated and will be removed at the next Plugin SDK major after
+[#112238](https://github.com/openclaw/openclaw/issues/112238). New and bundled
+plugins must not rely on that tier; declare the fields they own locally.
+
 ### Channel-owned single-account promotion
 
 When a channel upgrades from a single-account top-level config to `channels.<id>.accounts.*`, the default shared behavior moves promoted account-scoped values into `accounts.default`.

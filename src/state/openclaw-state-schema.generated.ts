@@ -384,6 +384,12 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS config_machine_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
   request_id TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
@@ -1984,4 +1990,13 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   installed_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS outbound_media_provenance (
+  realpath TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
 ) STRICT;\n`;

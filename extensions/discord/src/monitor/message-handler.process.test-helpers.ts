@@ -131,20 +131,6 @@ export function expectReactAckCallAt(
   expectReactionCallAt(sendMocks.reactMessageDiscord, index, emoji, params);
 }
 
-export function expectRemoveAckCallAt(
-  index: number,
-  emoji: string,
-  params?: {
-    channelId?: string;
-    messageId?: string;
-    accountId?: string;
-    ackReaction?: string;
-    removeAckAfterReply?: boolean;
-  },
-) {
-  expectReactionCallAt(sendMocks.removeReactionDiscord, index, emoji, params);
-}
-
 export function createMockDraftStreamForTest() {
   const draftStream = createMockDraftStream();
   createDiscordDraftStream.mockReturnValueOnce(draftStream);

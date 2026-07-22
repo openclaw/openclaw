@@ -375,6 +375,12 @@ export interface ConfigHealthEntries {
   updated_at_ms: number;
 }
 
+export interface ConfigMachineState {
+  state_key: string;
+  updated_at_ms: number;
+  value_json: string;
+}
+
 export interface CronJobs {
   agent_id: string | null;
   anchor_ms: number | null;
@@ -868,6 +874,15 @@ export interface OperatorApprovals {
   status: string;
   terminal_reason: string | null;
   updated_at_ms: number;
+}
+
+export interface OutboundMediaProvenance {
+  created_at_ms: number;
+  kind: string;
+  realpath: string;
+  sha256: string;
+  size_bytes: number;
+  version: number;
 }
 
 export interface PluginBindingApprovals {
@@ -1414,6 +1429,7 @@ export interface DB {
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
+  config_machine_state: ConfigMachineState;
   cron_jobs: CronJobs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
@@ -1444,6 +1460,7 @@ export interface DB {
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
+  outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

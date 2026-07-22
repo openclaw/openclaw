@@ -229,6 +229,10 @@ const loadSessionDiscussionHandlers = lazyHandlerModule(
   () => import("./server-methods/session-discussion.js"),
   (module) => module.sessionDiscussionHandlers,
 );
+const loadSessionObserverHandlers = lazyHandlerModule(
+  () => import("./session-observer-rpc.js"),
+  (module) => module.sessionObserverHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -709,6 +713,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["session.discussion.info", "session.discussion.open"],
     loadHandlers: loadSessionDiscussionHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.observer.ask"],
+    loadHandlers: loadSessionObserverHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

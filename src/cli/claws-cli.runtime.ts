@@ -1,4 +1,8 @@
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope-config.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import {
   applyClawAddPlan,
@@ -6,6 +10,14 @@ import {
   ClawAddMutationError,
 } from "../claws/add.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
+import {
+  applyClawRemovePlan,
+  buildClawRemovePlan,
+  CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+  CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+  ClawRemoveError,
+  readClawStatus,
+} from "../claws/lifecycle-state.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
 import { preflightClawPackage } from "../claws/packages.js";
 import { readClawInstallRecord } from "../claws/provenance.js";
@@ -24,7 +36,12 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import type { ClawsAddOptions, ClawsInspectOptions } from "./claws-cli.js";
+import type {
+  ClawsAddOptions,
+  ClawsInspectOptions,
+  ClawsRemoveOptions,
+  ClawsStatusOptions,
+} from "./claws-cli.js";
 
 type DiagnosticLike = { level: string; code: string; path: string; message: string };
 
@@ -108,6 +125,28 @@ function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
   return true;
 }
 
+function requireRemoveConsent(opts: ClawsRemoveOptions, runtime: RuntimeEnv): boolean {
+  if (opts.dryRun || (opts.yes && opts.planIntegrity)) {
+    return false;
+  }
+  const code = opts.yes ? "plan_integrity_required" : "consent_required";
+  const message = opts.yes
+    ? "Claw remove consent must include --plan-integrity from the exact dry-run plan."
+    : "Claw remove requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to remove owned state.";
+  if (opts.json) {
+    writeRuntimeJson(runtime, {
+      schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      error: { code, message },
+    });
+  } else {
+    runtime.error(message);
+  }
+  runtime.exit(1);
+  return true;
+}
+
 export async function runClawsInspectCommand(
   sourcePath: string,
   opts: ClawsInspectOptions,
@@ -180,9 +219,7 @@ export async function runClawsAddCommand(
   const existingWorkspacePaths = existingAgentIds.map((agentId) =>
     resolveAgentWorkspaceDir(config, agentId),
   );
-  const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(
-    resolveCronJobsStorePath(config.cron?.store),
-  );
+  const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(resolveCronJobsStorePath());
   const basePlanContext = {
     ...(opts.agentId ? { agentId: opts.agentId } : {}),
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
@@ -202,7 +239,7 @@ export async function runClawsAddCommand(
   if (resumeRecord && plan.blockers.length > 0) {
     const canResumeWorkspace =
       resumeRecord.status === "workspace_ready" || resumeRecord.status === "config_committed";
-    const committedAgent = config.agents?.list?.find(
+    const committedAgent = listAgentEntries(config).find(
       (agent) => stableStringify(agent) === stableStringify(plan.agent.config),
     );
     const canResumeAgent =
@@ -299,6 +336,121 @@ export async function runClawsAddCommand(
     runtime.log(`Status: ${addResult.status}`);
   }
   if (addResult.status !== "complete") {
+    runtime.exit(1);
+  }
+}
+
+export async function runClawsStatusCommand(
+  target: string | undefined,
+  opts: ClawsStatusOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  assertExperimentalClawsEnabled();
+  const status = await readClawStatus(target);
+  if (opts.json) {
+    writeRuntimeJson(runtime, status);
+  } else {
+    logExperimentalWarning(runtime);
+    runtime.log(`Installed Claws: ${status.summary.claws}`);
+    for (const record of status.records) {
+      runtime.log(
+        `${record.install.agentId}: ${record.install.claw.name}@${record.install.claw.version} (${record.install.status})`,
+      );
+      runtime.log(
+        `  Agent: ${record.agentState}; files: ${record.workspaceFiles.length}; packages: ${record.packages.length}`,
+      );
+    }
+  }
+  if (target && status.records.length === 0) {
+    runtime.exit(1);
+  }
+}
+
+export async function runClawsRemoveCommand(
+  target: string,
+  opts: ClawsRemoveOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  assertExperimentalClawsEnabled();
+  if (requireRemoveConsent(opts, runtime)) {
+    return;
+  }
+  const selected = opts.removeReferenced ?? [];
+  if (opts.removeUnused && selected.length > 0) {
+    runtime.error("Choose either --remove-unused or --remove-referenced, not both.");
+    runtime.exit(1);
+    return;
+  }
+  if (opts.forceReferenced && selected.length === 0) {
+    runtime.error("--force-referenced requires at least one --remove-referenced selector.");
+    runtime.exit(1);
+    return;
+  }
+  const referencedCleanup = selected.length
+    ? {
+        mode: "remove-selected" as const,
+        selected,
+        allowConflicts: Boolean(opts.forceReferenced),
+      }
+    : opts.removeUnused
+      ? { mode: "remove-if-unused" as const }
+      : { mode: "retain" as const };
+  const plan = await buildClawRemovePlan(target, { referencedCleanup });
+  if (opts.dryRun || plan.blockers.length > 0) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, plan);
+    } else {
+      logExperimentalWarning(runtime);
+      runtime.log(`Remove actions: ${plan.actions.length}`);
+      runtime.log(`Plan integrity: ${plan.planIntegrity}`);
+      for (const action of plan.actions.filter((candidate) => candidate.kind === "packageRef")) {
+        runtime.log(
+          `  Package ${action.target}: ${action.action}${action.reason ? ` (${action.reason})` : ""}`,
+        );
+      }
+      if (plan.blockers.length > 0) {
+        runtime.error(plan.blockers.map((blocker) => blocker.message).join("\n"));
+      }
+    }
+    if (plan.blockers.length > 0) {
+      runtime.exit(1);
+    }
+    return;
+  }
+  try {
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: opts.planIntegrity,
+      referencedCleanup,
+    });
+    if (opts.json) {
+      writeRuntimeJson(runtime, result);
+    } else {
+      logExperimentalWarning(runtime);
+      runtime.log(`Removed agent: ${result.agentId}`);
+      runtime.log(`Status: ${result.status}`);
+      for (const pkg of result.packages) {
+        runtime.log(
+          `  Package ${pkg.kind}:${pkg.ref}@${pkg.version}: ${pkg.action}${pkg.reason ? ` (${pkg.reason})` : ""}`,
+        );
+      }
+      runtime.log(`Package references released: ${result.packageRefsReleased}`);
+    }
+    if (result.status !== "complete") {
+      runtime.exit(1);
+    }
+  } catch (error) {
+    const code = error instanceof ClawRemoveError ? error.code : "remove_failed";
+    const message = error instanceof Error ? error.message : String(error);
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        status: "failed",
+        error: { code, message },
+      });
+    } else {
+      runtime.error(message);
+    }
     runtime.exit(1);
   }
 }

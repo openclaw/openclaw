@@ -52,6 +52,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -146,6 +147,7 @@ import {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
+import { requestSessionObserverAnswer } from "./chat-observer.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -153,6 +155,7 @@ import {
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
+import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
@@ -243,7 +246,10 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
+import {
+  reconcileWaitingApprovalsFromSnapshot,
+  resolveActiveRunOutputTokens,
+} from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -445,6 +451,13 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private resetConfirmationOpen = false;
   @litState() private observerHudReady = customElements.get("openclaw-chat-observer-hud") != null;
   private observerHudLoad: Promise<void> | null = null;
+  private readonly askSessionObserver = (sessionKey: string, question: string) => {
+    const state = this.state;
+    if (!state?.connected || !state.client) {
+      return Promise.reject(new Error("Gateway is disconnected"));
+    }
+    return requestSessionObserverAnswer(state.client, sessionKey, question);
+  };
   private resetConfirmation:
     | {
         sessionKey: string;
@@ -3277,6 +3290,17 @@ class ChatPane extends OpenClawLightDomElement {
     // split; bottom strips do not.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const selfUser = resolveCurrentSelfUser({
+      snapshotUser: gatewaySnapshot.selfUser,
+      presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
+      presenceInstanceId: gatewaySnapshot.client?.instanceId,
+    });
+    const runOutputTokens = resolveActiveRunOutputTokens({
+      localRunId: state.chatRunId,
+      activeRunIds: selectedSession?.activeRunIds,
+      usageByRun: state.chatRunUsageById,
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -3294,6 +3318,7 @@ class ChatPane extends OpenClawLightDomElement {
       sending: state.chatSending,
       canAbort: hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
+      startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
       waitingApproval: state.waitingApprovalStatuses.size > 0,
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
@@ -3303,6 +3328,7 @@ class ChatPane extends OpenClawLightDomElement {
       observerRunId: catalogKey ? null : observerRunId,
       observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       observerLastReadAt: selectedSession?.lastReadAt,
+      onObserverAsk: catalogKey ? undefined : this.askSessionObserver,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -3325,6 +3351,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -3584,9 +3611,9 @@ class ChatPane extends OpenClawLightDomElement {
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
-      userId: this.context.gateway.snapshot.selfUser?.id ?? null,
-      userName: this.context.gateway.snapshot.selfUser?.name ?? state.userName,
-      userAvatar: this.context.gateway.snapshot.selfUser?.avatarUrl ?? state.userAvatar,
+      userId: selfUser?.id ?? null,
+      userName: selfUser?.name ?? state.userName,
+      userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,

@@ -133,7 +133,7 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 ```
 
 <Note>
-`allow` and `alsoAllow` cannot both be set in the same scope (`tools`, `tools.byProvider.<id>`, `agents.list[].tools`) — config validation rejects it. Merge `alsoAllow` entries into `allow`, or drop `allow` and use `profile` + `alsoAllow` instead.
+`allow` and `alsoAllow` cannot both be set in the same scope (`tools`, `tools.byProvider.<id>`, `agents.entries.*.tools`) — config validation rejects it. Merge `alsoAllow` entries into `allow`, or drop `allow` and use `profile` + `alsoAllow` instead.
 </Note>
 
 ### `tools.byProvider`
@@ -170,7 +170,7 @@ Restricts tools for a specific requester identity. This is defense-in-depth on t
 
 Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are canonical OpenClaw ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are accepted as `id:` only. Matching order is channel+id, id, e164, username, name, then wildcard.
 
-Per-agent `agents.list[].tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
+Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 
 ### `tools.elevated`
 
@@ -190,7 +190,7 @@ Controls elevated exec access outside the sandbox:
 }
 ```
 
-- Per-agent override (`agents.list[].tools.elevated`) can only further restrict.
+- Per-agent override (`agents.entries.*.tools.elevated`) can only further restrict.
 - `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
 - Elevated `exec` bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).
 
@@ -220,7 +220,7 @@ Values shown are defaults except `applyPatch.allowModels` (empty/unset by defaul
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
+Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
 
 ```json5
 {
@@ -273,34 +273,26 @@ Configures inbound media understanding (image/audio/video):
   tools: {
     media: {
       concurrency: 2,
-      audio: {
-        enabled: true,
-        maxBytes: 20971520,
-        scope: {
-          default: "deny",
-          rules: [{ action: "allow", match: { chatType: "direct" } }],
+      models: [
+        { provider: "openai", model: "gpt-4o-mini-transcribe", capabilities: ["audio"] },
+        {
+          type: "cli",
+          command: "whisper",
+          args: ["--model", "base", "{{MediaPath}}"],
+          capabilities: ["audio"],
         },
-        models: [
-          { provider: "openai", model: "gpt-4o-mini-transcribe" },
-          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] },
-        ],
-      },
-      image: {
-        enabled: true,
-        timeoutSeconds: 180,
-        models: [{ provider: "ollama", model: "gemma4:26b", timeoutSeconds: 300 }],
-      },
-      video: {
-        enabled: true,
-        maxBytes: 52428800,
-        models: [{ provider: "google", model: "gemini-3-flash-preview" }],
-      },
+        { provider: "ollama", model: "gemma4:26b", capabilities: ["image"] },
+        { provider: "google", model: "gemini-3-flash-preview", capabilities: ["video"] },
+      ],
+      audio: { enabled: true, preferredModel: "openai/gpt-4o-mini-transcribe" },
+      image: { enabled: true, preferredModel: "ollama/gemma4:26b" },
+      video: { enabled: true },
     },
   },
 }
 ```
 
-`concurrency` (default `2`), `audio.maxBytes` (default 20 MB), and `video.maxBytes` (default 50 MB) are shown at their defaults; `image.maxBytes` defaults to 10 MB. Per-capability request timeout defaults: image/audio `60`s, video `120`s.
+`tools.media.models` is the only configured model list. Every entry declares the capabilities it handles. The optional `preferredModel` selector accepts `provider/model`, a model id, `provider:<id>` for provider-default entries, or `cli:command`; matching entries move to the front of that capability's fallback order. Per-capability prompts, limits, request settings, scope, attachment policy, and audio transcript echo remain defaults for configured and auto-detected models; a model entry can override model-specific fields.
 
 <AccordionGroup>
   <Accordion title="Media model entry fields">
@@ -317,9 +309,9 @@ Configures inbound media understanding (image/audio/video):
 
     **Common fields:**
 
-    - `capabilities`: optional list (`image`, `audio`, `video`). Each provider plugin declares its own default capability set; for example the bundled `openai` provider defaults to image+audio, `anthropic`/`minimax` to image, `google` to image+audio+video, and `groq` to audio.
+    - `capabilities`: list containing one or more of `image`, `audio`, and `video`.
     - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`: per-entry overrides.
-    - `tools.media.image.timeoutSeconds` and matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
+    - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
     Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.

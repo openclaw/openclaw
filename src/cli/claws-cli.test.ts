@@ -1,6 +1,6 @@
 // Tests for the experimental grouped Claws CLI.
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -27,6 +27,9 @@ const mocks = vi.hoisted(() => {
     runtime,
     loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
     applyClawAddPlan: vi.fn(),
+    readClawStatus: vi.fn(),
+    buildClawRemovePlan: vi.fn(),
+    applyClawRemovePlan: vi.fn(),
   };
 });
 
@@ -46,6 +49,15 @@ vi.mock("../config/config.js", async () => ({
 vi.mock("../claws/add.js", async () => ({
   ...(await vi.importActual<typeof import("../claws/add.js")>("../claws/add.js")),
   applyClawAddPlan: mocks.applyClawAddPlan,
+}));
+
+vi.mock("../claws/lifecycle-state.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/lifecycle-state.js")>(
+    "../claws/lifecycle-state.js",
+  )),
+  readClawStatus: mocks.readClawStatus,
+  buildClawRemovePlan: mocks.buildClawRemovePlan,
+  applyClawRemovePlan: mocks.applyClawRemovePlan,
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
@@ -95,6 +107,10 @@ async function writePackage(): Promise<{ root: string; workspace: string }> {
   return { root, workspace: join(root, "target-workspace") };
 }
 
+async function canonicalFuturePath(target: string): Promise<string> {
+  return join(await realpath(dirname(target)), basename(target));
+}
+
 async function runCli(args: string[]) {
   const program = new Command();
   program.exitOverride();
@@ -133,6 +149,42 @@ describe("claws cli", () => {
       configCommitted: true,
       installRecord: { agentId: plan.agent.finalId },
     }));
+    mocks.readClawStatus.mockReset();
+    mocks.readClawStatus.mockResolvedValue({
+      schemaVersion: "openclaw.clawStatus.v1",
+      records: [],
+      summary: { claws: 0, partial: 0, missingAgents: 0, driftedFiles: 0, packageRefs: 0 },
+    });
+    mocks.buildClawRemovePlan.mockReset();
+    mocks.buildClawRemovePlan.mockResolvedValue({
+      schemaVersion: "openclaw.clawRemovePlan.v1",
+      dryRun: true,
+      mutationAllowed: false,
+      planIntegrity: "sha256:remove-plan",
+      target: "demo-agent",
+      agentId: "demo-agent",
+      actions: [
+        {
+          kind: "agent",
+          id: "demo-agent",
+          action: "remove",
+          target: "agents.list[demo-agent]",
+          blocked: false,
+        },
+      ],
+      blockers: [],
+    });
+    mocks.applyClawRemovePlan.mockReset();
+    mocks.applyClawRemovePlan.mockResolvedValue({
+      schemaVersion: "openclaw.clawRemoveResult.v1",
+      dryRun: false,
+      status: "complete",
+      agentId: "demo-agent",
+      agentRemoved: true,
+      workspaceFiles: [],
+      packages: [],
+      packageRefsReleased: 1,
+    });
   });
 
   afterEach(() => {
@@ -148,12 +200,17 @@ describe("claws cli", () => {
     expect(program.commands.map((command) => command.name())).not.toContain("claws");
   });
 
-  it("registers inspect and add without exposing the prototype apply or feed commands", () => {
+  it("registers the experimental grouped lifecycle without prototype apply or feed commands", () => {
     const program = new Command();
     registerClawsCli(program);
     const claws = program.commands.find((command) => command.name() === "claws");
 
-    expect(claws?.commands.map((command) => command.name())).toEqual(["inspect", "add"]);
+    expect(claws?.commands.map((command) => command.name())).toEqual([
+      "inspect",
+      "add",
+      "status",
+      "remove",
+    ]);
   });
 
   it("prints versioned experimental JSON for a development manifest", async () => {
@@ -172,6 +229,7 @@ describe("claws cli", () => {
 
   it("takes identity from package.json and plans one new agent", async () => {
     const { root, workspace } = await writePackage();
+    const expectedWorkspace = await canonicalFuturePath(workspace);
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
 
@@ -179,7 +237,7 @@ describe("claws cli", () => {
       schemaVersion: "openclaw.clawAddPlan.v1",
       stability: "experimental",
       claw: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
-      agent: { finalId: "demo-agent", workspace },
+      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
       summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
@@ -187,7 +245,7 @@ describe("claws cli", () => {
 
   it("blocks adding into an existing agent instead of merging", async () => {
     const { root, workspace } = await writePackage();
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent" }] } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
 
@@ -200,7 +258,7 @@ describe("claws cli", () => {
 
   it("honors an explicit unused agent id in the plan", async () => {
     const { root, workspace } = await writePackage();
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent" }] } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
 
     await runCli([
       "claws",
@@ -246,6 +304,7 @@ describe("claws cli", () => {
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const expectedWorkspace = await canonicalFuturePath(workspace);
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -270,7 +329,7 @@ describe("claws cli", () => {
       schemaVersion: "openclaw.clawAddResult.v1",
       stability: "experimental",
       status: "complete",
-      agent: { finalId: "demo-agent", workspace },
+      agent: { finalId: "demo-agent", workspace: expectedWorkspace },
     });
   });
 
@@ -478,5 +537,125 @@ describe("claws cli", () => {
       error: { code: "consent_required" },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports installed Claw status by agent id", async () => {
+    mocks.readClawStatus.mockResolvedValue({
+      schemaVersion: "openclaw.clawStatus.v1",
+      target: "demo-agent",
+      records: [
+        {
+          install: { agentId: "demo-agent" },
+          agentState: "present",
+          workspaceFiles: [],
+          packages: [],
+        },
+      ],
+      summary: { claws: 1, partial: 0, missingAgents: 0, driftedFiles: 0, packageRefs: 0 },
+    });
+
+    await runCli(["claws", "status", "demo-agent", "--json"]);
+
+    expect(mocks.readClawStatus).toHaveBeenCalledWith("demo-agent");
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawStatus.v1",
+      summary: { claws: 1 },
+    });
+  });
+
+  it("prints a read-only remove plan without applying it", async () => {
+    await runCli(["claws", "remove", "demo-agent", "--dry-run", "--json"]);
+
+    expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      referencedCleanup: { mode: "retain" },
+    });
+    expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawRemovePlan.v1",
+      mutationAllowed: false,
+    });
+  });
+
+  it("applies remove only after explicit consent", async () => {
+    await runCli([
+      "claws",
+      "remove",
+      "demo-agent",
+      "--yes",
+      "--plan-integrity",
+      "sha256:remove-plan",
+      "--json",
+    ]);
+
+    expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: "sha256:remove-plan" }),
+      {
+        consentPlanIntegrity: "sha256:remove-plan",
+        referencedCleanup: { mode: "retain" },
+      },
+    );
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawRemoveResult.v1",
+      status: "complete",
+      agentId: "demo-agent",
+    });
+  });
+
+  it("requires the exact dry-run identity with remove consent", async () => {
+    await runCli(["claws", "remove", "demo-agent", "--yes", "--json"]);
+
+    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawRemovePlan.v1",
+      error: { code: "plan_integrity_required" },
+    });
+  });
+
+  it("binds selected referenced cleanup and its conflict override into the plan", async () => {
+    await runCli([
+      "claws",
+      "remove",
+      "demo-agent",
+      "--dry-run",
+      "--remove-referenced",
+      "plugin:@acme/audit@1.0.0",
+      "--force-referenced",
+      "--json",
+    ]);
+
+    expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith("demo-agent", {
+      referencedCleanup: {
+        mode: "remove-selected",
+        selected: ["plugin:@acme/audit@1.0.0"],
+        allowConflicts: true,
+      },
+    });
+  });
+
+  it("rejects ambiguous referenced cleanup modes", async () => {
+    await runCli([
+      "claws",
+      "remove",
+      "demo-agent",
+      "--dry-run",
+      "--remove-unused",
+      "--remove-referenced",
+      "plugin:@acme/audit@1.0.0",
+      "--json",
+    ]);
+
+    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
+    expect(mocks.errors).toContain(
+      "Choose either --remove-unused or --remove-referenced, not both.",
+    );
+  });
+
+  it("fails closed when remove has neither preview nor consent", async () => {
+    await runCli(["claws", "remove", "demo-agent", "--json"]);
+
+    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      error: { code: "consent_required" },
+    });
   });
 });

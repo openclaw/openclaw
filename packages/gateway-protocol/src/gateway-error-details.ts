@@ -23,6 +23,8 @@ export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 export const GatewayErrorDetailCodes = {
   MISSING_SCOPE: "MISSING_SCOPE",
   MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  SESSION_OBSERVER_BUSY: "SESSION_OBSERVER_BUSY",
+  SESSION_OBSERVER_UNAVAILABLE: "SESSION_OBSERVER_UNAVAILABLE",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
 } as const;
 
