@@ -45,6 +45,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
   assertSupportedSchemaVersion,
   createOpenClawDatabaseVerificationError,
   resolveDatabasePath,
@@ -133,6 +134,34 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
+function isCurrentOpenClawStateDatabaseSchema(db: DatabaseSync, pathname: string): boolean {
+  try {
+    assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+    if (detectOpenClawStateDatabaseSchemaMigrations({ path: pathname }).length > 0) {
+      return false;
+    }
+    for (const retiredTable of [
+      ["database", "verifications"].join("_"),
+      "node_pairing_pending",
+      "node_pairing_paired",
+      "cron_run_logs",
+    ]) {
+      if (tableExists(db, retiredTable)) {
+        return false;
+      }
+    }
+    if (
+      tableExists(db, "task_runs") &&
+      db.prepare("SELECT 1 FROM task_runs WHERE delivery_status = 'not-requested' LIMIT 1").get()
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function canSkipCurrentStateDatabaseSchemaRepair(options: OpenClawStateDatabaseOptions): boolean {
   const pathname = resolveDatabasePath(options);
   if (terminalOpenLatch.get(pathname)) {
@@ -158,15 +187,11 @@ function canSkipCurrentStateDatabaseSchemaRepair(options: OpenClawStateDatabaseO
       return false;
     }
     assertSqliteTableIntegrity(db, pathname, "schema_meta");
+    return isCurrentOpenClawStateDatabaseSchema(db, pathname);
   } catch {
     return false;
   } finally {
     db?.close();
-  }
-  try {
-    return detectOpenClawStateDatabaseSchemaMigrations(options).length === 0;
-  } catch {
-    return false;
   }
 }
 
@@ -421,7 +446,9 @@ export function openOpenClawStateDatabase(
         foreignKeys: true,
         synchronous: "NORMAL",
       });
-      ensureSchema(db, pathname);
+      if (!isCurrentOpenClawStateDatabaseSchema(db, pathname)) {
+        ensureSchema(db, pathname);
+      }
       return maintenance;
     } catch (err) {
       maintenance?.close();

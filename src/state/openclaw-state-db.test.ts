@@ -3478,6 +3478,28 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     });
   });
 
+  it("does not rewrite schema metadata when reopening a current database", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const before = new DatabaseSync(databasePath);
+    try {
+      before
+        .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
+        .run(123_456);
+    } finally {
+      before.close();
+    }
+
+    const reopened = openOpenClawStateDatabase(options);
+
+    expect(
+      reopened.db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+    ).toEqual({ updated_at: 123_456 });
+  });
+
   it("latches newer global schema failures before integrity scans", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
