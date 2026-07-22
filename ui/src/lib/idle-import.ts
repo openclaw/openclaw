@@ -39,10 +39,9 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
     }
   };
 
-  const activate = (immediate: boolean) => {
+  const activate = () => {
     active = true;
     onlineRetryAttempted = false;
-    return immediate ? run() : scheduleIdle();
   };
 
   const dispose = () => {
@@ -50,5 +49,15 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
     window.removeEventListener("online", start);
   };
 
-  return { schedule: () => activate(false), load: () => activate(true) as Promise<T>, dispose };
+  return {
+    schedule: (): void => {
+      activate();
+      scheduleIdle();
+    },
+    load: (): Promise<T> => {
+      activate();
+      return run();
+    },
+    dispose,
+  };
 }
