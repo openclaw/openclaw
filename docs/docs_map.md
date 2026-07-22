@@ -3757,8 +3757,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H3: Minimal remote setup
   - H3: Mirror mode with GPU
+  - H3: Environment variables
   - H3: Per-agent OpenShell with custom gateway
   - H2: Lifecycle management
+  - H3: When to recreate
   - H2: Security hardening
   - H2: Current limitations
   - H2: How it works
