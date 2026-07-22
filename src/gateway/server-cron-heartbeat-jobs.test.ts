@@ -79,7 +79,19 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     }
     // Only the stale monitor is pruned; user jobs without the prefix survive.
     expect(remove).toHaveBeenCalledTimes(1);
-    expect(remove).toHaveBeenCalledWith("job-stale-agent");
+    expect(remove).toHaveBeenCalledWith("job-stale-agent", { systemOwned: true });
+    // Declarative matching is scoped to real monitors so a colliding user job
+    // is never adopted by the system upsert.
+    for (const call of add.mock.calls) {
+      const opts = call[1] as { matchesExisting?: (job: CronJob) => boolean };
+      expect(opts.matchesExisting?.(monitorJob("x"))).toBe(true);
+      expect(
+        opts.matchesExisting?.({
+          ...monitorJob("x"),
+          payload: { kind: "systemEvent", text: "user" },
+        } as CronJob),
+      ).toBe(false);
+    }
   });
 
   it("removes all monitors when heartbeats are disabled", async () => {
@@ -97,7 +109,7 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     });
 
     expect(add).not.toHaveBeenCalled();
-    expect(remove).toHaveBeenCalledWith("job-main");
+    expect(remove).toHaveBeenCalledWith("job-main", { systemOwned: true });
   });
 
   it("keeps converging other agents when one convergence fails", async () => {

@@ -59,7 +59,13 @@ export async function reconcileHeartbeatMonitorJobs(params: {
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
         },
-        { enabledExplicit: true, systemOwned: true },
+        {
+          enabledExplicit: true,
+          systemOwned: true,
+          // Scope declarative matching to real monitors: a pre-existing user
+          // job that happens to hold this key is left untouched.
+          matchesExisting: (job) => job.payload.kind === "heartbeat",
+        },
       );
     } catch (error) {
       ok = false;
@@ -81,7 +87,7 @@ export async function reconcileHeartbeatMonitorJobs(params: {
       if (desired.has(key.slice(HEARTBEAT_DECLARATION_PREFIX.length))) {
         continue;
       }
-      await params.cron.remove(job.id);
+      await params.cron.remove(job.id, { systemOwned: true });
     }
   } catch (error) {
     ok = false;

@@ -907,7 +907,11 @@ export async function updateWithPrecondition(
 }
 
 /** Removes a cron job by id and re-arms the timer when the in-memory store changes. */
-export async function remove(state: CronServiceState, id: string) {
+export async function remove(
+  state: CronServiceState,
+  id: string,
+  opts?: { systemOwned?: boolean },
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state, { skipRecompute: true });
@@ -917,6 +921,14 @@ export async function remove(state: CronServiceState, id: string) {
     }
     const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
+    // Config is the monitor's source of truth: ad-hoc deletion would disable
+    // heartbeats until an unrelated reload, so only gateway reconciliation
+    // (stale-monitor cleanup) may remove one.
+    if (removedJob?.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+      throw new Error(
+        "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+      );
+    }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 

@@ -50,6 +50,8 @@ describe("heartbeat payload execution", () => {
       );
       // Existing monitors reject every patch, not just payload-kind edits.
       await expect(cron.update(job.id, { enabled: false })).rejects.toThrow(/system-owned/);
+      // Ad-hoc deletion is rejected too; only reconciliation cleanup removes.
+      await expect(cron.remove(job.id)).rejects.toThrow(/system-owned/);
       // A declarative upsert on the monitor's key cannot repurpose it either.
       await expect(
         cron.add({
