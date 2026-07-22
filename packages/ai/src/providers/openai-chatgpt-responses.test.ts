@@ -438,6 +438,58 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("websocket connect failed");
   });
 
+  it("rejects oversized ChatGPT websocket Blob frames before materializing them", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("fetch should not run");
+    });
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    const closeMock = vi.fn();
+    const oversizedFrame = {
+      size: 16 * 1024 * 1024 + 1,
+      arrayBuffer,
+    };
+    class OversizedBlobWebSocket {
+      private readonly listeners = new Map<string, (event: unknown) => void>();
+
+      send(): void {
+        queueMicrotask(() => {
+          this.listeners.get("message")?.({ data: oversizedFrame });
+        });
+      }
+      close = closeMock;
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners.set(type, listener);
+        if (type === "open") {
+          queueMicrotask(() => listener({}));
+        }
+      }
+      removeEventListener(type: string): void {
+        this.listeners.delete(type);
+      }
+    }
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", OversizedBlobWebSocket);
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      sessionId: "session-oversized-blob",
+      transport: "websocket",
+    });
+
+    const result = await stream.result();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalledWith(1009, "message too big");
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "WebSocket message too big: 16777217 bytes (limit: 16777216 bytes)",
+    );
+  });
   it("honors timeoutMs for explicit SSE transport requests", async () => {
     stubHangingFetch(5);
 
