@@ -1232,6 +1232,40 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("does not reuse verification when the recovered model changed", async () => {
+    const workspaceDir = await makeCaseDir("changed-verified-import-flow-");
+    runSetupMigrationImport.mockResolvedValueOnce({
+      kind: "verified-inference",
+      modelRef: "openai/gpt-5.6-sol",
+    });
+    const importedConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce(configSnapshot({}, false))
+      .mockResolvedValue(configSnapshot(importedConfig));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        authChoice: "demo-provider",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      createRuntime(),
+      buildWizardPrompter(),
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledOnce();
+  });
+
   it("keeps verification optional when provider setup supplies the post-import model", async () => {
     const workspaceDir = await makeCaseDir("provider-after-import-");
     readConfigFileSnapshot

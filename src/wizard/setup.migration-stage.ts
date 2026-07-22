@@ -350,16 +350,14 @@ export async function createSetupMigrationStage(params: {
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
-    const hasAgentDatabase = disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, {
+    disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
+    // Verification may already close this handle. The staged registry still must
+    // publish the final path before its shared database is promoted.
+    registerOpenClawAgentDatabase({
+      agentId,
+      path: path.join(finalAgentDir, "openclaw-agent.sqlite"),
       env: stageEnv,
     });
-    if (hasAgentDatabase) {
-      registerOpenClawAgentDatabase({
-        agentId,
-        path: path.join(finalAgentDir, "openclaw-agent.sqlite"),
-        env: stageEnv,
-      });
-    }
     closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };

@@ -181,6 +181,46 @@ describe("setup migration stage", () => {
     await expect(fs.access(path.join(liveStateDir, "state", "openclaw.sqlite"))).rejects.toThrow();
   });
 
+  it("promotes the final agent registry path after verification closes the handle", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const reportDir = path.join(stateDir, "migration", "claude", "attempt");
+    const targetConfig = { agents: { defaults: { workspace: workspaceDir } } };
+    const stage = await createSetupMigrationStage({
+      providerId: "claude",
+      stateDir,
+      workspaceDir,
+      reportDir,
+      targetConfig,
+    });
+    const { disposeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
+    disposeOpenClawAgentDatabaseByPath(path.join(stage.staged.agentDir, "openclaw-agent.sqlite"), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stage.staged.stateDir },
+    });
+
+    const promoted = await stage.promote({
+      expectedConfig: {},
+      continuation: continuation(),
+      readConfigFile: async () => ({}),
+      commitConfigFile: async (config) => config,
+    });
+
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        path: path.join(stage.final.agentDir, "openclaw-agent.sqlite"),
+      }),
+    ]);
+    await promoted.resume.complete();
+    await promoted.resume.acknowledge();
+    await stage.cleanup();
+  });
+
   it("rolls back promoted directories when the config commit fails", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");

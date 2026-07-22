@@ -273,7 +273,10 @@ async function runSetupWizardOnce(
     }
     baseConfig = migratedSnapshot.sourceConfig ?? migratedSnapshot.config;
     pendingPluginInstallMigrationBaseConfig = baseConfig;
-    importedInferenceVerified = migrationOutcome.kind === "verified-inference";
+    const importedModelRef = resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model);
+    importedInferenceVerified =
+      migrationOutcome.kind === "verified-inference" &&
+      importedModelRef === migrationOutcome.modelRef;
     keepExistingModelConfig = importedInferenceVerified;
     flow = "quickstart";
   }
