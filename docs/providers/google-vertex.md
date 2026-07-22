@@ -142,8 +142,10 @@ After onboarding, your `openclaw.json` will include:
     },
   },
   env: {
-    GOOGLE_CLOUD_PROJECT: "your-project-id",
-    GOOGLE_CLOUD_LOCATION: "global",
+    vars: {
+      GOOGLE_CLOUD_PROJECT: "your-project-id",
+      GOOGLE_CLOUD_LOCATION: "global",
+    },
   },
 }
 ```
@@ -159,8 +161,8 @@ After onboarding, your `openclaw.json` will include:
 
 <Note>
   Environment variables can be set in your shell, in `openclaw.json` under the
-  `env` key, or in `~/.openclaw/.env`. When running the Gateway as a systemd
-  service, use the `env` key in `openclaw.json` since shell exports do not reach
+  `env.vars` key, or in `~/.openclaw/.env`. When running the Gateway as a systemd
+  service, use the `env.vars` key in `openclaw.json` since shell exports do not reach
   the service process.
 </Note>
 
@@ -184,7 +186,7 @@ Onboarding sets `gemini-3.5-flash` as the default model.
     provider. If it does, try running `openclaw onboard --auth-choice google-vertex-adc`
     again. For manual configurations, check:
 
-    1. `GOOGLE_CLOUD_PROJECT` is set (in env or `openclaw.json` `env` section).
+    1. `GOOGLE_CLOUD_PROJECT` is set (in env or `openclaw.json` `env.vars` section).
     2. On GCE/GKE: the metadata server is reachable.
     3. With gcloud CLI: you have run `gcloud auth application-default login`.
     4. With a service account: `GOOGLE_APPLICATION_CREDENTIALS` points to a valid JSON key file.
@@ -192,10 +194,10 @@ Onboarding sets `gemini-3.5-flash` as the default model.
   </Accordion>
 
   <Accordion title="Vertex AI requires a project ID">
-    Set `GOOGLE_CLOUD_PROJECT` in the `env` section of `openclaw.json`:
+    Set `GOOGLE_CLOUD_PROJECT` in the `env.vars` section of `openclaw.json`:
 
     ```json5
-    { env: { GOOGLE_CLOUD_PROJECT: "your-project-id" } }
+    { env: { vars: { GOOGLE_CLOUD_PROJECT: "your-project-id" } } }
     ```
 
     Then restart the gateway: `openclaw gateway restart` or
@@ -217,7 +219,7 @@ Onboarding sets `gemini-3.5-flash` as the default model.
     specific region (e.g. `us-central1`), try switching to `global`:
 
     ```json5
-    { env: { GOOGLE_CLOUD_LOCATION: "global" } }
+    { env: { vars: { GOOGLE_CLOUD_LOCATION: "global" } } }
     ```
 
   </Accordion>

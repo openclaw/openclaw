@@ -126,8 +126,10 @@ export function createGoogleVertexProvider(): ProviderPlugin {
                 : [...existingModels, { id: defaultModelId, name: "Gemini 3.5 Flash" }];
               return {
                 env: {
-                  GOOGLE_CLOUD_PROJECT: project,
-                  GOOGLE_CLOUD_LOCATION: location,
+                  vars: {
+                    GOOGLE_CLOUD_PROJECT: project,
+                    GOOGLE_CLOUD_LOCATION: location,
+                  },
                 },
                 models: {
                   providers: {
