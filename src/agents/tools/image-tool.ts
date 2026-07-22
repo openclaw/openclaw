@@ -1,10 +1,6 @@
-/**
- * image built-in tool.
- *
- * Describes local, staged, web, and generated media through configured media-understanding providers.
- */
 import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
+import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import {
@@ -263,6 +259,7 @@ function resolveImageModelConfigForTool(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
 }): ImageModelConfig | null {
   // Native-vision runs route post-prompt image bytes to the active model, not fallback config.
   const explicit = coerceImageModelConfig(params.cfg);
@@ -276,10 +273,18 @@ function resolveImageModelConfigForTool(params: {
   const primary = resolveDefaultModelRef(params.cfg);
   let verifiedSubstituteProvider: string | undefined;
   const resolveCodexMediaRoute = () => {
-    const provider = imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
-      providerId: "codex",
-      cfg: params.cfg,
-    });
+    const preparedProviders =
+      params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
+    const provider = preparedProviders
+      ? findCapabilityProviderById({
+          providers: preparedProviders,
+          providerId: "codex",
+          normalizeProviderId: normalizeMediaProviderId,
+        })
+      : imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider({
+          providerId: "codex",
+          cfg: params.cfg,
+        });
     if (!provider?.capabilities?.includes("image")) {
       return undefined;
     }
@@ -686,7 +691,13 @@ async function runImagePrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
-  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
+  const preparedProviders =
+    params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
+  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(
+    undefined,
+    providerCfg,
+    preparedProviders,
+  );
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
@@ -844,6 +855,7 @@ export function createImageTool(options?: {
         agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
+        preparedModelRuntime: options?.preparedModelRuntime,
       })
     : explicitImageModelConfig;
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
@@ -948,6 +960,7 @@ export function createImageTool(options?: {
             agentDir,
             workspaceDir: options?.workspaceDir,
             authStore: options?.authProfileStore,
+            preparedModelRuntime: options?.preparedModelRuntime,
           });
         if (!imageModelConfig) {
           throw new Error(

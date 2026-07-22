@@ -46,6 +46,7 @@ import {
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { renderOfflineSidebarStatus, renderSessionRowBadges } from "./session-row-badges.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -209,6 +210,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     const mainKey = this.selectedAgentMainSessionKey(agentId);
     const mainRow = this.mainSessionRow(agentId);
     const approvalNeeded = sessionHasPendingApproval(this.approvalBadgeSnapshot(), mainKey);
+    const outboxCount = this.outboxCountForSessionKey(mainKey);
     const active =
       this.activeRouteId === "chat" &&
       areUiSessionKeysEquivalent(this.getRouteSessionKey(), mainKey);
@@ -250,7 +252,7 @@ class AppSidebar extends AppSidebarSessionListElement {
               >${icons.layoutDashboard}</span
             >`
           : nothing}
-        ${stateBadge !== nothing || approvalNeeded
+        ${stateBadge !== nothing || approvalNeeded || outboxCount > 0
           ? html`<span class="nav-item__state sidebar-home-session-states">
               ${stateBadge}
               ${approvalNeeded
@@ -262,6 +264,7 @@ class AppSidebar extends AppSidebarSessionListElement {
                     >${icons.alertTriangle}</span
                   >`
                 : nothing}
+              ${renderSessionRowBadges({ hasAutomation: false, outboxCount })}
             </span>`
           : nothing}
       </a>
@@ -343,17 +346,11 @@ class AppSidebar extends AppSidebarSessionListElement {
           ? html`<openclaw-tooltip
               .content=${this.lastError ? redactLoginFailureError(this.lastError) : reconnecting}
             >
-              <button
-                type="button"
-                class="sidebar-footer-bar__status"
-                aria-live="polite"
-                aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
-                @click=${() => this.onRetryConnect?.()}
-              >
-                <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-                  "common.offline",
-                )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
-              </button>
+              ${renderOfflineSidebarStatus({
+                queuedOutboxCount: this.queuedOutboxCount,
+                reconnecting,
+                onRetry: () => this.onRetryConnect?.(),
+              })}
             </openclaw-tooltip>`
           : nothing}
         <openclaw-tooltip .content=${t("nav.settings")}>
