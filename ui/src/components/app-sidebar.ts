@@ -11,6 +11,7 @@ import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -367,6 +368,8 @@ class AppSidebar extends AppSidebarSessionListElement {
         <openclaw-viewer-facepile
           .presencePayload=${this.presencePayload}
           .selfInstanceId=${this.presenceInstanceId}
+          .buildInfo=${CONTROL_UI_BUILD_INFO}
+          .gatewayVersion=${this.gatewayVersion}
           .maxVisible=${5}
           variant="footer"
         ></openclaw-viewer-facepile>
