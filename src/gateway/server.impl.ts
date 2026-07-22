@@ -41,6 +41,7 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { onEffectiveOperatorDevicePaired } from "../infra/device-pairing.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -50,7 +51,6 @@ import {
   isDiagnosticsTimelineEnabled,
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
-import { onEffectiveOperatorDevicePaired } from "../infra/device-pairing.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import {
