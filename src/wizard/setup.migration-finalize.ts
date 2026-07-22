@@ -219,7 +219,8 @@ export async function finalizeSetupMigrationPromotion(params: {
         next: deferredMigrationFailure(deferredPlan, error),
       });
     } finally {
-      await preparation?.dispose?.();
+      const disposable = preparation as { dispose?: () => void | Promise<void> } | undefined;
+      await disposable?.dispose?.();
     }
     deferredResult = retryResult;
     await params.resume.saveDeferredResult(deferredResult);
