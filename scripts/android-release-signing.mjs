@@ -5,6 +5,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+const ANDROID_SIGNING_TIMEOUT_MS = 120_000;
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
 const requiredPropertyNames = [
@@ -188,7 +190,9 @@ function run(command, args, options = {}) {
   execFileSync(command, args, {
     cwd: options.cwd,
     env: options.env || process.env,
+    killSignal: "SIGKILL",
     stdio: options.stdio || "pipe",
+    timeout: ANDROID_SIGNING_TIMEOUT_MS,
   });
 }
 
@@ -197,7 +201,9 @@ function runText(command, args, options = {}) {
     cwd: options.cwd,
     env: options.env || process.env,
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: ANDROID_SIGNING_TIMEOUT_MS,
   });
 }
 
