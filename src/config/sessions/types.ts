@@ -26,6 +26,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+export type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionOrigin = {
   label?: string;
@@ -231,6 +232,8 @@ export type RestartRecoveryRun = {
 
 export type SessionEntry = SessionRestartRecoveryState &
   SessionEntryProvenance & {
+    /** Collaboration mode. Missing legacy values are equivalent to "shared". */
+    visibility?: SessionVisibility;
     /**
      * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
      * Stored on the main session entry.

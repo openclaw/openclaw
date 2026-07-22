@@ -73,6 +73,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.message": [READ_SCOPE],
   "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
+  "session.sharing": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
@@ -96,6 +97,36 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   const keyJSON = JSON.stringify(name);
   const prefix = `{${keyJSON}:`;
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+}
+
+function resolveBroadcastSessionScope(
+  payload: unknown,
+  explicit: readonly string[] | undefined,
+  explicitAgentId: string | undefined,
+): { sessionKeys: readonly string[]; agentId?: string } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      sessionKeys: explicit ?? [],
+      ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
+    };
+  }
+  const record = payload as {
+    sessionKey?: unknown;
+    agentId?: unknown;
+    suggestion?: { sessionKey?: unknown; agentId?: unknown };
+    request?: { sessionKey?: unknown; agentId?: unknown };
+  };
+  const source = [record, record.suggestion, record.request].find(
+    (candidate) => typeof candidate?.sessionKey === "string" && candidate.sessionKey.trim(),
+  );
+  const sessionKey = typeof source?.sessionKey === "string" ? source.sessionKey.trim() : "";
+  const agentId =
+    explicitAgentId ??
+    (typeof source?.agentId === "string" ? source.agentId.trim() || undefined : undefined);
+  return {
+    sessionKeys: explicit?.length ? explicit : sessionKey ? [sessionKey] : [],
+    ...(agentId ? { agentId } : {}),
+  };
 }
 
 function hasEventScope(
@@ -153,6 +184,11 @@ function hasEventScope(
 export function createGatewayBroadcaster(params: {
   clients: Set<GatewayWsClient>;
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
+  canReceiveSessionEvent?: (
+    client: GatewayWsClient,
+    sessionKeys: readonly string[],
+    agentId?: string,
+  ) => boolean;
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
@@ -167,6 +203,11 @@ export function createGatewayBroadcaster(params: {
     if (params.clients.size === 0) {
       return;
     }
+    const { sessionKeys, agentId } = resolveBroadcastSessionScope(
+      payload,
+      opts?.sessionKeys,
+      opts?.agentId,
+    );
     const isTargeted = Boolean(targetConnIds);
     if (shouldLogWs()) {
       const logMeta: Record<string, unknown> = {
@@ -211,6 +252,13 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       if (!hasEventScope(c, event, explicitPluginScope)) {
+        continue;
+      }
+      if (
+        sessionKeys.length > 0 &&
+        params.canReceiveSessionEvent &&
+        !params.canReceiveSessionEvent(c, sessionKeys, agentId)
+      ) {
         continue;
       }
       if (

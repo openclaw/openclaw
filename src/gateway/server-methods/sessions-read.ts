@@ -29,6 +29,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
+  filterDraftSessionsForClient,
+  resolveSessionSharingRole,
+  resolveSessionSharingTarget,
+  resolveSessionVisibility,
+} from "../session-sharing.js";
+import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
@@ -183,7 +189,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "sessions.list": async ({ params, respond, context }) => {
+  "sessions.list": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
@@ -208,9 +214,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        const visibleStore = filterDraftSessionsForClient({ client, store });
         const listStore = configuredAgentsOnly
-          ? filterSessionStoreToConfiguredAgents(cfg, store)
-          : store;
+          ? filterSessionStoreToConfiguredAgents(cfg, visibleStore)
+          : visibleStore;
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
           () => loadOptionalServerMethodModelCatalog(context, "sessions.list"),
@@ -244,6 +251,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           "gateway.sessions.list.active_run_flags",
           () => {
             return result.sessions.map((session) => {
+              const sharingTarget = resolveSessionSharingTarget({
+                cfg,
+                sessionKey: session.key,
+                ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+              });
+              const visibility = sharingTarget
+                ? resolveSessionVisibility(sharingTarget.entry)
+                : "shared";
               const placementRecord = session.sessionId
                 ? placementsBySessionId?.get(session.sessionId)
                 : undefined;
@@ -256,6 +271,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 defaultAgentId: resolveDefaultAgentId(cfg),
               });
               return Object.assign({}, session, {
+                visibility,
+                ...(sharingTarget
+                  ? {
+                      sharingRole: resolveSessionSharingRole({
+                        client,
+                        target: sharingTarget,
+                        includeMembership: visibility !== "shared",
+                      }),
+                    }
+                  : {}),
                 hasActiveRun: activeRunState.active,
                 ...(placementRecord
                   ? { placement: projectWorkerSessionPlacement(placementRecord) }

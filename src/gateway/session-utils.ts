@@ -2254,6 +2254,7 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
+    visibility: entry ? (entry.visibility ?? "shared") : undefined,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     // The live registry controller takes precedence over the persisted spawner.
     controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,

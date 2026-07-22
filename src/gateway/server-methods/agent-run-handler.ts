@@ -8,6 +8,7 @@ import {
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { authorizeResolvedSessionMutation } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
@@ -148,6 +149,18 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     }
     agentId = content.agentId;
     requestedSessionKey = content.requestedSessionKey;
+    if (requestedSessionKey) {
+      const sharingError = authorizeResolvedSessionMutation({
+        cfg,
+        client,
+        sessionKey: requestedSessionKey,
+        agentId,
+      });
+      if (sharingError) {
+        respond(false, undefined, sharingError);
+        return;
+      }
+    }
     let effectiveTranscriptInputText = content.effectiveTranscriptInputText;
     let message = content.message;
     const {

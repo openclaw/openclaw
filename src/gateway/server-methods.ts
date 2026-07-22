@@ -44,6 +44,7 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { authorizeSessionMutation } from "./session-sharing.js";
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -746,6 +747,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.delete",
       "sessions.dispatch",
       "sessions.reclaim",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -928,6 +933,17 @@ export async function handleGatewayRequest(
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  const sessionMutationError = authorizeSessionMutation({
+    cfg: context.getRuntimeConfig(),
+    client: client ?? null,
+    method: req.method,
+    requestParams: req.params,
+    context,
+  });
+  if (sessionMutationError) {
+    respond(false, undefined, sessionMutationError);
     return;
   }
   if (

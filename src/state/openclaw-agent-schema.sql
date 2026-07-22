@@ -177,6 +177,18 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
   ON session_entries(status, session_key)
   WHERE status IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS session_members (
+  session_key TEXT NOT NULL,
+  identity_id TEXT NOT NULL,
+  added_by TEXT NOT NULL,
+  added_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, identity_id),
+  FOREIGN KEY (session_key) REFERENCES session_entries(session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_members_identity
+  ON session_members(identity_id, session_key);
+
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
   tab_id TEXT NOT NULL,
