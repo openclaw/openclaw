@@ -255,9 +255,6 @@ export function createOpenClawTools(
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
   );
-  const runtimeCwd = resolveWorkspaceRoot(
-    options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir,
-  );
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
@@ -530,7 +527,7 @@ export function createOpenClawTools(
       ? createTaskSuggestionTools({
           sessionKey: taskKey,
           agentId: sessionAgentId,
-          cwd: runtimeCwd,
+          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
@@ -708,6 +705,7 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       activeDeliveryContext: {
         channel: options?.agentChannel,
         to: options?.currentChannelId ?? options?.agentTo,
