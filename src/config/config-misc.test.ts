@@ -613,6 +613,34 @@ describe("ui.prefs.chatMessageMaxWidth", () => {
   });
 });
 
+describe("plugins.entries.*.workflow", () => {
+  it.each([true, false])("accepts allowScheduledSessionTurns=%s", (allowScheduledSessionTurns) => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "workflow-plugin": {
+            workflow: { allowScheduledSessionTurns },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-boolean scheduled session turn authorization", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "workflow-plugin": {
+            workflow: { allowScheduledSessionTurns: "yes" },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("plugins.entries.*.hooks", () => {
   it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
     const result = OpenClawSchema.safeParse({

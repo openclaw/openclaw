@@ -38,6 +38,10 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
     "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build`.",
+  "plugins.entries.*.workflow":
+    "Per-plugin session workflow policy for core-enforced capabilities that can enqueue or clean up future agent work. Use this to grant narrow workflow permissions without broadening typed hook access.",
+  "plugins.entries.*.workflow.allowScheduledSessionTurns":
+    "Explicitly allows a non-bundled plugin to create and remove durable Cron-backed session turns through `scheduleSessionTurn` and `unscheduleSessionTurnsByTag`. Keep false unless the plugin is trusted to enqueue future agent work in its target sessions.",
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.hooks.timeoutMs":

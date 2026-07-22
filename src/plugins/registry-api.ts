@@ -21,6 +21,7 @@ import type { PluginRuntimeResolver } from "./registry-runtime.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
+  type PluginSessionWorkflowPolicy,
   type PluginTypedHookPolicy,
   type PluginSideEffectGuard,
 } from "./registry-state.js";
@@ -135,6 +136,7 @@ export function createPluginApiFactory(
       config: OpenClawPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
+      workflowPolicy?: PluginSessionWorkflowPolicy;
       registrationMode?: PluginRegistrationMode;
     },
   ): OpenClawPluginApi => {
@@ -334,6 +336,7 @@ export function createPluginApiFactory(
                   pluginId: record.id,
                   pluginName: record.name,
                   origin: record.origin,
+                  operatorAuthorized: params.workflowPolicy?.allowScheduledSessionTurns,
                   schedule,
                   cron: getHostCronService(),
                   shouldCommit: isLoadedRecordInLiveRegistry,
@@ -351,6 +354,7 @@ export function createPluginApiFactory(
                 return unschedulePluginSessionTurnsByTag({
                   pluginId: record.id,
                   origin: record.origin,
+                  operatorAuthorized: params.workflowPolicy?.allowScheduledSessionTurns,
                   cron: getHostCronService(),
                   request,
                 });

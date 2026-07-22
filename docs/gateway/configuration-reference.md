@@ -243,6 +243,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
         hooks: {
           allowPromptInjection: false,
         },
+        workflow: {
+          allowScheduledSessionTurns: false,
+        },
         config: { provider: "twilio" },
       },
     },
@@ -258,6 +261,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.workflow.allowScheduledSessionTurns`: when `true`, explicitly authorizes a non-bundled plugin to create and remove durable Cron-backed session turns through `scheduleSessionTurn` and `unscheduleSessionTurnsByTag`. Leave unset or `false` unless the plugin is trusted to enqueue future agent work in its target sessions. Bundled plugin behavior is unchanged.
 - `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.

@@ -182,6 +182,11 @@ export const PluginEntrySchema = z.strictObject({
       timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
     })
     .optional(),
+  workflow: z
+    .strictObject({
+      allowScheduledSessionTurns: z.boolean().optional(),
+    })
+    .optional(),
   subagent: z
     .strictObject({
       allowModelOverride: z.boolean().optional(),

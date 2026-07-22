@@ -12,6 +12,10 @@ export type PluginTypedHookPolicy = {
   timeouts?: Record<string, number>;
 };
 
+export type PluginSessionWorkflowPolicy = {
+  allowScheduledSessionTurns?: boolean;
+};
+
 export type PluginSideEffectGuard = {
   active: boolean;
 };

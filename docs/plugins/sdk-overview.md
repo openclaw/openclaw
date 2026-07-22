@@ -353,7 +353,7 @@ plugins.
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
 | `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
-| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Cron-backed scheduled session turns plus tag-based cleanup; non-bundled plugins require explicit operator authorization                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
@@ -432,6 +432,14 @@ Cron scheduler. Cron owns timing and creates the background task record when the
 turn runs; the Plugin SDK only constrains the target session, plugin-owned
 naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
 turn when the work itself needs durable multi-step Task Flow state.
+
+Bundled plugins retain access by default. For a non-bundled plugin, the operator
+must explicitly set
+`plugins.entries.<id>.workflow.allowScheduledSessionTurns: true`; otherwise
+`scheduleSessionTurn(...)` returns `undefined` and
+`unscheduleSessionTurnsByTag(...)` returns a zero-count result. This permission
+does not follow from plugin enablement, conversation access, prompt injection,
+or plugin-defined config, and scheduling and tag cleanup use the same gate.
 
 The contracts intentionally split authority:
 

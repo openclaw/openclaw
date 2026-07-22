@@ -578,6 +578,7 @@ describe("plugin status reports", () => {
 
     expectInspectPolicy(inspect, {
       allowPromptInjection: undefined,
+      allowScheduledSessionTurns: undefined,
       allowConversationAccess: undefined,
       hookTimeoutMs: undefined,
       hookTimeouts: undefined,
@@ -688,7 +689,13 @@ describe("plugin status reports", () => {
       plugins: {
         entries: {
           google: {
-            hooks: { allowPromptInjection: false, allowConversationAccess: true },
+            hooks: {
+              allowPromptInjection: false,
+              allowConversationAccess: true,
+            },
+            workflow: {
+              allowScheduledSessionTurns: true,
+            },
             subagent: {
               allowModelOverride: true,
               allowedModels: ["openai/gpt-5.5"],
@@ -723,6 +730,7 @@ describe("plugin status reports", () => {
     expect(inspect.compatibility).toStrictEqual([]);
     expectInspectPolicy(inspect, {
       allowPromptInjection: false,
+      allowScheduledSessionTurns: true,
       allowConversationAccess: true,
       hookTimeoutMs: undefined,
       hookTimeouts: undefined,

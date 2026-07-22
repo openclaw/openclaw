@@ -416,7 +416,8 @@ export type OpenClawPluginApi = {
   /**
    * Schedule a future agent turn in a session through Cron.
    * Cron owns timing and creates the task ledger entry when the turn runs.
-   * Bundled plugins only; workspace plugins receive undefined.
+   * Non-bundled plugins require explicit operator authorization through
+   * plugins.entries.<id>.workflow.allowScheduledSessionTurns.
    *
    * @deprecated Use `api.session.workflow.scheduleSessionTurn(...)`.
    */
@@ -425,7 +426,7 @@ export type OpenClawPluginApi = {
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
   /**
    * Remove Cron-backed scheduled session turns that share the same plugin-owned tag.
-   * Bundled plugins only; workspace plugins receive a zero-count result.
+   * Non-bundled plugins require the same explicit operator authorization as scheduling.
    *
    * @deprecated Use `api.session.workflow.unscheduleSessionTurnsByTag(...)`.
    */

@@ -101,12 +101,31 @@ describe("normalizePluginsConfig", () => {
           timeouts: {
             before_prompt_build: 900_000,
           },
-        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
+        } as unknown as {
+          allowPromptInjection: boolean;
+          allowConversationAccess: boolean;
+        },
       },
       expectedHooks: undefined,
     },
   ] as const)("$name", ({ entry, expectedHooks }) => {
     expect(normalizeVoiceCallEntry(entry)?.hooks).toEqual(expectedHooks);
+  });
+
+  it("normalizes plugin workflow authorization", () => {
+    expect(
+      normalizeVoiceCallEntry({ workflow: { allowScheduledSessionTurns: true } })?.workflow,
+    ).toEqual({ allowScheduledSessionTurns: true });
+  });
+
+  it("drops invalid plugin workflow authorization", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        workflow: { allowScheduledSessionTurns: "nope" },
+      } as unknown as {
+        workflow: { allowScheduledSessionTurns: boolean };
+      })?.workflow,
+    ).toBeUndefined();
   });
 
   it.each([
