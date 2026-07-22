@@ -1219,7 +1219,7 @@ describe("official external plugin catalog", () => {
     );
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
-      "openclaw-plugin-yuanbao@2.15.0",
+      "openclaw-plugin-yuanbao@2.17.0",
     );
   });
 
