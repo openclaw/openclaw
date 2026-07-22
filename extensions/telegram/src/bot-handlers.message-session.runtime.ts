@@ -153,5 +153,3 @@ export function createTelegramMessageSessionRuntime({
 
   return { resolveTelegramSessionState, resolvePromptContextAmbientWatermark };
 }
-
-export type TelegramMessageSessionRuntime = ReturnType<typeof createTelegramMessageSessionRuntime>;

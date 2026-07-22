@@ -7552,6 +7552,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What changed
   - H3: Why
   - H2: Compatibility policy
+  - H3: Channel setup input field compatibility
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
@@ -7622,6 +7623,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: ClawHub publishing
   - H2: Setup entry
   - H3: Narrow setup helper imports
+  - H3: Channel-owned setup input fields
   - H3: Channel-owned single-account promotion
   - H2: Config schema
   - H3: Building channel config schemas

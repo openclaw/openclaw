@@ -124,7 +124,12 @@ describe("OpenClaw configured-model planner", () => {
     const binding = await createSystemAgentVerifiedInferenceBinding({
       configuredRoute,
       executionRoute: { ...configuredRoute, authProfileId: "openai:p2" },
-      auth: { authProfileId: "openai:p2", authFingerprint },
+      auth: {
+        authProfileId: "openai:p2",
+        authFingerprint,
+        modelId: configuredRoute.model,
+        modelApi: "openai-responses",
+      },
       deps: authDeps,
     });
     const runEmbeddedAgent = vi.fn(async () => ({

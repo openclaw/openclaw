@@ -233,11 +233,11 @@ artifacts flush because Matrix crypto native handles can outlive cleanup; set
 needs the command to return instead.
 
 Each run writes the normal QA Lab artifacts under the selected output
-directory: `qa-suite-report.md`, `qa-suite-summary.json`, `qa-evidence.json`,
-and a redacted `matrix-harness-*/matrix-qa-harness.json` manifest. If cleanup
-fails, run the printed `docker compose ... down --remove-orphans` recovery
-command. On slow runners, increase the no-reply window; on fast CI, a smaller
-window can shorten negative assertions.
+directory: `qa-suite-report.md`, `qa-suite-summary.json`, and
+`qa-evidence.json`. If cleanup fails, run the printed
+`docker compose ... down --remove-orphans` recovery command. On slow runners,
+increase the no-reply window; on fast CI, a smaller window can shorten negative
+assertions.
 
 The scenarios cover transport behavior that unit tests cannot prove end to
 end: mention gating, allow-bot policies, allowlists, top-level and threaded
@@ -1194,7 +1194,9 @@ The minimum adoption bar for a new channel:
    array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and
    runner execution should stay behind separate entrypoints. An optional
    `adapterFactory` exposes the transport to shared scenarios without changing
-   the command's existing scenario catalog.
+   the command's existing scenario catalog. Same-channel partitions are serial
+   unless the factory declares that every instance owns isolated credentials or
+   disposable servers, Gateway state, and artifact paths.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.

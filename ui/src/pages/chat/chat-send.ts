@@ -129,6 +129,7 @@ export type ChatHost = ChatInputHistoryState &
     chatQueueByScope?: Record<string, ChatQueueItem[]>;
     chatRunId: string | null;
     chatRunStartup?: ChatRunStartupState | null;
+    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: { summary: string } | null;

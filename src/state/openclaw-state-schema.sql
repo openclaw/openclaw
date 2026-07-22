@@ -1986,3 +1986,12 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS outbound_media_provenance (
+  realpath TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL
+) STRICT;

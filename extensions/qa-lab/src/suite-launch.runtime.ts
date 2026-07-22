@@ -96,6 +96,7 @@ type QaFlowChannelGroup = {
   channel: string | undefined;
   channelId: string | undefined;
   channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
+  isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
 
@@ -135,6 +136,16 @@ async function resolveQaFlowChannelGroups(
   scenarios: readonly QaSeedScenarioWithSource[],
 ): Promise<QaFlowChannelGroup[]> {
   if (runParams?.adapterFactories) {
+    const isolatesInstances = (channelId: string | undefined) => {
+      if (!channelId || runParams.channelDriver !== "live") {
+        return false;
+      }
+      return (
+        runParams.adapterFactories?.find((factory) =>
+          factory.matches({ channelId, driver: "live" }),
+        )?.isolatesInstances === true
+      );
+    };
     const explicitChannel = runParams.channelId?.trim().toLowerCase();
     if (explicitChannel) {
       return [
@@ -142,6 +153,7 @@ async function resolveQaFlowChannelGroups(
           channel: explicitChannel,
           channelId: explicitChannel,
           channelDriverSelection: runParams.channelDriverSelection,
+          isolatesAdapterInstances: isolatesInstances(explicitChannel),
           scenarios: [...scenarios],
         },
       ];
@@ -157,6 +169,7 @@ async function resolveQaFlowChannelGroups(
       channel,
       channelId: channel,
       channelDriverSelection: runParams.channelDriverSelection,
+      isolatesAdapterInstances: isolatesInstances(channel),
       scenarios: groupedScenarios,
     }));
   }
@@ -298,10 +311,11 @@ function flowSuitePartitionOutputDir(outputDir: string, partition: string) {
 function partitionSharedFlowScenarios(
   scenarios: readonly QaSeedScenarioWithSource[],
   concurrency: number,
+  maxPartitions = MAX_SHARED_FLOW_PARTITIONS,
 ) {
   const partitionCount = Math.min(
     Math.max(1, Math.floor(concurrency)),
-    MAX_SHARED_FLOW_PARTITIONS,
+    Math.max(1, Math.floor(maxPartitions)),
     scenarios.length,
   );
   const partitions = Array.from({ length: partitionCount }, (): QaSeedScenarioWithSource[] => []);
@@ -607,19 +621,27 @@ async function runUnifiedQaSuite(params: {
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
         (scenario) => !runtimeScenarioSet.has(scenario),
       );
+      const channelId = channelGroup.channelId;
       const usesContributedChannelDriver = Boolean(
-        channelGroup.channelId && params.runParams?.adapterFactories,
+        channelId &&
+        params.runParams?.channelDriver === "live" &&
+        params.runParams.adapterFactories?.find((factory) =>
+          factory.matches({ channelId, driver: "live" }),
+        ),
       );
+      // Isolated adapters may use the caller's full suite budget; every partition
+      // still has weight one in the global scheduler below.
       const sharedFlowPartitions = partitionSharedFlowScenarios(
         sharedFlowScenarios,
-        usesContributedChannelDriver ? 1 : concurrency,
+        usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances ? 1 : concurrency,
+        channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
       );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
-      const channelDriverFlowRequiresExclusiveWorkers = Boolean(
-        channelGroup.channelDriverSelection || usesContributedChannelDriver,
-      );
+      const channelDriverFlowRequiresExclusiveWorkers =
+        Boolean(channelGroup.channelDriverSelection || usesContributedChannelDriver) &&
+        !channelGroup.isolatesAdapterInstances;
       const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
         : MAX_ISOLATED_FLOW_CONCURRENCY;
@@ -665,8 +687,8 @@ async function runUnifiedQaSuite(params: {
           .filter((part): part is string => Boolean(part))
           .join("-");
         const task = {
-          // One channel's credential and gateway state stay serial. Distinct channels own
-          // separate adapters, leases, and artifact directories, so they may run together.
+          // One channel's credential and Gateway state stay serial unless each adapter create()
+          // owns an isolated runtime. Distinct channels may always run together.
           exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
             ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,

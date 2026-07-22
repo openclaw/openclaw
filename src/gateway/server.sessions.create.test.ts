@@ -758,12 +758,16 @@ test.each([undefined, "main"])(
 
     const created = await directSessionReq<{
       key?: string;
-      entry?: { parentSessionKey?: string };
+      entry?: { parentSessionKey?: string; spawnDepth?: number };
     }>("sessions.create", { agentId: "main" });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    // Auto-parented operator sessions must stay spawn-capable roots: without the
+    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
+    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
 
@@ -778,7 +782,7 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   const created = await directSessionReq<{
     key?: string;
-    entry?: { parentSessionKey?: string };
+    entry?: { parentSessionKey?: string; spawnDepth?: number };
   }>("sessions.create", {
     agentId: "main",
     parentSessionKey: "agent:main:explicit-parent",
@@ -786,6 +790,9 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+  // Explicit parents include visible spawn children, whose depth is derived by
+  // walking parentSessionKey; a stored root depth here would let them over-spawn.
+  expect(created.payload?.entry?.spawnDepth).toBeUndefined();
 
   const reused = await directSessionReq<{
     entry?: { parentSessionKey?: string };

@@ -2,6 +2,8 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
+  rowDemandsVisibility,
+  RowVisibilityReason,
   sidebarSessionAttentionPriority,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
@@ -112,6 +114,7 @@ export function projectSessionTree(params: {
     // ancestor remains actionable even when the blocked descendant is hidden.
     const attention = children.reduce(
       (current, child) =>
+        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
         sidebarSessionAttentionPriority(child.attention) > sidebarSessionAttentionPriority(current)
           ? child.attention
           : current,

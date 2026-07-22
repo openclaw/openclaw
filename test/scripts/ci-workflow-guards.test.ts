@@ -4641,7 +4641,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const runProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
-    expect(runProfileStep.run).toContain("--concurrency 2");
+    expect(runProfileStep.run).toContain("--concurrency 6");
     expect(runProfileStep.run).toContain("--fast");
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
     expect(generateJob.if.replace(/\s+/gu, " ")).toBe(

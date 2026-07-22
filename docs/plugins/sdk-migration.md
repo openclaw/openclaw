@@ -89,6 +89,25 @@ If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
+### Channel setup input field compatibility
+
+`ChannelSetupInput` now keeps only the cross-channel setup envelope typed
+permanently. Channel-specific fields remain typed in a deprecated compatibility
+tier so existing external plugins still compile while plugin authors move those
+fields into plugin-local setup input types.
+
+The shared type has no index signature. Plugin-owned keys can still be present
+on runtime input objects; declare them in a plugin-local intersection or narrow
+them through the owning plugin's setup schema.
+
+| `code`                                  | `owner`   | `replacement`                                                                                    | `removeAfter`           | Removal condition                                                                                                                        |
+| --------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk-channel-setup-input-fields` | `channel` | Intersect `ChannelSetupInput` with a plugin-local type that declares the owning channel's fields | `next-plugin-sdk-major` | Remove at the first Plugin SDK major after the bundled-plugin migration in [#112238](https://github.com/openclaw/openclaw/issues/112238) |
+
+This is a source/type compatibility record only. It has no runtime adapter or
+compatibility-registry entry because runtime setup input objects and setup
+behavior are unchanged.
+
 Audit the current migration queue with `pnpm plugins:boundary-report`:
 
 | Flag                                                    | Effect                                                                         |

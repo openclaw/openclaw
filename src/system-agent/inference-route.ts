@@ -27,6 +27,7 @@ export type SystemAgentConfiguredRoute = {
 
 export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
 };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -99,6 +100,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<SystemAgentConfiguredRoute | null> {
   const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
     await Promise.all([
@@ -150,6 +152,9 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
                 authProfileIdSource: "user",
               },
             }
+          : {}),
+        ...(deps.loadAuthProfileStoreForRuntime
+          ? { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime }
           : {}),
       })
     : undefined;
@@ -211,6 +216,7 @@ export async function projectDefaultInferenceRoute(
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<DefaultInferenceRouteProjection> {
   const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
     import("../agents/agent-scope.js"),
@@ -218,7 +224,7 @@ export async function projectInferenceRoute(
   ]);
   const defaultAgentId = resolveDefaultAgentId(config);
   const routeAgentId = normalizeAgentId(requestedAgentId ?? defaultAgentId);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId);
+  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = listAgentEntries(config);
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
   const executionAgent = listAgentEntries(route?.runConfig ?? {}).find(

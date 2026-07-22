@@ -38,7 +38,7 @@ export function renderChatViewNotices(props: ChatViewNoticesProps) {
         `
       : nothing}
     ${renderWorkspaceConflictNotice({
-      conflict: props.workspaceConflict,
+      conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
     })}
     ${props.focusMode && props.onToggleFocusMode

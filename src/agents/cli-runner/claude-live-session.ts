@@ -426,6 +426,7 @@ function buildClaudeLiveFingerprint(params: {
     extraSystemPromptHash: params.context.extraSystemPromptHash,
     promptToolNamesHash: params.context.promptToolNamesHash,
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
+    credentialFingerprint: params.context.preparedBackend.secretInput?.fingerprint,
     skillsFingerprint,
     argv: stableArgv,
     env: Object.keys(params.env)
@@ -1323,6 +1324,7 @@ async function createClaudeLiveSession(params: {
       cwd: params.context.cwd ?? params.context.workspaceDir,
       env: mcpCaptureAttempt.env ?? params.env,
       stdinMode: "pipe-open",
+      secretInput: params.context.preparedBackend.secretInput,
       captureOutput: false,
       onStdout: (chunk) => {
         if (session) {

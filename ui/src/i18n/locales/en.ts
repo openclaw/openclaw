@@ -913,6 +913,8 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
+    showAdvanced: "Show advanced",
+    advancedCount: "Advanced ({count})",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
@@ -3684,6 +3686,7 @@ export const en: TranslationMap = {
       preparingContext: "Preparing context…",
       startingModel: "Starting model…",
     },
+    outputTokens: "{count} output tokens",
     archivedSessionDisabled: "Restore this thread to send messages.",
     loadOlder: "Load older",
     sessionHeader: {

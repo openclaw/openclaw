@@ -652,6 +652,13 @@ gh workflow run duplicate-after-merge.yml \
 
 `pnpm config:docs:check` rejects undocumented config-surface growth and corrupt or stale count snapshots. When a reviewed product change intentionally adds schema paths, run `pnpm config:docs:gen`, inspect the core/channel/plugin count deltas and generated SHA-256 files, and commit the conscious baseline bump with the schema, help, labels, migration, and tests. Do not hand-edit the counts file to bypass the ratchet.
 
+Config authors must also tier new leaves for Settings. Add `advanced: false` or
+`advanced: true` at the leaf, or place the key beneath an ancestor whose tier
+all descendants should inherit. Unclassified roots fail the schema quality
+test with copy-paste stubs; paths without an ancestor are advanced by default.
+The curated common-leaf snapshot makes intentional tier changes visible in
+review.
+
 Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local check gate is stricter about architecture boundaries than the broad CI platform scope:
 
 - core production changes run core prod and core test typecheck plus core lint/guards;

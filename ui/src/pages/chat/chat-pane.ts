@@ -246,7 +246,10 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
+import {
+  reconcileWaitingApprovalsFromSnapshot,
+  resolveActiveRunOutputTokens,
+} from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -3293,6 +3296,11 @@ class ChatPane extends OpenClawLightDomElement {
       presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
       presenceInstanceId: gatewaySnapshot.client?.instanceId,
     });
+    const runOutputTokens = resolveActiveRunOutputTokens({
+      localRunId: state.chatRunId,
+      activeRunIds: selectedSession?.activeRunIds,
+      usageByRun: state.chatRunUsageById,
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -3343,6 +3351,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
+      runOutputTokens: catalogKey ? null : runOutputTokens,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,

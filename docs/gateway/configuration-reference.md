@@ -16,6 +16,12 @@ Code truth beats this page:
 - Agents should call the `gateway` tool action `config.schema.lookup` for one exact path-scoped schema node before editing config.
 - `pnpm config:docs:check` / `pnpm config:docs:gen` validate this doc's baseline hash against the current schema surface.
 
+Schema `uiHints` also carry a resolved `advanced` boolean for every path.
+Control UI uses it to show common fields first and collapse advanced fields per
+section; search still spans both tiers. Tier metadata is presentational only.
+When adding a key, declare its tier on the leaf or let it inherit the nearest
+ancestor declaration. A path with no declared ancestor is advanced by default.
+
 Dedicated deep references:
 
 - [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
@@ -511,6 +517,7 @@ See [Plugins](/tools/plugin).
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
       chatSendShortcut: "enter", // enter | modifier-enter
       chatFollowUpMode: "steer", // steer | queue; omit to use the server queue mode
+      showAdvancedSettings: false, // Expand every Advanced group in Settings
     },
   },
 }
@@ -526,6 +533,8 @@ See [Plugins](/tools/plugin).
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
   delivery remains separate and unchanged.
+  `showAdvancedSettings` defaults to `false`; Settings search may temporarily
+  open one matching advanced group without changing this preference.
   Connected clients apply server-side changes live: the gateway broadcasts a
   hash-only `config.changed` event after every persisted config write and
   clients refresh their snapshot (skipped while a local settings draft has

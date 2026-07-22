@@ -326,6 +326,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
+      sessionTranscript: { historyLimit: entry.isGroup ? deps.historyLimit : 0 },
       access: {
         ...(entry.isGroup
           ? {

@@ -9,6 +9,17 @@ import {
   resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
+type ClaudePreparedExecutionWithSecret = {
+  env?: Record<string, string>;
+  clearEnv?: string[];
+  cleanup?: () => Promise<void>;
+  secretInput: {
+    fd: number;
+    fingerprint: string;
+    createData: () => Buffer;
+  };
+};
+
 const CLAUDE_CLI_DISALLOWED_TOOLS =
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
 
@@ -700,6 +711,123 @@ describe("normalizeClaudeBackendConfig", () => {
     ).toEqual({
       env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" },
     });
+  });
+
+  it("forwards the selected OAuth profile through Claude's private descriptor", async () => {
+    const backend = buildAnthropicCliBackend();
+
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      authProfileId: "anthropic:claude-cli",
+      authCredential: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "selected-access-token",
+        refresh: "selected-refresh-token",
+        expires: Date.now() + 60_000,
+      },
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      authCredential: {
+        type: "oauth";
+        provider: string;
+        access: string;
+        refresh: string;
+        expires: number;
+      };
+    }) as ClaudePreparedExecutionWithSecret;
+
+    expect(prepared.env).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+    });
+    expect(prepared.env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(prepared.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
+    expect(prepared.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
+    expect(prepared.secretInput.fd).toBe(3);
+    expect(prepared.secretInput.fingerprint).not.toContain("selected-access-token");
+    expect(prepared.secretInput.createData().toString("utf8")).toBe("selected-access-token");
+
+    const sameToken = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      authCredential: {
+        type: "token",
+        provider: "claude-cli",
+        token: "selected-access-token",
+      },
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      authCredential: { type: "token"; provider: string; token: string };
+    }) as ClaudePreparedExecutionWithSecret;
+    const rotatedToken = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      authCredential: {
+        type: "token",
+        provider: "claude-cli",
+        token: "rotated-access-token",
+      },
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      authCredential: { type: "token"; provider: string; token: string };
+    }) as ClaudePreparedExecutionWithSecret;
+    expect(sameToken.secretInput.fingerprint).toBe(prepared.secretInput.fingerprint);
+    expect(rotatedToken.secretInput.fingerprint).not.toBe(prepared.secretInput.fingerprint);
+
+    await prepared.cleanup?.();
+    await sameToken.cleanup?.();
+    await rotatedToken.cleanup?.();
+    expect(() => prepared.secretInput.createData()).toThrow(
+      "Claude CLI credential input is no longer available",
+    );
+  });
+
+  it("keeps native Claude login when no compatible profile is selected", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("forwards a selected API-key profile through Claude's private descriptor", async () => {
+    const backend = buildAnthropicCliBackend();
+
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      authProfileId: "claude-cli:api",
+      authCredential: {
+        type: "api_key",
+        provider: "claude-cli",
+        key: "selected-api-key",
+      },
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      authCredential: {
+        type: "api_key";
+        provider: string;
+        key: string;
+      };
+    }) as ClaudePreparedExecutionWithSecret;
+
+    expect(prepared.env).toEqual({
+      CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "3",
+    });
+    expect(prepared.env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(prepared.env).not.toHaveProperty("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB");
+    expect(prepared.secretInput.fingerprint).not.toContain("selected-api-key");
+    expect(prepared.secretInput.createData().toString("utf8")).toBe("selected-api-key");
+
+    await prepared.cleanup?.();
+    expect(() => prepared.secretInput.createData()).toThrow(
+      "Claude CLI credential input is no longer available",
+    );
   });
 
   it("disables native background Bash and Monitor tools in args and resumeArgs", () => {

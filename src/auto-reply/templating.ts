@@ -43,6 +43,18 @@ type UntrustedStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
+  sessionTranscriptDedupeMessageIds?: string[];
+  /** Internal visible-text hints for legacy assistant rows without transcript ids. */
+  sessionTranscriptAssistantTextDedupeKeys?: string[];
+};
+
+export type SessionTranscriptContext = {
+  chatWindow?: boolean;
+  historyLimit: number;
+  beforeTimestampMs?: number;
+  minTimestampMs?: number;
+  senderLabels?: { assistant: string; user: string };
 };
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
@@ -92,6 +104,8 @@ export type MsgContext = {
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
   InboundHistory?: HistoryEntry[];
+  /** Internal facts used to merge canonical transcript turns before dispatch. */
+  SessionTranscriptContext?: SessionTranscriptContext;
   /**
    * @deprecated Use CommandBody.
    *
