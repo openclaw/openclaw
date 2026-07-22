@@ -108,6 +108,7 @@ export function createDiscordMessageRunQueue(
   let lifecycleActive = !params.abortSignal?.aborted;
 
   const cleanupSkippedQueuedMessages = () => {
+    params.abortSignal?.removeEventListener("abort", cleanupSkippedQueuedMessages);
     // These callbacks represent jobs accepted into the queue but not started.
     // Running jobs remove their callback before processDiscordMessage owns cleanup.
     if (!lifecycleActive && skippedCleanup.size === 0) {

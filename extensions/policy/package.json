@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/policy",
-  "version": "2026.6.33",
+  "version": "2026.6.34",
   "private": true,
   "description": "OpenClaw policy doctor checks for workspace conformance",
   "type": "module",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.33"
+    "openclaw": ">=2026.6.34"
   },
   "peerDependenciesMeta": {
     "openclaw": {

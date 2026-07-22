@@ -1,24 +1,24 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.6.33",
+  "version": "2026.6.34",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/matrix",
-      "version": "2026.6.33",
+      "version": "2026.6.34",
       "dependencies": {
         "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.0",
         "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
         "fake-indexeddb": "6.2.5",
-        "markdown-it": "14.2.0",
+        "markdown-it": "14.3.0",
         "matrix-js-sdk": "41.6.0",
         "music-metadata": "11.12.3",
         "typebox": "1.1.39",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.6.33"
+        "openclaw": ">=2026.6.34"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -262,9 +262,9 @@
       }
     },
     "node_modules/linkify-it": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.1.tgz",
-      "integrity": "sha512-wVoTjP4Q6R0NW5hiZkVJaFZPWgtXfoGF+6LucL3/FtiNjmcHhYjEr5f1Kqjirc1nBW07J/ZuRFumqr2oqccEWg==",
+      "version": "5.0.2",
+      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.2.tgz",
+      "integrity": "sha512-ONTm2jCMAVZjgQa/Fy1kScXsuOoF5NPTsoFBdE1KVIZ2vAh/r9+Bqo+0jINCBYnavTPQZz38QzFTme79ENoN3Q==",
       "funding": [
         {
           "type": "github",
@@ -294,9 +294,9 @@
       }
     },
     "node_modules/markdown-it": {
-      "version": "14.2.0",
-      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.2.0.tgz",
-      "integrity": "sha512-1TGiQiJVRQ3NPmZH6sx5Cfnmg6GQm9jvC1ch4TK511NjSJvjzKLzn5pPfZRNZkRPZP0HqCioSndqH8v2nRaWVQ==",
+      "version": "14.3.0",
+      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.3.0.tgz",
+      "integrity": "sha512-RCEsPjR+sr0x+AuYp601tKTkgFG4YEPLCzHST3cQ/fhlJkqAkz1L2/Qbp1j9qw5SBwQHFBoW8+hoN5xssOF0Tw==",
       "funding": [
         {
           "type": "github",
@@ -310,8 +310,8 @@
       "license": "MIT",
       "dependencies": {
         "argparse": "^2.0.1",
-        "entities": "^4.4.0",
-        "linkify-it": "^5.0.1",
+        "entities": "^4.5.0",
+        "linkify-it": "^5.0.2",
         "mdurl": "^2.0.0",
         "punycode.js": "^2.3.1",
         "uc.micro": "^2.1.0"

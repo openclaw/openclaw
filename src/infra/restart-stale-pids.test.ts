@@ -309,7 +309,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         (call) => call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-ww",
       );
       expect(psCall?.[1]).toEqual(["-ww", "-p", String(stalePid), "-o", "command="]);
-      expect(psCall?.[2]).toEqual({ timeout: 2000, encoding: "utf8" });
+      expect(psCall?.[2]).toEqual({ timeout: 2000, encoding: "utf8", killSignal: "SIGKILL" });
     });
 
     it("excludes ancestor pids so a sidecar cannot kill its parent gateway — regression for #68451", () => {
@@ -531,7 +531,11 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           (call) =>
             call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-o",
         );
-        expect(ancestorPsCall?.[2]).toEqual({ timeout: 400, encoding: "utf8" });
+        expect(ancestorPsCall?.[2]).toEqual({
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          timeout: 400,
+        });
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);

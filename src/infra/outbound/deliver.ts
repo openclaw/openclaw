@@ -868,6 +868,23 @@ function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
   );
 }
 
+function pushIdentifiedDeliveryResult(
+  results: OutboundDeliveryResult[],
+  delivery: OutboundDeliveryResult,
+): boolean {
+  if (!hasDeliveryResultIdentity(delivery)) {
+    return false;
+  }
+  results.push(delivery);
+  return true;
+}
+
+function filterIdentifiedDeliveryResults(
+  results: readonly OutboundDeliveryResult[],
+): OutboundDeliveryResult[] {
+  return results.filter((result) => hasDeliveryResultIdentity(result));
+}
+
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
   const pin = payload.delivery?.pin;
   if (pin === true) {
@@ -1543,7 +1560,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       throwIfAborted(abortSignal);
-      results.push(await sendHandler.sendText(unit.text, unit.overrides));
+      pushIdentifiedDeliveryResult(results, await sendHandler.sendText(unit.text, unit.overrides));
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -1797,10 +1814,12 @@ async function deliverOutboundPayloadsCore(
         const beforeCount = results.length;
         if (deliveryHandler.sendFormattedText) {
           results.push(
-            ...(await deliveryHandler.sendFormattedText(
-              payloadSummary.text,
-              applySendReplyToConsumption(sendOverrides),
-            )),
+            ...filterIdentifiedDeliveryResults(
+              await deliveryHandler.sendFormattedText(
+                payloadSummary.text,
+                applySendReplyToConsumption(sendOverrides),
+              ),
+            ),
           );
         } else {
           await sendTextChunks(deliveryHandler, payloadSummary.text, sendOverrides);
@@ -1821,7 +1840,7 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
-        const messageId = results.at(-1)?.messageId;
+        const messageId = deliveredResults.at(-1)?.messageId;
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -1838,7 +1857,7 @@ async function deliverOutboundPayloadsCore(
         });
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: deliveredResults.length > 0,
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
@@ -1878,7 +1897,7 @@ async function deliverOutboundPayloadsCore(
             }),
           );
         }
-        const messageId = results.at(-1)?.messageId;
+        const messageId = deliveredResults.at(-1)?.messageId;
         const pinMessageId = deliveredResults.find((entry) => entry.messageId)?.messageId;
         await maybePinDeliveredMessage({
           handler: deliveryHandler,
@@ -1895,7 +1914,7 @@ async function deliverOutboundPayloadsCore(
         });
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: deliveredResults.length > 0,
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
@@ -1923,9 +1942,10 @@ async function deliverOutboundPayloadsCore(
               unit.overrides,
             )
           : await deliveryHandler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
-        results.push(delivery);
-        firstMessageId ??= delivery.messageId;
-        lastMessageId = delivery.messageId;
+        if (pushIdentifiedDeliveryResult(results, delivery)) {
+          firstMessageId ??= delivery.messageId;
+          lastMessageId = delivery.messageId;
+        }
       }
       await maybePinDeliveredMessage({
         handler: deliveryHandler,
@@ -1958,7 +1978,7 @@ async function deliverOutboundPayloadsCore(
       }
       completeDeliveryDiagnostics(results.length - beforeCount);
       emitMessageSent({
-        success: true,
+        success: results.length > beforeCount,
         content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });

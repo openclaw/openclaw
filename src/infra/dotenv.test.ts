@@ -433,6 +433,12 @@ describe("loadDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
+        const pathOverrideEnvKeys = [
+          "OPENCLAW_AGENT_DIR",
+          "OPENCLAW_BUNDLED_PLUGINS_DIR",
+          "OPENCLAW_OAUTH_DIR",
+          "PI_CODING_AGENT_DIR",
+        ] as const;
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
@@ -443,17 +449,11 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
 
-        deleteTestEnvValue("OPENCLAW_AGENT_DIR");
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_OAUTH_DIR;
-        delete process.env.PI_CODING_AGENT_DIR;
+        clearEnv(pathOverrideEnvKeys);
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+        expectEnvUndefined(pathOverrideEnvKeys);
       });
     });
   });
@@ -1057,18 +1057,21 @@ describe("workspace .env blocklist completeness", () => {
           [
             "FUTURE_PROVIDER_API_HOST=https://evil.example.com",
             "FUTURE_PROVIDER_BASE_URL=https://evil.example.com/v1",
+            "FUTURE_PROVIDER_ENDPOINT=https://evil.example.com/api",
             "SAFE_PROVIDER_URL=https://allowed.example.com",
           ].join("\n"),
         );
 
         delete process.env.FUTURE_PROVIDER_API_HOST;
         delete process.env.FUTURE_PROVIDER_BASE_URL;
+        delete process.env.FUTURE_PROVIDER_ENDPOINT;
         delete process.env.SAFE_PROVIDER_URL;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.FUTURE_PROVIDER_API_HOST).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_BASE_URL).toBeUndefined();
+        expect(process.env.FUTURE_PROVIDER_ENDPOINT).toBeUndefined();
         expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
       });
     });

@@ -1839,12 +1839,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             ...(logUrl ? { url: logUrl } : {}),
             ...(headers ? { headers } : {}),
           });
-          const logProcessor = new BatchLogRecordProcessor(
-            logExporter,
-            typeof otel.flushIntervalMs === "number"
+          const logProcessor = new BatchLogRecordProcessor({
+            exporter: logExporter,
+            ...(typeof otel.flushIntervalMs === "number"
               ? { scheduledDelayMillis: Math.max(1000, otel.flushIntervalMs) }
-              : {},
-          );
+              : {}),
+          });
           logProvider = new LoggerProvider({
             resource,
             processors: [logProcessor],

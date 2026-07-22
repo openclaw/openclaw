@@ -1,6 +1,7 @@
 // Workspace tests cover bootstrap seeding, attestation safety, bootstrap file
 // filtering, and setup-completion state for agent workspaces.
 import { createHash } from "node:crypto";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -888,6 +889,144 @@ describe("loadWorkspaceBootstrapFiles", () => {
       expect(agents?.content).toBeUndefined();
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a transient bootstrap read instead of dropping the file for the turn", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nkeep me\n",
+    });
+
+    const originalReadFileSync = syncFs.readFileSync.bind(syncFs);
+    let readFileSyncCalls = 0;
+    let threwTransient = false;
+    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation(((
+      target: unknown,
+      options: unknown,
+    ) => {
+      readFileSyncCalls += 1;
+      if (!threwTransient) {
+        threwTransient = true;
+        throw Object.assign(new Error("Unknown system error -11: read"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return originalReadFileSync(target as never, options as never);
+    }) as typeof syncFs.readFileSync);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(threwTransient).toBe(true);
+      // The retry re-opens and reads again, so the failed first read is followed
+      // by at least one more successful read.
+      expect(readFileSyncCalls).toBeGreaterThanOrEqual(2);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("keep me");
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("marks a bootstrap file missing after transient read retries are exhausted", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n",
+    });
+
+    const readSpy = vi.spyOn(syncFs, "readFileSync").mockImplementation((() => {
+      throw Object.assign(new Error("Unknown system error -11: read"), {
+        code: "EAGAIN",
+        errno: -11,
+      });
+    }) as typeof syncFs.readFileSync);
+
+    try {
+      // Unlike the template check, this reader returns an io failure (not a
+      // throw) when the budget is exhausted, so the file surfaces as missing.
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(true);
+      expect(agents?.content).toBeUndefined();
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("retries a transient boundary-resolution failure before dropping a bootstrap file", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nboundary retry\n",
+    });
+
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
+    let agentsLstatAttempts = 0;
+    const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
+      target: unknown,
+      options?: unknown,
+    ) => {
+      if (String(target) === agentsPath && ++agentsLstatAttempts === 1) {
+        throw Object.assign(new Error("Unknown system error -11: lstat"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return await originalLstat(target as never, options as never);
+    }) as typeof syncFs.promises.lstat);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(agentsLstatAttempts).toBe(2);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("boundary retry");
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
+  it("retries a transient open failure before dropping a bootstrap file", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: "# AGENTS.md\n\nopen retry\n",
+    });
+
+    // openRootFile reports a transient open failure as reason "io"; the reader
+    // must retry it (re-open) rather than drop the file for the turn.
+    const originalOpenSync = syncFs.openSync.bind(syncFs);
+    let threwTransientOpen = false;
+    const openSpy = vi.spyOn(syncFs, "openSync").mockImplementation(((
+      ...args: Parameters<typeof syncFs.openSync>
+    ) => {
+      if (!threwTransientOpen) {
+        threwTransientOpen = true;
+        throw Object.assign(new Error("Unknown system error -11: open"), {
+          code: "EAGAIN",
+          errno: -11,
+        });
+      }
+      return originalOpenSync(...args);
+    }) as typeof syncFs.openSync);
+
+    try {
+      const files = await loadWorkspaceBootstrapFiles(tempDir);
+      expect(threwTransientOpen).toBe(true);
+      const agents = files.find((file) => file.name === DEFAULT_AGENTS_FILENAME);
+      expect(agents?.missing).toBe(false);
+      expect(agents?.content).toContain("open retry");
+    } finally {
+      openSpy.mockRestore();
     }
   });
 });

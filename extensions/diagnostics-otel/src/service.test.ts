@@ -59,6 +59,7 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
+const logProcessorCtor = vi.hoisted(() => vi.fn());
 const spanProcessorCtor = vi.hoisted(() => vi.fn());
 const unhandledRejectionHandlerState = vi.hoisted(() => {
   let handlers: Array<(reason: unknown) => boolean> = [];
@@ -129,7 +130,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
-  BatchLogRecordProcessor: function BatchLogRecordProcessor() {},
+  BatchLogRecordProcessor: function BatchLogRecordProcessor(options?: unknown) {
+    logProcessorCtor(options);
+  },
   LoggerProvider: class {
     getLogger = vi.fn(() => ({
       emit: logEmit,
@@ -326,6 +329,13 @@ function firstSpanProcessorOptions(): { scheduledDelayMillis?: number } {
   return mockCallArg(spanProcessorCtor, 1) as { scheduledDelayMillis?: number };
 }
 
+function firstLogProcessorOptions(): { exporter?: unknown; scheduledDelayMillis?: number } {
+  return mockCallArg(logProcessorCtor, 0) as {
+    exporter?: unknown;
+    scheduledDelayMillis?: number;
+  };
+}
+
 function firstSetSpanContext(): Record<string, unknown> {
   return mockCallArg(telemetryState.tracer.setSpanContext, 1) as Record<string, unknown>;
 }
@@ -513,6 +523,7 @@ describe("diagnostics-otel service", () => {
     traceExporterCtor.mockClear();
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
+    logProcessorCtor.mockClear();
     spanProcessorCtor.mockClear();
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
@@ -1529,6 +1540,20 @@ describe("diagnostics-otel service", () => {
 
     expect(spanProcessorCtor).toHaveBeenCalledTimes(1);
     expect(firstSpanProcessorOptions().scheduledDelayMillis).toBe(1000);
+    await service.stop?.(ctx);
+  });
+
+  test("applies flush interval to log batching", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    ctx.config.diagnostics!.otel!.flushIntervalMs = 250;
+
+    await service.start(ctx);
+
+    expect(logProcessorCtor).toHaveBeenCalledTimes(1);
+    const options = firstLogProcessorOptions();
+    expect(options.exporter).toBeDefined();
+    expect(options.scheduledDelayMillis).toBe(1000);
     await service.stop?.(ctx);
   });
 

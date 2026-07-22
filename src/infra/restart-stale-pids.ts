@@ -112,6 +112,7 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
     const res = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
       encoding: "utf8",
       timeout: spawnTimeoutMs,
+      killSignal: "SIGKILL",
     });
     if (res.error || res.status !== 0 || !res.stdout.trim()) {
       return null;
@@ -254,6 +255,7 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
   const res = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
     encoding: "utf8",
     timeout: spawnTimeoutMs,
+    killSignal: "SIGKILL",
   });
   if (res.error || res.status !== 0 || !res.stdout.trim()) {
     return null;
