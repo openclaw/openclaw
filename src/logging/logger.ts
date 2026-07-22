@@ -718,7 +718,7 @@ export function toPinoLikeLogger(logger: OpenClawLogger, level: LogLevel): PinoL
       logger.getSubLogger({
         name: bindings ? JSON.stringify(bindings) : undefined,
         minLevel: logger.settings.minLevel,
-      }),
+      }) as unknown as OpenClawLogger,
       level,
     );
 

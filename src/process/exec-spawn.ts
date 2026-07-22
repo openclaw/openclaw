@@ -83,7 +83,7 @@ export function spawnCommandWithInvocation<
     shell: false,
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  } as ExecaOptions) as ResultPromise<OptionsType>;
+  } as ExecaOptions) as unknown as ResultPromise<OptionsType>;
   return { child, invocation };
 }
 

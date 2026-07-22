@@ -1034,13 +1034,11 @@ export async function registerSlackMonitorSlashCommands(params: {
         runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
         return;
       }
-      const respondFn: (
-        message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0],
-      ) => Promise<unknown> =
+      const respondFn: SlackCommandMiddlewareArgs["respond"] =
         respond ??
         (async (message) => {
           if (!body.channel?.id || !body.user?.id) {
-            return;
+            return new Response(null, { status: 204 });
           }
           const payload =
             typeof message === "string"
@@ -1058,6 +1056,7 @@ export async function registerSlackMonitorSlashCommands(params: {
             ...(payload.blocks ? { blocks: payload.blocks } : {}),
             ...(typeof payload.mrkdwn === "boolean" ? { mrkdwn: payload.mrkdwn } : {}),
           });
+          return new Response(null, { status: 200 });
         });
       const actionValue = action?.value ?? action?.selected_option?.value;
       const parsed = parseSlackCommandArgValue(actionValue);
