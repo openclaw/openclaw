@@ -429,7 +429,7 @@ Extra checks:
 ```bash
 openclaw pairing list signal
 pgrep -af signal-cli
-grep -i "signal" "/tmp/openclaw/openclaw-$(date +%Y-%m-%d).log" | tail -20
+openclaw logs --plain --limit 500 | grep -i "signal" | tail -20
 ```
 
 For triage flow: [Channels Troubleshooting](/channels/troubleshooting).

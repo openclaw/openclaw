@@ -1,5 +1,5 @@
 import { expect, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -43,15 +43,29 @@ export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
 }
 
 export function createSessionStore(
-  overrides: Partial<SessionEntry> = {},
+  overrides: Partial<InternalSessionEntry> = {},
   sessionKey = "agent:main:subagent:child",
-): Record<string, SessionEntry> {
+): Record<string, InternalSessionEntry> {
   return {
-    [sessionKey]: {
-      sessionId: "sess-child",
-      updatedAt: 1,
-      ...overrides,
-    },
+    [sessionKey]: createSessionEntry(overrides),
+  };
+}
+
+export function createSessionEntry(
+  overrides: Partial<InternalSessionEntry> = {},
+): InternalSessionEntry {
+  return {
+    sessionId: "sess-child",
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+export function createAssistantToolCallMessage(content: unknown[]) {
+  return {
+    role: "assistant",
+    content,
+    stopReason: "toolUse",
   };
 }
 

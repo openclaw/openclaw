@@ -147,7 +147,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: structured media placeholder formatter and its text-fact contract.
       // +1: resetSessionEntryLifecycle.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
-      4680,
+      // +18: generic schema primitives needed by plugin-owned channel config schemas.
+      4696,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -156,7 +157,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: resetSessionEntryLifecycle.
       // +1: settled-turn full-attempt projector.
-      2843,
+      // +4: generic channel schema shape builders.
+      2846,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
