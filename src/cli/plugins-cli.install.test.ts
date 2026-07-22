@@ -1959,6 +1959,7 @@ describe("plugins cli install", () => {
     const enabledCfg = createEnabledPluginConfig("sherpa-onnx-tts");
     loadConfig.mockReturnValue(cfg);
     findBundledPluginSourceMock.mockReturnValue(undefined);
+    parseClawHubPluginSpec.mockReturnValue({ name: "@openclaw/sherpa-onnx-tts" });
     installPluginFromClawHub.mockResolvedValue(
       createClawHubInstallResult({
         pluginId: "sherpa-onnx-tts",
