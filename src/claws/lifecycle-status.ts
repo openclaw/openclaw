@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -139,7 +140,7 @@ export async function readClawStatus(
   );
   const records: ClawStatusRecord[] = [];
   for (const install of installs) {
-    const agent = config.agents?.list?.find((candidate) => candidate.id === install.agentId);
+    const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
     const packageRefs = allPackageRefs.filter(
       (packageRef) => packageRef.agentId === install.agentId,
     );
