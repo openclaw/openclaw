@@ -193,7 +193,7 @@ describe("device-auth upgrade migration", () => {
 
   it("does not reconnect when approval finishes after disposal", async () => {
     let resolveApproval: (() => void) | undefined;
-    const approval = new Promise<void>((resolve) => {
+    const approvalRequest = new Promise<void>((resolve) => {
       resolveApproval = resolve;
     });
     const request = vi.fn<RequestFn>((method) => {
@@ -203,7 +203,7 @@ describe("device-auth upgrade migration", () => {
         });
       }
       if (method === "device.pair.approve") {
-        return approval;
+        return approvalRequest;
       }
       return Promise.resolve([]);
     });

@@ -10,6 +10,8 @@ export type DeviceAuthMigrationSnapshot = {
   error: string | null;
 };
 
+export type DeviceAuthMigrationController = ReturnType<typeof createDeviceAuthMigrationController>;
+
 const EMPTY_SNAPSHOT: DeviceAuthMigrationSnapshot = {
   requestId: null,
   busy: false,
