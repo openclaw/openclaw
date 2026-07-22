@@ -159,6 +159,54 @@ export const en: TranslationMap = {
       saveBeforeSetup:
         "You have unsaved channel config changes. Save or reload them before running guided setup.",
     },
+    pairing: {
+      title: "DM access requests",
+      subtitle: "Review people waiting to send direct messages to pairing-protected channels.",
+      channelFilter: "Channel",
+      accountFilter: "Account",
+      allChannels: "All channels",
+      allAccounts: "All accounts",
+      approve: "Approve",
+      dismiss: "Dismiss",
+      approveAria: "Approve {sender} for {channel}, account {account}",
+      dismissAria: "Dismiss {sender} for {channel}, account {account}",
+      requested: "Requested {ago}",
+      expires: "Expires {ago}",
+      senderDetails: "Sender details",
+      missingPermission:
+        "This connection does not have operator.pairing access, so DM requests cannot be reviewed.",
+      noAccounts: "No configured channel accounts use DM sender pairing.",
+      noRequests: "No pending DM access requests.",
+      noFilteredRequests: "No pending requests match these filters.",
+      limits:
+        "Requests expire after {minutes} minutes. Each channel account can hold up to {count} pending requests.",
+      detailTitle: "DM access",
+      detailSubtitle: "People must be approved before their direct messages reach the agent.",
+      pendingCount: "{count} pending",
+      noPending: "No pending requests",
+      review: "Review requests",
+      approveDialogTitle: "Approve DM access",
+      dismissDialogTitle: "Dismiss DM access request",
+      approveExplanation:
+        "This lets the sender talk to the agent in direct messages. It does not grant group access.",
+      dismissExplanation:
+        "This removes the current request but does not block the sender. They can request access again later.",
+      notifyRequester: "Notify the requester after approval",
+      makeCommandOwner: "Also make this sender the first command owner",
+      commandOwnerHelp:
+        "Command owners can run privileged commands and approve dangerous actions. This option is only available while no owner is configured.",
+      commandOwnerNeedsAdmin:
+        "No command owner is configured. This connection needs operator.admin to assign the first owner.",
+      approvedNotice: "DM access approved.",
+      approvedOwnerNotice: "DM access approved and the first command owner was configured.",
+      approvedNotificationFailedNotice:
+        "DM access approved, but the requester notification could not be delivered.",
+      approvedOwnerFailedNotice:
+        "DM access approved, but the first command owner could not be configured.",
+      approvedFollowupsFailedNotice:
+        "DM access approved, but requester notification and command-owner setup both failed.",
+      dismissedNotice: "DM access request dismissed. The sender can request access again.",
+    },
     setup: {
       dialogLabel: "Set up {channel}",
       title: "Set up {channel}",
@@ -166,6 +214,8 @@ export const en: TranslationMap = {
       subtitle: "A short guided setup — you can fine-tune everything later.",
       starting: "Starting setup…",
       working: "Working…",
+      sessionExpired:
+        "This setup session expired after the Gateway restarted. Close this dialog, then start channel setup again.",
       continue: "Continue",
       finish: "Finish",
       copyText: "Copy",
@@ -536,6 +586,9 @@ export const en: TranslationMap = {
     active: "Updated within",
     limit: "Limit",
     filters: "Filters",
+    createdBy: "Created by {name}",
+    filterByCreator: "Filter by creator",
+    allCreators: "All people",
     filterControls: "Thread filters",
     sourceFilters: "Thread source filters",
     global: "Global",
@@ -1863,6 +1916,8 @@ export const en: TranslationMap = {
       copy: "Copy",
       expires: "Expires in {count} minutes",
       cancelled: "Provider sign-in was cancelled.",
+      sessionExpired:
+        "This setup session expired after the Gateway restarted. Close this dialog, then start model setup again.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -3974,6 +4029,13 @@ export const en: TranslationMap = {
       expired: "Expired",
       cancelled: "Cancelled",
     },
+    imageLightbox: {
+      label: "Image preview: {title}",
+      open: "Open image {title}",
+      openOriginal: "Open original",
+      close: "Close image preview",
+      untitled: "Image",
+    },
     messages: {
       activity: "Activity",
       copySelection: "Copy",
@@ -4295,6 +4357,7 @@ export const en: TranslationMap = {
     sessionDiscussion: {
       title: "Discussion",
       show: "Show discussion",
+      hide: "Hide discussion",
       disconnected: "Gateway is disconnected.",
       loading: "Loading discussion…",
       opening: "Opening discussion…",

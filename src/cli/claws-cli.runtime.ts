@@ -1,3 +1,4 @@
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import {
   listAgentEntries,
   listAgentIds,
@@ -10,6 +11,11 @@ import {
   ClawAddMutationError,
 } from "../claws/add.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
+import {
+  CLAW_EXPORT_RESULT_SCHEMA_VERSION,
+  ClawExportError,
+  exportClawAgent,
+} from "../claws/export.js";
 import {
   applyClawRemovePlan,
   buildClawRemovePlan,
@@ -30,6 +36,8 @@ import {
 } from "../claws/types.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
   resolveCronJobsStorePath,
@@ -38,10 +46,12 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import type {
   ClawsAddOptions,
+  ClawsExportOptions,
   ClawsInspectOptions,
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { callGatewayFromCli } from "./gateway-rpc.js";
 
 type DiagnosticLike = { level: string; code: string; path: string; message: string };
 
@@ -64,6 +74,21 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Actions: ${plan.summary.totalActions}`);
   runtime.log(`Packages: ${plan.summary.packageActions}`);
   runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
+  for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
+    const server = action.details as Record<string, unknown> | undefined;
+    const target =
+      typeof server?.url === "string"
+        ? redactSensitiveUrlLikeString(server.url)
+        : typeof server?.command === "string"
+          ? redactSensitiveArgv([
+              server.command,
+              ...(Array.isArray(server.args)
+                ? server.args.filter((arg): arg is string => typeof arg === "string")
+                : []),
+            ]).join(" ")
+          : "invalid declaration";
+    runtime.log(`  MCP ${action.id}: ${target}`);
+  }
   runtime.log(`Cron jobs: ${plan.summary.cronJobActions}`);
   if (plan.capabilityChanges.length > 0) {
     runtime.log(`Capability escalations (${plan.capabilityChanges.length}):`);
@@ -215,6 +240,12 @@ export async function runClawsAddCommand(
   }
 
   const config = getRuntimeConfig();
+  const listedMcpServers = await listConfiguredMcpServers();
+  if (!listedMcpServers.ok) {
+    runtime.error(listedMcpServers.error);
+    runtime.exit(1);
+    return;
+  }
   const existingAgentIds = listAgentIds(config);
   const existingWorkspacePaths = existingAgentIds.map((agentId) =>
     resolveAgentWorkspaceDir(config, agentId),
@@ -225,7 +256,7 @@ export async function runClawsAddCommand(
     ...(opts.workspace ? { workspace: opts.workspace } : {}),
     existingAgentIds,
     existingWorkspacePaths,
-    existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
+    existingMcpServers: listedMcpServers.mcpServers,
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
@@ -309,6 +340,11 @@ export async function runClawsAddCommand(
     addResult = await applyClawAddPlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+      cronGateway: {
+        add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+        list: async (agentId) =>
+          await callGatewayFromCli("cron.list", {}, { agentId, includeDisabled: true }),
+      },
     });
   } catch (error) {
     const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
@@ -408,6 +444,11 @@ export async function runClawsRemoveCommand(
           `  Package ${action.target}: ${action.action}${action.reason ? ` (${action.reason})` : ""}`,
         );
       }
+      for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
+        runtime.log(
+          `  MCP ${action.id}: ${action.action}${action.reason ? ` (${action.reason})` : ""}`,
+        );
+      }
       if (plan.blockers.length > 0) {
         runtime.error(plan.blockers.map((blocker) => blocker.message).join("\n"));
       }
@@ -421,6 +462,10 @@ export async function runClawsRemoveCommand(
     const result = await applyClawRemovePlan(plan, {
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
+      cronGateway: {
+        get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+        remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
+      },
     });
     if (opts.json) {
       writeRuntimeJson(runtime, result);
@@ -444,6 +489,49 @@ export async function runClawsRemoveCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, {
         schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        status: "failed",
+        error: { code, message },
+      });
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1);
+  }
+}
+
+export async function runClawsExportCommand(
+  agentId: string,
+  opts: ClawsExportOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<void> {
+  assertExperimentalClawsEnabled();
+  try {
+    const listedMcpServers = await listConfiguredMcpServers();
+    if (!listedMcpServers.ok) {
+      throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
+    }
+    const result = await exportClawAgent(agentId, opts.out, {
+      config: getRuntimeConfig(),
+      sourceMcpServers: listedMcpServers.mcpServers,
+    });
+    if (opts.json) {
+      writeRuntimeJson(runtime, result);
+      return;
+    }
+    logExperimentalWarning(runtime);
+    runtime.log(`Exported agent: ${result.agentId}`);
+    runtime.log(`Package directory: ${result.outputDirectory}`);
+    runtime.log(
+      `Workspace files: ${result.manifest.workspace.files.length + Object.keys(result.manifest.workspace.bootstrapFiles).length}`,
+    );
+    runtime.log(`Packages: ${result.manifest.packages.length}`);
+  } catch (error) {
+    const code = error instanceof ClawExportError ? error.code : "export_failed";
+    const message = error instanceof Error ? error.message : String(error);
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
         stability: CLAW_OUTPUT_STABILITY,
         status: "failed",
         error: { code, message },

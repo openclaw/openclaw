@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -10,6 +11,7 @@ import "./components/chat-sidebar.ts";
 
 type DiscussionTestPane = TestChatPane & {
   probeSessionDiscussion: (sessionKey: string) => Promise<void>;
+  renderSessionDiscussionAction: () => unknown;
 };
 
 const SESSION_KEY = "agent:main:current";
@@ -35,9 +37,13 @@ function createDiscussionPane(params: {
     state.sidebarContent = content;
     state.sidebarOpen = true;
   });
+  const handleCloseSidebar = vi.fn(() => {
+    state.sidebarOpen = false;
+  });
   state.handleOpenSidebar = handleOpenSidebar;
+  state.handleCloseSidebar = handleCloseSidebar;
   state.sidebarOpen = params.sidebarOpen ?? false;
-  return { pane, state, handleOpenSidebar, request };
+  return { pane, state, handleOpenSidebar, handleCloseSidebar, request };
 }
 
 describe("chat pane session discussion auto-show", () => {
@@ -98,6 +104,33 @@ describe("chat pane session discussion auto-show", () => {
     await pane.probeSessionDiscussion(SESSION_KEY);
 
     expect(handleOpenSidebar).not.toHaveBeenCalled();
+  });
+
+  it("uses the header action to open and close the discussion sidebar", async () => {
+    const { pane, handleOpenSidebar, handleCloseSidebar } = createDiscussionPane({
+      info: { state: "available" },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    await pane.probeSessionDiscussion(SESSION_KEY);
+    render(pane.renderSessionDiscussionAction(), container);
+
+    let action = container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle");
+    expect(action?.ariaLabel).toBe("Show discussion");
+    expect(action?.getAttribute("aria-pressed")).toBe("false");
+    action?.click();
+    expect(handleOpenSidebar).toHaveBeenCalledTimes(1);
+
+    render(pane.renderSessionDiscussionAction(), container);
+    action = container.querySelector<HTMLButtonElement>(".chat-session-discussion-toggle");
+    expect(action?.ariaLabel).toBe("Hide discussion");
+    expect(action?.getAttribute("aria-pressed")).toBe("true");
+    action?.click();
+    expect(handleCloseSidebar).toHaveBeenCalledTimes(1);
+    expect(handleOpenSidebar).toHaveBeenCalledTimes(1);
+
+    container.remove();
   });
 
   it("does not steal a sidebar that is already open", async () => {

@@ -371,7 +371,13 @@ describe("AppSidebar agent chip", () => {
     expect(button?.textContent).toContain("Reconnecting…");
     expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now");
     expect(button?.getAttribute("aria-live")).toBe("polite");
-    expect(button?.title).toBe("gateway unavailable?[redacted-credential]");
+    // The redacted error detail moved from a native title to the shared
+    // tooltip's accessible description.
+    expect(button?.hasAttribute("title")).toBe(false);
+    const descriptionId = button?.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(descriptionId)?.textContent).toBe(
+      "gateway unavailable?[redacted-credential]",
+    );
     expect(button?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",

@@ -19,6 +19,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import "../../../components/tooltip.ts";
 import {
   handleMarkdownCodeBlockCopy,
@@ -149,6 +150,8 @@ type ChatThreadProps = {
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   onRequestUpdate?: () => void;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
@@ -1253,6 +1256,8 @@ function renderChatThreadContents(
       onToggleToolExpanded: toggleToolCardExpanded,
       onRequestUpdate: requestUpdate,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: props.onOpenImage,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
       userId: props.userId ?? null,

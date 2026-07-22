@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -1787,7 +1788,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("resolveGatewaySessionStoreTarget reads a retired legacy store without provisioning SQLite", async () => {
+  test("resolveGatewaySessionStoreTarget ignores a retired legacy store without provisioning SQLite", async () => {
     await withStateDirEnv("session-utils-retired-legacy-", async ({ stateDir }) => {
       const retiredSessionsDir = path.join(stateDir, "agents", "retired", "sessions");
       const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
@@ -1813,7 +1814,12 @@ describe("gateway session utils", () => {
       });
 
       expect(target.storePath).toBe(retiredStorePath);
-      expect(target.store["agent:retired:main"]?.sessionId).toBe("sess-retired-legacy");
+      expect(target.store).toEqual({});
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath, {
+        agentId: "retired",
+      }).path;
+      expect(sqlitePath).toBeDefined();
+      expect(fs.existsSync(sqlitePath!)).toBe(false);
       expect(fs.readdirSync(retiredSessionsDir)).toEqual(["sessions.json"]);
     });
   });

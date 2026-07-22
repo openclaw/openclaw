@@ -96,6 +96,47 @@ or reuses matching ones and records whether the Claw introduced or referenced
 each resource. Plugins remain process-wide OpenClaw capabilities rather than
 per-agent installations.
 
+Cron jobs declare scheduled work for the new agent:
+
+```json
+{
+  "cronJobs": [
+    {
+      "id": "daily-summary",
+      "name": "Daily incident summary",
+      "schedule": { "cron": "0 9 * * *", "timezone": "UTC" },
+      "session": "isolated",
+      "message": "Summarize active incidents."
+    }
+  ]
+}
+```
+
+Claws use the existing Gateway scheduler and bind created jobs to the new
+agent. Preview, provenance, status, and removal cover those jobs without
+changing the behavior of ordinary cron commands. Removal rereads the live job
+through the Gateway and preserves it when its owned definition changed after
+planning.
+
+MCP declarations use the existing `mcp.servers` configuration model:
+
+```json
+{
+  "mcpServers": {
+    "statuspage": {
+      "command": "npx",
+      "args": ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      "env": { "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}" }
+    }
+  }
+}
+```
+
+Environment references remain references; Claws do not embed resolved secret
+values. A collision-free declaration becomes managed, while an exact existing
+or shared declaration is referenced. Preview, provenance, status, export, and
+removal follow the same ownership policy as other Claw resources.
+
 ## Inspect and preview
 
 Validate the source without planning local changes:
@@ -138,8 +179,8 @@ openclaw claws status
 openclaw claws status incident-triage --json
 ```
 
-`status` compares the installed agent and its recorded workspace and package
-provenance with current state. It reports incomplete installs, missing
+`status` compares the installed agent and its recorded workspace, package, MCP,
+and cron provenance with current state. It reports incomplete installs, missing
 resources, and drift without changing local state.
 
 Claw provenance distinguishes two relationships:
@@ -185,14 +226,28 @@ Use `--force-referenced` only after reviewing the displayed dependents,
 independent owners, and pre-existing origin. It allows selected cleanup despite
 those conflicts; it does not skip plan-integrity consent.
 
+## Export an installed agent
+
+Export creates a new package directory and fails if the destination exists or
+managed state has drifted:
+
+```bash
+openclaw claws export incident-triage --out ./incident-triage-export --json
+```
+
+The result contains `package.json`, `openclaw.claw.json`, and managed workspace
+sidecars. It is a portable Claw package, not a whole-instance backup: unrelated
+agents, credentials, sessions, and unowned local state are excluded.
+
 ## Command reference
 
-| Command                        | Purpose                                             |
-| ------------------------------ | --------------------------------------------------- |
-| `claws inspect <source>`       | Validate a package directory or JSON manifest.      |
-| `claws add <source>`           | Preview or create one new agent and workspace.      |
-| `claws status [claw-or-agent]` | Report installed state, ownership, and drift.       |
-| `claws remove <claw-or-agent>` | Preview or remove the agent and eligible resources. |
+| Command                             | Purpose                                             |
+| ----------------------------------- | --------------------------------------------------- |
+| `claws inspect <source>`            | Validate a package directory or JSON manifest.      |
+| `claws add <source>`                | Preview or create one new agent and workspace.      |
+| `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
+| `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
+| `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 
 Use `--json` for experimental machine-readable output.
 
@@ -201,3 +256,5 @@ Use `--json` for experimental machine-readable output.
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)
+- [Cron jobs](/automation/cron-jobs)
+- [MCP configuration](/gateway/configuration-reference#mcp)
