@@ -10,6 +10,7 @@ const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const suppressNotesStorage = new AsyncLocalStorage<boolean>();
+const noteOutputStorage = new AsyncLocalStorage<NodeJS.WriteStream>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
   if (!value) {
@@ -206,17 +207,17 @@ export function resolveNoteOutputColumns(message: string, columns: number): numb
   return Math.max(columns, widestLine + 6);
 }
 
-function createNoteOutput(columns: number): NodeJS.WriteStream {
-  if (process.stdout.columns === columns) {
-    return process.stdout;
+function createNoteOutput(output: NodeJS.WriteStream, columns: number): NodeJS.WriteStream {
+  if (output.columns === columns) {
+    return output;
   }
-  const output = Object.create(process.stdout) as NodeJS.WriteStream;
-  Object.defineProperty(output, "columns", {
+  const columnAwareOutput = Object.create(output) as NodeJS.WriteStream;
+  Object.defineProperty(columnAwareOutput, "columns", {
     value: columns,
     configurable: true,
   });
-  output.write = process.stdout.write.bind(process.stdout);
-  return output;
+  columnAwareOutput.write = output.write.bind(output);
+  return columnAwareOutput;
 }
 
 export function note(message: unknown, title?: string) {
@@ -226,11 +227,16 @@ export function note(message: unknown, title?: string) {
   ) {
     return;
   }
-  const columns = resolveNoteColumns(process.stdout.columns);
+  const output = noteOutputStorage.getStore() ?? process.stdout;
+  const columns = resolveNoteColumns(output.columns);
   const wrappedMessage = wrapNoteMessage(message, { columns });
   clackNote(wrappedMessage, stylePromptTitle(title), {
-    output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
+    output: createNoteOutput(output, resolveNoteOutputColumns(wrappedMessage, columns)),
   });
+}
+
+export function withNoteOutput<T>(output: NodeJS.WriteStream, callback: () => T): T {
+  return noteOutputStorage.run(output, callback);
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

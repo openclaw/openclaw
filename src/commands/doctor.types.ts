@@ -16,4 +16,6 @@ export type DoctorOptions = {
   sessionSqliteAllAgents?: boolean;
   sessionSqliteGithubIssue?: boolean;
   json?: boolean;
+  /** Internal stream override for Doctor UI embedded in another machine-readable command. */
+  uiOutput?: NodeJS.WriteStream;
 };

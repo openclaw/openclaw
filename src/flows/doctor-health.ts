@@ -7,13 +7,24 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 // Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
-const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
-const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
+const intro = (message: string, output?: NodeJS.WriteStream) =>
+  clackIntro(stylePromptTitle(message) ?? message, output ? { output } : undefined);
+const outro = (message: string, output?: NodeJS.WriteStream) =>
+  clackOutro(stylePromptTitle(message) ?? message, output ? { output } : undefined);
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
+  const run = async () => await runDoctorCommand(runtime, options);
+  if (!options.uiOutput) {
+    return await run();
+  }
+  const { withNoteOutput } = await import("../../packages/terminal-core/src/note.js");
+  return await withNoteOutput(options.uiOutput, run);
+}
+
+async function runDoctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
@@ -22,7 +33,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
 
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
   const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
-  intro("OpenClaw doctor");
+  intro("OpenClaw doctor", options.uiOutput);
 
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
   const root = await resolveOpenClawPackageRoot({
@@ -37,7 +48,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     options,
     root,
     confirm: (p) => prompter.confirm(p),
-    outro,
+    outro: (message) => outro(message, options.uiOutput),
   });
   if (updateResult.handled) {
     return;
@@ -91,5 +102,5 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     }
   }
 
-  outro("Doctor complete.");
+  outro("Doctor complete.", options.uiOutput);
 }

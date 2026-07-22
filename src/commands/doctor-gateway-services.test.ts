@@ -251,6 +251,7 @@ async function runNonInteractiveRepair(params: {
   cfg?: OpenClawConfig;
   updateInProgress?: boolean;
   lastTouchedVersionOverride?: string;
+  uiOutput?: NodeJS.WriteStream;
 }) {
   Object.defineProperty(process.stdin, "isTTY", {
     value: false,
@@ -272,9 +273,12 @@ async function runNonInteractiveRepair(params: {
         nonInteractive: true,
       },
     }),
-    params.lastTouchedVersionOverride
-      ? { lastTouchedVersionOverride: params.lastTouchedVersionOverride }
-      : {},
+    {
+      ...(params.lastTouchedVersionOverride
+        ? { lastTouchedVersionOverride: params.lastTouchedVersionOverride }
+        : {}),
+      ...(params.uiOutput ? { uiOutput: params.uiOutput } : {}),
+    } as Parameters<typeof maybeRepairGatewayServiceConfig>[4],
   );
 }
 
@@ -963,6 +967,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     await runNonInteractiveRepair({
       cfg: { gateway: {} },
       updateInProgress: true,
+      uiOutput: process.stderr,
     });
 
     expectNoteContaining(
@@ -971,6 +976,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
     expectNoNoteContaining("left the live systemd unit unchanged", "Gateway service config");
     expect(mocks.stage).toHaveBeenCalledTimes(1);
+    expectCallField(mocks.stage, "stdout", process.stderr);
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
@@ -1320,6 +1326,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runNonInteractiveRepair({
           updateInProgress: true,
           lastTouchedVersionOverride: "2026.5.14",
+          uiOutput: process.stderr,
         });
 
         expect(mocks.readRuntime.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1341,6 +1348,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
+        expectCallField(mocks.install, "stdout", process.stderr);
         expect(mocks.install).toHaveBeenCalledWith(
           expect.objectContaining({
             startupFallbackTakeoverRuntime: { status: "running", pid: 4242 },
@@ -1365,11 +1373,13 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.readRuntime.mockResolvedValue({ status: "running" });
     mocks.readWindowsStartupFallbackRuntimeForUpdate.mockResolvedValue(null);
 
-    await runNonInteractiveRepair({ updateInProgress: true });
+    await runNonInteractiveRepair({ updateInProgress: true, uiOutput: process.stderr });
 
     expect(mocks.install).toHaveBeenCalledWith(
       expect.objectContaining({ startupFallbackTakeoverRuntime: undefined }),
     );
+    expectCallField(mocks.install, "stdout", process.stderr);
+    expectCallField(mocks.restart, "stdout", process.stderr);
   });
 
   it("leaves embedded service tokens untouched during legacy Windows update handoffs", async () => {

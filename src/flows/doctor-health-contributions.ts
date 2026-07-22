@@ -750,6 +750,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
       skipPluginValidation:
         ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
       preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+      uiOutput: ctx.options.uiOutput,
       ...resolveLegacyParentVersionOverride(ctx),
     },
   );

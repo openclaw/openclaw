@@ -89,9 +89,10 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
     .action(async (opts, actionCommand) => {
+      const json = Boolean(opts.json) || inheritedUpdateJson(actionCommand);
       try {
         await updateFinalizeCommand({
-          json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
+          json,
           channel: opts.channel as string | undefined,
           timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes),
@@ -100,8 +101,14 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
+        const message = String(err);
+        defaultRuntime.error(message);
+        if (json) {
+          defaultRuntime.writeJson({ status: "error", mode: "finalize", error: message });
+          defaultRuntime.exit(1, { resetStream: process.stderr });
+        } else {
+          defaultRuntime.exit(1);
+        }
       }
     });
 }
