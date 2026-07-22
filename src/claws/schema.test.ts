@@ -619,6 +619,29 @@ describe("buildClawAddPlan", () => {
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
   });
 
+  it("plans reuse for an exact existing MCP server", async () => {
+    const { source, workspace } = await createPlanSource();
+    const manifest = requireManifest();
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      context: {
+        workspace,
+        existingMcpServers: { github: manifest.mcpServers.github! },
+      },
+    });
+
+    expect(plan.blockers.map((item) => item.code)).not.toContain("mcp_server_collision");
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "github",
+        blocked: false,
+        details: expect.objectContaining({ expectedState: "present-exact" }),
+      }),
+    );
+  });
+
   it("uses an explicit unused agent id for every derived action", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({

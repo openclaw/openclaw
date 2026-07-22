@@ -4,6 +4,7 @@ import { mkdir, realpath, rm } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -20,6 +21,7 @@ import {
   CLAW_OUTPUT_STABILITY,
   CLAW_SCHEMA_VERSION,
   type ClawManifest,
+  type ClawMcpServer,
 } from "./types.js";
 
 export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" as const;
@@ -180,12 +182,46 @@ function derivativePackageVersion(manifest: ClawManifest, contents: ExportConten
 
 type ExportContent = { path: string; content: Buffer };
 
+function portableMcpServer(server: Record<string, unknown>): ClawMcpServer {
+  const common = {
+    ...(server.toolFilter && typeof server.toolFilter === "object"
+      ? { toolFilter: server.toolFilter as ClawMcpServer["toolFilter"] }
+      : {}),
+    ...(typeof server.timeout === "number" ? { timeout: server.timeout } : {}),
+    ...(typeof server.connectTimeout === "number" ? { connectTimeout: server.connectTimeout } : {}),
+  };
+  if (typeof server.url === "string") {
+    if (server.transport !== "sse" && server.transport !== "streamable-http") {
+      throw new Error("Managed remote MCP server has an unsupported transport.");
+    }
+    return {
+      url: server.url,
+      transport: server.transport,
+      ...(server.auth === "oauth" ? { auth: "oauth" as const } : {}),
+      ...common,
+    };
+  }
+  if (typeof server.command !== "string") {
+    throw new Error("Managed MCP server has neither a command nor a remote URL.");
+  }
+  return {
+    command: server.command,
+    ...(server.transport === "stdio" ? { transport: server.transport } : {}),
+    ...(Array.isArray(server.args) ? { args: server.args as string[] } : {}),
+    ...(server.env && typeof server.env === "object"
+      ? { env: server.env as Record<string, string> }
+      : {}),
+    ...common,
+  };
+}
+
 export async function exportClawAgent(
   agentId: string,
   outputDirectory: string,
   options: OpenClawStateDatabaseOptions & {
     config: OpenClawConfig;
     packageDeps?: PackageRemovalDeps;
+    sourceMcpServers?: Record<string, Record<string, unknown>>;
   },
 ): Promise<ClawExportResult> {
   const status = await readClawStatus(agentId, options);
@@ -241,6 +277,15 @@ export async function exportClawAgent(
   const unresolvedCronJobs = record.cronJobs.filter(
     (cron) => cron.status !== "complete" || !cron.schedulerJobId,
   );
+  const unavailableMcpServers = record.mcpServers.filter((server) => server.state !== "present");
+  if (unavailableMcpServers.length > 0) {
+    throw new ClawExportError(
+      "mcp_servers_unavailable",
+      `Cannot export MCP servers with unresolved ownership or drift: ${unavailableMcpServers
+        .map((server) => server.name)
+        .join(", ")}.`,
+    );
+  }
   if (unresolvedCronJobs.length > 0) {
     throw new ClawExportError(
       "cron_jobs_unavailable",
@@ -287,6 +332,9 @@ export async function exportClawAgent(
       files.push({ source, path: file.path });
     }
   }
+  const configuredMcpServers = normalizeConfiguredMcpServers(
+    options.sourceMcpServers ?? options.config.mcp?.servers,
+  );
   const manifest: ClawManifest = {
     schemaVersion: CLAW_SCHEMA_VERSION,
     agent: portableAgent(agent, avatar.source),
@@ -303,7 +351,12 @@ export async function exportClawAgent(
         const rightIdentity = `${right.kind}:${right.ref}:${right.version}`;
         return comparePortableText(leftIdentity, rightIdentity);
       }),
-    mcpServers: {},
+    mcpServers: Object.fromEntries(
+      record.mcpServers.map((ref) => [
+        ref.name,
+        portableMcpServer(configuredMcpServers[ref.name]!),
+      ]),
+    ),
     cronJobs: record.cronJobs
       .map((cron) => cron.job)
       .toSorted((left, right) => left.id.localeCompare(right.id)),
