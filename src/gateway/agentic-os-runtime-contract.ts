@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
 
 const CONTRACT_VERSION = "v1";
+export const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
+const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
+const AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS = 5 * 60 * 1000;
+const AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 const ALLOW_LEASE_IDENTITY_FIELDS = [
   "client_lease_id",
@@ -68,6 +72,7 @@ type LeaseRecord = {
   clientLeaseId: string;
   owner: Record<(typeof ALLOW_LEASE_IDENTITY_FIELDS)[number], string>;
   spawnOwner: Record<(typeof ALLOW_LEASE_OWNER_FIELDS)[number], string>;
+  authenticatedPrincipalId: string;
   acquireMetadata: RuntimeMetadata;
   created_at_ms: number;
   expires_at_ms: number;
@@ -81,9 +86,9 @@ type SessionRecord = {
   idempotencyKey: string;
   gatewayLeaseId: string;
   metadata: RuntimeMetadata;
-  task: string;
   taskName?: string;
   agentId: string;
+  authenticatedPrincipalId: string;
   runId?: string;
   created_at_ms: number;
 };
@@ -91,6 +96,13 @@ type SessionRecord = {
 type ReleaseReplay = {
   fingerprint: string;
   response: Record<string, unknown>;
+  createdAtMs: number;
+  authenticatedPrincipalId: string;
+};
+
+type SpawnPending = {
+  fingerprint: string;
+  promise: Promise<SessionRecord>;
 };
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
@@ -100,6 +112,8 @@ const releaseByIdempotencyKey = new Map<string, ReleaseReplay>();
 const sessionsByKey = new Map<string, SessionRecord>();
 const spawnByIdempotencyKey = new Map<string, SessionRecord>();
 const spawnByClientRequestId = new Map<string, SessionRecord>();
+const spawnPendingByIdempotencyKey = new Map<string, SpawnPending>();
+const spawnPendingByClientRequestId = new Map<string, SpawnPending>();
 
 class ContractInputError extends Error {}
 
@@ -216,18 +230,64 @@ function pruneExpiredLeases(now = Date.now()) {
       leasesByGatewayId.delete(gatewayLeaseId);
     }
   }
+  for (const [key, record] of acquireByIdempotencyKey) {
+    if (
+      record.released_at_ms &&
+      now - record.released_at_ms > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS
+    ) {
+      acquireByIdempotencyKey.delete(key);
+      if (acquireByClientLeaseId.get(record.clientLeaseId) === record) {
+        acquireByClientLeaseId.delete(record.clientLeaseId);
+      }
+    }
+  }
+  for (const [key, replay] of releaseByIdempotencyKey) {
+    if (now - replay.createdAtMs > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS) {
+      releaseByIdempotencyKey.delete(key);
+    }
+  }
+  for (const [sessionKey, record] of sessionsByKey) {
+    if (now - record.created_at_ms <= AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS) {
+      continue;
+    }
+    sessionsByKey.delete(sessionKey);
+    if (spawnByIdempotencyKey.get(record.idempotencyKey) === record) {
+      spawnByIdempotencyKey.delete(record.idempotencyKey);
+    }
+    if (spawnByClientRequestId.get(record.clientRequestId) === record) {
+      spawnByClientRequestId.delete(record.clientRequestId);
+    }
+  }
+}
+
+function assertRecordCapacity(map: ReadonlyMap<unknown, unknown>, label: string) {
+  if (map.size >= AGENTIC_OS_RUNTIME_MAX_RECORDS) {
+    throw new ContractInputError(`${label} capacity reached`);
+  }
 }
 
 export function acquireAgenticOsAllowLease(
   params: Record<string, unknown>,
+  authenticatedRequesterAgentId?: string,
+  authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_LEASE_CAMEL_ALIASES);
   const owner = pickStrings(params, ALLOW_LEASE_IDENTITY_FIELDS);
+  if (authenticatedRequesterAgentId && owner.requester_agent_id !== authenticatedRequesterAgentId) {
+    return rejectConflict("requester_agent_id does not match authenticated requester");
+  }
   const spawnOwner = pickStrings(params, ALLOW_LEASE_OWNER_FIELDS);
   const ttlMs = readPositiveInteger(params, "ttl_ms");
+  if (ttlMs > AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS) {
+    return rejectConflict(`ttl_ms exceeds maximum ${AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS}`);
+  }
   const fingerprint = stableJson({ ...owner, ttl_ms: ttlMs });
   const existingByIdempotency = acquireByIdempotencyKey.get(owner.idempotency_key);
   if (existingByIdempotency) {
+    if (existingByIdempotency.authenticatedPrincipalId !== authenticatedPrincipalId) {
+      return rejectConflict("allow lease belongs to a different authenticated principal");
+    }
     if (existingByIdempotency.fingerprint !== fingerprint) {
       return rejectConflict("conflicting allow lease acquire idempotency_key");
     }
@@ -237,6 +297,7 @@ export function acquireAgenticOsAllowLease(
   if (existingByClientLease) {
     return rejectConflict("conflicting allow lease client_lease_id");
   }
+  assertRecordCapacity(acquireByIdempotencyKey, "allow lease");
   const gatewayLeaseId = `gateway-lease:${randomUUID()}`;
   const now = Date.now();
   const acquireMetadata = metadataEnvelope({
@@ -251,6 +312,7 @@ export function acquireAgenticOsAllowLease(
     clientLeaseId: owner.client_lease_id,
     owner,
     spawnOwner,
+    authenticatedPrincipalId,
     acquireMetadata,
     created_at_ms: now,
     expires_at_ms: now + ttlMs,
@@ -261,19 +323,30 @@ export function acquireAgenticOsAllowLease(
   return leaseResponse(record);
 }
 
-export function listAgenticOsAllowLeases(): Record<string, unknown> {
+export function listAgenticOsAllowLeases(
+  authenticatedPrincipalId = "internal",
+): Record<string, unknown> {
   pruneExpiredLeases();
   const leases = [...leasesByGatewayId.values()]
-    .filter((record) => !record.released_at_ms)
+    .filter(
+      (record) =>
+        !record.released_at_ms && record.authenticatedPrincipalId === authenticatedPrincipalId,
+    )
     .map((record) => leaseResponse(record));
   return { status: "ok", leases };
 }
 
 export function releaseAgenticOsAllowLease(
   params: Record<string, unknown>,
+  authenticatedRequesterAgentId?: string,
+  authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_LEASE_CAMEL_ALIASES);
   const owner = pickStrings(params, ALLOW_LEASE_OWNER_FIELDS);
+  if (authenticatedRequesterAgentId && owner.requester_agent_id !== authenticatedRequesterAgentId) {
+    return rejectConflict("requester_agent_id does not match authenticated requester");
+  }
   const releaseIdempotencyKey = readString(params, "idempotency_key");
   const gatewayLeaseId = readString(params, "gateway_lease_id");
   const normalized = {
@@ -284,6 +357,9 @@ export function releaseAgenticOsAllowLease(
   const fingerprint = stableJson(normalized);
   const replay = releaseByIdempotencyKey.get(releaseIdempotencyKey);
   if (replay) {
+    if (replay.authenticatedPrincipalId !== authenticatedPrincipalId) {
+      return rejectConflict("allow lease release belongs to a different authenticated principal");
+    }
     if (replay.fingerprint !== fingerprint) {
       return rejectConflict("conflicting allow lease release idempotency_key");
     }
@@ -293,6 +369,9 @@ export function releaseAgenticOsAllowLease(
   if (!record || record.gatewayLeaseId !== gatewayLeaseId) {
     return rejectConflict("unknown allow lease owner or gateway_lease_id");
   }
+  if (record.authenticatedPrincipalId !== authenticatedPrincipalId) {
+    return rejectConflict("allow lease belongs to a different authenticated principal");
+  }
   for (const field of ALLOW_LEASE_OWNER_FIELDS) {
     if (record.spawnOwner[field] !== owner[field]) {
       return rejectConflict(`allow lease owner mismatch: ${field}`);
@@ -301,7 +380,13 @@ export function releaseAgenticOsAllowLease(
   record.released_at_ms = record.released_at_ms ?? Date.now();
   leasesByGatewayId.delete(gatewayLeaseId);
   const response = releaseResponse(record, metadataEnvelope(normalized));
-  releaseByIdempotencyKey.set(releaseIdempotencyKey, { fingerprint, response });
+  assertRecordCapacity(releaseByIdempotencyKey, "allow lease release replay");
+  releaseByIdempotencyKey.set(releaseIdempotencyKey, {
+    fingerprint,
+    response,
+    createdAtMs: Date.now(),
+    authenticatedPrincipalId,
+  });
   return response;
 }
 
@@ -333,21 +418,11 @@ function sessionProjection(record: SessionRecord): Record<string, unknown> {
     client_request_id: record.clientRequestId,
     idempotency_key: record.idempotencyKey,
     agent_id: record.agentId,
-    task: record.task,
     taskName: record.taskName,
     runId: record.runId,
     created_at_ms: record.created_at_ms,
     metadata: record.metadata,
   };
-}
-
-function hasAgenticOsSpawnContract(params: Record<string, unknown>): boolean {
-  return (
-    Object.hasOwn(params, "client_request_id") ||
-    Object.hasOwn(params, "idempotency_key") ||
-    Object.hasOwn(params, "gateway_lease_id") ||
-    Object.hasOwn(params, "metadata")
-  );
 }
 
 function requireLeaseAuthorizesSpawn(params: {
@@ -399,30 +474,10 @@ function spawnProjectionPayload(record: SessionRecord): Record<string, unknown> 
 
 export async function spawnAgenticOsSession(
   params: Record<string, unknown>,
+  authenticatedRequesterAgentId?: string,
+  authenticatedPrincipalId = "internal",
 ): Promise<Record<string, unknown>> {
-  if (!hasAgenticOsSpawnContract(params)) {
-    const legacy = await spawnSubagentDirect(
-      {
-        task: readString(params, "task"),
-        taskName: typeof params.taskName === "string" ? params.taskName : undefined,
-        label: typeof params.label === "string" ? params.label : undefined,
-        agentId: typeof params.agentId === "string" ? params.agentId : undefined,
-        model: typeof params.model === "string" ? params.model : undefined,
-        thinking: typeof params.thinking === "string" ? params.thinking : undefined,
-        cwd: typeof params.cwd === "string" ? params.cwd : undefined,
-        thread: params.thread === true,
-        mode: params.mode === "run" || params.mode === "session" ? params.mode : undefined,
-        cleanup:
-          params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined,
-        sandbox: params.sandbox === "require" ? "require" : undefined,
-        context:
-          params.context === "fork" || params.context === "isolated" ? params.context : undefined,
-        lightContext: params.lightContext === true,
-      },
-      {},
-    );
-    return legacy as Record<string, unknown>;
-  }
+  pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_SPAWN_CAMEL_ALIASES);
   const clientRequestId = readString(params, "client_request_id");
   const idempotencyKey = readString(params, "idempotency_key");
@@ -438,6 +493,15 @@ export async function spawnAgenticOsSession(
   const lease = leasesByGatewayId.get(gatewayLeaseId);
   if (!lease || lease.gatewayLeaseId !== gatewayLeaseId || lease.released_at_ms) {
     return rejectConflict("gateway_lease_id is not active");
+  }
+  if (
+    authenticatedRequesterAgentId &&
+    lease.spawnOwner.requester_agent_id !== authenticatedRequesterAgentId
+  ) {
+    return rejectConflict("allow lease requester does not match authenticated requester");
+  }
+  if (lease.authenticatedPrincipalId !== authenticatedPrincipalId) {
+    return rejectConflict("allow lease belongs to a different authenticated principal");
   }
   const agentId =
     typeof params.agentId === "string" && params.agentId
@@ -469,85 +533,124 @@ export async function spawnAgenticOsSession(
   if (existingByClientRequest) {
     return rejectConflict("conflicting sessions_spawn client_request_id");
   }
-  const spawnResult = (await spawnSubagentDirect(
-    {
-      task,
-      taskName,
-      agentId,
-      mode: params.mode === "session" ? "session" : "run",
-      cleanup:
-        params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined,
-      context:
-        params.context === "fork" || params.context === "isolated" ? params.context : undefined,
-      lightContext: params.lightContext === true,
-      expectsCompletionMessage: false,
-    },
-    {
-      agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}:main`,
-      requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
-    },
-  )) as Record<string, unknown>;
-  if (spawnResult.status !== "accepted") {
-    return spawnResult;
+  const pendingByIdempotency = spawnPendingByIdempotencyKey.get(idempotencyKey);
+  if (pendingByIdempotency) {
+    if (pendingByIdempotency.fingerprint !== fingerprint) {
+      return rejectConflict("conflicting sessions_spawn idempotency_key");
+    }
+    return spawnProjectionPayload(await pendingByIdempotency.promise);
   }
-  const sessionKey = spawnResultSessionKey(spawnResult);
-  if (!sessionKey) {
-    return rejectConflict("sessions_spawn accepted without a child session identity");
+  if (spawnPendingByClientRequestId.has(clientRequestId)) {
+    return rejectConflict("conflicting sessions_spawn client_request_id");
   }
-  const record: SessionRecord = {
-    sessionKey,
+  assertRecordCapacity(spawnByIdempotencyKey, "session spawn replay");
+  const pending: SpawnPending = {
     fingerprint,
-    clientRequestId,
-    idempotencyKey,
-    gatewayLeaseId,
-    metadata: metadataEnvelope(metadata),
-    task,
-    taskName,
-    agentId,
-    runId: spawnResultRunId(spawnResult),
-    created_at_ms: Date.now(),
+    promise: (async () => {
+      const spawnResult = (await spawnSubagentDirect(
+        {
+          task,
+          taskName,
+          agentId,
+          mode: params.mode === "session" ? "session" : "run",
+          cleanup:
+            params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined,
+          context:
+            params.context === "fork" || params.context === "isolated" ? params.context : undefined,
+          lightContext: params.lightContext === true,
+          expectsCompletionMessage: false,
+        },
+        {
+          agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}:main`,
+          requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
+          authorizedTargetAgentId: lease.spawnOwner.agent_id,
+        },
+      )) as Record<string, unknown>;
+      if (spawnResult.status !== "accepted") {
+        throw new ContractInputError(
+          typeof spawnResult.error === "string" ? spawnResult.error : "child runner rejected spawn",
+        );
+      }
+      const sessionKey = spawnResultSessionKey(spawnResult);
+      if (!sessionKey) {
+        return rejectConflict("sessions_spawn accepted without a child session identity");
+      }
+      const record: SessionRecord = {
+        sessionKey,
+        fingerprint,
+        clientRequestId,
+        idempotencyKey,
+        gatewayLeaseId,
+        metadata: metadataEnvelope(metadata),
+        taskName,
+        agentId,
+        authenticatedPrincipalId,
+        runId: spawnResultRunId(spawnResult),
+        created_at_ms: Date.now(),
+      };
+      sessionsByKey.set(sessionKey, record);
+      spawnByIdempotencyKey.set(idempotencyKey, record);
+      spawnByClientRequestId.set(clientRequestId, record);
+      return record;
+    })(),
   };
-  sessionsByKey.set(sessionKey, record);
-  spawnByIdempotencyKey.set(idempotencyKey, record);
-  spawnByClientRequestId.set(clientRequestId, record);
-  return spawnProjectionPayload(record);
+  spawnPendingByIdempotencyKey.set(idempotencyKey, pending);
+  spawnPendingByClientRequestId.set(clientRequestId, pending);
+  try {
+    return spawnProjectionPayload(await pending.promise);
+  } finally {
+    spawnPendingByIdempotencyKey.delete(idempotencyKey);
+    spawnPendingByClientRequestId.delete(clientRequestId);
+  }
 }
 
-export function listAgenticOsSessions(): Record<string, unknown> {
-  const sessions = [...sessionsByKey.values()].map((record) => sessionProjection(record));
+export function listAgenticOsSessions(
+  authenticatedPrincipalId = "internal",
+): Record<string, unknown> {
+  pruneExpiredLeases();
+  const sessions = [...sessionsByKey.values()]
+    .filter((record) => record.authenticatedPrincipalId === authenticatedPrincipalId)
+    .map((record) => sessionProjection(record));
   return { status: "ok", count: sessions.length, sessions };
 }
 
-export function statusAgenticOsSession(params: Record<string, unknown>): Record<string, unknown> {
+export function statusAgenticOsSession(
+  params: Record<string, unknown>,
+  authenticatedPrincipalId = "internal",
+): Record<string, unknown> {
+  pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES);
   const sessionKey = readString(params, "session_key");
   const record = sessionsByKey.get(sessionKey);
   if (!record) {
     throw new ContractInputError("unknown session_key");
   }
+  if (record.authenticatedPrincipalId !== authenticatedPrincipalId) {
+    throw new ContractInputError("session belongs to a different authenticated principal");
+  }
   const projection = sessionProjection(record);
-  return { status: "accepted", ...projection, session: projection };
+  return { status: "tracked", ...projection, session: projection };
 }
 
-export function historyAgenticOsSession(params: Record<string, unknown>): Record<string, unknown> {
+export function historyAgenticOsSession(
+  params: Record<string, unknown>,
+  authenticatedPrincipalId = "internal",
+): Record<string, unknown> {
+  pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_HISTORY_CAMEL_ALIASES);
   const sessionKey = readString(params, "sessionKey");
   const record = sessionsByKey.get(sessionKey);
   if (!record) {
     throw new ContractInputError("unknown sessionKey");
   }
+  if (record.authenticatedPrincipalId !== authenticatedPrincipalId) {
+    throw new ContractInputError("session belongs to a different authenticated principal");
+  }
   const projection = sessionProjection(record);
   return {
     status: "ok",
     ...projection,
     session: projection,
-    messages: [
-      {
-        role: "system",
-        content: "Agentic OS runtime contract v1 accepted session identity.",
-        ...projection,
-      },
-    ],
   };
 }
 

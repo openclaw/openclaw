@@ -74,6 +74,7 @@ type CatalogPayload = {
   agentId?: string;
   groups: CatalogGroup[];
   tools?: CatalogTool[];
+  runtimeMethods?: Array<{ name: string; parameters: string[] }>;
 };
 
 function createInvokeParams(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
@@ -160,16 +161,18 @@ describe("tools.catalog handler", () => {
     const { respond, invoke } = createInvokeParams({ includePlugins: false });
     await invoke();
     const payload = expectCatalogPayload(respond);
-    const catalog = payload.tools ?? payload.groups.flatMap((group) => group.tools);
-
-    expect(catalog.find((tool) => tool.id === "subagents.allowLease.acquire")).toMatchObject({
+    const runtimeMethods = payload.runtimeMethods ?? [];
+    expect(
+      runtimeMethods.find((method) => method.name === "subagents.allowLease.acquire"),
+    ).toMatchObject({
       parameters: expect.arrayContaining(["client_lease_id", "idempotency_key", "ttl_ms"]),
-      defaultProfiles: [],
     });
-    expect(catalog.find((tool) => tool.id === "sessions_status")).toMatchObject({
+    expect(runtimeMethods.find((method) => method.name === "sessions_status")).toMatchObject({
       parameters: ["session_key"],
-      defaultProfiles: [],
     });
+    const catalog = payload.tools ?? payload.groups.flatMap((group) => group.tools);
+    expect(catalog.map((tool) => tool.id)).not.toContain("subagents.allowLease.acquire");
+    expect(catalog.map((tool) => tool.id)).not.toContain("sessions_status");
   });
 
   it("omits agents_wait until Swarm is enabled for the catalog agent", async () => {

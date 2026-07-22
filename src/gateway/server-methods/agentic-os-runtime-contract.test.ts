@@ -39,7 +39,7 @@ const sessionMetadata = {
   task_digest: "sha256:test",
 };
 
-async function invoke(method: string, params: Record<string, unknown> = {}) {
+async function invoke(method: string, params: Record<string, unknown> = {}, deviceId?: string) {
   const respond = vi.fn();
   const handler = agenticOsRuntimeContractHandlers[method];
   if (!handler) {
@@ -48,8 +48,15 @@ async function invoke(method: string, params: Record<string, unknown> = {}) {
   await handler({
     params,
     respond: respond as never,
-    context: {} as never,
-    client: null,
+    context: {
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main" }, { id: "ai-engineer" }] },
+      }),
+      loadGatewayModelCatalog: async () => [],
+      loadGatewayModelCatalogSnapshot: async () => ({ entries: [] }),
+      logGateway: { debug: () => {}, error: () => {}, warn: () => {} },
+    } as never,
+    client: deviceId ? ({ connect: { device: { id: deviceId } } } as never) : null,
     req: { type: "req", id: "req-1", method },
     isWebchatConnect: () => false,
   });
@@ -107,6 +114,42 @@ describe("Agentic OS runtime contract v1", () => {
     );
   });
 
+  it("isolates lease and session projections by authenticated principal", async () => {
+    const gatewayLeaseId = payload(
+      await invoke("subagents.allowLease.acquire", acquireParams, "device-a"),
+    ).gateway_lease_id as string;
+    expect(payload(await invoke("subagents.allowLease.status", {}, "device-b")).leases).toEqual([]);
+    expectInvalid(
+      await invoke(
+        "sessions_spawn",
+        {
+          task: "principal isolation",
+          runtime: "subagent",
+          agentId: "ai-engineer",
+          gateway_lease_id: gatewayLeaseId,
+          client_request_id: "spawn-a",
+          idempotency_key: "spawn-idem-a",
+          metadata: sessionMetadata,
+        },
+        "device-b",
+      ),
+      "different authenticated principal",
+    );
+  });
+
+  it("prunes expired lease replay identities after bounded retention", async () => {
+    await acquireLease({ ...acquireParams, ttl_ms: 1 });
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10 * 60 * 1000);
+    try {
+      const reacquired = payload(
+        await invoke("subagents.allowLease.acquire", { ...acquireParams, ttl_ms: 60_000 }),
+      );
+      expect(reacquired.status).toBe("active");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("rejects owner-mismatched release and replays exact release with a release idempotency key", async () => {
     const gatewayLeaseId = await acquireLease();
     expectInvalid(
@@ -116,7 +159,7 @@ describe("Agentic OS runtime contract v1", () => {
         requester_agent_id: "other",
         gateway_lease_id: gatewayLeaseId,
       }),
-      "allow lease owner mismatch",
+      "requester_agent_id does not match authenticated requester",
     );
 
     const releaseParams = {
@@ -158,20 +201,46 @@ describe("Agentic OS runtime contract v1", () => {
     );
   });
 
-  it("routes legacy sessions_spawn callers through the real subagent runner", async () => {
-    const accepted = payload(
+  it("rejects unleased legacy sessions_spawn callers before the runner", async () => {
+    expectInvalid(
       await invoke("sessions_spawn", {
         task: "legacy spawn",
         runtime: "subagent",
         agentId: "ai-engineer",
         mode: "run",
       }),
+      "missing required string: client_request_id",
     );
-    expect(accepted.status).toBe("accepted");
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.objectContaining({ task: "legacy spawn", agentId: "ai-engineer" }),
-      {},
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("coalesces concurrent duplicate sessions_spawn calls onto one child runner", async () => {
+    const gatewayLeaseId = await acquireLease();
+    let resolveSpawn!: (value: Record<string, unknown>) => void;
+    spawnSubagentDirectMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSpawn = resolve;
+      }),
     );
+    const spawnParams = {
+      task: "concurrent duplicate",
+      runtime: "subagent",
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: "spawn-a",
+      idempotency_key: "spawn-idem-a",
+      metadata: sessionMetadata,
+    };
+    const first = invoke("sessions_spawn", spawnParams);
+    const second = invoke("sessions_spawn", spawnParams);
+    await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1));
+    resolveSpawn({
+      status: "accepted",
+      childSessionKey: "agent:ai-engineer:subagent:real-child",
+      runId: "run-real-child",
+    });
+    expect(payload(await first).session_key).toBe(payload(await second).session_key);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects released, expired, and wrong-owner leases before spawning", async () => {
@@ -257,13 +326,49 @@ describe("Agentic OS runtime contract v1", () => {
         metadata: expect.objectContaining({ normalized: sessionMetadata }),
       });
     }
-    expect(history.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          session_key: sessionKey,
-          metadata: expect.objectContaining({ normalized: sessionMetadata }),
-        }),
-      ]),
+    if (status.runtime_session !== null) {
+      expect(status.runtime_session).toMatchObject({
+        key: sessionKey,
+        observed: expect.any(Boolean),
+        message_count: expect.any(Number),
+      });
+    }
+    expect(history.messages).toEqual([]);
+    expect(history).not.toHaveProperty("task");
+  });
+
+  it("prunes aged session projections after bounded retention", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const accepted = payload(
+      await invoke("sessions_spawn", {
+        task: "verify bounded session retention",
+        runtime: "subagent",
+        agentId: "ai-engineer",
+        gateway_lease_id: gatewayLeaseId,
+        client_request_id: "spawn-retention",
+        idempotency_key: "spawn-retention-idem",
+        metadata: {
+          ...sessionMetadata,
+          client_request_id: "spawn-retention",
+          idempotency_key: "spawn-retention-idem",
+        },
+      }),
     );
+    const sessionKey = accepted.session_key as string;
+    const initial = payload(await invoke("sessions_list"));
+    expect(initial.sessions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ session_key: sessionKey })]),
+    );
+
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 25 * 60 * 60 * 1000);
+    try {
+      expect(payload(await invoke("sessions_list")).sessions).toEqual([]);
+      expectInvalid(
+        await invoke("sessions_status", { session_key: sessionKey }),
+        "unknown session_key",
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
