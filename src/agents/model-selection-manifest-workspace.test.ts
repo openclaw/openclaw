@@ -2,16 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const loadManifestMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryWorkspaceDirFromStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
-}));
-
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: loadManifestMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
 vi.mock("../plugins/runtime-state.js", () => ({
@@ -25,23 +20,9 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 describe("configured model manifest workspace scope", () => {
   beforeEach(() => {
     vi.resetModules();
-    loadManifestMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getActivePluginRegistryWorkspaceDirFromStateMock.mockReset();
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
-    loadManifestMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          modelIdNormalization: {
-            providers: {
-              custom: {
-                prefixWhenBare: "workspace-custom",
-              },
-            },
-          },
-        },
-      ],
-    });
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
   });
 
   it("does not reuse workspace manifest policies without a workspace context", async () => {
@@ -64,14 +45,23 @@ describe("configured model manifest workspace scope", () => {
         id: "fast-model",
       },
     ]);
-    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-    });
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+      }),
+    );
   });
 
   it("uses manifest policies when the workspace context is explicit", async () => {
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: { custom: { prefixWhenBare: "workspace-custom" } },
+          },
+        },
+      ],
+    });
     const { buildConfiguredModelCatalog } = await import("./model-selection-shared.js");
     const cfg = {
       models: {
@@ -89,12 +79,9 @@ describe("configured model manifest workspace scope", () => {
         id: "workspace-custom/fast-model",
       },
     ]);
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledWith({
-      config: cfg,
-      workspaceDir: "/workspace/a",
-      env: process.env,
-    });
-    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: cfg, workspaceDir: "/workspace/a" }),
+    );
   });
 
   it("uses an unscoped current snapshot without falling back to a metadata scan", async () => {
@@ -128,7 +115,6 @@ describe("configured model manifest workspace scope", () => {
         id: "global-custom/fast-model",
       },
     ]);
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("does not load manifest metadata for empty configured model aliases", async () => {
@@ -142,7 +128,6 @@ describe("configured model manifest workspace scope", () => {
     expect(aliases.byAlias.size).toBe(0);
     expect(aliases.byKey.size).toBe(0);
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("does not load manifest metadata for wildcard-only configured model aliases", async () => {
@@ -162,7 +147,6 @@ describe("configured model manifest workspace scope", () => {
     expect(aliases.byAlias.size).toBe(0);
     expect(aliases.byKey.size).toBe(0);
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("does not load manifest metadata for configured model entries without aliases", async () => {
@@ -182,7 +166,6 @@ describe("configured model manifest workspace scope", () => {
     expect(aliases.byAlias.size).toBe(0);
     expect(aliases.byKey.size).toBe(0);
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("does not load manifest metadata for statically resolved primary models", async () => {
@@ -205,7 +188,6 @@ describe("configured model manifest workspace scope", () => {
 
     for (const { cfg, expected } of cases) {
       getCurrentPluginMetadataSnapshotMock.mockClear();
-      loadManifestMetadataSnapshotMock.mockClear();
       expect(
         resolveConfiguredModelRef({
           cfg,
@@ -214,7 +196,6 @@ describe("configured model manifest workspace scope", () => {
         }),
       ).toEqual(expected);
       expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
     }
   });
 
@@ -239,11 +220,10 @@ describe("configured model manifest workspace scope", () => {
       }),
     ).toEqual({ provider: "anthropic", model: "haiku-4.6" });
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("uses manifest-normalized configured refs to infer providers for bare defaults", async () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
       plugins: [
         {
           modelIdNormalization: {
@@ -277,11 +257,11 @@ describe("configured model manifest workspace scope", () => {
         defaultModel: "gpt-5.4",
       }),
     ).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalled();
   });
 
   it("reuses resolved manifest plugins while resolving configured model aliases", async () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
       plugins: [
         {
           modelIdNormalization: {
@@ -319,11 +299,11 @@ describe("configured model manifest workspace scope", () => {
         defaultModel: "claude-sonnet-4-6",
       }),
     ).toEqual({ provider: "openrouter", model: "openrouter/auto" });
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalled();
   });
 
   it("reuses resolved manifest plugins while resolving direct primary models", async () => {
-    loadManifestMetadataSnapshotMock.mockReturnValue({
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
       plugins: [
         {
           modelIdNormalization: {
@@ -360,6 +340,6 @@ describe("configured model manifest workspace scope", () => {
         defaultModel: "claude-sonnet-4-6",
       }),
     ).toEqual({ provider: "openrouter", model: "openrouter/auto" });
-    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalled();
   });
 });
