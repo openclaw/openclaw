@@ -8,8 +8,10 @@ import type { Context, Model } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   closeOpenAICodexWebSocketSessions,
+  connectWebSocketForTest,
   extractOpenAICodexAccountId,
   parseSSEForTest,
+  parseWebSocketForTest,
   resetOpenAICodexWebSocketStateForTest,
   streamSimpleOpenAICodexResponses,
   streamOpenAICodexResponses,
@@ -1069,8 +1071,143 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(pullCount).toBeLessThanOrEqual(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
-});
 
+  it("rejects a stalled WebSocket upgrade with a handshake timeout error", async () => {
+    vi.useFakeTimers();
+    // A WebSocket that accepts TCP but never fires open/error/close.
+    vi.stubGlobal(
+      "WebSocket",
+      class NeverOpeningWebSocket {
+        close = vi.fn();
+        addEventListener = vi.fn();
+        removeEventListener = vi.fn();
+      },
+    );
+
+    const connectPromise = connectWebSocketForTest(
+      "ws://localhost:1",
+      new Headers(),
+      undefined,
+      5_000,
+    );
+    vi.advanceTimersByTime(5_000);
+    await expect(connectPromise).rejects.toThrow(
+      "WebSocket connection handshake timed out",
+    );
+    vi.useRealTimers();
+  });
+
+  it("rejects oversized WebSocket messages exceeding MAX_WS_MESSAGE_BYTES", async () => {
+    const events: { type: string; listener?: (e: unknown) => void }[] = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class OversizeWebSocket {
+        close = vi.fn();
+        readyState = WebSocket.OPEN;
+        addEventListener = events.push.bind(events);
+        removeEventListener = vi.fn();
+      },
+    );
+
+    const connectPromise = connectWebSocketForTest(
+      "ws://localhost:1",
+      new Headers(),
+      undefined,
+      5_000,
+    );
+    // Fire open so the connection settles
+    for (const ev of events) {
+      if (ev.type === "open") {
+        ev.listener?.({});
+      }
+    }
+    const socket = await connectPromise;
+
+    // parseWebSocket registers a message listener, then oversized data errors
+    const gen = parseWebSocketForTest(socket);
+    const nextPromise = gen.next();
+
+    for (const ev of events) {
+      if (ev.type === "message") {
+        ev.listener?.({ data: "x".repeat(17 * 1024 * 1024 + 1) });
+      }
+    }
+
+    const result = await nextPromise;
+    expect(result.done).toBe(true);
+  });
+
+  it("rejects multibyte oversized WebSocket messages using byte-accurate limit", async () => {
+    const events: { type: string; listener?: (e: unknown) => void }[] = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class MultibyteOversizeSocket {
+        close = vi.fn();
+        readyState = WebSocket.OPEN;
+        addEventListener = events.push.bind(events);
+        removeEventListener = vi.fn();
+      },
+    );
+
+    const connectPromise = connectWebSocketForTest(
+      "ws://localhost:1",
+      new Headers(),
+      undefined,
+      5_000,
+    );
+    for (const ev of events) {
+      if (ev.type === "open") {
+        ev.listener?.({});
+      }
+    }
+    const socket = await connectPromise;
+
+    // 3-byte UTF-8 character repeated to exceed the 16 MiB byte limit.
+    // text.length (UTF-16 code units) is ~5.3M but byte length is ~16M+1.
+    const char3 = "\u{1F600}"; // U+1F600 — 4 UTF-16 code units, 4 bytes UTF-8
+    // Actually use a 3-byte UTF-8 char: € (U+20AC) = 3 UTF-8 bytes, 1 UTF-16 code unit
+    const mbChar = "€"; // 3 bytes UTF-8, 1 code unit UTF-16
+    const count = Math.ceil((17 * 1024 * 1024) / 3) + 1;
+    const oversized = mbChar.repeat(count);
+
+    const gen = parseWebSocketForTest(socket);
+    const nextPromise = gen.next();
+
+    for (const ev of events) {
+      if (ev.type === "message") {
+        ev.listener?.({ data: oversized });
+      }
+    }
+
+    const result = await nextPromise;
+    expect(result.done).toBe(true);
+  });
+
+  it("settles the handshake promise even when socket.close() throws", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "WebSocket",
+      class ThrowingOnCloseSocket {
+        close() {
+          throw new Error("close failed");
+        }
+        addEventListener = vi.fn();
+        removeEventListener = vi.fn();
+      },
+    );
+
+    const connectPromise = connectWebSocketForTest(
+      "ws://localhost:1",
+      new Headers(),
+      undefined,
+      5_000,
+    );
+    vi.advanceTimersByTime(5_000);
+    await expect(connectPromise).rejects.toThrow(
+      "WebSocket connection handshake timed out",
+    );
+    vi.useRealTimers();
+  });
 describe("parseSSEForTest", () => {
   it("bounds streamed OpenAI ChatGPT Responses success bodies without content-length", async () => {
     // 1 MiB chunks; cap is 16 MiB so the bounded reader cancels well before

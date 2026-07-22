@@ -84,6 +84,16 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reac
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
+// WebSocket connection handshake must complete within 30 s or the socket is
+// closed and the connection attempt is rejected. This is a transport-neutral
+// timeout (not ws-specific) so it works across Node, Bun, and browser globals.
+const CONNECT_WS_HANDSHAKE_TIMEOUT_MS = 30_000;
+
+// Maximum WebSocket message payload in bytes. Messages exceeding this size
+// trigger a close with code 1009 (Message Too Big) and reject the stream.
+// Set to the same value as OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES.
+const MAX_WS_MESSAGE_BYTES = 16 * 1024 * 1024;
+
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
   "incomplete",
@@ -1015,6 +1025,11 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
   } catch {}
 }
 
+// Export for test: verifies handshake timeout rejects stalled connections.
+export const connectWebSocketForTest = connectWebSocket;
+// Export for test: verifies oversized message rejection in parseWebSocket.
+export const parseWebSocketForTest = parseWebSocket;
+
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -1032,6 +1047,7 @@ async function connectWebSocket(
   url: string,
   headers: Headers,
   signal?: AbortSignal,
+  connectTimeoutMs?: number,
 ): Promise<WebSocketLike> {
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
@@ -1051,6 +1067,27 @@ async function connectWebSocket(
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
     }
+
+    // Transport-neutral handshake deadline.  When the ws library is used,
+    // its handshakeTimeout field is not portable to browser or Bun globals,
+    // so we enforce the deadline via a timer and the existing cleanup path.
+    const handshakeTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      // Some runtime WebSocket implementations throw if close() is called
+      // before the socket has finished opening; catch so the promise is
+      // always settled.
+      try {
+        socket.close(WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE, "handshake timeout");
+      } catch {
+        // Handshake timed out — close failure is non-fatal.
+      }
+      reject(new Error("WebSocket connection handshake timed out"));
+    }, connectTimeoutMs ?? CONNECT_WS_HANDSHAKE_TIMEOUT_MS);
+    handshakeTimer.unref?.();
 
     const onOpen: WebSocketListener = () => {
       if (settled) {
@@ -1089,6 +1126,7 @@ async function connectWebSocket(
     };
 
     const cleanup = () => {
+      clearTimeout(handshakeTimer);
       socket.removeEventListener("open", onOpen);
       socket.removeEventListener("error", onError);
       socket.removeEventListener("close", onClose);
@@ -1234,20 +1272,42 @@ function extractWebSocketCloseError(event: unknown): Error {
   return new Error("WebSocket closed");
 }
 
-async function decodeWebSocketData(data: unknown): Promise<string | null> {
+async function decodeWebSocketData(
+  data: unknown,
+  maxBytes?: number,
+): Promise<string | null> {
+  // Enforce byte-size limit before decoding so oversized frames are rejected
+  // before the full payload is materialized as a JS string.  The check works
+  // on raw byte sources (ArrayBuffer, TypedArray) and falls back to the
+  // string-length heuristic for text frames (which are already in memory).
+  const checkBytes = (byteLength: number): void => {
+    if (maxBytes !== undefined && byteLength > maxBytes) {
+      throw new CodexProtocolError(
+        `WebSocket message exceeds maximum size of ${maxBytes} bytes`,
+      );
+    }
+  };
+
   if (typeof data === "string") {
+    if (maxBytes !== undefined) {
+      // Text frames are already a JS string; use utf-8 byte length.
+      checkBytes(new TextEncoder().encode(data).length);
+    }
     return data;
   }
   if (data instanceof ArrayBuffer) {
+    checkBytes(data.byteLength);
     return new TextDecoder().decode(new Uint8Array(data));
   }
   if (ArrayBuffer.isView(data)) {
+    checkBytes(data.byteLength);
     const view = data;
     return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   }
   if (data && typeof data === "object" && "arrayBuffer" in data) {
     const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
     const arrayBuffer = await blobLike.arrayBuffer();
+    checkBytes(arrayBuffer.byteLength);
     return new TextDecoder().decode(new Uint8Array(arrayBuffer));
   }
   return null;
@@ -1279,7 +1339,13 @@ async function* parseWebSocket(
         if (!event || typeof event !== "object" || !("data" in event)) {
           return;
         }
-        text = await decodeWebSocketData((event as { data?: unknown }).data);
+        // decodeWebSocketData enforces the byte-size limit before
+        // materializing the full payload; oversized frames throw a
+        // CodexProtocolError and close the socket with code 1009.
+        text = await decodeWebSocketData(
+          (event as { data?: unknown }).data,
+          MAX_WS_MESSAGE_BYTES,
+        );
         if (!text) {
           return;
         }
@@ -1296,7 +1362,19 @@ async function* parseWebSocket(
         queue.push(parsed);
         wake();
       } catch (cause) {
-        failed = new CodexProtocolError(
+        // Close the socket when the message exceeds the size limit so the
+        // peer is notified and the stream terminates promptly.
+        if (cause instanceof CodexProtocolError) {
+          try {
+            socket.close(
+              WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE,
+              "message exceeds size limit",
+            );
+          } catch {
+            // Best-effort close.
+          }
+        }
+        failed = cause instanceof Error ? cause : new CodexProtocolError(
           `Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`,
           {
             cause,
