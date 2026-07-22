@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions.js";
+import * as runtimeConfig from "../config/config.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntry,
@@ -20,31 +22,6 @@ vi.mock("../gateway/call.js", () => ({
 const loadSessionEntryByKeyMock = vi.fn();
 vi.mock("./subagent-announce-delivery.js", () => ({
   loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
-}));
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
-    agents: {
-      list: [
-        { id: "main" },
-        { id: "other" },
-        { id: "director1" },
-        { id: "re-portal" },
-        { id: "leasing-ops" },
-        { id: "worker" },
-      ],
-    },
-    tools: {
-      // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-      sessions: { visibility: "all" },
-      agentToAgent: { enabled: true },
-    },
-  }),
-  resolveGatewayPort: () => 18789,
 }));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
@@ -80,6 +57,8 @@ const TEST_CONFIG = {
     agentToAgent: { enabled: true },
   },
 } as OpenClawConfig;
+
+let getRuntimeConfigSpy: ReturnType<typeof vi.spyOn> | undefined;
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
   let count = 0;
@@ -263,11 +242,22 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 }
 
 describe("sessions tools", () => {
+  beforeAll(() => {
+    getRuntimeConfigSpy = vi
+      .spyOn(runtimeConfig, "getRuntimeConfig")
+      .mockImplementation(() => TEST_CONFIG);
+  });
+
+  afterAll(() => {
+    getRuntimeConfigSpy?.mockRestore();
+  });
+
   beforeEach(() => {
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
+    getRuntimeConfigSpy?.mockImplementation(() => TEST_CONFIG);
     installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
