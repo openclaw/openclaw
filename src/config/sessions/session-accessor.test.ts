@@ -496,6 +496,25 @@ describe("session accessor seam", () => {
       recorded.origin = { provider: "mutated" };
     }
     expect(loadSessionEntry({ sessionKey, storePath })?.origin?.provider).toBe("webchat");
+
+    const operatorKey = "agent:main:dashboard:operator-created";
+    const operator = await recordInboundSessionMeta({
+      storePath,
+      sessionKey: operatorKey,
+      ctx: {
+        ...ctx,
+        SessionKey: operatorKey,
+        SessionCreation: {
+          via: "operator",
+          actor: { type: "human", id: "profile-ada" },
+        },
+      },
+    });
+    expect(operator).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-ada" },
+      createdAt: expect.any(Number),
+    });
   });
 
   it("does not create sessions when inbound meta recording opts out of upsert", async () => {

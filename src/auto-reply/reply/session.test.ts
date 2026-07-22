@@ -1317,6 +1317,32 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
+  it("stamps trusted creation provenance when initializing a missing session", async () => {
+    const root = await makeCaseDir("openclaw-session-creation-provenance-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:dashboard:created";
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        SessionCreation: {
+          via: "operator",
+          actor: { type: "human", id: "profile-ada" },
+        },
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-ada" },
+      createdAt: expect.any(Number),
+    });
+  });
+
   it("preserves session lineage across an implicit daily stale rollover (#90119)", async () => {
     const root = await makeCaseDir("openclaw-daily-rollover-lineage-");
     const storePath = path.join(root, "sessions.json");

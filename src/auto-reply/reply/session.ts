@@ -35,6 +35,7 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -908,6 +909,8 @@ async function initSessionStateAttemptLocked(
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const creationStamp =
+    !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -948,9 +951,9 @@ async function initSessionStateAttemptLocked(
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
     forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
     forkSource: persistedForkSource ?? baseEntry?.forkSource,
-    createdVia: persistedCreatedVia ?? baseEntry?.createdVia,
-    createdActor: persistedCreatedActor ?? baseEntry?.createdActor,
-    createdAt: persistedCreatedAt ?? baseEntry?.createdAt,
+    createdVia: persistedCreatedVia ?? baseEntry?.createdVia ?? creationStamp?.createdVia,
+    createdActor: persistedCreatedActor ?? baseEntry?.createdActor ?? creationStamp?.createdActor,
+    createdAt: persistedCreatedAt ?? baseEntry?.createdAt ?? creationStamp?.createdAt,
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,

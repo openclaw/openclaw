@@ -9,6 +9,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -214,6 +215,9 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
+    ...(!existingEntry && ctx.SessionCreation
+      ? buildSessionCreationStamp(ctx.SessionCreation)
+      : {}),
     ...(resetTriggered && existingEntry
       ? {
           previousSessionId: existingEntry.sessionId,

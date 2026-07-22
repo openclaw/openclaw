@@ -1371,6 +1371,13 @@ export async function spawnSubagentDirect(
     };
 
     const initialChildSessionPatch: Record<string, unknown> = {
+      spawnedBy: spawnedByKey,
+      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+      // Navigation and control lineage commit with the creation stamp so a
+      // launch failure cannot leave a durable but parentless child row.
+      parentSessionKey: spawnedByKey,
+      ...(spawnedWorkspaceDir ? { spawnedWorkspaceDir } : {}),
+      ...(spawnedCwd ? { spawnedCwd } : {}),
       ...admission.childSessionPatch,
       inheritedToolPolicyVersion: 1,
       ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
@@ -1543,36 +1550,12 @@ export async function spawnSubagentDirect(
       persistentSession: spawnMode === "session",
       task,
     });
-
     const spawnedMetadata = normalizeSpawnedRunMetadata({
       spawnedBy: spawnedByKey,
       ...toolSpawnMetadata,
       workspaceDir: spawnedWorkspaceDir,
     });
-    const spawnLineagePatchError = await patchChildSession({
-      spawnedBy: spawnedByKey,
-      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
-      // Navigation parent is stamped at creation so the durable tree edge does
-      // not depend on the control-lineage field surviving later transitions.
-      parentSessionKey: spawnedByKey,
-      ...(spawnedMetadata.workspaceDir
-        ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir }
-        : {}),
-      ...(spawnedCwd ? { spawnedCwd } : {}),
-    });
-    if (spawnLineagePatchError) {
-      await cleanupFailedSpawnBeforeAgentStart({
-        childSessionKey,
-        attachmentAbsDir,
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
-      });
-      return {
-        status: "error",
-        error: spawnLineagePatchError,
-        childSessionKey,
-      };
-    }
+
     if (childCreationEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,

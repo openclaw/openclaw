@@ -257,8 +257,14 @@ export async function persistAgentSessionPhase(params: {
               entryForPatch?.sessionId === params.entry?.sessionId
                 ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
                 : patchBuild.patch;
+            const previousSessionId = normalizeOptionalString(freshEntry?.sessionId);
+            const nextSessionId = normalizeOptionalString(lifecyclePatch.sessionId);
+            const rotationLineage =
+              previousSessionId && nextSessionId && previousSessionId !== nextSessionId
+                ? { previousSessionId }
+                : {};
             const effectivePatch = freshEntry
-              ? lifecyclePatch
+              ? { ...lifecyclePatch, ...rotationLineage }
               : {
                   ...lifecyclePatch,
                   ...buildSessionCreationStamp(params.creation),

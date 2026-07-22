@@ -432,10 +432,12 @@ export async function recordSqliteInboundSessionMeta(params: {
       }
       const senderId = params.ctx.From?.trim();
       return {
-        ...buildSessionCreationStamp({
-          via: "channel",
-          actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
-        }),
+        ...buildSessionCreationStamp(
+          params.ctx.SessionCreation ?? {
+            via: "channel",
+            actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
+          },
+        ),
         ...metadataPatch,
       };
     },
@@ -483,12 +485,14 @@ export async function updateSqliteSessionLastRoute(params: {
       }
       const senderId = params.ctx?.From?.trim();
       return {
-        ...buildSessionCreationStamp({
-          via: "channel",
-          ...(params.ctx
-            ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
-            : {}),
-        }),
+        ...buildSessionCreationStamp(
+          params.ctx?.SessionCreation ?? {
+            via: "channel",
+            ...(params.ctx
+              ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
+              : {}),
+          },
+        ),
         ...routePatch,
       };
     },

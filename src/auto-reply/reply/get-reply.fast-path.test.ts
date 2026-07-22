@@ -759,6 +759,28 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     );
   });
 
+  it("stamps trusted creation provenance during fast bootstrap", () => {
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        SessionKey: "agent:main:dashboard:created",
+        SessionCreation: {
+          via: "operator",
+          actor: { type: "human", id: "profile-ada" },
+        },
+      }),
+      cfg: { session: { store: "/tmp/sessions.json" } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.sessionEntry).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-ada" },
+      createdAt: expect.any(Number),
+    });
+  });
+
   it("preserves usage footer mode during fast reset bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-usage-"));
     const storePath = path.join(home, "sessions.json");
