@@ -58,7 +58,7 @@ async function createBuiltInQaTransport(
   return undefined;
 }
 
-function requireQaTransportFactory(
+export function requireQaTransportAdapterFactory(
   factories: readonly QaTransportAdapterFactory[],
   context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
 ) {
@@ -67,6 +67,18 @@ function requireQaTransportFactory(
     throw new Error(`no QA transport factory for ${context.driver}:${context.channelId}`);
   }
   return factory;
+}
+
+export function usesContributedQaTransportAdapter(params: {
+  adapterFactories: readonly QaTransportAdapterFactory[] | undefined;
+  channelDriver: string | null | undefined;
+  channelId: string | undefined;
+}) {
+  return (
+    params.channelDriver === "live" &&
+    params.channelId !== undefined &&
+    params.adapterFactories !== undefined
+  );
 }
 
 function createQaTransportAdapterFactoryRegistry(
@@ -80,7 +92,7 @@ function createQaTransportAdapterFactoryRegistry(
         if (builtIn) {
           adapter = builtIn;
         } else {
-          const factory = requireQaTransportFactory(factories, context);
+          const factory = requireQaTransportAdapterFactory(factories, context);
           const definition = await factory.create({
             adapterOptions: context.adapterOptions,
             channelId: context.channelId,

@@ -192,7 +192,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
           commandName: "example",
           adapterFactory: {
             id: "example",
-            maxParallelismPerChannel: 0,
+            maxConcurrentInstancesPerChannel: 0,
             matches: vi.fn(),
             create: vi.fn(),
           },

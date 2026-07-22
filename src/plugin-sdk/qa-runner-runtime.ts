@@ -139,10 +139,10 @@ type QaRunnerTransportAdapterDefinition = {
 type QaRunnerTransportFactory = {
   id: string;
   /**
-   * Maximum same-channel partitions this driver can isolate safely.
+   * Maximum same-channel adapter instances this factory can isolate safely.
    * Defaults to one for credential-backed transports with exclusive state.
    */
-  maxParallelismPerChannel?: number;
+  maxConcurrentInstancesPerChannel?: number;
   matches: (context: { channelId: string; driver: string }) => boolean;
   create: (context: {
     adapterOptions?: QaRunnerAdapterOptions;
@@ -340,9 +340,9 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       if (
         adapterFactory &&
         (adapterFactory.id !== runner.commandName ||
-          (adapterFactory.maxParallelismPerChannel !== undefined &&
-            (!Number.isInteger(adapterFactory.maxParallelismPerChannel) ||
-              adapterFactory.maxParallelismPerChannel < 1)) ||
+          (adapterFactory.maxConcurrentInstancesPerChannel !== undefined &&
+            (!Number.isInteger(adapterFactory.maxConcurrentInstancesPerChannel) ||
+              adapterFactory.maxConcurrentInstancesPerChannel < 1)) ||
           typeof adapterFactory.matches !== "function" ||
           typeof adapterFactory.create !== "function")
       ) {

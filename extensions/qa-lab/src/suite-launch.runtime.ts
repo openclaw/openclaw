@@ -14,6 +14,8 @@ import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
+  requireQaTransportAdapterFactory,
+  usesContributedQaTransportAdapter,
 } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
@@ -70,7 +72,7 @@ type QaSuiteExecutionPlan =
   | {
       kind: "unified";
       scenarios: QaSeedScenarioWithSource[];
-      flowScenarios: QaSeedScenarioWithSource[];
+      flowChannelGroups: QaFlowChannelGroupPlan[];
       testFileScenariosByKind: Map<QaTestFileExecutionKind, QaTestFileScenario[]>;
     };
 
@@ -93,11 +95,16 @@ type QaUnifiedPartitionTask = {
   weight: number;
 };
 
-type QaFlowChannelGroup = {
+type QaFlowChannelGroupPlan = {
+  adapterPlan:
+    | {
+        id: string;
+        maxConcurrentInstancesPerChannel: number;
+      }
+    | undefined;
   channel: string | undefined;
   channelId: string | undefined;
   channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
-  driverFactory: NonNullable<QaSuiteRunParams["adapterFactories"]>[number] | undefined;
   scenarios: QaSeedScenarioWithSource[];
 };
 
@@ -132,25 +139,45 @@ function resolveRequestedScenarios(params: {
   });
 }
 
-async function resolveQaFlowChannelGroups(
+async function resolveQaFlowChannelGroupPlans(
   runParams: QaSuiteRunParams | undefined,
   scenarios: readonly QaSeedScenarioWithSource[],
-): Promise<QaFlowChannelGroup[]> {
+): Promise<QaFlowChannelGroupPlan[]> {
+  if (scenarios.length === 0) {
+    return [];
+  }
   if (runParams?.adapterFactories) {
-    const resolveDriverFactory = (channelId: string | undefined) =>
-      channelId
-        ? runParams.adapterFactories?.find((factory) =>
-            factory.matches({ channelId, driver: runParams.channelDriver ?? "live" }),
-          )
-        : undefined;
+    const resolveAdapterPlan = (channelId: string | undefined) => {
+      if (
+        !channelId ||
+        !usesContributedQaTransportAdapter({
+          adapterFactories: runParams.adapterFactories,
+          channelDriver: runParams.channelDriver,
+          channelId,
+        })
+      ) {
+        return undefined;
+      }
+      const factory = requireQaTransportAdapterFactory(runParams.adapterFactories ?? [], {
+        channelId,
+        driver: runParams.channelDriver ?? "live",
+      });
+      return {
+        id: factory.id,
+        maxConcurrentInstancesPerChannel: Math.max(
+          1,
+          Math.floor(factory.maxConcurrentInstancesPerChannel ?? 1),
+        ),
+      };
+    };
     const explicitChannel = runParams.channelId?.trim().toLowerCase();
     if (explicitChannel) {
       return [
         {
+          adapterPlan: resolveAdapterPlan(explicitChannel),
           channel: explicitChannel,
           channelId: explicitChannel,
           channelDriverSelection: runParams.channelDriverSelection,
-          driverFactory: resolveDriverFactory(explicitChannel),
           scenarios: [...scenarios],
         },
       ];
@@ -163,20 +190,20 @@ async function resolveQaFlowChannelGroups(
       groups.set(channel, group);
     }
     return [...groups].map(([channel, groupedScenarios]) => ({
+      adapterPlan: resolveAdapterPlan(channel),
       channel,
       channelId: channel,
       channelDriverSelection: runParams.channelDriverSelection,
-      driverFactory: resolveDriverFactory(channel),
       scenarios: groupedScenarios,
     }));
   }
   if (runParams?.channelDriver !== "crabline") {
     return [
       {
+        adapterPlan: undefined,
         channel: runParams?.channelId ?? runParams?.channelDriverSelection?.channel,
         channelId: runParams?.channelId,
         channelDriverSelection: runParams?.channelDriverSelection,
-        driverFactory: undefined,
         scenarios: [...scenarios],
       },
     ];
@@ -194,12 +221,12 @@ async function resolveQaFlowChannelGroups(
   if (channels.length === 1 && singleChannel) {
     return [
       {
+        adapterPlan: undefined,
         channel: singleChannel,
         channelId: undefined,
         channelDriverSelection:
           runParams.channelDriverSelection ??
           resolveOpenClawCrablineChannelDriverSelection({ channel: singleChannel }),
-        driverFactory: undefined,
         scenarios: [...scenarios],
       },
     ];
@@ -207,10 +234,10 @@ async function resolveQaFlowChannelGroups(
   // One Crabline process serves one channel. Mixed logical suites therefore
   // launch one flow partition per channel and aggregate them at this owner.
   return channels.map((channel) => ({
+    adapterPlan: undefined,
     channel,
     channelId: undefined,
     channelDriverSelection: resolveOpenClawCrablineChannelDriverSelection({ channel }),
-    driverFactory: undefined,
     scenarios: scenarios.filter(
       (scenario) =>
         (normalizeQaSuiteScenarioChannel(scenario) ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) ===
@@ -240,7 +267,7 @@ async function resolveSuiteExecutionPlan(
     scenarios.push(scenario);
     testFileScenariosByKind.set(scenario.execution.kind, scenarios);
   }
-  const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
+  const channelGroups = (await resolveQaFlowChannelGroupPlans(params, flowScenarios)).filter(
     (group) => group.scenarios.length > 0,
   );
   const requiresFlowPartitions =
@@ -255,7 +282,7 @@ async function resolveSuiteExecutionPlan(
   return {
     kind: "unified",
     scenarios: selectedScenarios,
-    flowScenarios,
+    flowChannelGroups: channelGroups,
     testFileScenariosByKind,
   };
 }
@@ -611,12 +638,9 @@ async function runUnifiedQaSuite(params: {
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
-  if (params.plan.flowScenarios.length > 0) {
-    const channelGroups = (
-      await resolveQaFlowChannelGroups(params.runParams, params.plan.flowScenarios)
-    ).filter((group) => group.scenarios.length > 0);
+  if (params.plan.flowChannelGroups.length > 0) {
     const runFlowSuite = await loadQaFlowSuiteRuntime();
-    for (const channelGroup of channelGroups) {
+    for (const channelGroup of params.plan.flowChannelGroups) {
       const sharedFlowScenarios = channelGroup.scenarios.filter(
         (scenario) => !scenarioRequiresIsolatedQaSuiteWorker(scenario),
       );
@@ -632,23 +656,22 @@ async function runUnifiedQaSuite(params: {
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
         (scenario) => !runtimeScenarioSet.has(scenario),
       );
-      const usesContributedChannelDriver = Boolean(
-        channelGroup.channelId && params.runParams?.adapterFactories,
-      );
-      const driverParallelism = usesContributedChannelDriver
-        ? Math.max(1, Math.floor(channelGroup.driverFactory?.maxParallelismPerChannel ?? 1))
-        : 1;
+      const usesContributedTransportAdapter = channelGroup.adapterPlan !== undefined;
+      const maxConcurrentTransportInstances =
+        channelGroup.adapterPlan?.maxConcurrentInstancesPerChannel ?? 1;
       const sharedFlowPartitions = partitionSharedFlowScenarios(
         sharedFlowScenarios,
-        usesContributedChannelDriver ? Math.min(concurrency, driverParallelism) : concurrency,
+        usesContributedTransportAdapter
+          ? Math.min(concurrency, maxConcurrentTransportInstances)
+          : concurrency,
       );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
-      const channelDriverFlowRequiresExclusiveWorkers = Boolean(
-        channelGroup.channelDriverSelection || usesContributedChannelDriver,
+      const transportFlowRequiresExclusiveWorkers = Boolean(
+        channelGroup.channelDriverSelection || usesContributedTransportAdapter,
       );
-      const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
+      const isolatedFlowConcurrencyLimit = transportFlowRequiresExclusiveWorkers
         ? 1
         : MAX_ISOLATED_FLOW_CONCURRENCY;
       const isolatedFlowConcurrency = Math.min(
@@ -687,19 +710,19 @@ async function runUnifiedQaSuite(params: {
         const isolatedPartition =
           partition.kind === "isolated" || partition.kind.startsWith("isolated-");
         const partitionName = [
-          channelGroups.length > 1 ? channelGroup.channel : undefined,
+          params.plan.flowChannelGroups.length > 1 ? channelGroup.channel : undefined,
           flowPartitions.length > 1 ? partition.kind : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join("-");
         const task = {
-          // Drivers default to one same-channel partition because credentials and Gateway
-          // state are often exclusive. A driver may raise this only when create() fully isolates them.
-          resourceCapacity: channelDriverFlowRequiresExclusiveWorkers
-            ? driverParallelism
+          // Adapter plans default to one same-channel instance because credentials and Gateway
+          // state are often exclusive. Factories may raise this only when create() isolates them.
+          resourceCapacity: transportFlowRequiresExclusiveWorkers
+            ? maxConcurrentTransportInstances
             : undefined,
-          resourceKey: channelDriverFlowRequiresExclusiveWorkers
-            ? `driver:${channelGroup.driverFactory?.id ?? params.runParams?.channelDriver ?? "default"}:channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
+          resourceKey: transportFlowRequiresExclusiveWorkers
+            ? `adapter:${channelGroup.adapterPlan?.id ?? params.runParams?.channelDriver ?? "default"}:channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,
           weight: partition.concurrency,
           run: async () => {

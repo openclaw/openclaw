@@ -44,6 +44,7 @@ import {
   createQaTransportAdapter,
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
+  usesContributedQaTransportAdapter,
   type QaTransportAdapterFactory,
   type QaTransportFactoryContext,
   type QaTransportId,
@@ -135,10 +136,11 @@ async function createQaSuiteTransportAdapter(params: {
   transportId: QaTransportId;
 }) {
   try {
-    const usesLiveAdapter =
-      params.channelDriver === "live" &&
-      params.channelId !== undefined &&
-      params.adapterFactories !== undefined;
+    const usesLiveAdapter = usesContributedQaTransportAdapter({
+      adapterFactories: params.adapterFactories,
+      channelDriver: params.channelDriver,
+      channelId: params.channelId,
+    });
     return await createQaTransportAdapter(
       {
         channelId: params.channelId ?? params.channelDriverSelection?.channel ?? params.transportId,

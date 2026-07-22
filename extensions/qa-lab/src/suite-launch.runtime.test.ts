@@ -152,6 +152,18 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("does not require a contributed factory for the built-in transport", async () => {
+    const result = await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      adapterFactories: [],
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(result.executionKind).toBe("flow");
+    expect(runQaFlowSuite).toHaveBeenCalledOnce();
+  });
+
   it("partitions flow-only suites that request isolated workers", async () => {
     const repoRoot = await makeTempRepo("qa-suite-flow-only-isolated-");
     const result = await runQaSuite({
@@ -220,7 +232,7 @@ describe("qa suite runtime launcher", () => {
     const adapterFactories = [
       {
         id: "portable-driver",
-        matches: vi.fn(),
+        matches: vi.fn(() => true),
         create: vi.fn(),
       },
     ];
@@ -288,7 +300,7 @@ describe("qa suite runtime launcher", () => {
       outputDir: ".artifacts/qa-e2e/pluggable-channel-concurrency",
       providerMode: "mock-openai",
       channelDriver: "live",
-      adapterFactories: [{ id: "portable-driver", matches: vi.fn(), create: vi.fn() }],
+      adapterFactories: [{ id: "portable-driver", matches: vi.fn(() => true), create: vi.fn() }],
       concurrency: 2,
       scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
     });
@@ -296,7 +308,7 @@ describe("qa suite runtime launcher", () => {
     expect(maxActiveChannels).toBe(2);
   });
 
-  it("uses driver-declared parallelism for same-channel partitions", async () => {
+  it("plans same-channel partitions from adapter instance capacity", async () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
     const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
     if (!defaultFlowImplementation) {
@@ -317,6 +329,10 @@ describe("qa suite runtime launcher", () => {
       }
     });
 
+    const matches = vi.fn(
+      ({ channelId, driver }: { channelId: string; driver: string }) =>
+        driver === "live" && channelId === "matrix",
+    );
     await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
@@ -325,8 +341,8 @@ describe("qa suite runtime launcher", () => {
       adapterFactories: [
         {
           id: "matrix",
-          maxParallelismPerChannel: 2,
-          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+          maxConcurrentInstancesPerChannel: 2,
+          matches,
           create: vi.fn(),
         },
       ],
@@ -345,13 +361,14 @@ describe("qa suite runtime launcher", () => {
       ["matrix-approval-deny-reaction", "matrix-approval-exec-metadata-single-event"],
     ]);
     expect(maxActivePartitions).toBe(2);
+    expect(matches).toHaveBeenCalledOnce();
   });
 
   it("binds one portable channel scenario without an explicit channel override", async () => {
     const adapterFactories = [
       {
         id: "portable-driver",
-        matches: vi.fn(),
+        matches: vi.fn(() => true),
         create: vi.fn(),
       },
     ];
@@ -550,6 +567,9 @@ describe("qa suite runtime launcher", () => {
     const result = await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/scenario-test",
+      channelDriver: "live",
+      channelId: "matrix",
+      adapterFactories: [],
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
 
