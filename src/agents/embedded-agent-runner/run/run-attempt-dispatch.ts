@@ -73,6 +73,7 @@ type AttemptControl = {
   laneTaskAbortController: AbortController;
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
+  registerLaneTimeoutMcpLease: (handle: { dispose(): Promise<void> }) => void;
   onToolOutcome: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
@@ -306,6 +307,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
         control.laneTaskAbortController.abort();
       }
     },
+    ...(control.pluginHarnessOwnsTransport
+      ? {}
+      : { onBundleMcpLeaseAcquired: control.registerLaneTimeoutMcpLease }),
     replyOperation: params.replyOperation,
     shouldEmitToolResult: params.shouldEmitToolResult,
     shouldEmitToolOutput: params.shouldEmitToolOutput,

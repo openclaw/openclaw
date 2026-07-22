@@ -3,7 +3,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   buildBundleMcpToolsFromCatalog,
@@ -252,6 +252,85 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
+    });
+  });
+
+  it("rejects new MCP tool, resource, and prompt calls after the run lease is disposed", async () => {
+    const base = makeToolRuntime({ serverName: "knowledge" });
+    const catalog = await base.getCatalog();
+    const callTool = vi.fn(base.callTool);
+    const listResources = vi.fn(async () => [{ uri: "memo://one", name: "memo" }]);
+    const readResource = vi.fn(async (_serverName: string, uri: string) => ({
+      contents: [{ uri, text: "memo text" }],
+    }));
+    const listPrompts = vi.fn(async () => [{ name: "brief" }]);
+    const getPrompt = vi.fn(async (_serverName: string, name: string) => ({ name }));
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: {
+        ...base,
+        getCatalog: async () => ({
+          ...catalog,
+          servers: {
+            knowledge: {
+              ...catalog.servers.knowledge,
+              resources: { listChanged: true },
+              prompts: { listChanged: true },
+            },
+          },
+        }),
+        callTool,
+        listResources,
+        readResource,
+        listPrompts,
+        getPrompt,
+      },
+    });
+
+    await runtime.dispose();
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["knowledge__bundle_probe", {}],
+      ["knowledge__resources_list", {}],
+      ["knowledge__resources_read", { uri: "memo://one" }],
+      ["knowledge__prompts_list", {}],
+      ["knowledge__prompts_get", { name: "brief" }],
+    ];
+    for (const [name, input] of calls) {
+      const tool = expectDefined(
+        runtime.tools.find((candidate) => candidate.name === name),
+        `${name} test invariant`,
+      );
+      await expect(
+        tool.execute(`call-after-dispose-${name}`, input, undefined, undefined),
+      ).rejects.toMatchObject({ name: "BundleMcpRunLeaseDisposedError" });
+    }
+    expect(callTool).not.toHaveBeenCalled();
+    expect(listResources).not.toHaveBeenCalled();
+    expect(readResource).not.toHaveBeenCalled();
+    expect(listPrompts).not.toHaveBeenCalled();
+    expect(getPrompt).not.toHaveBeenCalled();
+  });
+
+  it("allows an MCP tool call already in flight to settle after run lease disposal", async () => {
+    let resolveCall: ((result: CallToolResult) => void) | undefined;
+    const pendingCall = new Promise<CallToolResult>((resolve) => {
+      resolveCall = resolve;
+    });
+    const sessionRuntime = makeToolRuntime();
+    sessionRuntime.callTool = vi.fn(() => pendingCall);
+    const runtime = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+
+    const execution = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-already-in-flight",
+      {},
+      undefined,
+      undefined,
+    );
+    expect(sessionRuntime.callTool).toHaveBeenCalledOnce();
+
+    await runtime.dispose();
+    resolveCall?.({ content: [{ type: "text", text: "settled" }], isError: false });
+    await expect(execution).resolves.toMatchObject({
+      content: [{ type: "text", text: "settled" }],
     });
   });
 

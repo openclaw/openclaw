@@ -404,20 +404,54 @@ export function buildBundleMcpToolsFromCatalog(params: {
   return tools;
 }
 
+export class BundleMcpRunLeaseDisposedError extends Error {
+  constructor(sessionId: string) {
+    super(`bundle-mcp run lease disposed for session ${sessionId}`);
+    this.name = "BundleMcpRunLeaseDisposedError";
+  }
+}
+
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
+  onLeaseAcquired?: (handle: Pick<BundleMcpToolRuntime, "dispose">) => void;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   const releaseLease = params.runtime.acquireLease?.();
+  const dispose = async () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    // Reset/delete can request retirement while this run owns the lease.
+    // Dispose as soon as the final run, view, or other independent lease has released.
+    await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
+    await params.disposeRuntime?.();
+  };
+  const assertLeaseActive = () => {
+    if (disposed) {
+      throw new BundleMcpRunLeaseDisposedError(params.runtime.sessionId);
+    }
+  };
+  try {
+    // Register immediately after acquisition: catalog discovery can itself hang,
+    // so waiting for materialization would leave the run lease unreachable.
+    params.onLeaseAcquired?.({ dispose });
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
   params.runtime.markUsed();
   let catalog;
   try {
     catalog = await params.runtime.getCatalog();
+    // A lane timeout can revoke the run lease while catalog startup is still
+    // pending. Never return tools whose owning run was already abandoned.
+    assertLeaseActive();
   } catch (error) {
-    await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
+    await dispose();
     throw error;
   }
   const reservedToolNames = params.reservedToolNames
@@ -427,6 +461,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     catalog,
     reservedToolNames,
     createExecute: (tool) => async (toolCallId: string, input: unknown) => {
+      assertLeaseActive();
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
       const agentResult = toAgentToolResult({
@@ -464,6 +499,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     },
     createResourceListExecute: params.runtime.listResources
       ? (serverName) => async () => {
+          assertLeaseActive();
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
@@ -474,6 +510,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
     createResourceReadExecute: params.runtime.readResource
       ? (serverName) => async (_toolCallId: string, input: unknown) => {
+          assertLeaseActive();
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
@@ -484,6 +521,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
     createPromptListExecute: params.runtime.listPrompts
       ? (serverName) => async () => {
+          assertLeaseActive();
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
@@ -494,6 +532,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
     createPromptGetExecute: params.runtime.getPrompt
       ? (serverName) => async (_toolCallId: string, input: unknown) => {
+          assertLeaseActive();
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
@@ -532,16 +571,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       }
       allowedAppToolsByServer = next;
     },
-    dispose: async () => {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      // Reset/delete can request retirement while this run owns the lease.
-      // Dispose as soon as the final run, view, or request lease has released.
-      await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
-      await params.disposeRuntime?.();
-    },
+    dispose,
   };
 }
 

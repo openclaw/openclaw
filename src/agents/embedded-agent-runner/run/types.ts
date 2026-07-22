@@ -148,6 +148,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  /** OpenClaw-host cleanup handle registered as soon as the run-owned MCP lease is acquired. */
+  onBundleMcpLeaseAcquired?: (handle: { dispose(): Promise<void> }) => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;

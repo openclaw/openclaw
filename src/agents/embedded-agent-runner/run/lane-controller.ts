@@ -8,6 +8,7 @@ import {
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../../process/command-queue.types.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
+import { log } from "../logger.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
@@ -36,6 +37,8 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(initialParams.timeoutMs);
   const laneTaskAbortController = new AbortController();
   const laneTaskReleaseController = new AbortController();
+  let laneTimeoutMcpLease: { dispose(): Promise<void> } | undefined;
+  let laneTimeoutReached = false;
   let laneTaskProgressAtMs = Date.now();
 
   const noteLaneTaskProgress = () => {
@@ -57,6 +60,36 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     abortError.name = "AbortError";
     throw abortError;
   };
+  const disposeMcpLeaseHandle = (handle: { dispose(): Promise<void> }) => {
+    // Materialized runtime disposal releases only this attempt's run lease.
+    // Independent MCP leases keep their own owners and lifetimes.
+    const logCleanupError = (error: unknown) => {
+      const params = options.getParams();
+      log.warn(
+        `bundle-mcp lane-timeout lease cleanup failed: runId=${params.runId} sessionId=${params.sessionId} error=${String(error)}`,
+      );
+    };
+    try {
+      void handle.dispose().catch(logCleanupError);
+    } catch (error) {
+      logCleanupError(error);
+    }
+  };
+  const registerLaneTimeoutMcpLease = (handle: { dispose(): Promise<void> }) => {
+    if (laneTimeoutReached) {
+      disposeMcpLeaseHandle(handle);
+      return;
+    }
+    laneTimeoutMcpLease = handle;
+  };
+  const disposeLaneTimeoutMcpLease = () => {
+    laneTimeoutReached = true;
+    const handle = laneTimeoutMcpLease;
+    laneTimeoutMcpLease = undefined;
+    if (handle) {
+      disposeMcpLeaseHandle(handle);
+    }
+  };
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
     withEmbeddedRunLaneTimeout(
       {
@@ -65,6 +98,13 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         taskTimeoutAbortSignal: laneTaskAbortController.signal,
         taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
         taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
+        onTaskTimeout: () => {
+          try {
+            opts?.onTaskTimeout?.();
+          } finally {
+            disposeLaneTimeoutMcpLease();
+          }
+        },
       },
       laneTaskTimeoutMs,
     );
@@ -187,6 +227,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     laneTaskAbortController,
     laneTaskReleaseController,
     noteLaneTaskProgress,
+    registerLaneTimeoutMcpLease,
     throwIfAborted,
   };
 }

@@ -21,7 +21,7 @@ import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
@@ -835,6 +835,56 @@ describe("session MCP runtime", () => {
     await materialized.dispose();
 
     expect(activeLeases).toBe(0);
+  });
+
+  it("rejects pending catalog materialization after its run lease is disposed", async () => {
+    let activeLeases = 0;
+    const releaseLease = vi.fn(() => {
+      activeLeases -= 1;
+    });
+    const baseRuntime = makeRuntime([
+      { toolName: "bundle_probe", description: "Bundle MCP probe" },
+    ]);
+    const catalog = await baseRuntime.getCatalog();
+    let resolveCatalog: ((value: McpToolCatalog) => void) | undefined;
+    const pendingCatalog = new Promise<McpToolCatalog>((resolve) => {
+      resolveCatalog = resolve;
+    });
+    const runtime = {
+      ...baseRuntime,
+      acquireLease: () => {
+        activeLeases += 1;
+        return releaseLease;
+      },
+      getCatalog: () => pendingCatalog,
+    };
+    let timeoutHandle: { dispose(): Promise<void> } | undefined;
+    let exposedTools: unknown;
+
+    const materializing = materializeBundleMcpToolsForRun({
+      runtime,
+      onLeaseAcquired: (handle) => {
+        timeoutHandle = handle;
+      },
+    }).then((materialized) => {
+      exposedTools = materialized.tools;
+      return materialized;
+    });
+
+    expect(timeoutHandle).toBeDefined();
+    expect(activeLeases).toBe(1);
+    await timeoutHandle?.dispose();
+    await timeoutHandle?.dispose();
+    expect(activeLeases).toBe(0);
+    expect(releaseLease).toHaveBeenCalledOnce();
+
+    const rejected = expect(materializing).rejects.toMatchObject({
+      name: "BundleMcpRunLeaseDisposedError",
+    });
+    resolveCatalog?.(catalog);
+    await rejected;
+    expect(exposedTools).toBeUndefined();
+    expect(releaseLease).toHaveBeenCalledOnce();
   });
 
   it("releases a runtime lease when catalog materialization fails", async () => {
@@ -2136,6 +2186,34 @@ process.on("SIGINT", shutdown);`,
 
     await materialized.dispose();
     expect(testing.getCachedSessionIds()).not.toContain("session-run-lease");
+  });
+
+  it("releases only the materialized run lease while an independent lease stays active", async () => {
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-run-with-independent-lease",
+      sessionKey: "agent:test:session-run-with-independent-lease",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { sessionIdleTtlMs: 0 } },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const releaseIndependentLease = runtime.acquireLease?.();
+
+    await expect(
+      retireSessionMcpRuntime({
+        sessionId: "session-run-with-independent-lease",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(runtime.activeLeases).toBe(2);
+
+    await materialized.dispose();
+    expect(runtime.activeLeases).toBe(1);
+    expect(testing.getCachedSessionIds()).toContain("session-run-with-independent-lease");
+
+    releaseIndependentLease?.();
+    await completeDeferredSessionMcpRuntimeRetirement(runtime);
+    expect(testing.getCachedSessionIds()).not.toContain("session-run-with-independent-lease");
   });
 
   it("keeps an active MCP child and its database lock until deferred retirement completes", async () => {

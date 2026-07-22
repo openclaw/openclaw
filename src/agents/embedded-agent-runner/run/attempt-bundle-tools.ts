@@ -98,6 +98,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpSessionRuntime
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
+        onLeaseAcquired: params.attempt.onBundleMcpLeaseAcquired,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),

@@ -636,11 +636,18 @@ describe("command queue", () => {
     vi.useFakeTimers();
     try {
       const releaseController = new AbortController();
+      const abortController = new AbortController();
+      const events: string[] = [];
       const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
         taskTimeoutMs: 48 * 60 * 60 * 1000,
         taskTimeoutProgressAtMs: () => Date.now(),
+        taskTimeoutAbortSignal: abortController.signal,
         taskTimeoutAbortGraceMs: 25,
         taskTimeoutReleaseSignal: releaseController.signal,
+        onTaskTimeout: () => {
+          events.push("cleanup");
+          throw new Error("cleanup failed");
+        },
       });
       const firstRejected = expect(first).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
@@ -651,15 +658,23 @@ describe("command queue", () => {
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
         secondRan = true;
+        events.push("second");
         return "second";
       });
 
+      abortController.abort();
       releaseController.abort();
       await vi.advanceTimersByTimeAsync(0);
 
       await firstRejected;
       await expect(second).resolves.toBe("second");
       expect(secondRan).toBe(true);
+      expect(events).toEqual(["cleanup", "second"]);
+      expect(
+        diagnosticMocks.diag.warn.mock.calls.some(([message]) =>
+          String(message).includes("lane task timeout cleanup failed"),
+        ),
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }
