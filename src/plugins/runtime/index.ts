@@ -32,6 +32,7 @@ import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeTalk } from "./runtime-talk.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
@@ -325,6 +326,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
     system: createRuntimeSystem(),
+    talk: createRuntimeTalk(),
     media: createRuntimeMedia(),
     webSearch: {
       listProviders: listWebSearchProviders,

@@ -159,8 +159,8 @@ describe("realtime voice agent talkback queue", () => {
       question: "guest",
       responseStyle: "brief",
     });
-    expect(deliver).toHaveBeenCalledWith("owner-answer");
-    expect(deliver).toHaveBeenCalledWith("guest-answer");
+    expect(deliver).toHaveBeenCalledWith("owner-answer", { senderIsOwner: true });
+    expect(deliver).toHaveBeenCalledWith("guest-answer", { senderIsOwner: false });
   });
 
   it("delivers fallback text when consult fails", async () => {
