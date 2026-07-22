@@ -132,7 +132,12 @@ describe("plugin-sdk qa-runner-runtime", () => {
 
   it("returns activated runner registrations declared in plugin manifests", async () => {
     const register = vi.fn((qa: Command) => qa);
-    const adapterFactory = { id: "example", matches: vi.fn(), create: vi.fn() };
+    const adapterFactory = {
+      id: "example",
+      isolatesInstances: true,
+      matches: vi.fn(),
+      create: vi.fn(),
+    };
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
@@ -172,40 +177,6 @@ describe("plugin-sdk qa-runner-runtime", () => {
       dirName: "qa-example",
       artifactBasename: "runtime-api.js",
     });
-  });
-
-  it("rejects invalid same-channel transport parallelism", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "qa-example",
-          origin: "bundled",
-          qaRunners: [{ commandName: "example" }],
-          rootDir: "/tmp/qa-example",
-        },
-      ],
-      diagnostics: [],
-    });
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      qaRunnerCliRegistrations: [
-        {
-          commandName: "example",
-          adapterFactory: {
-            id: "example",
-            maxConcurrentInstancesPerChannel: 0,
-            matches: vi.fn(),
-            create: vi.fn(),
-          },
-          register: vi.fn(),
-        },
-      ],
-    });
-
-    const module = await import("./qa-runner-runtime.js");
-
-    expect(() => module.listQaRunnerCliContributions()).toThrow(
-      'QA runner plugin "qa-example" exported an invalid transport factory for "example"',
-    );
   });
 
   it("reports declared runners as blocked when the plugin is present but not activated", async () => {

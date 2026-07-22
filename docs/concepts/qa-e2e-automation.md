@@ -1195,9 +1195,8 @@ The minimum adoption bar for a new channel:
    runner execution should stay behind separate entrypoints. An optional
    `adapterFactory` exposes the transport to shared scenarios without changing
    the command's existing scenario catalog. Same-channel partitions are serial
-   by default. A factory may set `maxConcurrentInstancesPerChannel` above one
-   only when every `create()` call owns isolated credentials or disposable
-   servers, Gateway state, and artifact paths.
+   unless the factory declares that every instance owns isolated credentials or
+   disposable servers, Gateway state, and artifact paths.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.

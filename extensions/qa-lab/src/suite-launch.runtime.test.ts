@@ -49,6 +49,28 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
   return evidence;
 }
 
+function trackMaxActiveFlowRuns() {
+  const run = runQaFlowSuite.getMockImplementation();
+  if (!run) {
+    throw new Error("expected default QA flow suite mock implementation");
+  }
+  let active = 0;
+  let maxActive = 0;
+  runQaFlowSuite.mockImplementation(async (params) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    try {
+      return await run(params);
+    } finally {
+      active -= 1;
+    }
+  });
+  return () => maxActive;
+}
+
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
@@ -152,18 +174,6 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
-  it("does not require a contributed factory for the built-in transport", async () => {
-    const result = await runQaSuite({
-      repoRoot: process.cwd(),
-      providerMode: "mock-openai",
-      adapterFactories: [],
-      scenarioIds: ["channel-chat-baseline"],
-    });
-
-    expect(result.executionKind).toBe("flow");
-    expect(runQaFlowSuite).toHaveBeenCalledOnce();
-  });
-
   it("partitions flow-only suites that request isolated workers", async () => {
     const repoRoot = await makeTempRepo("qa-suite-flow-only-isolated-");
     const result = await runQaSuite({
@@ -232,7 +242,7 @@ describe("qa suite runtime launcher", () => {
     const adapterFactories = [
       {
         id: "portable-driver",
-        matches: vi.fn(() => true),
+        matches: vi.fn(),
         create: vi.fn(),
       },
     ];
@@ -276,63 +286,33 @@ describe("qa suite runtime launcher", () => {
 
   it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-channel-concurrency-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
-    let activeChannels = 0;
-    let maxActiveChannels = 0;
-    runQaFlowSuite.mockImplementation(async (params) => {
-      activeChannels += 1;
-      maxActiveChannels = Math.max(maxActiveChannels, activeChannels);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1);
-      });
-      try {
-        return await defaultFlowImplementation(params);
-      } finally {
-        activeChannels -= 1;
-      }
-    });
+    const maxActive = trackMaxActiveFlowRuns();
 
     await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/pluggable-channel-concurrency",
       providerMode: "mock-openai",
       channelDriver: "live",
-      adapterFactories: [{ id: "portable-driver", matches: vi.fn(() => true), create: vi.fn() }],
+      adapterFactories: [{ id: "portable-driver", matches: vi.fn(), create: vi.fn() }],
       concurrency: 2,
       scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
     });
 
-    expect(maxActiveChannels).toBe(2);
+    expect(maxActive()).toBe(2);
   });
 
-  it("plans same-channel partitions from adapter instance capacity", async () => {
+  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
-    let activePartitions = 0;
-    let maxActivePartitions = 0;
-    runQaFlowSuite.mockImplementation(async (params) => {
-      activePartitions += 1;
-      maxActivePartitions = Math.max(maxActivePartitions, activePartitions);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1);
-      });
-      try {
-        return await defaultFlowImplementation(params);
-      } finally {
-        activePartitions -= 1;
-      }
-    });
+    const maxActive = trackMaxActiveFlowRuns();
 
-    const matches = vi.fn(
-      ({ channelId, driver }: { channelId: string; driver: string }) =>
-        driver === "live" && channelId === "matrix",
-    );
+    const scenarioIds = [
+      "matrix-approval-channel-target-both",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-thread-target",
+    ];
     await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
@@ -341,34 +321,27 @@ describe("qa suite runtime launcher", () => {
       adapterFactories: [
         {
           id: "matrix",
-          maxConcurrentInstancesPerChannel: 2,
-          matches,
+          isolatesInstances: true,
+          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
           create: vi.fn(),
         },
       ],
-      concurrency: 2,
-      scenarioIds: [
-        "matrix-approval-channel-target-both",
-        "matrix-approval-deny-reaction",
-        "matrix-approval-exec-metadata-chunked",
-        "matrix-approval-exec-metadata-single-event",
-      ],
+      concurrency: 6,
+      scenarioIds,
     });
 
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
-    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
-      ["matrix-approval-channel-target-both", "matrix-approval-exec-metadata-chunked"],
-      ["matrix-approval-deny-reaction", "matrix-approval-exec-metadata-single-event"],
-    ]);
-    expect(maxActivePartitions).toBe(2);
-    expect(matches).toHaveBeenCalledOnce();
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
+      scenarioIds.map((scenarioId) => [scenarioId]),
+    );
+    expect(maxActive()).toBe(6);
   });
 
   it("binds one portable channel scenario without an explicit channel override", async () => {
     const adapterFactories = [
       {
         id: "portable-driver",
-        matches: vi.fn(() => true),
+        matches: vi.fn(),
         create: vi.fn(),
       },
     ];
@@ -567,9 +540,6 @@ describe("qa suite runtime launcher", () => {
     const result = await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/scenario-test",
-      channelDriver: "live",
-      channelId: "matrix",
-      adapterFactories: [],
       scenarioIds: ["control-ui-chat-flow-playwright"],
     });
 

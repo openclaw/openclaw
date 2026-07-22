@@ -14,8 +14,6 @@ import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
-  requireQaTransportAdapterFactory,
-  usesContributedQaTransportAdapter,
 } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
@@ -72,7 +70,7 @@ type QaSuiteExecutionPlan =
   | {
       kind: "unified";
       scenarios: QaSeedScenarioWithSource[];
-      flowChannelGroups: QaFlowChannelGroupPlan[];
+      flowScenarios: QaSeedScenarioWithSource[];
       testFileScenariosByKind: Map<QaTestFileExecutionKind, QaTestFileScenario[]>;
     };
 
@@ -89,22 +87,16 @@ type QaUnifiedPartitionResult = {
 };
 
 type QaUnifiedPartitionTask = {
-  resourceCapacity?: number;
-  resourceKey?: string;
+  exclusiveKey?: string;
   run: () => Promise<QaUnifiedPartitionResult>;
   weight: number;
 };
 
-type QaFlowChannelGroupPlan = {
-  adapterPlan:
-    | {
-        id: string;
-        maxConcurrentInstancesPerChannel: number;
-      }
-    | undefined;
+type QaFlowChannelGroup = {
   channel: string | undefined;
   channelId: string | undefined;
   channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
+  isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
 
@@ -139,45 +131,29 @@ function resolveRequestedScenarios(params: {
   });
 }
 
-async function resolveQaFlowChannelGroupPlans(
+async function resolveQaFlowChannelGroups(
   runParams: QaSuiteRunParams | undefined,
   scenarios: readonly QaSeedScenarioWithSource[],
-): Promise<QaFlowChannelGroupPlan[]> {
-  if (scenarios.length === 0) {
-    return [];
-  }
+): Promise<QaFlowChannelGroup[]> {
   if (runParams?.adapterFactories) {
-    const resolveAdapterPlan = (channelId: string | undefined) => {
-      if (
-        !channelId ||
-        !usesContributedQaTransportAdapter({
-          adapterFactories: runParams.adapterFactories,
-          channelDriver: runParams.channelDriver,
-          channelId,
-        })
-      ) {
-        return undefined;
+    const isolatesInstances = (channelId: string | undefined) => {
+      if (!channelId || runParams.channelDriver !== "live") {
+        return false;
       }
-      const factory = requireQaTransportAdapterFactory(runParams.adapterFactories ?? [], {
-        channelId,
-        driver: runParams.channelDriver ?? "live",
-      });
-      return {
-        id: factory.id,
-        maxConcurrentInstancesPerChannel: Math.max(
-          1,
-          Math.floor(factory.maxConcurrentInstancesPerChannel ?? 1),
-        ),
-      };
+      return (
+        runParams.adapterFactories?.find((factory) =>
+          factory.matches({ channelId, driver: "live" }),
+        )?.isolatesInstances === true
+      );
     };
     const explicitChannel = runParams.channelId?.trim().toLowerCase();
     if (explicitChannel) {
       return [
         {
-          adapterPlan: resolveAdapterPlan(explicitChannel),
           channel: explicitChannel,
           channelId: explicitChannel,
           channelDriverSelection: runParams.channelDriverSelection,
+          isolatesAdapterInstances: isolatesInstances(explicitChannel),
           scenarios: [...scenarios],
         },
       ];
@@ -190,17 +166,16 @@ async function resolveQaFlowChannelGroupPlans(
       groups.set(channel, group);
     }
     return [...groups].map(([channel, groupedScenarios]) => ({
-      adapterPlan: resolveAdapterPlan(channel),
       channel,
       channelId: channel,
       channelDriverSelection: runParams.channelDriverSelection,
+      isolatesAdapterInstances: isolatesInstances(channel),
       scenarios: groupedScenarios,
     }));
   }
   if (runParams?.channelDriver !== "crabline") {
     return [
       {
-        adapterPlan: undefined,
         channel: runParams?.channelId ?? runParams?.channelDriverSelection?.channel,
         channelId: runParams?.channelId,
         channelDriverSelection: runParams?.channelDriverSelection,
@@ -221,7 +196,6 @@ async function resolveQaFlowChannelGroupPlans(
   if (channels.length === 1 && singleChannel) {
     return [
       {
-        adapterPlan: undefined,
         channel: singleChannel,
         channelId: undefined,
         channelDriverSelection:
@@ -234,7 +208,6 @@ async function resolveQaFlowChannelGroupPlans(
   // One Crabline process serves one channel. Mixed logical suites therefore
   // launch one flow partition per channel and aggregate them at this owner.
   return channels.map((channel) => ({
-    adapterPlan: undefined,
     channel,
     channelId: undefined,
     channelDriverSelection: resolveOpenClawCrablineChannelDriverSelection({ channel }),
@@ -267,7 +240,7 @@ async function resolveSuiteExecutionPlan(
     scenarios.push(scenario);
     testFileScenariosByKind.set(scenario.execution.kind, scenarios);
   }
-  const channelGroups = (await resolveQaFlowChannelGroupPlans(params, flowScenarios)).filter(
+  const channelGroups = (await resolveQaFlowChannelGroups(params, flowScenarios)).filter(
     (group) => group.scenarios.length > 0,
   );
   const requiresFlowPartitions =
@@ -282,7 +255,7 @@ async function resolveSuiteExecutionPlan(
   return {
     kind: "unified",
     scenarios: selectedScenarios,
-    flowChannelGroups: channelGroups,
+    flowScenarios,
     testFileScenariosByKind,
   };
 }
@@ -338,10 +311,11 @@ function flowSuitePartitionOutputDir(outputDir: string, partition: string) {
 function partitionSharedFlowScenarios(
   scenarios: readonly QaSeedScenarioWithSource[],
   concurrency: number,
+  maxPartitions = MAX_SHARED_FLOW_PARTITIONS,
 ) {
   const partitionCount = Math.min(
     Math.max(1, Math.floor(concurrency)),
-    MAX_SHARED_FLOW_PARTITIONS,
+    Math.max(1, Math.floor(maxPartitions)),
     scenarios.length,
   );
   const partitions = Array.from({ length: partitionCount }, (): QaSeedScenarioWithSource[] => []);
@@ -365,7 +339,7 @@ async function runWeightedUnifiedPartitionTasks(
   const limit = Math.max(1, Math.floor(maxWeight));
   const results: QaUnifiedPartitionResult[] = [];
   const pending = tasks.map((task, index) => ({ index, task }));
-  const activeResourceCounts = new Map<string, number>();
+  const activeExclusiveKeys = new Set<string>();
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     let firstError: Error | undefined;
@@ -391,9 +365,7 @@ async function runWeightedUnifiedPartitionTasks(
           const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
           return (
             (activeWeight === 0 || activeWeight + taskWeight <= limit) &&
-            (!task.resourceKey ||
-              (activeResourceCounts.get(task.resourceKey) ?? 0) <
-                Math.max(1, Math.floor(task.resourceCapacity ?? 1)))
+            (!task.exclusiveKey || !activeExclusiveKeys.has(task.exclusiveKey))
           );
         });
         if (pendingIndex === -1) {
@@ -406,28 +378,16 @@ async function runWeightedUnifiedPartitionTasks(
         const { index, task } = pendingTask;
         const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
         activeWeight += taskWeight;
-        if (task.resourceKey) {
-          activeResourceCounts.set(
-            task.resourceKey,
-            (activeResourceCounts.get(task.resourceKey) ?? 0) + 1,
-          );
+        if (task.exclusiveKey) {
+          activeExclusiveKeys.add(task.exclusiveKey);
         }
-        const releaseResource = () => {
-          if (!task.resourceKey) {
-            return;
-          }
-          const remaining = (activeResourceCounts.get(task.resourceKey) ?? 1) - 1;
-          if (remaining > 0) {
-            activeResourceCounts.set(task.resourceKey, remaining);
-          } else {
-            activeResourceCounts.delete(task.resourceKey);
-          }
-        };
         task.run().then(
           (result) => {
             results[index] = result;
             activeWeight -= taskWeight;
-            releaseResource();
+            if (task.exclusiveKey) {
+              activeExclusiveKeys.delete(task.exclusiveKey);
+            }
             if (pending.length === 0 && activeWeight === 0) {
               finishIfSettled();
               return;
@@ -437,7 +397,9 @@ async function runWeightedUnifiedPartitionTasks(
           (error: unknown) => {
             firstError = error instanceof Error ? error : new Error(String(error));
             activeWeight -= taskWeight;
-            releaseResource();
+            if (task.exclusiveKey) {
+              activeExclusiveKeys.delete(task.exclusiveKey);
+            }
             finishIfSettled();
           },
         );
@@ -638,9 +600,12 @@ async function runUnifiedQaSuite(params: {
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
-  if (params.plan.flowChannelGroups.length > 0) {
+  if (params.plan.flowScenarios.length > 0) {
+    const channelGroups = (
+      await resolveQaFlowChannelGroups(params.runParams, params.plan.flowScenarios)
+    ).filter((group) => group.scenarios.length > 0);
     const runFlowSuite = await loadQaFlowSuiteRuntime();
-    for (const channelGroup of params.plan.flowChannelGroups) {
+    for (const channelGroup of channelGroups) {
       const sharedFlowScenarios = channelGroup.scenarios.filter(
         (scenario) => !scenarioRequiresIsolatedQaSuiteWorker(scenario),
       );
@@ -656,22 +621,28 @@ async function runUnifiedQaSuite(params: {
       const ordinaryIsolatedFlowScenarios = isolatedFlowScenarios.filter(
         (scenario) => !runtimeScenarioSet.has(scenario),
       );
-      const usesContributedTransportAdapter = channelGroup.adapterPlan !== undefined;
-      const maxConcurrentTransportInstances =
-        channelGroup.adapterPlan?.maxConcurrentInstancesPerChannel ?? 1;
+      const channelId = channelGroup.channelId;
+      const usesContributedChannelDriver = Boolean(
+        channelId &&
+        params.runParams?.channelDriver === "live" &&
+        params.runParams.adapterFactories?.find((factory) =>
+          factory.matches({ channelId, driver: "live" }),
+        ),
+      );
+      // Isolated adapters may use the caller's full suite budget; every partition
+      // still has weight one in the global scheduler below.
       const sharedFlowPartitions = partitionSharedFlowScenarios(
         sharedFlowScenarios,
-        usesContributedTransportAdapter
-          ? Math.min(concurrency, maxConcurrentTransportInstances)
-          : concurrency,
+        usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances ? 1 : concurrency,
+        channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
       );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
-      const transportFlowRequiresExclusiveWorkers = Boolean(
-        channelGroup.channelDriverSelection || usesContributedTransportAdapter,
-      );
-      const isolatedFlowConcurrencyLimit = transportFlowRequiresExclusiveWorkers
+      const channelDriverFlowRequiresExclusiveWorkers =
+        Boolean(channelGroup.channelDriverSelection || usesContributedChannelDriver) &&
+        !channelGroup.isolatesAdapterInstances;
+      const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
         : MAX_ISOLATED_FLOW_CONCURRENCY;
       const isolatedFlowConcurrency = Math.min(
@@ -710,19 +681,16 @@ async function runUnifiedQaSuite(params: {
         const isolatedPartition =
           partition.kind === "isolated" || partition.kind.startsWith("isolated-");
         const partitionName = [
-          params.plan.flowChannelGroups.length > 1 ? channelGroup.channel : undefined,
+          channelGroups.length > 1 ? channelGroup.channel : undefined,
           flowPartitions.length > 1 ? partition.kind : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join("-");
         const task = {
-          // Adapter plans default to one same-channel instance because credentials and Gateway
-          // state are often exclusive. Factories may raise this only when create() isolates them.
-          resourceCapacity: transportFlowRequiresExclusiveWorkers
-            ? maxConcurrentTransportInstances
-            : undefined,
-          resourceKey: transportFlowRequiresExclusiveWorkers
-            ? `adapter:${channelGroup.adapterPlan?.id ?? params.runParams?.channelDriver ?? "default"}:channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
+          // One channel's credential and Gateway state stay serial unless each adapter create()
+          // owns an isolated runtime. Distinct channels may always run together.
+          exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
+            ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,
           weight: partition.concurrency,
           run: async () => {

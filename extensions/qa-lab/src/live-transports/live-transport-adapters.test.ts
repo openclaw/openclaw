@@ -56,11 +56,11 @@ const factories = [
 
 describe("live transport adapter factories", () => {
   it("opts only the disposable Matrix adapter into same-channel parallelism", () => {
-    expect(matrixQaAdapterFactory.maxConcurrentInstancesPerChannel).toBe(2);
-    expect(discordQaAdapterFactory.maxConcurrentInstancesPerChannel).toBeUndefined();
-    expect(slackQaAdapterFactory.maxConcurrentInstancesPerChannel).toBeUndefined();
-    expect(telegramQaAdapterFactory.maxConcurrentInstancesPerChannel).toBeUndefined();
-    expect(whatsappQaAdapterFactory.maxConcurrentInstancesPerChannel).toBeUndefined();
+    expect(matrixQaAdapterFactory.isolatesInstances).toBe(true);
+    expect(discordQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(slackQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(telegramQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(whatsappQaAdapterFactory.isolatesInstances).toBeUndefined();
   });
 
   it("selects Slack generic defaults from the YAML adapter profile", () => {
