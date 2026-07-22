@@ -41,6 +41,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const CRITICAL_THRESHOLD = 20;
+const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -282,7 +283,7 @@ describe("before_tool_call loop detection behavior", () => {
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
-      detector: "ping_pong" | "known_poll_no_progress";
+      detector: "ping_pong" | "known_poll_no_progress" | "global_circuit_breaker";
       toolName: string;
       count?: number;
     },
@@ -430,6 +431,46 @@ describe("before_tool_call loop detection behavior", () => {
 
     const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
     expectToolLoopBlockedResult(result, "identical outcomes");
+  });
+
+  it("blocks non-strict same-tool argument churn through the wrapped tool runtime", async () => {
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
+      const targetPath =
+        typeof params === "object" && params !== null && "path" in params
+          ? String(params.path)
+          : "unknown";
+      return {
+        content: [{ type: "text", text: `wrote ${targetPath}` }],
+        details: { ok: true, path: targetPath },
+      };
+    });
+    const tool = createWrappedTool("write", execute);
+    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      const targetPath = paths[index % paths.length]!;
+      await expectUnblockedToolExecution(tool, `write-churn-${index}`, {
+        path: targetPath,
+        content: "same content",
+      });
+    }
+
+    await withToolLoopEvents(async (emitted) => {
+      const result = await tool.execute(
+        "write-churn-blocked",
+        { path: "/tmp/c.md", content: "same content" },
+        undefined,
+        undefined,
+      );
+      expectToolLoopBlockedResult(result, "global circuit breaker");
+      expectCriticalLoopEvent(emitted.at(-1), {
+        detector: "global_circuit_breaker",
+        toolName: "write",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
   });
 
   it("does not carry loop history across run ids", async () => {

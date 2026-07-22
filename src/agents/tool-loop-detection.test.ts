@@ -492,6 +492,93 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks repeated stable argument churn with the global circuit breaker", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+        expect(loopResult.message).toContain("2 repeated argument patterns");
+      }
+    });
+
+    it("does not block a one-shot batch of distinct arguments", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: `/tmp/file-${index}.md`, content: "same content" },
+          {
+            content: [{ type: "text", text: "write complete" }],
+            details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block argument churn when a repeated variant makes progress", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md";
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `write ${targetPath} revision ${index}` }],
+            details: { ok: true, revision: index },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("blocks repeated completed exec calls despite volatile runtime details", () => {
       const state = createState();
       const params = { command: "grafana-api.sh datasources" };
