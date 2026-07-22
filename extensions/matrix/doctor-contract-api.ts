@@ -307,14 +307,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
     async detectLegacyState(params) {
-      const io: MatrixInboundDedupeMigrationIo = { context: params.context, env: params.env };
       const preview: string[] = [];
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
       for (const storageRootDir of sources.sqliteRoots) {
         try {
-          if (
-            (await readLegacyInboundDedupeSqliteSource(io, storageRootDir)).legacyRowCount === 0
-          ) {
+          if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount === 0) {
             continue;
           }
         } catch {
@@ -343,7 +340,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const sqliteRootsToRetire: string[] = [];
       for (const storageRootDir of sources.sqliteRoots) {
         try {
-          const source = await readLegacyInboundDedupeSqliteSource(io, storageRootDir);
+          const source = await readLegacyInboundDedupeSqliteSource(storageRootDir);
           if (source.legacyRowCount === 0) {
             continue;
           }
@@ -395,7 +392,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       // run keeps them for the next doctor attempt.
       for (const storageRootDir of sqliteRootsToRetire) {
         try {
-          await retireLegacyInboundDedupeSqliteRows(io, storageRootDir);
+          await retireLegacyInboundDedupeSqliteRows(storageRootDir);
           changes.push(`Retired Matrix inbound dedupe rows for ${storageRootDir}`);
         } catch (err) {
           warnings.push(
