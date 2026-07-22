@@ -73,6 +73,7 @@ import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveCompactionEnabled,
 } from "../agent-settings.js";
 import { createOpenClawCodingTools, resolveProcessToolScopeKey } from "../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
@@ -1522,6 +1523,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       // has no associated context engine.
       applyAgentAutoCompactionGuard({
         settingsManager,
+        compactionEnabled: resolveCompactionEnabled(params.config),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider,
           modelId,

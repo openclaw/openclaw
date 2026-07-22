@@ -540,6 +540,7 @@ vi.mock("../../agent-settings.js", () => ({
     },
   }),
   isSilentOverflowProneModel: () => false,
+  resolveCompactionEnabled: () => true,
   resolveEffectiveCompactionMode: () => "default",
 }));
 
