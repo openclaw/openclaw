@@ -433,6 +433,12 @@ describe("loadDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
+        const pathOverrideEnvKeys = [
+          "OPENCLAW_AGENT_DIR",
+          "OPENCLAW_BUNDLED_PLUGINS_DIR",
+          "OPENCLAW_OAUTH_DIR",
+          "PI_CODING_AGENT_DIR",
+        ] as const;
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
@@ -443,17 +449,11 @@ describe("loadDotEnv", () => {
           ].join("\n"),
         );
 
-        deleteTestEnvValue("OPENCLAW_AGENT_DIR");
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.OPENCLAW_OAUTH_DIR;
-        delete process.env.PI_CODING_AGENT_DIR;
+        clearEnv(pathOverrideEnvKeys);
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
-        expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
+        expectEnvUndefined(pathOverrideEnvKeys);
       });
     });
   });
