@@ -126,6 +126,7 @@ function scoreDiagnoseCandidatePreselect(params: {
     sessionId: params.entry.sessionId,
     sessionKey: params.key,
     sessionFile: params.entry.sessionFile,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const diagnostic = getDiagnosticSessionStateSnapshot({
     sessionId: params.entry.sessionId,
@@ -327,6 +328,7 @@ function scoreDiagnoseCandidate(params: {
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
     ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const diagnostic = getDiagnosticSessionStateSnapshot({
     sessionId: params.row.sessionId,

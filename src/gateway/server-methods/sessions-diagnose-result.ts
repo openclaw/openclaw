@@ -292,6 +292,7 @@ export async function buildDiagnoseResult(params: {
     sessionId: target.entry.sessionId,
     sessionKey: target.key,
     sessionFile: target.entry.sessionFile,
+    ...(target.agentId ? { agentId: target.agentId } : {}),
   });
   const stateSnapshot = getDiagnosticSessionStateSnapshot(
     {

@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import {
+  ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   getEmbeddedRunDiagnosticSnapshot,
@@ -14,9 +19,13 @@ afterEach(() => {
   ACTIVE_EMBEDDED_RUNS.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
+  ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
+  replyRunTesting.resetReplyRunRegistry();
 });
 
 describe("getEmbeddedRunDiagnosticSnapshot", () => {
@@ -116,6 +125,181 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
     ).toEqual({
       active: false,
       sessionKey: "agent:main:target",
+    });
+  });
+
+  it("scopes fallback key diagnosis by agent", () => {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set("global", "session-work");
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set("main:global", "session-main");
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set("work:global", "session-work");
+    ACTIVE_EMBEDDED_RUNS.set("session-main", {
+      isStreaming: () => false,
+      isCompacting: () => false,
+      queueMessage: async () => {},
+      abort: () => {},
+    });
+    ACTIVE_EMBEDDED_RUNS.set("session-work", {
+      isStreaming: () => true,
+      isCompacting: () => false,
+      queueMessage: async () => {},
+      abort: () => {},
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-main",
+        sessionKey: "global",
+        agentId: "main",
+      }),
+    ).toMatchObject({
+      active: true,
+      sessionId: "session-main",
+      sessionKey: "global",
+      streaming: false,
+    });
+  });
+
+  it("requires scoped fallback ownership before reporting a shared id active", () => {
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set(
+      "main:global",
+      "session-shared",
+    );
+    ACTIVE_EMBEDDED_RUNS.set("session-shared", {
+      isStreaming: () => true,
+      isCompacting: () => false,
+      queueMessage: async () => {},
+      abort: () => {},
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-shared",
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    ).toEqual({
+      active: false,
+      sessionId: "session-shared",
+      sessionKey: "global",
+      hasTranscriptSnapshot: false,
+    });
+  });
+
+  it("accepts exact file ownership for scoped fallback rows", () => {
+    const sessionFile = "/tmp/work-global.jsonl";
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
+      resolveEmbeddedSessionFileKey(sessionFile),
+      "session-shared",
+    );
+    ACTIVE_EMBEDDED_RUNS.set("session-shared", {
+      isStreaming: () => true,
+      isCompacting: () => false,
+      queueMessage: async () => {},
+      abort: () => {},
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-shared",
+        sessionKey: "global",
+        sessionFile,
+        agentId: "work",
+      }),
+    ).toMatchObject({
+      active: true,
+      sessionId: "session-shared",
+      sessionKey: "global",
+      streaming: true,
+    });
+  });
+
+  it("does not attach legacy fallback abandonment without matching file identity", () => {
+    ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set("session-shared", {
+      sessionId: "session-shared",
+      sessionKey: "global",
+      sessionFile: "/tmp/main-global.jsonl",
+      abandonedAtMs: 10,
+      reason: "timeout",
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-shared",
+        sessionKey: "global",
+        sessionFile: "/tmp/work-global.jsonl",
+        agentId: "work",
+      }),
+    ).toEqual({
+      active: false,
+      sessionId: "session-shared",
+      sessionKey: "global",
+      hasTranscriptSnapshot: false,
+    });
+  });
+
+  it("preserves reply-run activity for scoped fallback rows", () => {
+    createReplyOperation({
+      sessionKey: "global",
+      sessionId: "session-reply",
+      agentId: "work",
+      resetTriggered: false,
+    });
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.set(
+      "work:global",
+      "session-old",
+    );
+    ABANDONED_EMBEDDED_RUNS_BY_AGENT_SCOPED_FALLBACK_KEY.set("work:global", {
+      sessionId: "session-old",
+      sessionKey: "global",
+      agentId: "work",
+      abandonedAtMs: 10,
+      reason: "timeout",
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-reply",
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    ).toEqual({
+      active: true,
+      sessionId: "session-reply",
+      sessionKey: "global",
+      hasTranscriptSnapshot: false,
+    });
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    ).toEqual({
+      active: true,
+      sessionId: "session-reply",
+      sessionKey: "global",
+      hasTranscriptSnapshot: false,
+    });
+  });
+
+  it("does not attribute reply-run activity to another scoped fallback agent", () => {
+    createReplyOperation({
+      sessionKey: "global",
+      sessionId: "session-shared",
+      agentId: "main",
+      resetTriggered: false,
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionId: "session-shared",
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    ).toEqual({
+      active: false,
+      sessionId: "session-shared",
+      sessionKey: "global",
+      hasTranscriptSnapshot: false,
     });
   });
 

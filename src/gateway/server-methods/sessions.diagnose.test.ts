@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsDiagnoseResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
 } from "../../agents/embedded-agent-runner/run-state.js";
@@ -43,6 +44,7 @@ afterEach(() => {
   ACTIVE_EMBEDDED_RUNS.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY.clear();
   resetDiagnosticRunActivityForTest();
   resetDiagnosticSessionStateForTest();
 });
@@ -800,6 +802,22 @@ test("sessions.diagnose keeps the source agent for global fallback rows", async 
       global: sessionStoreEntry("sess-work-global", { updatedAt: 20 }),
     },
   });
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set("global", "sess-main-global");
+  const fallbackIndex = ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_AGENT_SCOPED_FALLBACK_KEY;
+  fallbackIndex.set("main:global", "sess-main-global");
+  fallbackIndex.set("work:global", "sess-work-global");
+  ACTIVE_EMBEDDED_RUNS.set("sess-main-global", {
+    queueMessage: async () => {},
+    isStreaming: () => false,
+    isCompacting: () => false,
+    abort: () => {},
+  });
+  ACTIVE_EMBEDDED_RUNS.set("sess-work-global", {
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: () => {},
+  });
 
   const result = await directSessionReq<SessionsDiagnoseResult>(
     "sessions.diagnose",
@@ -837,6 +855,11 @@ test("sessions.diagnose keeps the source agent for global fallback rows", async 
       gatewayRun: {
         hasActiveRun: true,
         runs: [expect.objectContaining({ agentId: "work" })],
+      },
+      embeddedRun: {
+        active: true,
+        sessionId: "sess-work-global",
+        streaming: true,
       },
     },
     nextChecks: [
