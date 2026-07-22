@@ -24,6 +24,7 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
     const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
       encoding: "utf8",
       timeout: 1000,
+      killSignal: "SIGKILL",
     });
     if (ps.error || ps.status !== 0) {
       return null;

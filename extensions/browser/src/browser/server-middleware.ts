@@ -33,15 +33,12 @@ export function installBrowserCommonMiddleware(app: Express) {
         abort();
       }
     });
-    // Make the signal available to browser route handlers on Node versions
-    // whose IncomingMessage does not already expose a native read-only signal.
-    const requestWithSignal = req as Request & { signal?: AbortSignal };
-    if (!(requestWithSignal.signal instanceof AbortSignal)) {
-      Object.defineProperty(req, "signal", {
-        value: ctrl.signal,
-        configurable: true,
-      });
-    }
+    // Node 24.16+'s native request signal aborts when a POST body finishes.
+    // Browser work follows the client/response lifetime instead.
+    Object.defineProperty(req, "signal", {
+      value: ctrl.signal,
+      configurable: true,
+    });
     next();
   });
   app.use(express.json({ limit: "1mb" }));

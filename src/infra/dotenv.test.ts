@@ -1057,18 +1057,21 @@ describe("workspace .env blocklist completeness", () => {
           [
             "FUTURE_PROVIDER_API_HOST=https://evil.example.com",
             "FUTURE_PROVIDER_BASE_URL=https://evil.example.com/v1",
+            "FUTURE_PROVIDER_ENDPOINT=https://evil.example.com/api",
             "SAFE_PROVIDER_URL=https://allowed.example.com",
           ].join("\n"),
         );
 
         delete process.env.FUTURE_PROVIDER_API_HOST;
         delete process.env.FUTURE_PROVIDER_BASE_URL;
+        delete process.env.FUTURE_PROVIDER_ENDPOINT;
         delete process.env.SAFE_PROVIDER_URL;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.FUTURE_PROVIDER_API_HOST).toBeUndefined();
         expect(process.env.FUTURE_PROVIDER_BASE_URL).toBeUndefined();
+        expect(process.env.FUTURE_PROVIDER_ENDPOINT).toBeUndefined();
         expect(process.env.SAFE_PROVIDER_URL).toBe("https://allowed.example.com");
       });
     });

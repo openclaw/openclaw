@@ -35,6 +35,8 @@ function createRuntime() {
   const readAllowFromStore = vi.fn(async () => [] as string[]);
   const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR123", created: true }));
   const resolveAgentRoute = vi.fn();
+  const isControlCommandMessage = vi.fn((body: string) => body.trim().startsWith("/"));
+  const shouldComputeCommandAuthorized = vi.fn((body: string) => body.trim().startsWith("/"));
   const run = vi.fn<
     (params: {
       adapter: {
@@ -52,6 +54,10 @@ function createRuntime() {
   const buildContext = vi.fn();
   const resolveStorePath = vi.fn();
   const runtime = {
+    commands: {
+      isControlCommandMessage,
+      shouldComputeCommandAuthorized,
+    },
     pairing: {
       readAllowFromStore,
       upsertPairingRequest,
@@ -76,6 +82,8 @@ function createRuntime() {
     readAllowFromStore,
     upsertPairingRequest,
     resolveAgentRoute,
+    isControlCommandMessage,
+    shouldComputeCommandAuthorized,
     run,
     buildContext,
     resolveStorePath,
@@ -160,6 +168,50 @@ describe("dispatchSmsInboundEvent", () => {
           routeSessionKey: "agent:main:sms:direct:+15551234567",
           dispatchSessionKey: "agent:main:sms:direct:+15551234567",
         }),
+      }),
+    );
+    expect(turn.routeSessionKey).toBe("agent:main:sms:direct:+15551234567");
+  });
+
+  it("marks allowlisted SMS slash commands as authorized command turns", async () => {
+    const { runtime, resolveAgentRoute, run, buildContext, resolveStorePath } = createRuntime();
+    resolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      accountId: "default",
+      sessionKey: "agent:main:sms:direct:+15551234567",
+    });
+    buildContext.mockReturnValue({ SessionKey: "agent:main:sms:direct:+15551234567" });
+    resolveStorePath.mockReturnValue("/tmp/openclaw-sessions");
+
+    await dispatchSmsInboundEvent({
+      cfg: { commands: { useAccessGroups: true } },
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: ["+15551234567"] }),
+      channelRuntime: runtime,
+      msg: {
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "/status",
+        messageSid: "SM-command",
+        accountSid: "AC123",
+      },
+    });
+
+    const runParams = run.mock.calls[0]?.[0];
+    const turn = await runParams.adapter.resolveTurn(
+      runParams.adapter.ingest({
+        from: "+15551234567",
+        to: "+15557654321",
+        body: "/status",
+        messageSid: "SM-command",
+        accountSid: "AC123",
+      }),
+    );
+
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access: { commands: { authorized: true } },
+        command: { kind: "text-slash", body: "/status", authorized: true },
+        extra: expect.objectContaining({ SenderE164: "+15551234567" }),
       }),
     );
     expect(turn.routeSessionKey).toBe("agent:main:sms:direct:+15551234567");
