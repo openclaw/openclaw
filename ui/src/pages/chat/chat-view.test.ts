@@ -1776,7 +1776,9 @@ describe("chat composer workbench", () => {
       onOpenImage,
     });
     document.body.append(container);
-    const panel = container.querySelector("openclaw-chat-detail-panel");
+    const panel = container.querySelector("openclaw-chat-detail-panel") as
+      | (Element & { updateComplete: Promise<unknown> })
+      | null;
     await panel?.updateComplete;
 
     panel?.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();

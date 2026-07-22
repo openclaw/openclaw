@@ -28,7 +28,7 @@ function dataUrlMimeType(source: string): string | undefined {
   return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
 }
 
-export class OpenClawImageLightbox extends OpenClawLitElement {
+class OpenClawImageLightbox extends OpenClawLitElement {
   @property() src = "";
   @property() override title = "";
   @query(".open-original") private openOriginal?: HTMLAnchorElement;

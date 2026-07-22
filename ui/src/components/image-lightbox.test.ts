@@ -7,8 +7,8 @@ import "./image-lightbox.ts";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
-let createObjectUrl: ReturnType<typeof vi.fn>;
-let revokeObjectUrl: ReturnType<typeof vi.fn>;
+let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => string>>;
+let revokeObjectUrl: ReturnType<typeof vi.fn<(url: string) => void>>;
 let fetchImage: ReturnType<typeof vi.fn>;
 
 async function renderLightbox() {
@@ -44,8 +44,13 @@ describe("openclaw-image-lightbox", () => {
     vi.stubGlobal(
       "URL",
       class extends NativeUrl {
-        static override createObjectURL = createObjectUrl;
-        static override revokeObjectURL = revokeObjectUrl;
+        static override createObjectURL(object: Blob | MediaSource): string {
+          return createObjectUrl(object);
+        }
+
+        static override revokeObjectURL(url: string): void {
+          revokeObjectUrl(url);
+        }
       },
     );
     vi.stubGlobal("fetch", fetchImage);
