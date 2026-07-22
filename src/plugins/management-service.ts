@@ -1,4 +1,5 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
+import crypto from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -8,6 +9,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
+import { loadConfig } from "../config/io.runtime.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -891,11 +893,17 @@ function installRecordOwnsTarget(
   );
 }
 
-async function cleanupFailedManagedPluginInstall(params: {
+export async function cleanupFailedManagedPluginInstall(params: {
   pluginId: string;
   install: PluginInstallRecord;
   targetDir: string;
   extensionsDir: string;
+  /** Per-attempt token written into the SQLite install record before the
+   *  persistence attempt.  When the surviving record carries the same token
+   *  it is definitive proof that this failed transaction created it — safe
+   *  to remove.  A mismatched or missing token means another process wrote
+   *  the record and the target must be preserved. */
+  attemptToken?: string;
 }): Promise<string[]> {
   let installRecords: Record<string, PluginInstallRecord>;
   try {
@@ -906,6 +914,26 @@ async function cleanupFailedManagedPluginInstall(params: {
     ];
   }
   if (installRecordOwnsTarget(installRecords[params.pluginId], params.targetDir)) {
+    // Only remove the target when the surviving record carries our
+    // per-attempt token — that proves this failed transaction created
+    // the record.  Without a token (or when tokens don't match) we
+    // fall back to conservative behaviour and retain the target.
+    if (
+      params.attemptToken &&
+      installRecords[params.pluginId]?.installAttemptToken === params.attemptToken
+    ) {
+      // The record was written by the current failed transaction and
+      // survived the rollback — this is a stale left-over.  Remove
+      // the target so retries aren't permanently blocked.
+      try {
+        await applyPluginUninstallDirectoryRemoval({ target: params.targetDir });
+      } catch (removalError) {
+        return [
+          `Failed to remove the stale managed install target after an incomplete install of ${params.pluginId}: ${formatErrorMessage(removalError)}`,
+        ];
+      }
+      return [];
+    }
     return [
       `Plugin install persistence reported an error after ${params.targetDir} was recorded; retained the managed target.`,
     ];
@@ -970,22 +998,52 @@ async function persistManagedPluginInstall(params: {
   targetDir: string;
   extensionsDir: string;
 }): Promise<OpenClawConfig> {
+  // Generate a per-attempt token before persistence so the cleanup path
+  // can tie a surviving SQLite record back to this specific transaction.
+  // A matching token is definitive proof the record is a stale left-over
+  // from this failed attempt; a mismatch means another process wrote it.
+  const attemptToken = crypto.randomUUID();
   try {
     return await persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: params.pluginId,
-      install: params.install,
+      // Embed the attempt token in the install record written to SQLite.
+      install: { ...params.install, installAttemptToken: attemptToken },
       invalidateRuntimeCache: false,
       runtime: createSilentRuntime(),
     });
   } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall({
-      pluginId: params.pluginId,
-      install: params.install,
-      targetDir: params.targetDir,
-      extensionsDir: params.extensionsDir,
-    });
+    // Only run cleanup when we can confirm the config commit failed.
+    // If the config already has this install at the target path, the
+    // error came from a post-commit refresh — the install is valid and
+    // the target must be preserved regardless of token match.
+    const commitFailed = await wasConfigCommitFailed(params);
+    const cleanupWarnings = commitFailed
+      ? await cleanupFailedManagedPluginInstall({
+          pluginId: params.pluginId,
+          install: params.install,
+          targetDir: params.targetDir,
+          extensionsDir: params.extensionsDir,
+          attemptToken,
+        })
+      : [
+          `Plugin install recorded but a post-commit operation failed for ${params.pluginId}; retained the managed target at ${params.targetDir}.`,
+        ];
     return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
+  }
+}
+
+async function wasConfigCommitFailed(params: {
+  pluginId: string;
+  targetDir: string;
+}): Promise<boolean> {
+  try {
+    const current = loadConfig({ skipPluginValidation: true });
+    const install = current.plugins?.installs?.[params.pluginId];
+    return !install || !installRecordOwnsTarget(install, params.targetDir);
+  } catch {
+    // Can't read config → assume commit failed and run cleanup.
+    return true;
   }
 }
 
