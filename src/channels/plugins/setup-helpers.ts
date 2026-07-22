@@ -217,8 +217,7 @@ export function createPatchedAccountSetupAdapter(params: {
   };
 }
 
-/** Creates a Zod-backed setup input validator with an optional typed semantic check. */
-export function createZodSetupInputValidator<T extends ChannelSetupInput>(params: {
+function createZodSetupInputValidator<T extends ChannelSetupInput>(params: {
   schema: ZodType<T>;
   validate?: (params: { cfg: OpenClawConfig; accountId: string; input: T }) => string | null;
 }): NonNullable<ChannelSetupAdapter["validateInput"]> {
