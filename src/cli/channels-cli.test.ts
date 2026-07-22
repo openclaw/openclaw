@@ -574,15 +574,7 @@ describe("registerChannelsCli", () => {
       },
     ]);
 
-    await runChannelsAddCli([
-      "channels",
-      "add",
-      "--account",
-      "work",
-      "telegram",
-      "--token",
-      "tok",
-    ]);
+    await runChannelsAddCli(["channels", "add", "--account", "work", "telegram", "--token", "tok"]);
 
     expect(channelsAddCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "telegram", account: "work", token: "tok" }),
