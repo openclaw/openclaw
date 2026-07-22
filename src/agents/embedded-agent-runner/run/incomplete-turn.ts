@@ -134,12 +134,20 @@ const RETRY_GUARD_MODEL_APIS = new Set([
 // surfacing the existing incomplete-turn error path.
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
+/** One tools-disabled summary after successful tool work ends with a blank visible completion. */
+export const DEFAULT_POST_TOOL_EMPTY_FINALIZER_LIMIT = 1;
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+// Tools stay unavailable on this retry: the prior attempt already performed
+// mutating work, so replaying tool calls would risk duplicate side effects.
+const POST_TOOL_EMPTY_FINALIZER_INSTRUCTION =
+  "Do not call tools. Based only on the tool results already in the transcript, produce a short, truthful final reply for the user. Do not claim any unverified action as done, and do not restart the task.";
+const POST_TOOL_EMPTY_DEGRADED_MESSAGE =
+  "⚠️ Tool work completed, but no summary could be generated. Please check the produced artifacts before retrying.";
 
 /**
  * Marks whether retrying the attempt can safely replay the prompt. Concrete
@@ -295,6 +303,18 @@ export function resolveIncompleteTurnPayloadText(params: {
     stopReason !== "error"
   ) {
     return null;
+  }
+
+  // Settled successful tool work with a blank final completion is partial
+  // success, not a full agent failure. Prefer a truthful degraded summary over
+  // the generic "couldn't generate a response" card. Only apply when there is
+  // still no visible assistant text — partial toolUse narration keeps the
+  // generic incomplete-turn wording. (#111764)
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
+    hasSettledSuccessfulToolWorkForEmptyFinalizer(params.attempt)
+  ) {
+    return POST_TOOL_EMPTY_DEGRADED_MESSAGE;
   }
 
   return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
@@ -856,6 +876,120 @@ export function resolveEmptyResponseRetryInstruction(params: {
   }
 
   return null;
+}
+
+/**
+ * After successful tool work, a normal stop with no user-visible text cannot
+ * use the replay-safe empty-response retry (side effects force a skip). This
+ * separate one-shot lane continues with tools disabled so the model can only
+ * summarize already-committed results. (#111764)
+ */
+export function resolvePostToolEmptyFinalizerInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  payloadCount: number;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (
+    params.payloadCount !== 0 ||
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
+    return null;
+  }
+
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return null;
+  }
+
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+    return null;
+  }
+
+  if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
+    return null;
+  }
+
+  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+    return null;
+  }
+
+  if (hasAsyncStartedToolActivity(params.attempt.toolMetas)) {
+    return null;
+  }
+
+  if (!hasSettledSuccessfulToolWorkForEmptyFinalizer(params.attempt)) {
+    return null;
+  }
+
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const stopReason = assistant?.stopReason;
+  // toolUse has its own settled-tool continuation lane; this finalizer is for a
+  // post-tool stop/end_turn that still produced no visible answer.
+  if (stopReason === "toolUse" || stopReason === "error") {
+    return null;
+  }
+  if (
+    stopReason !== "stop" &&
+    stopReason !== "end_turn" &&
+    // Some providers omit stopReason while still emitting a blank final turn.
+    stopReason != null
+  ) {
+    return null;
+  }
+
+  const blankFinal =
+    isEmptyResponseAssistantTurn({
+      payloadCount: params.payloadCount,
+      attempt: params.attempt,
+    }) ||
+    isReasoningOnlyAssistantTurn(assistant) ||
+    isUnsignedThinkingOnlyAssistantTurn(assistant) ||
+    Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  if (!blankFinal) {
+    return null;
+  }
+
+  if (
+    !shouldApplyNonVisibleTurnRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      executionContract: params.executionContract,
+    }) &&
+    !isZeroUsageEmptyStopAssistantTurn(assistant ?? null)
+  ) {
+    return null;
+  }
+
+  return POST_TOOL_EMPTY_FINALIZER_INSTRUCTION;
+}
+
+/**
+ * Tool work finished with no active lifecycle items and no hard tool error.
+ * Used both for the tools-disabled finalizer and the degraded summary card.
+ */
+function hasSettledSuccessfulToolWorkForEmptyFinalizer(attempt: IncompleteTurnAttempt): boolean {
+  if ((attempt.toolMetas?.length ?? 0) === 0) {
+    return false;
+  }
+  if ((attempt.itemLifecycle?.activeCount ?? 0) > 0) {
+    return false;
+  }
+  if (attempt.lastToolError) {
+    return false;
+  }
+  // Prefer explicit side-effect evidence so replay-safe empty retries stay on
+  // the existing empty-response path when they can still fire.
+  return resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects === true;
 }
 
 function shouldApplyNonVisibleTurnRetryGuard(params: {
