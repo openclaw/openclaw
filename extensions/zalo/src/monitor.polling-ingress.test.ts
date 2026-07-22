@@ -260,6 +260,62 @@ describe("Zalo polling durable ingress", () => {
     await second.run;
   });
 
+  it("journals a polled update on the abort path with durable-after-stop admission", async () => {
+    const updateA = createTextUpdate({
+      messageId: "poll-abort-a",
+      userId: "user-1",
+      userName: "User One",
+      chatId: "dm-chat-1",
+    });
+    const updateB = createTextUpdate({
+      messageId: "poll-abort-b",
+      userId: "user-1",
+      userName: "User One",
+      chatId: "dm-chat-1",
+    });
+
+    // First update completes normally so the poll loop advances to the next
+    // getUpdates call, which stays in-flight past shutdown.
+    dispatchMock.mockImplementation(async ({ replyOptions }: DispatchReplyOptions) => {
+      await replyOptions?.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    const latePoll = createDeferred();
+    getUpdatesMock
+      .mockResolvedValueOnce({ ok: true, result: updateA as ZaloUpdate })
+      .mockImplementationOnce(() =>
+        latePoll.promise.then(() => ({ ok: true, result: updateB as ZaloUpdate })),
+      )
+      .mockImplementation(() => new Promise(() => {}));
+
+    const { abort, run } = await startPollingMonitor(
+      createLifecycleMonitorSetup({ accountId: "default", dmPolicy: "open", webhookUrl: "" }),
+    );
+
+    // Wait for the first update to complete so the next poll is in-flight on
+    // getUpdates when abort fires.
+    await vi.waitFor(() => {
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
+    await waitForZaloWebhookVerdict(queue, "poll-abort-a", "completed");
+
+    // Abort while the second getUpdates is in-flight; the monitor shuts down
+    // before the poll response arrives.
+    abort.abort();
+    await run;
+
+    // Release the in-flight poll after the monitor has fully shut down.
+    latePoll.resolve();
+
+    // With durable-after-stop admission the abort branch must persist the
+    // consumed update into the durable ingress queue even after stop.
+    await vi.waitFor(async () => {
+      const [claims, pending] = await Promise.all([queue.listClaims(), queue.listPending()]);
+      const ids = [...claims, ...pending].map((record) => record.id);
+      expect(ids).toContain("poll-abort-b");
+    });
+  });
+
   it("dead-letters an authentication failure from dispatch without retry", async () => {
     const update = createTextUpdate({
       messageId: "poll-deadletter-1",
