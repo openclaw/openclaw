@@ -670,28 +670,29 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
-    // internally pushes Promise.resolve(emit(event)) into an updateEvents
-    // array.  Because emit → processEvents is async, any failure (e.g.
-    // activeRun cleared) produces a *rejected Promise*, not a synchronous
-    // throw — so a try-catch here would be ineffective.  Instead we rely
-    // on the `updatesDisabled` flag being set proactively: by the promise
-    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
-    // signal (Layer 2) — both of which prevent this call from ever being
-    // reached after the agent run has ended.
-    opts.onUpdate({
-      content: [
-        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
-      ],
-      details: {
-        status: "running",
-        sessionId,
-        pid: session.pid ?? undefined,
-        startedAt,
-        cwd: session.cwd,
-        tail: session.tail,
-      },
-    });
+    // Guard: opts.onUpdate() may interact with session write lock or
+    // transcript pipelines in embedded agent paths.  A synchronous throw
+    // or an async deadlock here would block stdout/stderr processing and
+    // prevent the exec Promise from settling (#108384).  Wrap defensively
+    // so exec progress never stalls on a failing update callback.
+    try {
+      opts.onUpdate({
+        content: [
+          { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
+        ],
+        details: {
+          status: "running",
+          sessionId,
+          pid: session.pid ?? undefined,
+          startedAt,
+          cwd: session.cwd,
+          tail: session.tail,
+        },
+      });
+    } catch {
+      // onUpdate failures must not block stdout processing or deadlock
+      // the exec Promise in embedded sessions.
+    }
   };
 
   // One parser per stream so ESC sequences split across chunks are not mangled.

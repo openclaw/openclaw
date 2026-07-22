@@ -2074,9 +2074,23 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        let settled = false;
+
+        const safeResolve = (result: AgentToolResult<ExecToolDetails>) => {
+          if (settled) return;
+          settled = true;
+          resolve(result);
+        };
+
+        const safeReject = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          reject(err);
+        };
+
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
+          safeResolve({
             content: [
               {
                 type: "text",
@@ -2138,9 +2152,21 @@ export function createExecTool(
           .then((outcome) => {
             cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
+              // Already resolved by resolveRunning() via yield timer.
+              // Ensure the Promise is settled even if resolveRunning was
+              // skipped due to a race (#108384).
+              if (!settled) {
+                safeResolve(
+                  buildExecForegroundResult({
+                    outcome,
+                    cwd: run.session.cwd,
+                    warningText: getWarningText(),
+                  }),
+                );
+              }
               return;
             }
-            resolve(
+            safeResolve(
               buildExecForegroundResult({
                 outcome,
                 cwd: run.session.cwd,
@@ -2151,9 +2177,14 @@ export function createExecTool(
           .catch((err: unknown) => {
             cleanupToolRunListeners();
             if (yielded || run.session.backgrounded) {
+              // If the Promise is somehow not settled yet, reject it
+              // to prevent a permanent hang (#108384).
+              if (!settled) {
+                safeReject(err as Error);
+              }
               return;
             }
-            reject(err as Error);
+            safeReject(err as Error);
           });
       });
     },
