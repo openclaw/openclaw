@@ -1733,6 +1733,7 @@ export async function executePreparedCliRun(
               cwd: context.cwd ?? context.workspaceDir,
               env,
               input: stdinPayload,
+              secretInput: context.preparedBackend.secretInput,
               captureOutput: false,
               onStdout: consumeStdout,
               onStderr: consumeStderr,

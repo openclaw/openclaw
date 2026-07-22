@@ -121,7 +121,16 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveLoopbackToolsAllowFromMcpPermissions } from "./tool-policy.js";
-import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import type {
+  CliReusableSession,
+  CliSecretInput,
+  PreparedCliRunContext,
+  RunCliAgentParams,
+} from "./types.js";
+
+type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
+  secretInput?: CliSecretInput;
+};
 
 function resolveClaudeCliContextModelId(modelId: string): string {
   const trimmed = modelId.trim();
@@ -679,8 +688,7 @@ export async function prepareCliRunContext(
     params.cliToolAvailability?.mcp,
   );
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
-  let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
-    undefined;
+  let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
     const mcpClientGrant = mcpLoopbackRuntime
       ? prepareDeps.mintMcpLoopbackClientGrant({
@@ -778,21 +786,22 @@ export async function prepareCliRunContext(
       executionMode,
       env: preparedBackend.env,
     } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-    preparedExecution = nodeClaudePlacement
-      ? undefined
-      : await backendResolved.prepareExecution?.(
-          (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
-            ? {
-                ...prepareExecutionContext,
-                // Private bridge for bundled auth-owning CLI backends. This is intentionally not
-                // part of the public Plugin SDK until a credential-forwarding
-                // contract exists.
-                authCredential,
-              }
-            : prepareExecutionContext) as typeof prepareExecutionContext & {
-            authCredential?: AuthProfileCredential;
-          },
-        );
+    preparedExecution =
+      (nodeClaudePlacement
+        ? undefined
+        : await backendResolved.prepareExecution?.(
+            (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
+              ? {
+                  ...prepareExecutionContext,
+                  // Private bridge for bundled auth-owning CLI backends. This is intentionally not
+                  // part of the public Plugin SDK until a credential-forwarding
+                  // contract exists.
+                  authCredential,
+                }
+              : prepareExecutionContext) as typeof prepareExecutionContext & {
+              authCredential?: AuthProfileCredential;
+            },
+          )) ?? undefined;
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
@@ -886,6 +895,7 @@ export async function prepareCliRunContext(
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }
         : {}),
+      ...(preparedExecution?.secretInput ? { secretInput: preparedExecution.secretInput } : {}),
       ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
     };

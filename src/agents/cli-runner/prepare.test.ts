@@ -1114,6 +1114,43 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("keeps bundled Claude secret input on the private prepared runner context", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const secretInput = {
+      fd: 3,
+      fingerprint: "credential-a",
+      createData: () => Buffer.from("secret"),
+    };
+    const prepareExecution = vi.fn(async () => ({
+      env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+      secretInput,
+    }));
+
+    try {
+      setCliBackendForPrepareTest({
+        prepareExecution: prepareExecution as CliBackendPlugin["prepareExecution"],
+      });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-test-private-secret-input",
+        config: {},
+      });
+
+      expect(context.preparedBackend.secretInput).toBe(secretInput);
+      expect(context.preparedBackend.env).toMatchObject({
+        CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
     const { dir, sessionFile } = createSessionFile();
     const profileSystemSettingsPath = path.join(dir, "profile-system-settings.json");

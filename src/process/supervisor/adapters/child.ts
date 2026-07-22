@@ -1,5 +1,6 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import type { Writable } from "node:stream";
 import { toErrorObject } from "../../../infra/errors.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import {
@@ -15,7 +16,7 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
-import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
+import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
@@ -78,6 +79,7 @@ export async function createChildAdapter(params: {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  secretInput?: SpawnSecretInput;
 }): Promise<ChildAdapter> {
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
@@ -96,19 +98,29 @@ export async function createChildAdapter(params: {
   // existing POSIX detached behavior.
   const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
 
+  const stdio: Array<"ignore" | "inherit" | "overlapped" | "pipe"> = [
+    stdinMode === "inherit" ? "inherit" : "pipe",
+    "pipe",
+    "pipe",
+  ];
+  if (params.secretInput) {
+    if (!Number.isInteger(params.secretInput.fd) || params.secretInput.fd < 3) {
+      throw new Error("secret input file descriptor must be an integer greater than 2");
+    }
+    while (stdio.length <= params.secretInput.fd) {
+      stdio.push("ignore");
+    }
+    stdio[params.secretInput.fd] = process.platform === "win32" ? "overlapped" : "pipe";
+  }
+
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: preparedSpawn.env,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio,
     detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   };
-  if (stdinMode === "inherit") {
-    options.stdio = ["inherit", "pipe", "pipe"];
-  } else {
-    options.stdio = ["pipe", "pipe", "pipe"];
-  }
 
   const spawned = await spawnWithFallback({
     argv: [preparedSpawn.command, ...preparedSpawn.args],
@@ -122,6 +134,36 @@ export async function createChildAdapter(params: {
         ]
       : [],
   });
+
+  if (params.secretInput) {
+    const stream = spawned.child.stdio[params.secretInput.fd] as Writable | null | undefined;
+    if (!stream || typeof stream.end !== "function") {
+      spawned.child.kill("SIGKILL");
+      throw new Error(`secret input file descriptor ${params.secretInput.fd} is unavailable`);
+    }
+    let data: Buffer | undefined;
+    try {
+      data = params.secretInput.createData();
+      // Claude consumes and closes this descriptor before launching hooks. End
+      // the parent pipe immediately so no descendant can inherit usable bytes.
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => {
+          stream.off("error", onError);
+          reject(error);
+        };
+        stream.once("error", onError);
+        stream.end(data, () => {
+          stream.off("error", onError);
+          resolve();
+        });
+      });
+    } catch (error) {
+      spawned.child.kill("SIGKILL");
+      throw error;
+    } finally {
+      data?.fill(0);
+    }
+  }
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
   // Pipe errors can arrive before output subscribers attach. Close remains

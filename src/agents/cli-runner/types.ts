@@ -216,10 +216,19 @@ export type RunCliAgentParams = {
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
+export type CliSecretInput = {
+  fd: number;
+  /** Process-local non-secret generation used only to invalidate a warm child. */
+  fingerprint: string;
+  createData: () => Buffer;
+};
+
 type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Private child-only credential transport; never serialized into env or public plugin state. */
+  secretInput?: CliSecretInput;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
     activate: (captureKey: string) => void;
