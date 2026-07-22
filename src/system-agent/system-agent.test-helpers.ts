@@ -1,4 +1,7 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
 import {
   fingerprintAuthProfileOwnerShape,
@@ -24,7 +27,38 @@ type SystemAgentVerifiedInferenceTestFixture = {
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const routeAgentId = resolveDefaultAgentId(config);
+  const selection = resolveSimpleCompletionSelectionForAgent({
+    cfg: config,
+    agentId: routeAgentId,
+  });
+  const selectedProfileId = selection?.profileId;
+  const cliExecutionProvider = selection
+    ? resolveCliRuntimeExecutionProvider({
+        provider: selection.provider,
+        cfg: config,
+        agentId: routeAgentId,
+        modelId: selection.modelId,
+        ...(selectedProfileId ? { authProfileId: selectedProfileId } : {}),
+      })
+    : undefined;
+  const selectedCredential = selectedProfileId
+    ? ({
+        type: "api_key",
+        provider: cliExecutionProvider ?? selection.runtimeProvider ?? selection.provider,
+        key: "test-key",
+      } as const)
+    : undefined;
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    config,
+    undefined,
+    {
+      loadAuthProfileStoreForRuntime: (() => ({
+        version: 1,
+        profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
+      })) as never,
+    },
+  );
   if (!configuredRoute) {
     throw new Error("missing test route");
   }

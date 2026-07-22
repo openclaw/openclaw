@@ -829,6 +829,7 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
   const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     binding.execution.agentId,
+    deps,
   );
   if (
     !currentRoute ||

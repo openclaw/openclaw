@@ -15,6 +15,10 @@ type CliExecutionAuthProfileSelection = {
   authProfileIdSource?: "auto" | "user";
 };
 
+export class CliExecutionAuthProfileError extends Error {
+  override name = "CliExecutionAuthProfileError";
+}
+
 export function cliBackendAcceptsAuthProfileForwarding(params: {
   provider: string;
   config: OpenClawConfig;
@@ -38,8 +42,10 @@ export function resolveCliExecutionAuthProfileId(params: {
   config: OpenClawConfig;
   agentDir: string;
   selected?: CliExecutionAuthProfileSelection;
+  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
 }): string | undefined {
-  const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+  const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+  const store = loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
@@ -60,9 +66,11 @@ export function resolveCliExecutionAuthProfileId(params: {
     }
     if (params.selected?.authProfileIdSource !== "auto") {
       if (!credential) {
-        throw new Error(`No credentials found for profile "${selectedAuthProfileId}".`);
+        throw new CliExecutionAuthProfileError(
+          `No credentials found for profile "${selectedAuthProfileId}".`,
+        );
       }
-      throw new Error(
+      throw new CliExecutionAuthProfileError(
         `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${selectedAuthProfileId}" owned by "${credential.provider}".`,
       );
     }

@@ -13,6 +13,7 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -1195,7 +1196,17 @@ async function buildTestPlan(params: {
   }
   switch (kind) {
     case "existing-model": {
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId);
+      let route;
+      try {
+        route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId, {
+          loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime,
+        });
+      } catch (error) {
+        if (error instanceof CliExecutionAuthProfileError) {
+          return { error: error.message, status: "auth" as const };
+        }
+        throw error;
+      }
       if (!route) {
         return { error: "No configured default-agent inference route is available." };
       }
@@ -1668,7 +1679,11 @@ async function activateSetupInferenceUnredacted(
       deps,
     });
     if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+      return {
+        ok: false,
+        status: "status" in plan ? plan.status : "unavailable",
+        error: plan.error,
+      };
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
@@ -2621,7 +2636,11 @@ export async function verifySetupInferenceConfig(params: {
       deps,
     });
     if ("error" in builtPlan) {
-      return { ok: false, status: "unavailable", error: builtPlan.error };
+      return {
+        ok: false,
+        status: "status" in builtPlan ? builtPlan.status : "unavailable",
+        error: builtPlan.error,
+      };
     }
     let plan: SetupInferenceTestPlan = builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
@@ -2880,7 +2899,11 @@ export async function completeSetupInferenceConfig(params: {
       deps,
     });
     if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+      return {
+        ok: false,
+        status: "status" in plan ? plan.status : "unavailable",
+        error: plan.error,
+      };
     }
     const result = await runSetupInferenceTest({
       plan,

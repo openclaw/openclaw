@@ -489,15 +489,20 @@ describe("verified OpenClaw inference binding", () => {
       },
       auth: { profiles: { [profileId]: { provider: "claude-cli", mode: "api_key" } } },
     } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
-      throw new Error("missing test CLI SecretRef route");
-    }
     const credential = {
       type: "api_key" as const,
       provider: "claude-cli",
       keyRef: { source: "file" as const, provider: "vault", id: "/claude/work" },
     };
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig, undefined, {
+      loadAuthProfileStoreForRuntime: (() => ({
+        version: 1,
+        profiles: { [profileId]: credential },
+      })) as never,
+    });
+    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
+      throw new Error("missing test CLI SecretRef route");
+    }
     let activeKey = "materialized-a";
     const ensureStore = vi.fn(() => ({
       version: 1,
