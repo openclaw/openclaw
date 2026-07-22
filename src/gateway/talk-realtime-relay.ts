@@ -1585,10 +1585,7 @@ export function cancelTalkRealtimeRelayTurn(params: {
       }
     }
   }
-  session.harness.handleBargeIn(
-    { audioPlaybackActive: true },
-    noFallbackRelayOutputFlush,
-  );
+  session.harness.handleBargeIn({ audioPlaybackActive: true }, noFallbackRelayOutputFlush);
   abortRelayAgentRuns(session, reason);
   const cancelled = session.harness.talk.cancelTurn({
     turnId,
