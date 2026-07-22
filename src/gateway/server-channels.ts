@@ -446,19 +446,36 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     store: ChannelRuntimeStore,
     options: { includeKnownAccountHandoffs?: boolean } = {},
   ): string[] => {
-    const known = new Set<string>([
-      ...store.aborts.keys(),
-      ...store.starting.keys(),
-      ...store.tasks.keys(),
-    ]);
+    const known = new Set<string>();
+    const includeKnownAccountHandoffs = options.includeKnownAccountHandoffs === true;
+    const addKnownLifecycleId = (id: string) => {
+      const rKey = restartKey(channelId, id);
+      const snapshot = store.runtimes.get(id);
+      if (
+        recoveryStopTimedOut.has(rKey) &&
+        snapshot?.restartPending !== true &&
+        !(includeKnownAccountHandoffs && knownAccountDeferredToCaller.has(rKey))
+      ) {
+        return;
+      }
+      known.add(id);
+    };
+    for (const id of store.aborts.keys()) {
+      addKnownLifecycleId(id);
+    }
+    for (const id of store.starting.keys()) {
+      addKnownLifecycleId(id);
+    }
+    for (const id of store.tasks.keys()) {
+      addKnownLifecycleId(id);
+    }
     for (const [id, snapshot] of store.runtimes.entries()) {
       // `connected` can be stale after a clean stop. Treat only active or
       // explicitly handoff-pending accounts as known-live restart candidates.
       if (
         snapshot.running ||
         snapshot.restartPending ||
-        (options.includeKnownAccountHandoffs === true &&
-          knownAccountDeferredToCaller.has(restartKey(channelId, id)))
+        (includeKnownAccountHandoffs && knownAccountDeferredToCaller.has(restartKey(channelId, id)))
       ) {
         known.add(id);
       }
@@ -493,7 +510,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
-    startOptions: StartChannelOptions = {},
+    optsValue: StartChannelOptions = {},
   ) => {
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
@@ -504,7 +521,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       includeKnownAccounts = false,
       preserveRestartAttempts = false,
       preserveManualStop = false,
-    } = startOptions;
+    } = optsValue;
     const cfg = getRuntimeConfig();
     resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
@@ -530,7 +547,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (accountIds.length === 0) {
       return;
     }
-    if (autostartSuppression && startOptions.manual !== true) {
+    if (autostartSuppression && optsValue.manual !== true) {
       // Safe mode must block every automatic channel start surface; otherwise
       // config reloads can undo the crash-loop breaker while operators inspect.
       const suffix = accountId ? ` account ${accountId}` : "";
@@ -770,8 +787,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (startOptions.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(startOptions.deferAccountStartUntil, abort.signal);
+            if (optsValue.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(optsValue.deferAccountStartUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
