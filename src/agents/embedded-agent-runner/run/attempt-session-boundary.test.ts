@@ -260,4 +260,92 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
     expect(activeSession.agent.state.messages).toBe(repairedMessages);
   });
+
+  it("drops an empty aborted assistant leaf before repairing its user parent", () => {
+    const repairedMessages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "repaired" }], timestamp: 2 },
+    ];
+    const { activeSession } = createActiveSession();
+    const branch = vi.fn();
+    const entries = {
+      aborted: {
+        id: "aborted",
+        parentId: "user-leaf",
+        type: "message",
+        timestamp: "2026-07-20T00:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          stopReason: "aborted",
+        },
+      },
+      "user-leaf": {
+        id: "user-leaf",
+        parentId: "parent-entry",
+        type: "message",
+        timestamp: "2026-07-20T00:00:00.000Z",
+        message: { role: "user", content: "old" },
+      },
+    } as const;
+    let leafId: keyof typeof entries = "aborted";
+    branch.mockImplementation((id: keyof typeof entries) => {
+      leafId = id;
+    });
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => entries[leafId],
+      getEntry: (id: keyof typeof entries) => entries[id],
+      branch,
+      clearNextUserMessagePersistenceSuppression: vi.fn(),
+      buildSessionContext: () => ({ messages: repairedMessages }),
+    });
+
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: { prompt: "new", trigger: "user" },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    expect(branch).toHaveBeenNthCalledWith(1, "user-leaf");
+    expect(branch).toHaveBeenNthCalledWith(2, "parent-entry");
+    expect(boundary.orphanRepair?.removeLeaf).toBe(true);
+    expect(activeSession.agent.state.messages).toBe(repairedMessages);
+  });
+
+  it("preserves aborted assistant leaves that contain visible text", () => {
+    const { activeSession } = createActiveSession();
+    const branch = vi.fn();
+    const assistantLeaf = {
+      id: "assistant-leaf",
+      parentId: "user-leaf",
+      type: "message",
+      timestamp: "2026-07-20T00:00:00.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+    } as const;
+    const sessionManager = createSessionManager({
+      getLeafEntry: () => assistantLeaf,
+      getEntry: () => undefined,
+      branch,
+    });
+
+    const boundary = prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      attempt: { prompt: "new", trigger: "user" },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager,
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+
+    expect(branch).not.toHaveBeenCalled();
+    expect(boundary.orphanRepair).toBeUndefined();
+  });
 });

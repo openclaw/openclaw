@@ -5,6 +5,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import {
+  dropReplayableAbortedAssistantLeaf,
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
@@ -46,6 +47,14 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     // queued work, and the normal system prompt would contaminate it.
     activeSession.agent.reset();
     input.setActiveSessionSystemPrompt("");
+  }
+
+  if (
+    !isRawModelRun &&
+    !attempt.suppressNextUserMessagePersistence &&
+    dropReplayableAbortedAssistantLeaf(sessionManager)
+  ) {
+    activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
   }
 
   const orphanRepair = isRawModelRun

@@ -1,7 +1,7 @@
 /**
  * Cap on consecutive attempts that ended in an idle timeout without completed
  * model progress, before the outer run loop refuses to start another attempt.
- * Distinct from MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES (which gates one extra
+ * Distinct from MAX_SAME_MODEL_TIMEOUT_RETRIES (which gates one extra
  * retry on the same model before failover) and the broad MAX_RUN_LOOP_ITERATIONS
  * backstop in run.ts.
  *
