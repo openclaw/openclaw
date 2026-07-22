@@ -293,7 +293,7 @@ describe("claws cli", () => {
         },
       },
     });
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
 
     await runClawsAddCommand(manifestPath, { dryRun: true, workspace }, mocks.runtime);
 

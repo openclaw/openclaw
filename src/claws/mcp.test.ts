@@ -1,7 +1,6 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -10,9 +9,10 @@ import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function fixture(agentId = "worker", root?: string) {
-  const packageRoot = root ?? (await mkdtemp(join(tmpdir(), "openclaw-claw-mcp-")));
+  const packageRoot = root ?? tempDirs.make("openclaw-claw-mcp-");
   const parsed = parseClawManifest({
     schemaVersion: 1,
     agent: { id: agentId },

@@ -1,7 +1,6 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -13,6 +12,7 @@ import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const sourceServer = {
   command: "uvx",
@@ -21,7 +21,7 @@ const sourceServer = {
 };
 
 async function addMcpFixture() {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-remove-mcp-"));
+  const root = tempDirs.make("openclaw-claw-remove-mcp-");
   const parsed = parseClawManifest({
     schemaVersion: 1,
     agent: { id: "worker", name: "Worker" },
