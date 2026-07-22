@@ -72,6 +72,24 @@ describe("startHeartbeatRunner", () => {
     cronOwnedRunner.stop();
   });
 
+  it("chains clamped fallback timers past Node's setTimeout cap to long due times", async () => {
+    useFakeHeartbeatTime();
+    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "60d" } } },
+        cron: { enabled: false },
+      } as OpenClawConfig,
+      runOnce,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    // 60d exceeds the ~24.85d setTimeout cap: each clamped firing defers
+    // not-due and must re-arm until the real due slot inside 60d passes.
+    await vi.advanceTimersByTimeAsync(61 * 24 * 60 * 60 * 1000);
+    expect(runOnce).toHaveBeenCalled();
+    runner.stop();
+  });
+
   function resolveDueFromNow(nowMs: number, intervalMs: number, agentId: string) {
     return computeNextHeartbeatPhaseDueMs({
       nowMs,

@@ -2426,10 +2426,13 @@ export function startHeartbeatRunner(opts: {
     decision?: DeferDecision,
   ) => {
     if (!decision?.defer || decision.reason === "not-due" || agent.nextDueMs > now) {
+      // A clamped fallback timer (interval beyond Node's setTimeout cap) can
+      // fire before nextDueMs; re-arm so the chain reaches the real due time.
+      scheduleFallbackNext();
       return;
     }
     // Deferrals that do not have wake-layer retry ownership still need to move
-    // the due slot forward; otherwise scheduleNext() will keep rearming at 0ms.
+    // the due slot forward; otherwise the fallback timer would rearm at 0ms.
     advanceAgentSchedule(agent, now, reason);
   };
 
