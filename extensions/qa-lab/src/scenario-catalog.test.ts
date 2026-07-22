@@ -174,6 +174,9 @@ describe("qa scenario catalog", () => {
     const cronRestart = requireFlowScenario(
       readQaScenarioById("cron-model-created-one-shot-recurring"),
     );
+    const cronAuthority = requireFlowScenario(
+      readQaScenarioById("cron-model-created-explicit-authority"),
+    );
 
     expect(staleLinks.execution.suiteIsolation).toBe("isolated");
     expect(staleLinks.execution.isolationReason).toContain("gateway session");
@@ -182,6 +185,19 @@ describe("qa scenario catalog", () => {
     expect(cronRestart.execution.suiteIsolation).toBe("isolated");
     expect(cronRestart.execution.retryCount).toBe(0);
     expect(JSON.stringify(cronRestart.execution.flow)).toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(cronAuthority.execution.suiteIsolation).toBe("isolated");
+    expect(cronAuthority.execution.retryCount).toBe(0);
+    expect(cronAuthority.runtimeParityTier).toBe("live-only");
+    expect(JSON.stringify(cronAuthority.gatewayConfigPatch)).toContain(
+      "qa-cron-authority-operator",
+    );
+    const cronAuthorityFlow = JSON.stringify(cronAuthority.execution.flow);
+    expect(cronAuthorityFlow).toContain("toolsAllowIsDefault");
+    expect(cronAuthorityFlow).toContain("model did not request wildcard authority");
+    expect(cronAuthorityFlow).toContain("model did not request overbroad authority");
+    expect(cronAuthorityFlow).toContain("overbroad policy was not intersected");
+    expect(cronAuthorityFlow).not.toContain("cron.run");
+    expect(cronAuthorityFlow).not.toContain("waitForCronRunCompletion");
   });
 
   it("requires explicit suite isolation for gateway state restart scenarios", () => {
@@ -193,6 +209,7 @@ describe("qa scenario catalog", () => {
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "active-memory-preprompt-recall",
+      "cron-model-created-explicit-authority",
       "cron-model-created-one-shot-recurring",
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
