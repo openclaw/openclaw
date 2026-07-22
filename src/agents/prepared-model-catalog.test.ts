@@ -47,6 +47,7 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalogSnapshot,
+  loadPublishedPreparedModelCatalog,
   loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
@@ -144,6 +145,18 @@ describe("prepared model catalog access", () => {
       expect(mocks.acquireSnapshot).not.toHaveBeenCalled();
     },
   );
+
+  it("projects published replacement entries for runtime callers", async () => {
+    const committedSnapshot = {
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/committed" } } },
+    };
+    mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+    await expect(loadPublishedPreparedModelCatalog({ readOnly: true })).resolves.toBe(
+      committedSnapshot.modelCatalog.entries,
+    );
+  });
 
   it("prefers the full published generation for read-only access", () => {
     mocks.getSnapshot.mockReturnValue(fullSnapshot);
