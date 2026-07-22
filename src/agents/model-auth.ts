@@ -50,9 +50,12 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
-  resolveInlineProviderApiKeyUnusableUntil,
 } from "./auth-profiles.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import {
+  isAuthCooldownBypassedForProvider,
+  resolveProfileUnusableUntil,
+} from "./auth-profiles/usage-state.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -441,11 +444,27 @@ export function isConfigBackedInlineProviderApiKey(params: {
   return Boolean(perEntryRawKey && !params.store?.profiles[perEntryRawKey]);
 }
 
+// Reads the inline provider API-key cooldown via usage-state primitives instead
+// of the auth-profiles usage module, so model-auth keeps working in the many
+// tests that partially mock that module. Mirrors the usage-module helper of the
+// same intent, using the same provider normalization as the write side so the
+// `inline-api-key:<provider>` usage id matches what the failure marker records.
+function resolveInlineProviderApiKeyCooldownUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+  return stats ? resolveProfileUnusableUntil(stats) : null;
+}
+
 function assertInlineProviderApiKeyUsable(params: {
   store: AuthProfileStore;
   provider: string;
 }): void {
-  const unusableUntil = resolveInlineProviderApiKeyUnusableUntil(params.store, params.provider);
+  const unusableUntil = resolveInlineProviderApiKeyCooldownUntil(params.store, params.provider);
   if (typeof unusableUntil !== "number" || unusableUntil <= Date.now()) {
     return;
   }
@@ -1015,7 +1034,7 @@ export function hasRuntimeAvailableProviderAuth(params: {
 
   const inlineProviderApiKeyUsable = params.store
     ? (() => {
-        const unusableUntil = resolveInlineProviderApiKeyUnusableUntil(params.store, provider);
+        const unusableUntil = resolveInlineProviderApiKeyCooldownUntil(params.store, provider);
         return unusableUntil === null || unusableUntil === undefined || unusableUntil <= Date.now();
       })()
     : true;
@@ -1955,7 +1974,7 @@ export async function hasAvailableAuthForProvider(params: {
       provider,
       preferredProfile,
     });
-  const inlineUnusableUntil = resolveInlineProviderApiKeyUnusableUntil(store, provider);
+  const inlineUnusableUntil = resolveInlineProviderApiKeyCooldownUntil(store, provider);
   const inlineProviderApiKeyUsable =
     typeof inlineUnusableUntil !== "number" || inlineUnusableUntil <= Date.now();
   const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
