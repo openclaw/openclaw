@@ -1034,7 +1034,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         runtime.log?.("slack: drop slash arg action payload (mismatched app/team)");
         return;
       }
-      const respondFn: SlackCommandMiddlewareArgs["respond"] =
+      const respondFn: (
+        message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0],
+      ) => Promise<unknown> =
         respond ??
         (async (message) => {
           if (!body.channel?.id || !body.user?.id) {

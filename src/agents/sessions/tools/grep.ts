@@ -3,7 +3,6 @@
  *
  * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
  */
-import type { ChildProcess } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -160,7 +159,7 @@ export function createGrepToolDefinition(
         // Keep cancellation live from the first await through async result formatting.
         // Settlement owns listener cleanup; spawned children stop without waiting for close.
         let settled = false;
-        let child: ChildProcess | undefined;
+        let child: ReturnType<typeof spawnCommand> | undefined;
         let childClosed = false;
         let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
