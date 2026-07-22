@@ -5,6 +5,7 @@ import {
 import type { GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
 import { controlUiVersionDiffersFrom } from "../build-info.ts";
+import { t } from "../i18n/index.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
   createDevicePairSetupState,
@@ -15,7 +16,6 @@ import {
   type DevicePairSetup,
   type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
-import { createDeviceAuthMigrationController } from "./device-auth-migration.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -30,7 +30,15 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { resolveUpdateStatusBanner, type ApplicationStatusBanner } from "./update-status-banner.ts";
+
+type ApplicationStatusBanner = {
+  tone: "danger" | "warn" | "info";
+  text: string;
+};
+
+type DeviceAuthMigrationController = ReturnType<
+  (typeof import("./device-auth-migration.ts"))["createDeviceAuthMigrationController"]
+>;
 
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -107,6 +115,41 @@ function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | nu
         channel: value.channel,
       }
     : null;
+}
+
+function resolveUpdateStatusBanner(params: {
+  status?: string;
+  reason?: string;
+}): ApplicationStatusBanner {
+  const status = (params.status ?? "error").trim() || "error";
+  const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
+  const guidance =
+    {
+      dirty: "Commit or stash changes, then retry.",
+      "no-upstream": "Set an upstream branch, then retry.",
+      "not-git-install":
+        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
+      "not-openclaw-root":
+        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
+      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
+      "build-failed": "Build failed. Fix the build error and retry.",
+      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
+      "global-install-failed":
+        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
+      "restart-disabled":
+        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry.",
+      "restart-unavailable":
+        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
+      "restart-unhealthy":
+        "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      "managed-service-handoff-already-running":
+        "Another managed update is already running. Wait for it to complete, then refresh update status.",
+      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
+    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
+  return {
+    tone: status === "skipped" ? "warn" : "danger",
+    text: `Update ${status}: ${reason}. ${guidance}`,
+  };
 }
 
 function resolveUpdateVerificationBanner(params: {
@@ -261,14 +304,83 @@ export function createApplicationOverlays(
     activeClient === client &&
     gateway.snapshot.client === client &&
     gateway.snapshot.connected;
-  const deviceAuthMigration = createDeviceAuthMigrationController({
-    gateway,
-    isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
-    onChange: (next) => {
-      snapshot = { ...snapshot, ...next };
-      publish();
-    },
-  });
+  let deviceAuthMigration: DeviceAuthMigrationController | null = null;
+  let deviceAuthMigrationLoad: Promise<DeviceAuthMigrationController | null> | null = null;
+  const resetDeviceAuthMigration = () => {
+    if (deviceAuthMigration) {
+      deviceAuthMigration.reset();
+      return;
+    }
+    snapshot = {
+      ...snapshot,
+      deviceAuthMigrationRequestId: null,
+      deviceAuthMigrationBusy: false,
+      deviceAuthMigrationError: null,
+    };
+    publish();
+  };
+  const loadDeviceAuthMigration = (client: NonNullable<typeof activeClient>, epoch: number) => {
+    if (deviceAuthMigration) {
+      return Promise.resolve(deviceAuthMigration);
+    }
+    // This is a rare upgrade-only flow. Load it once when hello reports the
+    // pending transition so ordinary Control UI startup does not pay its cost.
+    deviceAuthMigrationLoad ??= import("./device-auth-migration.ts")
+      .then(({ createDeviceAuthMigrationController }) => {
+        if (disposed) {
+          return null;
+        }
+        const controller = createDeviceAuthMigrationController({
+          gateway,
+          isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
+          onChange: (next) => {
+            snapshot = { ...snapshot, ...next };
+            publish();
+          },
+        });
+        deviceAuthMigration = controller;
+        return controller;
+      })
+      .catch((error: unknown) => {
+        deviceAuthMigrationLoad = null;
+        if (
+          !disposed &&
+          epoch === connectedEpoch &&
+          isCurrentClient(client) &&
+          gateway.snapshot.hello?.deviceAuthMigration?.pending === true
+        ) {
+          snapshot = {
+            ...snapshot,
+            deviceAuthMigrationError: t("login.deviceAuthMigration.loadFailed", {
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          };
+          publish();
+        }
+        return null;
+      });
+    return deviceAuthMigrationLoad;
+  };
+  const refreshDeviceAuthMigration = async (
+    client: NonNullable<typeof activeClient>,
+    epoch: number,
+  ) => {
+    if (gateway.snapshot.hello?.deviceAuthMigration?.pending !== true) {
+      resetDeviceAuthMigration();
+      return;
+    }
+    const controller = await loadDeviceAuthMigration(client, epoch);
+    if (
+      !controller ||
+      epoch !== connectedEpoch ||
+      !isCurrentClient(client) ||
+      gateway.snapshot.hello?.deviceAuthMigration?.pending !== true
+    ) {
+      controller?.reset();
+      return;
+    }
+    await controller.refresh(client, epoch);
+  };
 
   const refreshDevicePairPendingCount = async () => {
     const client = gateway.snapshot.client;
@@ -449,7 +561,7 @@ export function createApplicationOverlays(
     if (previousClient !== next.client || !next.connected) {
       approvalDecision = null;
       devicePairPendingCountGeneration += 1;
-      deviceAuthMigration.reset();
+      resetDeviceAuthMigration();
       closeDevicePairSetupState(devicePairSetupState);
       devicePairSetupState.pendingCount = 0;
     }
@@ -481,7 +593,7 @@ export function createApplicationOverlays(
     if (connectedSourceChanged) {
       connectedEpoch += 1;
       void refreshApprovals(next.client, connectedEpoch);
-      void deviceAuthMigration.refresh(next.client, connectedEpoch);
+      void refreshDeviceAuthMigration(next.client, connectedEpoch);
       void verifyPendingUpdateVersion(next.client, connectedEpoch);
     }
   };
@@ -494,7 +606,7 @@ export function createApplicationOverlays(
     if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
       void refreshDevicePairPendingCount();
       if (activeClient) {
-        void deviceAuthMigration.refresh(activeClient, connectedEpoch);
+        void refreshDeviceAuthMigration(activeClient, connectedEpoch);
       }
       return;
     }
@@ -706,14 +818,14 @@ export function createApplicationOverlays(
       publish();
     },
     async secureThisBrowser() {
-      await deviceAuthMigration.secure(activeClient, connectedEpoch);
+      await deviceAuthMigration?.secure(activeClient, connectedEpoch);
     },
     dispose() {
       disposed = true;
       approvalDecision = null;
       updateRunGeneration += 1;
       devicePairPendingCountGeneration += 1;
-      deviceAuthMigration.dispose();
+      deviceAuthMigration?.dispose();
       cancelUpdateVerification();
       closeDevicePairSetupState(devicePairSetupState);
       stopGateway();
