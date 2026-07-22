@@ -656,12 +656,19 @@ function enrichAgentEvent(
   return enriched;
 }
 
+/** Emits an event only when its run ownership is still current. */
+export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
+  const enriched = enrichAgentEvent(event);
+  if (!enriched) {
+    return false;
+  }
+  notifyListeners(getAgentEventState().listeners, enriched);
+  return true;
+}
+
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
-  const enriched = enrichAgentEvent(event);
-  if (enriched) {
-    notifyListeners(getAgentEventState().listeners, enriched);
-  }
+  emitAgentEventIfCurrent(event);
 }
 
 export function emitAgentEventForOwner(

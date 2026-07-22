@@ -8,6 +8,7 @@ import {
   emitAgentAuditEvent,
   emitAgentEvent,
   emitAgentEventForOwner,
+  emitAgentEventIfCurrent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   listAgentRunsForSession,
@@ -91,7 +92,13 @@ describe("agent-events sequencing", () => {
         runId: "usage-run",
         lifecycleGeneration,
         outputTokens,
-        emit: (data) => emitAgentEvent({ runId: "usage-run", stream: "usage", data }),
+        emit: (data) =>
+          emitAgentEventIfCurrent({
+            runId: "usage-run",
+            lifecycleGeneration,
+            stream: "usage",
+            data,
+          }),
       });
     };
 
@@ -340,18 +347,22 @@ describe("agent-events sequencing", () => {
     const seen: AgentEventPayload[] = [];
     const stop = onAgentEvent((event) => seen.push(event));
 
-    emitAgentEvent({
-      runId: "shared-run",
-      lifecycleGeneration: "pre-restart",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-    emitAgentEvent({
-      runId: "shared-run",
-      lifecycleGeneration: activeGeneration,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    expect(
+      emitAgentEventIfCurrent({
+        runId: "shared-run",
+        lifecycleGeneration: "pre-restart",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      }),
+    ).toBe(false);
+    expect(
+      emitAgentEventIfCurrent({
+        runId: "shared-run",
+        lifecycleGeneration: activeGeneration,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      }),
+    ).toBe(true);
     stop();
 
     expect(seen).toHaveLength(1);

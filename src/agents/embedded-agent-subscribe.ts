@@ -13,7 +13,7 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -636,7 +636,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
       outputTokens,
-      emit: (usage) => emitAgentEvent({ runId: params.runId, stream: "usage", data: usage }),
+      emit: (usage) =>
+        emitAgentEventIfCurrent({
+          runId: params.runId,
+          lifecycleGeneration: params.lifecycleGeneration,
+          stream: "usage",
+          data: usage,
+        }),
     });
     if (!data || !params.onAgentEvent) {
       return;
