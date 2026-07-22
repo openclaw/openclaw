@@ -187,6 +187,7 @@ actor GatewayConnection {
     private let endpointProvider: EndpointProvider
     private let supportsSharedEndpointRecovery: Bool
     private let activationBindingKeyProvider: @Sendable () -> SymmetricKey?
+    private let includeDeviceIdentity: Bool
     private let sessionBox: WebSocketSessionBox?
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
@@ -233,6 +234,7 @@ actor GatewayConnection {
         self.endpointProvider = endpointProvider
         self.supportsSharedEndpointRecovery = supportsSharedEndpointRecovery
         self.activationBindingKeyProvider = activationBindingKeyProvider
+        self.includeDeviceIdentity = true
         self.sessionBox = sessionBox
         self.clientShutdown = clientShutdown
     }
@@ -255,6 +257,9 @@ actor GatewayConnection {
         }
         self.supportsSharedEndpointRecovery = false
         self.activationBindingKeyProvider = activationBindingKeyProvider
+        // Mock WebSocket routes do not exercise device authentication and must not
+        // depend on the process-global persisted identity store.
+        self.includeDeviceIdentity = false
         self.sessionBox = sessionBox
         self.clientShutdown = clientShutdown
     }
@@ -918,6 +923,7 @@ extension GatewayConnection {
                 clientId: "openclaw-macos",
                 clientMode: "ui",
                 clientDisplayName: InstanceIdentity.displayName,
+                includeDeviceIdentity: self.includeDeviceIdentity,
                 allowStoredDeviceAuth: deviceAuthGatewayID != nil,
                 deviceAuthGatewayID: deviceAuthGatewayID),
             disconnectHandler: { [weak self] _, socketGeneration in
