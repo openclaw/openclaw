@@ -71,6 +71,7 @@ export type TelegramSendRichMessageParams = {
   message_thread_id?: number;
   direct_messages_topic_id?: number;
   rich_message: TelegramInputRichMessage;
+  link_preview_options?: { is_disabled: true };
   disable_notification?: boolean;
   protect_content?: boolean;
   allow_paid_broadcast?: boolean;
@@ -91,6 +92,7 @@ export type TelegramEditRichMessageTextParams = {
   message_id?: number;
   inline_message_id?: string;
   rich_message: TelegramInputRichMessage;
+  link_preview_options?: { is_disabled: true };
   reply_markup?: InlineKeyboardMarkup;
 };
 

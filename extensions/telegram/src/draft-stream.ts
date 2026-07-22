@@ -219,6 +219,7 @@ export function createTelegramDraftStream(params: {
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
+  linkPreview?: boolean;
   richMessages?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
@@ -238,6 +239,7 @@ export function createTelegramDraftStream(params: {
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
+  const linkPreviewOptions = params.linkPreview === false ? { is_disabled: true } : undefined;
   const sendMessageParams =
     replyToMessageId != null
       ? {
@@ -248,6 +250,10 @@ export function createTelegramDraftStream(params: {
           },
         }
       : (threadParams ?? {});
+  const sendMessageLinkPreviewParams =
+    linkPreviewOptions != null
+      ? { ...sendMessageParams, link_preview_options: linkPreviewOptions }
+      : sendMessageParams;
   const richMessageParams: Omit<TelegramSendRichMessageParams, "chat_id" | "rich_message"> =
     replyToMessageId != null
       ? {
@@ -258,6 +264,10 @@ export function createTelegramDraftStream(params: {
           },
         }
       : (threadParams ?? {});
+  const richMessageLinkPreviewParams =
+    linkPreviewOptions != null
+      ? { ...richMessageParams, link_preview_options: linkPreviewOptions }
+      : richMessageParams;
 
   const streamState = { stopped: false, final: false };
   let messageSendAttempted = false;
@@ -293,7 +303,7 @@ export function createTelegramDraftStream(params: {
         return await getTelegramRichRawApi(params.api).sendRichMessage({
           chat_id: chatId,
           rich_message: richPlan.richMessage,
-          ...richMessageParams,
+          ...richMessageLinkPreviewParams,
         });
       } catch (err) {
         const fallbackPlan = buildTelegramPlainFallbackPlan({
@@ -305,19 +315,27 @@ export function createTelegramDraftStream(params: {
         if (!fallbackPlan) {
           throw err;
         }
-        return await params.api.sendMessage(chatId, fallbackPlan.plainText, sendMessageParams);
+        return await params.api.sendMessage(
+          chatId,
+          fallbackPlan.plainText,
+          sendMessageLinkPreviewParams,
+        );
       }
     }
     const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     const sendPlain = async () =>
-      await params.api.sendMessage(chatId, transportPreview.plainText, sendMessageParams);
+      await params.api.sendMessage(
+        chatId,
+        transportPreview.plainText,
+        sendMessageLinkPreviewParams,
+      );
     if (transportPreview.parseMode !== "HTML") {
       return await sendPlain();
     }
     try {
       return await params.api.sendMessage(chatId, transportPreview.text, {
         parse_mode: "HTML" as const,
-        ...sendMessageParams,
+        ...sendMessageLinkPreviewParams,
       });
     } catch (err) {
       if (!isTelegramHtmlParseError(err)) {
@@ -344,6 +362,7 @@ export function createTelegramDraftStream(params: {
             chat_id: chatId,
             message_id: streamMessageId,
             rich_message: richPlan.richMessage,
+            ...richMessageLinkPreviewParams,
           });
         } catch (err) {
           const fallbackPlan = buildTelegramPlainFallbackPlan({
@@ -355,7 +374,12 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await params.api.editMessageText(chatId, streamMessageId, fallbackPlan.plainText);
+          await params.api.editMessageText(
+            chatId,
+            streamMessageId,
+            fallbackPlan.plainText,
+            linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : undefined,
+          );
         }
         return true;
       }
@@ -364,15 +388,26 @@ export function createTelegramDraftStream(params: {
         try {
           await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
             parse_mode: "HTML" as const,
+            ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await params.api.editMessageText(chatId, streamMessageId, transportPreview.plainText);
+          await params.api.editMessageText(
+            chatId,
+            streamMessageId,
+            transportPreview.plainText,
+            linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : undefined,
+          );
         }
       } else {
-        await params.api.editMessageText(chatId, streamMessageId, transportPreview.text);
+        await params.api.editMessageText(
+          chatId,
+          streamMessageId,
+          transportPreview.text,
+          linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : undefined,
+        );
       }
       return true;
     }

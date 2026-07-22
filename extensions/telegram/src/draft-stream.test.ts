@@ -172,6 +172,32 @@ describe("createTelegramDraftStream", () => {
     expectPreviewEdit(api, "Hello again");
   });
 
+  it("disables link previews for plain draft send and edit when configured", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      linkPreview: false,
+    });
+
+    stream.update("Hello https://example.test");
+    await vi.waitFor(() =>
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello https://example.test", {
+        message_thread_id: 42,
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+
+    stream.update("Hello again https://example.test");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      17,
+      "Hello again https://example.test",
+      { link_preview_options: { is_disabled: true } },
+    );
+  });
+
   it("tracks when a message preview first became visible", async () => {
     vi.useFakeTimers();
     try {
@@ -902,6 +928,45 @@ describe("createTelegramDraftStream", () => {
       rich_message: {
         html: "<h2>Plan updated</h2><table bordered striped><thead><tr><th>B</th></tr></thead></table>",
       },
+    });
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("disables link previews for rich draft send and edit when configured", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      richMessages: true,
+      linkPreview: false,
+    });
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
+        html: "<h2>Plan</h2><table bordered striped><thead><tr><th>A</th></tr></thead></table>",
+      },
+      link_preview_options: { is_disabled: true },
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Plan updated",
+      richMessage: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: {
+        html: "<h2>Plan updated</h2><table bordered striped><thead><tr><th>B</th></tr></thead></table>",
+      },
+      link_preview_options: { is_disabled: true },
     });
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
