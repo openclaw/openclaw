@@ -1626,6 +1626,7 @@ surfaces:
                 runtime.codex-native-workspace.read,
                 runtime.prompt-compatibility,
                 runtime.tool-continuity,
+                tools.ask-user,
                 tools.apply-patch,
                 tools.edit,
                 tools.evidence,
@@ -2806,12 +2807,18 @@ surfaces:
           - name: Agent cron tool
             coverageIds: [channels.qa-channel, personal.reminders, scheduling.cron]
             description: Covers Agent cron tool across cron job creation, listing, inspection, editing, and related cron job lifecycle behavior.
+          - name: Model-authored cron jobs
+            coverageIds: [agents.tool-use]
+            description: Covers model-driven cron tool calls that create and manage scheduled jobs.
           - name: Manual cron runs
             coverageIds: [scheduling.cron]
             description: Covers Manual cron runs across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.
           - name: Isolated cron execution
             coverageIds: [scheduling.cron, scheduling.dedup]
             description: Covers Isolated cron execution across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.
+          - name: Scheduler persistence
+            coverageIds: [scheduling.persistence]
+            description: Covers scheduled job persistence and recovery across Gateway restarts.
           - name: Model/provider preflight
             coverageIds: [automation.model-provider-preflight]
             description: Covers Model/provider preflight across scheduler dispatch, timer arming, manual/due runs, isolated agent execution, and related cron runs and diagnostics behavior.

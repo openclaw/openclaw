@@ -288,6 +288,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
     mocks.ensureWorkspace.mockImplementation(async () => {
       mocks.events.push("workspace");
+      return { bootstrapPending: true };
     });
     mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
@@ -321,9 +322,60 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     const result = await applySystemAgentSetup(baseParams({ expectedConfigHash: null }));
 
     expect(result.configHashBefore).toBeNull();
+    expect(result.bootstrapPending).toBe(true);
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: { defaults: { workspace: "/tmp/openclaw-workspace" } },
     });
+  });
+
+  it("does not mistake a proposal-created roster for an existing fleet", async () => {
+    const absent = snapshot(null, {});
+    mocks.state.initialSnapshot = absent;
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = absent;
+    mocks.state.commitPreviousHash = null;
+
+    await applySystemAgentSetup(
+      baseParams({
+        expectedConfigHash: null,
+        workspace: "/tmp/requested-workspace",
+        configPatch: { agents: { list: [{ id: "main" }] } },
+      }),
+    );
+
+    expect(mocks.state.persistedConfig?.agents).toMatchObject({
+      defaults: { workspace: "/tmp/requested-workspace" },
+      list: [{ id: "main" }],
+    });
+  });
+
+  it("keeps an existing fleet workspace for unconfirmed setup apply", async () => {
+    const config = {
+      agents: {
+        defaults: { workspace: "/tmp/current-workspace" },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    } satisfies OpenClawConfig;
+    mocks.state.initialSnapshot = snapshot("probe", config);
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = snapshot("probe", config);
+
+    await applySystemAgentSetup(
+      baseParams({
+        workspace: "/tmp/requested-workspace",
+        configPatch: {
+          agents: { defaults: { workspace: "/tmp/patch-workspace" }, list: null },
+        },
+      }),
+    );
+
+    expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
+    expect(mocks.state.persistedConfig?.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+      "/tmp/current-workspace",
+      runtime,
+      expect.any(Object),
+    );
   });
 
   it("rejects invalid config before any setup mutation", async () => {

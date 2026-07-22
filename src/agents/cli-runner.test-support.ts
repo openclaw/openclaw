@@ -3,7 +3,7 @@ import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import { getClaudeLiveSessionGenerationForOwner } from "./cli-runner/claude-live-session.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 

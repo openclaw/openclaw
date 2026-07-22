@@ -4,7 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
   providerContextTokenCacheKey,
@@ -934,7 +934,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
   });
 
-  it("shows 1M context window for claude opus 4.7 variants", () => {
+  it("keeps bare Claude CLI opus 4.7 variants at the plan-safe context window", () => {
     const text = buildStatusMessage({
       agent: {
         model: "claude-cli/claude-opus-4.7-20260219",
@@ -951,8 +951,8 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Context: 200k/1.0m");
-    expect(normalized).not.toContain("Context: 200k/200k");
+    expect(normalized).toContain("Context: 200k/200k");
+    expect(normalized).not.toContain("Context: 200k/1.0m");
   });
 
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
@@ -1137,7 +1137,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("oauth (anthropic:claude-cli)");
     expect(normalized).not.toContain("Fallback: claude-cli/claude-opus-4-7");
     expect(normalized).not.toContain("unknown");
-    expect(normalized).toContain("Context: 36k/1.0m (4%)");
+    expect(normalized).toContain("Context: 36k/200k (18%)");
   });
 
   it("prefers active CLI OAuth over selected env API-key labels for runtime aliases", () => {

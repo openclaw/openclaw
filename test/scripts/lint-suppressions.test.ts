@@ -195,11 +195,11 @@ describe("production lint suppressions", () => {
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
-        "extensions/reef/src/transport.ts|no-useless-assignment|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
         "scripts/changed-lanes.mjs|typescript/no-base-to-string|2",
         "scripts/changed-lanes.mjs|typescript/restrict-template-expressions|2",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
+        "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -234,11 +234,12 @@ describe("production lint suppressions", () => {
         "src/system-agent/setup-inference.ts|no-unsafe-finally|1",
         "src/system-agent/setup-inference.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/version.ts|eslint/no-underscore-dangle|1",
         "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
+        // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
+        "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),
     );
   });

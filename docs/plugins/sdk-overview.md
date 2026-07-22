@@ -41,9 +41,8 @@ For channel config, publish the channel-owned JSON Schema through
 `openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
 subpath is for shared schema primitives and the generic builder. OpenClaw's
 bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
-bundled-channel schemas. Deprecated compatibility exports remain on
-`plugin-sdk/channel-config-schema-legacy`; neither bundled schema subpath is a
-pattern for new plugins.
+bundled-channel schemas. That bundled schema subpath is not a pattern for new
+plugins.
 
 <Warning>
   Do not import provider- or channel-branded convenience seams (for example
@@ -72,9 +71,11 @@ bundled-plugin helpers). For the full catalog — grouped and linked — see
 [Plugin SDK subpaths](/plugins/sdk-subpaths).
 
 The compiler entrypoint inventory lives in
-`scripts/lib/plugin-sdk-entrypoints.json`; package exports are generated from
-the public subset after subtracting repo-local test/internal subpaths listed in
-`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Run
+`scripts/lib/plugin-sdk-entrypoints.json`; typed public exports exclude the
+internal subpaths listed in
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Production entries
+on that list retain JavaScript-only host runtime exports for separately
+published official plugins, while test-only entries remain unexported. Run
 `pnpm plugin-sdk:surface` to audit the public export count. Deprecated public
 subpaths that are old enough and unused by bundled extension production code are
 tracked in `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; broad
@@ -85,6 +86,13 @@ deprecated re-export barrels are tracked in
 
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
+
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
@@ -197,6 +205,7 @@ advertised node command.
 | `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
 | `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
 | `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
@@ -208,6 +217,27 @@ advertised node command.
 | `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
 | `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+
+#### Post-ack webhook work
+
+Webhook routes that acknowledge a request before processing finishes must move
+that detached work onto its own tracked admission root:
+
+```typescript
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+
+void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
+  runtime.error?.(`webhook dispatch failed: ${String(error)}`);
+});
+```
+
+Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
 
 #### Requester-scoped MCP connections
 
@@ -287,6 +317,15 @@ capturing one global path during registration. If an agent id is required but
 missing in a multi-agent operation, fail closed rather than choosing an
 arbitrary agent.
 
+Use `registerMemoryPromptPreparation(...)` when prompt text depends on async
+plugin state. The callback runs once before each full agent prompt and receives
+the same tool, agent, session, and sandbox context as synchronous memory prompt
+builders. Validate the current storage-owner instance before loading persisted
+state, then return only lines for that run. OpenClaw freezes those lines and
+hands the immutable result to synchronous prompt assembly. Keep persistence,
+atomic replacement, and owner-removal deletion inside the owning plugin; do not
+poll or read files from a prompt builder.
+
 Telegram interactive handlers can return `{ submitText }` to route text through
 Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
@@ -326,6 +365,30 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+For a gateway-protected external tab, register the descriptor `path` under a
+same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
+short-lived, HttpOnly grant scoped to that plugin and route root so the
+sandboxed frame can load without copying the Gateway bearer token into its URL
+or JavaScript. The authenticated parent renews the grant while the external tab
+is active and before mounting it after navigation or browser resume. It also
+probes the grant from the same opaque sandbox before mounting, so browser
+privacy modes that block the cookie fail closed with an unavailable panel.
+The frame grant accepts only `GET` and `HEAD` and always carries
+`operator.read`; `requiredScopes` controls tab visibility but never widens the
+cookie grant. Mutations remain on explicit Gateway-authenticated parent or
+bearer surfaces. External tabs require HTTPS/Tailscale Serve or a
+browser-trusted loopback origin; plain HTTP on a LAN host shows the
+secure-context error instead of mounting a panel that cannot authenticate.
+Full third-party-cookie blocking also makes gateway-protected tabs unavailable.
+As with all native plugin surfaces, the frame remains inside the installed
+plugin trust boundary; OpenClaw does not treat installed plugins as mutually
+isolated browser security principals.
+Cookie grants use the browser's hostname boundary, not its port boundary. Do
+not cohost mutually untrusted services on the Gateway hostname, even on other
+ports.
+Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
+request or require this Gateway grant.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({
@@ -383,8 +446,7 @@ The contracts intentionally split authority:
   own command names or aliases.
 - `allowPromptInjection=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
-  prompt fields from legacy `before_agent_start`, and
-  `enqueueNextTurnInjection`.
+  and `enqueueNextTurnInjection`.
 
 Examples of non-Plan consumers:
 
@@ -527,10 +589,13 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   limit selected for the run, so native-compaction backends can align their
   own threshold without provider-specific core branches.
 - Backends that can disable all native tools for a specific run may declare
-  `nativeToolMode: "selectable"`. Restricted calls pass an empty
-  `ctx.toolAvailability.native` tuple plus an exact host-isolated MCP allowlist;
+  `nativeToolMode: "selectable"`. Restricted calls pass an exact
+  `ctx.toolAvailability.native` list plus an exact host-isolated MCP allowlist;
   `resolveExecutionArgs` must enforce both on the final fresh or resume argv.
-  OpenClaw fails closed if the backend cannot do so.
+  To accept runtime caps such as cron `toolsAllow`, the backend must also
+  implement `resolveRuntimeToolAvailability`; OpenClaw disables all native
+  tools and fails closed if the backend cannot translate or enforce the MCP
+  cap.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).
@@ -541,9 +606,6 @@ For an end-to-end authoring guide, see
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
 | `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
 ### Deprecated memory embedding adapters
 
@@ -551,13 +613,12 @@ For an end-to-end authoring guide, see
 | ---------------------------------------------- | ---------------------------------------------- |
 | `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
 
-- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
-  so companion plugins can consume exported memory artifacts through
-  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
-  memory plugin's private layout.
-- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+  for host-managed exports. Companion plugins that enumerate those declared
+  artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
+  `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
+  API exists; they must not reach into another plugin's private layout.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.

@@ -28,7 +28,6 @@ const {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } = await import("./approval-reactions.js");
-const { clearSignalReplyAuthorsForTest } = await import("./reply-authors.js");
 const { sendMessageSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
@@ -45,9 +44,8 @@ const SIGNAL_TEST_CFG = {
 };
 
 describe("sendMessageSignal receipts", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     clearSignalApprovalReactionTargetsForTest();
-    await clearSignalReplyAuthorsForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
   });
@@ -122,7 +120,7 @@ describe("sendMessageSignal receipts", () => {
     );
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
-      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
     expect(result.messageId).toBe("1234567891");

@@ -7,12 +7,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -54,6 +55,7 @@ const WINDOWS_NODE_REQUIRED_ASSETS = [
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 1;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
+const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
@@ -272,6 +274,7 @@ export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
@@ -391,6 +394,16 @@ export async function githubApi(path, options = {}) {
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES;
   const controller = new AbortController();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const request = (requestToken) =>
+    fetchImpl(`https://api.github.com/${path}`, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(requestToken ? { Authorization: `Bearer ${requestToken}` } : {}),
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
   let timeout;
   const timeoutPromise = new Promise((_, reject) => {
     timeout = setTimeout(() => {
@@ -400,21 +413,24 @@ export async function githubApi(path, options = {}) {
     timeout.unref?.();
   });
   try {
-    const response = await Promise.race([
-      (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${token}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      }),
-      timeoutPromise,
-    ]);
-    const text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+    let response = await Promise.race([request(token), timeoutPromise]);
+    let text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
       signal: controller.signal,
       timeoutPromise,
     });
+    const primaryRateLimitExhausted =
+      (response.status === 403 || response.status === 429) &&
+      (/API rate limit exceeded/iu.test(text) ||
+        response.headers.get("x-ratelimit-remaining") === "0");
+    if (primaryRateLimitExhausted) {
+      // Public release evidence remains readable without auth when one maintainer
+      // token is exhausted. Mutating gh commands keep their authenticated path.
+      response = await Promise.race([request(""), timeoutPromise]);
+      text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      });
+    }
     if (!response.ok) {
       throw new Error(`GitHub API ${path} failed with ${response.status}: ${text}`);
     }
@@ -507,7 +523,7 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
       {
         cwd: targetRoot,
-        env: process.env,
+        env: { ...process.env, [TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha },
         stdio: "inherit",
       },
     );
@@ -530,6 +546,21 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       }
     }
     rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
+
+export function isDirectReleaseCandidateExecution(
+  directPath,
+  modulePath,
+  resolveRealPath = realpathSync,
+) {
+  if (!directPath) {
+    return false;
+  }
+  try {
+    return resolveRealPath(directPath) === resolveRealPath(modulePath);
+  } catch {
+    return false;
   }
 }
 
@@ -585,6 +616,31 @@ function gitIsAncestor(ancestor, target) {
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
+}
+
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor = gitIsAncestor,
+}) {
+  if (!/^[a-f0-9]{40}$/u.test(pinnedToolingSha)) {
+    throw new Error("release candidate trusted tooling pin is missing or invalid");
+  }
+  if (toolingSha !== pinnedToolingSha) {
+    throw new Error(
+      `release candidate tooling HEAD ${toolingSha} does not match pinned tooling ${pinnedToolingSha}`,
+    );
+  }
+  if (
+    pinnedToolingSha !== latestTrustedToolingSha &&
+    !isAncestor(pinnedToolingSha, latestTrustedToolingSha)
+  ) {
+    throw new Error(
+      `pinned release candidate tooling ${pinnedToolingSha} is not reachable from trusted workflow tip ${latestTrustedToolingSha}`,
+    );
+  }
+  return pinnedToolingSha;
 }
 
 export function validateNpmPreflightRunSource({
@@ -822,8 +878,11 @@ export function validateCandidateChangelogProvenance({
 async function runArtifacts(repo, runId) {
   const data = await githubApi(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
   return (data.artifacts ?? []).map((artifact) => ({
-    name: artifact.name,
+    digest: artifact.digest,
     expired: artifact.expired,
+    id: artifact.id,
+    name: artifact.name,
+    workflowRunId: artifact.workflow_run?.id,
   }));
 }
 
@@ -849,8 +908,14 @@ export function resolveArtifactName(artifacts, preferredName, prefix) {
   );
 }
 
-async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
-  return resolveArtifactName(await runArtifacts(repo, runId), preferredName, prefix);
+async function resolveRunArtifact(repo, runId, preferredName, prefix) {
+  const artifacts = await runArtifacts(repo, runId);
+  const name = resolveArtifactName(artifacts, preferredName, prefix);
+  const artifact = artifacts.find((candidate) => candidate.name === name);
+  if (!artifact) {
+    throw new Error(`resolved artifact ${name} disappeared from run ${runId}`);
+  }
+  return artifact;
 }
 
 function runAndEcho(command, args) {
@@ -1020,9 +1085,9 @@ function downloadArtifact(repo, runId, name, dir) {
 }
 
 async function downloadResolvedArtifact(repo, runId, preferredName, prefix, dir) {
-  const name = await resolveRunArtifactName(repo, runId, preferredName, prefix);
-  downloadArtifact(repo, runId, name, dir);
-  return name;
+  const artifact = await resolveRunArtifact(repo, runId, preferredName, prefix);
+  downloadArtifact(repo, runId, artifact.name, dir);
+  return artifact;
 }
 
 function sha256(path) {
@@ -1176,15 +1241,20 @@ export function validateFullManifest(manifest, params) {
       `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
     );
   }
-  if (manifest.controls?.performanceBlocking !== true) {
+  if (params.releaseProfile !== "beta" && manifest.controls?.performanceBlocking !== true) {
     throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
 
-export function candidateParallelsArgs(tarballPath, dependencyTarballPaths = []) {
+export function candidateParallelsArgs(
+  tarballPath,
+  dependencyTarballPaths = [],
+  toolingRoot = TOOLING_ROOT,
+) {
   return [
-    "test:parallels:npm-update",
-    "--",
+    "exec",
+    "tsx",
+    join(toolingRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
@@ -1197,8 +1267,12 @@ export function candidateParallelsShellCommand(
   timeoutBin,
   dependencyTarballPaths = [],
 ) {
+  // Login shells can replace the candidate's supported Node with ambient host Node.
+  // Keep the invoking Node first so pnpm and npm use the validated runtime.
+  const nodeBinDir = dirname(process.execPath);
   return [
     'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    `export PATH=${shellQuote(nodeBinDir)}:"$PATH";`,
     "exec",
     shellQuote(timeoutBin),
     "--foreground",
@@ -1212,27 +1286,68 @@ async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
+  // This function runs inside trusted tooling, not the frozen target checkout.
+  // Prepare its isolated dependencies here before importing the Parallels harness.
+  run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+    cwd: TOOLING_ROOT,
+  });
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
   const command = candidateParallelsShellCommand(tarballPath, timeoutBin, dependencyTarballPaths);
-  run("bash", ["-lc", command]);
+  run("bash", ["-lc", command], {
+    env: {
+      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(process.cwd(), ".artifacts", "parallels"),
+    },
+  });
   return {
     status: "passed",
     command,
   };
 }
 
-async function runTelegramIfNeeded(options, artifactName) {
+export function buildTelegramArtifactInputs({ artifact, manifest, runAttempt, runId, sourceSha }) {
+  const artifactDigest = artifact.digest?.match(/^sha256:([0-9a-f]{64})$/u)?.[1];
+  if (!Number.isInteger(artifact.id) || artifact.id < 1 || !artifactDigest) {
+    throw new Error(`npm preflight artifact ${artifact.name} is missing immutable identity`);
+  }
+  if (String(artifact.workflowRunId) !== String(runId)) {
+    throw new Error(
+      `npm preflight artifact ${artifact.name} belongs to run ${artifact.workflowRunId}, not ${runId}`,
+    );
+  }
+  if (!Number.isInteger(runAttempt) || runAttempt < 1) {
+    throw new Error(`npm preflight run ${runId} has invalid attempt`);
+  }
+  return {
+    package_artifact_digest: artifactDigest,
+    package_artifact_id: artifact.id,
+    package_artifact_name: artifact.name,
+    package_artifact_run_attempt: runAttempt,
+    package_artifact_run_id: runId,
+    package_file_name: manifest.tarballName,
+    package_sha256: manifest.tarballSha256,
+    package_source_sha: sourceSha,
+    package_version: manifest.packageVersion,
+  };
+}
+
+async function runTelegramIfNeeded(options, artifact, manifest, runAttempt, sourceSha) {
   if (options.skipTelegram) {
     return { status: "skipped" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
+  const artifactInputs = buildTelegramArtifactInputs({
+    artifact,
+    manifest,
+    runAttempt,
+    runId: options.npmPreflightRunId,
+    sourceSha,
+  });
   const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
-    package_artifact_name: artifactName,
-    package_artifact_run_id: options.npmPreflightRunId,
+    ...artifactInputs,
     harness_ref: options.workflowRef,
     provider_mode: options.telegramProviderMode,
   });
@@ -1244,7 +1359,7 @@ async function runTelegramIfNeeded(options, artifactName) {
     status: "passed",
     runId,
     url: runLocal.url,
-    artifactName,
+    artifactName: artifact.name,
     providerMode: options.telegramProviderMode,
   };
 }
@@ -1263,7 +1378,14 @@ async function main() {
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
-  const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
+  const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
+  // The outer process pins a clean main commit before creating this tooling checkout.
+  // A newer main tip must not invalidate that immutable, still-trusted ancestor mid-run.
+  const trustedToolingSha = validateTrustedToolingPin({
+    toolingSha,
+    pinnedToolingSha: process.env[TRUSTED_TOOLING_SHA_ENV] ?? latestTrustedToolingSha,
+    latestTrustedToolingSha,
+  });
   validateCandidateCheckout({
     targetSha,
     targetHeadSha: gitRevParse("HEAD", targetRoot),
@@ -1357,13 +1479,14 @@ async function main() {
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
-  const npmArtifactName = await downloadResolvedArtifact(
+  const npmArtifact = await downloadResolvedArtifact(
     options.repo,
     options.npmPreflightRunId,
     `openclaw-npm-preflight-${options.tag}`,
     "openclaw-npm-preflight-",
     npmDir,
   );
+  const npmArtifactName = npmArtifact.name;
   if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
     throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
   }
@@ -1426,7 +1549,13 @@ async function main() {
   });
 
   const parallels = await runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths);
-  const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
+  const npmTelegram = await runTelegramIfNeeded(
+    options,
+    npmArtifact,
+    npmManifest,
+    npmRun.runAttempt,
+    targetSha,
+  );
   options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",
@@ -1532,7 +1661,7 @@ async function main() {
   console.log(publishCommand);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectReleaseCandidateExecution(process.argv[1], fileURLToPath(import.meta.url))) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

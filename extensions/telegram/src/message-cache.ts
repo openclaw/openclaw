@@ -6,7 +6,11 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramPrimaryMedia, resolveTelegramRichMessageBody } from "./bot/body-helpers.js";
+import {
+  resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessageBody,
+  type TelegramMediaKind,
+} from "./bot/body-helpers.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -22,7 +26,9 @@ import {
 } from "./prompt-context-projection.js";
 import { getOptionalTelegramRuntime } from "./runtime.js";
 
-export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
+export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number] & {
+  mediaKind?: TelegramMediaKind;
+};
 
 export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
   messageId: string;
@@ -101,7 +107,20 @@ export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cac
 // hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
-const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
+const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
+
+function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBucket> {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] as
+    | Map<string, TelegramMessageCacheBucket>
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, TelegramMessageCacheBucket>();
+  globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] = created;
+  return created;
+}
 
 export type PersistedTelegramMessageCacheValue = {
   version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
@@ -115,10 +134,6 @@ type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
   entries(): Promise<Array<{ key: string; value: unknown }>>;
 };
-
-export function resetTelegramMessageCacheBucketsForTest(): void {
-  persistedMessageCacheBuckets.clear();
-}
 
 function telegramMessageCacheKey(params: {
   scopeKey: string | undefined;
@@ -173,11 +188,7 @@ function resolveMessageBody(msg: Message, preserveWhitespace: boolean): string |
   if (location) {
     return formatLocationText(location);
   }
-  return resolveTelegramRichMessageBody(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder;
-}
-
-function resolveMediaType(placeholder?: string): string | undefined {
-  return placeholder?.match(/^<media:([^>]+)>$/)?.[1];
+  return resolveTelegramRichMessageBody(msg);
 }
 
 function resolveMessageTimestamp(msg: Message): number | undefined {
@@ -212,7 +223,7 @@ function normalizeMessageNode(
     ...(msg.from?.username ? { senderUsername: msg.from.username } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
     ...(body ? { body } : {}),
-    ...(media ? { mediaType: resolveMediaType(media.placeholder) ?? media.placeholder } : {}),
+    ...(media ? { mediaType: media.kind } : {}),
     ...(fileId ? { mediaRef: `telegram:file/${fileId}` } : {}),
     ...(replyMessage?.message_id != null ? { replyToId: String(replyMessage.message_id) } : {}),
     ...(forwardedFrom?.from ? { forwardedFrom: forwardedFrom.from } : {}),
@@ -414,6 +425,7 @@ function resolveMessageCacheBucket(params: {
       hydrated: true,
     };
   }
+  const persistedMessageCacheBuckets = getPersistedMessageCacheBuckets();
   const existing = persistedMessageCacheBuckets.get(bucketKey);
   if (existing) {
     existing.persistentStore = params.persistentStore ?? existing.persistentStore;

@@ -1,5 +1,5 @@
 // Vydra tests cover image generation provider plugin behavior.
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraImageGenerationProvider } from "./image-generation-provider.js";
 import {
@@ -186,6 +186,6 @@ describe("vydra image-generation provider", () => {
         prompt: "draw a cat",
         cfg: {},
       }),
-    ).rejects.toThrow("Vydra job status: JSON response exceeds 16777216 bytes");
+    ).rejects.toThrow("Vydra job status request failed: JSON response exceeds 16777216 bytes");
   });
 });

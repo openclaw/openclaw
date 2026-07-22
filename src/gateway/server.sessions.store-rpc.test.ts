@@ -288,12 +288,22 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(pinned.ok).toBe(true);
   expect(pinned.payload?.entry.pinnedAt).toEqual(expect.any(Number));
 
+  const iconPatched = await directSessionReq<{
+    entry: { icon?: string };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    icon: "name:spark",
+  });
+  expect(iconPatched.ok).toBe(true);
+  expect(iconPatched.payload?.entry.icon).toBe("name:spark");
+
   const pinnedList = await directSessionReq<{
-    sessions: Array<{ key: string; pinned?: boolean }>;
+    sessions: Array<{ key: string; pinned?: boolean; icon?: string }>;
   }>("sessions.list", {});
   expect(pinnedList.payload?.sessions[0]).toMatchObject({
     key: "agent:main:subagent:one",
     pinned: true,
+    icon: "name:spark",
   });
 
   const archived = await directSessionReq<{
@@ -582,13 +592,15 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(entryAfterReset?.lastAccountId).toBe("work");
   expect(entryAfterReset?.lastThreadId).toBe("1737500000.123456");
+  // Retained history: reset rotates the live session id but keeps the old
+  // generation's transcript rows in SQLite.
   await expect(
     loadTranscriptRows({
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
       storePath,
     }),
-  ).resolves.toEqual([]);
+  ).resolves.toHaveLength(3);
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

@@ -3,9 +3,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
@@ -32,7 +35,9 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntry,
   replaceSessionEntry,
+  resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
@@ -60,8 +65,6 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
-
-const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-pruning-integ-" });
 
 function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
@@ -91,8 +94,10 @@ function applyCappedMaintenanceConfig(mockLoadConfigLocal: ReturnType<typeof vi.
   });
 }
 
-async function createCaseDir(prefix: string): Promise<string> {
-  return await suiteRootTracker.make(prefix);
+function disableAutomaticDiskBudget(mockLoadConfigValue: ReturnType<typeof vi.fn>) {
+  mockLoadConfigValue.mockReturnValue({
+    session: { maintenance: { maxDiskBytes: false } },
+  });
 }
 
 async function expectPathExists(targetPath: string): Promise<void> {
@@ -184,30 +189,37 @@ async function seedSqliteTrajectoryEvent(params: {
 }
 
 describe("Integration: saveSessionStore with pruning", () => {
+  let testState: OpenClawTestState;
   let testDir: string;
   let storePath: string;
   let savedCacheTtl: string | undefined;
 
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
-
-  afterAll(async () => {
-    await suiteRootTracker.cleanup();
-  });
-
   beforeEach(async () => {
     mockLoadConfig = vi.mocked(getRuntimeConfig) as ReturnType<typeof vi.fn>;
     mockLoadConfig.mockReset();
-    testDir = await createCaseDir("pruning-integ");
+    disableAutomaticDiskBudget(mockLoadConfig);
+    testState = await createOpenClawTestState({
+      prefix: "openclaw-pruning-integ-",
+      layout: "state-only",
+    });
+    testDir = testState.sessionsDir();
+    await fs.mkdir(testDir, { recursive: true });
     storePath = path.join(testDir, "sessions.json");
     savedCacheTtl = process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
     process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     mockLoadConfig.mockReset();
+    disableAutomaticDiskBudget(mockLoadConfig);
+    // Reset/delete entry lifecycles kick fire-and-forget history maintenance.
+    // Serialize a no-op pass behind them before closing shared SQLite handles.
+    await enforceSqliteSessionHistoryDiskBudget({
+      storePath,
+      mode: "warn",
+      maintenance: { maxDiskBytes: null, highWaterBytes: null },
+    });
     clearSessionStoreCacheForTest();
     closeOpenClawAgentDatabasesForTest();
     if (savedCacheTtl === undefined) {
@@ -215,6 +227,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     } else {
       process.env.OPENCLAW_SESSION_CACHE_TTL_MS = savedCacheTtl;
     }
+    await testState.cleanup();
   });
 
   it("saveSessionStore prunes stale model-run probes before capping real sessions", async () => {
@@ -879,7 +892,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(oldOrphanTranscript);
   });
 
-  it("sessions cleanup dry-run reports SQLite transcript row bytes for disk budget", async () => {
+  it("sessions cleanup dry-run reports physical SQLite usage without projecting row eviction", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -924,11 +937,12 @@ describe("Integration: saveSessionStore with pruning", () => {
       throw new Error("expected SQLite row-byte disk budget summary");
     }
     expect(diskBudgetSummary.totalBytesBefore).toBeGreaterThan(2_400);
-    expect(diskBudgetSummary.totalBytesAfter).toBeLessThan(diskBudgetSummary.totalBytesBefore);
-    expect(diskBudgetSummary.removedEntries).toBe(1);
+    expect(diskBudgetSummary.totalBytesAfter).toBe(diskBudgetSummary.totalBytesBefore);
+    expect(diskBudgetSummary.removedEntries).toBe(0);
     expect(diskBudgetSummary.removedFiles).toBe(0);
-    expect(preview?.summary.afterCount).toBe(1);
-    expect(preview?.budgetEvictedKeys.has(oldKey)).toBe(true);
+    expect(preview?.summary.afterCount).toBe(2);
+    expect(preview?.summary.wouldMutate).toBe(false);
+    expect(preview?.budgetEvictedKeys.has(oldKey)).toBe(false);
     expect(preview?.budgetEvictedKeys.has(freshKey)).toBe(false);
     expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeDefined();
     expect(
@@ -940,7 +954,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("sessions cleanup apply reports SQLite disk-budget row eviction", async () => {
+  it("sessions cleanup preserves live SQLite entries even when their physical store is over budget", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -984,10 +998,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
       throw new Error("expected applied SQLite row-byte disk budget summary");
     }
-    expect(diskBudgetSummary.removedEntries).toBe(1);
+    expect(diskBudgetSummary.removedEntries).toBe(0);
     expect(diskBudgetSummary.removedFiles).toBe(0);
-    expect(summary?.appliedCount).toBe(1);
-    expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeUndefined();
+    expect(summary?.appliedCount).toBe(2);
+    expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeDefined();
     expect(loadSessionEntry({ storePath, sessionKey: freshKey })).toBeDefined();
     expect(
       loadTranscriptEventsSync({
@@ -995,7 +1009,7 @@ describe("Integration: saveSessionStore with pruning", () => {
         sessionKey: oldKey,
         storePath,
       }),
-    ).toEqual([]);
+    ).not.toEqual([]);
     expect(
       loadTranscriptEventsSync({
         sessionId: "fresh-apply-budget-session",
@@ -1005,7 +1019,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("sessions cleanup dry-run accounts SQLite trajectory rows in disk budget", async () => {
+  it("sessions cleanup dry-run physically accounts for SQLite trajectory storage", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -1043,9 +1057,9 @@ describe("Integration: saveSessionStore with pruning", () => {
       throw new Error("expected SQLite trajectory row-byte disk budget summary");
     }
     expect(diskBudgetSummary.totalBytesBefore).toBeGreaterThan(1_200);
-    expect(diskBudgetSummary.totalBytesAfter).toBeLessThan(diskBudgetSummary.totalBytesBefore);
-    expect(diskBudgetSummary.removedEntries).toBe(1);
-    expect(dryRun.previewResults[0]?.budgetEvictedKeys.has(oldKey)).toBe(true);
+    expect(diskBudgetSummary.totalBytesAfter).toBe(diskBudgetSummary.totalBytesBefore);
+    expect(diskBudgetSummary.removedEntries).toBe(0);
+    expect(dryRun.previewResults[0]?.budgetEvictedKeys.has(oldKey)).toBe(false);
     expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeDefined();
     await expect(
       loadSqliteTrajectoryRuntimeEvents({
@@ -1055,7 +1069,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     ).resolves.toHaveLength(1);
   });
 
-  it("sessions cleanup apply removes budget-evicted SQLite trajectory rows", async () => {
+  it("sessions cleanup apply keeps trajectory rows for live entries", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -1098,21 +1112,76 @@ describe("Integration: saveSessionStore with pruning", () => {
     if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
       throw new Error("expected applied SQLite trajectory row-byte disk budget summary");
     }
-    expect(diskBudgetSummary.removedEntries).toBe(1);
-    expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeUndefined();
+    expect(diskBudgetSummary.removedEntries).toBe(0);
+    expect(loadSessionEntry({ storePath, sessionKey: oldKey })).toBeDefined();
     expect(loadSessionEntry({ storePath, sessionKey: freshKey })).toBeDefined();
     await expect(
       loadSqliteTrajectoryRuntimeEvents({
         sessionId: "old-trajectory-apply-budget-session",
         storePath,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toHaveLength(1);
     await expect(
       loadSqliteTrajectoryRuntimeEvents({
         sessionId: "fresh-trajectory-apply-budget-session",
         storePath,
       }),
     ).resolves.toHaveLength(1);
+  });
+
+  it("sessions cleanup extracts and evicts historical SQLite rows under physical pressure", async () => {
+    const sessionKey = "agent:main:historical-budget";
+    await seedSqliteSessionStore(storePath, {
+      [sessionKey]: { sessionId: "historical-budget-session", updatedAt: 1 },
+    });
+    await seedSqliteTranscriptMessage({
+      content: "historical " + "x".repeat(128 * 1024),
+      sessionId: "historical-budget-session",
+      sessionKey,
+      storePath,
+    });
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      buildNextEntry: () => ({ sessionId: "live-budget-session", updatedAt: Date.now() }),
+    });
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 500,
+          maxDiskBytes: 0,
+          highWaterBytes: 0,
+        },
+      },
+    });
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.diskBudget?.removedEntries).toBe(1);
+    expect(loadSessionEntry({ storePath, sessionKey })?.sessionId).toBe("live-budget-session");
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "historical-budget-session",
+        sessionKey,
+        storePath,
+      }),
+    ).toEqual([]);
+    // highWaterBytes 0 demands zero disk: after the extraction commits, the
+    // final unprotected prune reclaims even the fresh archive (counted in
+    // removedFiles). Archive survival under realistic budgets is covered by
+    // the session-history-eviction unit tests.
+    expect(applied.appliedSummaries[0]?.diskBudget?.removedFiles).toBe(1);
+    expect(
+      (await fs.readdir(testDir)).some((name) =>
+        name.startsWith("historical-budget-session.jsonl.deleted."),
+      ),
+    ).toBe(false);
   });
 
   it("sessions cleanup dry-run excludes stale and capped entry transcripts from orphan counts", async () => {
@@ -1483,6 +1552,37 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty("session-50");
   });
 
+  it("updateSessionStore honors configured maxEntries without an explicit override", async () => {
+    const now = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        oldest: makeEntry(now - 2),
+        recent: makeEntry(now - 1),
+      }),
+      "utf-8",
+    );
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "365d",
+          maxEntries: 2,
+        },
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      store.newest = makeEntry(now);
+    });
+
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(loaded)).toHaveLength(2);
+    expect(loaded).toHaveProperty("newest");
+    expect(loaded).toHaveProperty("recent");
+    expect(loaded.oldest).toBeUndefined();
+  });
+
   it("loadSessionStore honors configured maxEntries without an explicit override", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
@@ -1563,7 +1663,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyCappedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
-    const externalDir = await createCaseDir("external-cap");
+    const externalDir = testState.path("external-cap");
+    await fs.mkdir(externalDir, { recursive: true });
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "external", "utf-8");
     const store: Record<string, SessionEntry> = {
@@ -1738,7 +1839,8 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     const now = Date.now();
-    const externalDir = await createCaseDir("external-session");
+    const externalDir = testState.path("external-session");
+    await fs.mkdir(externalDir, { recursive: true });
     const externalTranscript = path.join(externalDir, "outside.jsonl");
     await fs.writeFile(externalTranscript, "z".repeat(400), "utf-8");
 

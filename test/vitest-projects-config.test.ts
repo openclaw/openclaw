@@ -29,6 +29,7 @@ import {
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
@@ -215,8 +216,8 @@ describe("projects vitest config", () => {
     const config = createUiVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.environment).toBe("jsdom");
-    expect(testConfig.isolate).toBe(false);
-    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.runner).toBeUndefined();
     const setupFiles = normalizeConfigPaths(testConfig.setupFiles);
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
@@ -234,6 +235,13 @@ describe("projects vitest config", () => {
     const config = createUnitFastVitestConfig();
     const testConfig = requireTestConfig(config);
     expect(testConfig.isolate).toBe(false);
+    expect(testConfig.runner).toBeUndefined();
+  });
+
+  it("isolates forced unit-fast files from shared module caches", () => {
+    const config = createUnitFastIsolatedVitestConfig();
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(true);
     expect(testConfig.runner).toBeUndefined();
   });
 

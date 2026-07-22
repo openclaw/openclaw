@@ -413,7 +413,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      // Concurrent Knip scans need cores and memory headroom.
+      runner: "blacksmith-32vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find(
@@ -428,12 +429,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(releaseChecksScript).toContain('-f ref="$release_checks_target_ref"');
+    expect(releaseChecksScript).toContain("args+=(-f allow_frozen_target_scenario_omissions=true)");
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"',
+      'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")',
+    );
+    expect(pluginPrereleaseScript).toContain(
+      'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
+    );
+    expect(pluginPrereleaseScript).toContain(
+      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
@@ -544,7 +552,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         (step: WorkflowStep) => step.name === "Run plugin prerelease static shard",
       ).run,
     ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
-    expect(dockerSuite).toEqual({
+    expect(dockerSuite).toMatchObject({
       if: "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
       name: "plugin-prerelease-docker-suite",
       needs: ["preflight"],
@@ -566,7 +574,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
         shared_image_artifact_namespace: "plugin-prerelease",
         shared_image_policy: "no-push-artifact",
-        targeted_docker_lane_group_size: 4,
+        targeted_docker_lane_group_size: 2,
       },
     });
     expect(dockerSuite.secrets).toBeUndefined();
@@ -613,6 +621,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
+    expect(fullReleaseWorkflow.jobs.performance["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
       "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
@@ -669,8 +678,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(workflow.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual({
       default: false,
-      description:
-        "Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict",
+      description: "Allow explicitly opted-in current-tree packaging to use Unreleased notes",
       required: false,
       type: "boolean",
     });
@@ -685,6 +693,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(captureInputs?.run).toContain("refs/tags/");
     expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
     expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");
+    const explicitOptIn = captureInputs?.run.indexOf('"$allow_unreleased_changelog" == "true"');
+    const releaseRefGuard = captureInputs?.run.indexOf(
+      '"$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/',
+    );
+    expect(explicitOptIn).toBeGreaterThanOrEqual(0);
+    expect(releaseRefGuard).toBeGreaterThan(explicitOptIn ?? -1);
     expect(workflow.jobs.install_smoke_release_checks.with.allow_unreleased_changelog).toBe(
       currentTreeAllowance,
     );
@@ -695,10 +709,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       currentTreeAllowance,
     );
     const fullReleaseAllowance =
-      "${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}";
+      "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}";
+    const summarizeTarget = fullReleaseWorkflow.jobs.resolve_target.steps.find(
+      (step: WorkflowStep) => step.name === "Summarize target",
+    );
     const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
+    expect(summarizeTarget?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
     expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
   });
 

@@ -14,7 +14,7 @@ import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let replyRunTesting: typeof import("./reply-run-registry.js").testing;
+let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 const sessionKey = "agent:main:telegram:direct:1";
@@ -35,12 +35,7 @@ function createVisibleDispatchParams(replyResolver: () => Promise<ReplyPayload>)
       MessageThreadId: "501.000",
       BodyForAgent: "second telegram direct turn",
     }),
-    cfg: {
-      diagnostics: {
-        stuckSessionWarnMs: 1_000,
-        stuckSessionAbortMs: 1_000,
-      },
-    } as OpenClawConfig,
+    cfg: {} as OpenClawConfig,
     dispatcher: createDispatcher(),
     replyResolver,
   };
@@ -49,7 +44,8 @@ function createVisibleDispatchParams(replyResolver: () => Promise<ReplyPayload>)
 describe("dispatchReplyFromConfig stale visible admission recovery", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({ createReplyOperation, testing: replyRunTesting } = await import("./reply-run-registry.js"));
+    ({ createReplyOperation } = await import("./reply-run-registry.js"));
+    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   });
 
@@ -79,8 +75,14 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
       resetTriggered: false,
     });
     activeOperation.setPhase("running");
+    const waitChanges: boolean[] = [];
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
-    const dispatchParams = createVisibleDispatchParams(replyResolver);
+    const dispatchParams = {
+      ...createVisibleDispatchParams(replyResolver),
+      replyOptions: {
+        onReplyAdmissionWaitChange: (waiting: boolean) => waitChanges.push(waiting),
+      },
+    };
     let settled = false;
 
     const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
@@ -88,9 +90,10 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
       return result;
     });
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(120_000);
 
     expect(settled).toBe(false);
+    expect(waitChanges).toEqual([true]);
     expect(replyResolver).not.toHaveBeenCalled();
     expect(diagnosticMocks.requestStuckDiagnosticSessionRecovery).not.toHaveBeenCalled();
 
@@ -103,6 +106,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     });
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(waitChanges).toEqual([true, false]);
   });
 
   it("reclaims stale visible reply work through admission and dispatches the turn", async () => {

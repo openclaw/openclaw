@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -57,16 +58,23 @@ import {
 import {
   buildBoardFilterOptions,
   matchesBoardFilter,
-  normalizeActiveBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "./board-filter.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
+
+function ensureWorkboardCardDashboardElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-workboard-card-dashboard",
+    () => import("./workboard-card-dashboard.ts"),
+  );
+}
 
 type WorkboardProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
   canWrite?: boolean;
+  canGrant?: boolean;
   canModelOverride?: boolean;
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
@@ -1299,7 +1307,9 @@ function renderLifecycle(
     <div class="workboard-card__lifecycle">
       <span class="workboard-lifecycle workboard-lifecycle--${formatted.tone}">
         ${taskStatus ??
-        (stale || !execution ? formatted.label : `${execution.engine} ${execution.mode}`)}
+        (stale || !execution
+          ? formatted.label
+          : `${execution.engine ? `${execution.engine} ` : ""}${execution.mode}`)}
       </span>
       <span class="workboard-card__lifecycle-detail">
         ${task && taskIsAuthoritative
@@ -1431,6 +1441,9 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const cardActions = getCardActionState(props, card);
   const { task, busy, activeTask, live, linkedSessionKey, writable, showStartControls, archived } =
     cardActions;
+  if (linkedSessionKey) {
+    void ensureWorkboardCardDashboardElement().catch(() => undefined);
+  }
   const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
   const formatted = formatLifecycle(lifecycle);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
@@ -1513,6 +1526,17 @@ function renderCardDetailsPanel(props: WorkboardProps) {
                   <h3>${t("workboard.fieldNotes")}</h3>
                   <p>${card.notes}</p>
                 </section>
+              `
+            : nothing}
+          ${linkedSessionKey
+            ? html`
+                <openclaw-workboard-card-dashboard
+                  .sessionKey=${linkedSessionKey}
+                  .client=${props.client}
+                  .connected=${props.connected}
+                  .canMutate=${props.canWrite !== false}
+                  .canGrant=${props.canGrant === true}
+                ></openclaw-workboard-card-dashboard>
               `
             : nothing}
           ${renderDependencyDetailList(dependencies)}
@@ -2001,7 +2025,10 @@ export function renderWorkboard(props: WorkboardProps) {
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
   const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
-  const activeBoardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
+  // A valid route can outlive a deleted board. Keep that id as the active
+  // filter so the page becomes empty instead of silently showing every card.
+  const activeBoardFilter = state.boardFilter;
+  const showBoardSwitcher = boardOptions.length >= 3;
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
@@ -2120,7 +2147,7 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
-            ${boardOptions.length > 2
+            ${showBoardSwitcher
               ? renderWorkboardSelect({
                   value: activeBoardFilter,
                   options: boardOptions,

@@ -10,6 +10,14 @@ export type Generated<T> =
     ? ColumnType<S, I | undefined, U>
     : ColumnType<T, T | undefined, T>;
 
+export interface AcpParentStreamEvents {
+  created_at: number;
+  event_json: string;
+  run_id: string;
+  seq: number;
+  session_id: string;
+}
+
 export interface AuthProfileState {
   state_json: string;
   state_key: string;
@@ -22,6 +30,38 @@ export interface AuthProfileStore {
   updated_at: number;
 }
 
+export interface BoardTabs {
+  chat_dock: Generated<string>;
+  created_by: string;
+  position: number;
+  revision: number;
+  session_key: string;
+  tab_id: string;
+  title: string;
+}
+
+export interface BoardWidgets {
+  content_kind: string;
+  created_at: number;
+  created_by: string;
+  descriptor_json: string | null;
+  grant_state: Generated<string>;
+  granted_sha: string | null;
+  html: Uint8Array | null;
+  manifest: Generated<string>;
+  name: string;
+  position: number;
+  revision: number;
+  session_key: string;
+  sha256: string;
+  size_h: number;
+  size_w: number;
+  tab_id: string;
+  title: string | null;
+  updated_at: number;
+  view_generation: string | null;
+}
+
 export interface CacheEntries {
   blob: Uint8Array | null;
   expires_at: number | null;
@@ -31,11 +71,32 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface ConversationDeliveries {
+  conversation_id: string;
+  created_at: number;
+  message_hash: string;
+  operation_id: string;
+  operation_kind: string;
+  platform_message_id: string | null;
+  prepared_message_id: string | null;
+  queue_id: string | null;
+  rejection_error: string | null;
+  reply_message_id: string | null;
+  reply_text: string | null;
+  reply_thread_id: string | null;
+  reply_timestamp: number | null;
+  reply_to_id: string | null;
+  source_session_key: string | null;
+  status: string;
+  updated_at: number;
+}
+
 export interface Conversations {
   account_id: string;
   channel: string;
   conversation_id: string;
   created_at: number;
+  delivery_target: string;
   kind: string;
   label: string | null;
   metadata_json: string | null;
@@ -45,6 +106,23 @@ export interface Conversations {
   peer_id: string;
   thread_id: string | null;
   updated_at: number;
+}
+
+export interface HeartbeatOutcomes {
+  context_claimed_at: number | null;
+  context_run_id: string | null;
+  next_check: string | null;
+  occurred_at: number;
+  outcome: string;
+  priority: string | null;
+  response_reason: string | null;
+  run_session_key: string;
+  session_key: string;
+  summary: string;
+  task_names_json: string | null;
+  updated_at: number;
+  wake_reason: string | null;
+  wake_source: string | null;
 }
 
 export interface MemoryEmbeddingCache {
@@ -61,7 +139,7 @@ export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
-  id: string | null;
+  id: string;
   model: string;
   path: string;
   source: Generated<string>;
@@ -71,7 +149,7 @@ export interface MemoryIndexChunks {
 }
 
 export interface MemoryIndexMeta {
-  key: string | null;
+  key: string;
   value: string;
 }
 
@@ -121,6 +199,13 @@ export interface SessionRoutes {
   updated_at: number;
 }
 
+export interface SessionTranscriptActiveEvents {
+  active_position: number;
+  event_seq: number;
+  message_position: number | null;
+  session_id: string;
+}
+
 export interface SessionTranscriptFts {
   message_id: string | null;
   role: string | null;
@@ -159,7 +244,15 @@ export interface SessionTranscriptFtsIdx {
   term: string;
 }
 
+export interface SessionTranscriptGenerations {
+  generation: string;
+  session_id: string;
+  updated_at: number;
+}
+
 export interface SessionTranscriptIndexState {
+  active_event_count: Generated<number>;
+  active_message_count: Generated<number>;
   indexed_seq: number;
   leaf_event_id: string | null;
   needs_rebuild: Generated<number>;
@@ -194,6 +287,17 @@ export interface Sessions {
   updated_at: number;
 }
 
+export interface StateLeases {
+  created_at: number;
+  expires_at: number | null;
+  heartbeat_at: number | null;
+  lease_key: string;
+  owner: string;
+  payload_json: string | null;
+  scope: string;
+  updated_at: number;
+}
+
 export interface TrajectoryRuntimeEvents {
   created_at: number;
   event_json: string;
@@ -220,10 +324,15 @@ export interface TranscriptEvents {
 }
 
 export interface DB {
+  acp_parent_stream_events: AcpParentStreamEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
+  board_tabs: BoardTabs;
+  board_widgets: BoardWidgets;
   cache_entries: CacheEntries;
+  conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;
+  heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
@@ -233,14 +342,17 @@ export interface DB {
   session_conversations: SessionConversations;
   session_entries: SessionEntries;
   session_routes: SessionRoutes;
+  session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;
   session_transcript_fts_data: SessionTranscriptFtsData;
   session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
+  session_transcript_generations: SessionTranscriptGenerations;
   session_transcript_index_state: SessionTranscriptIndexState;
   sessions: Sessions;
+  state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;

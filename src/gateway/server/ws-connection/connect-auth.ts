@@ -80,6 +80,7 @@ export async function authenticateGatewayConnect(
     sendHandshakeErrorResponse,
   } = context;
   const resolvedAuth = getResolvedAuth();
+  const hasRequestedScopes = Array.isArray(connectParams.scopes);
   const admission = await admitGatewayConnect(context);
   if (!admission) {
     return undefined;
@@ -195,6 +196,14 @@ export async function authenticateGatewayConnect(
       client: connectParams.client,
     });
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage, {
+      ...(failedAuth.rateLimited === true
+        ? {
+            retryable: true,
+            ...(failedAuth.retryAfterMs !== undefined
+              ? { retryAfterMs: failedAuth.retryAfterMs }
+              : {}),
+          }
+        : {}),
       details: {
         code: resolveAuthConnectErrorDetailCode(failedAuth.reason),
         authReason: failedAuth.reason,
@@ -449,6 +458,7 @@ export async function authenticateGatewayConnect(
     usesLegacyNodeProtocol,
     role,
     scopes,
+    hasRequestedScopes,
     isControlUi,
     isBrowserOperatorUi,
     isWebchat,

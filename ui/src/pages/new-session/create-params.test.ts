@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 
@@ -30,18 +31,20 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "", attachments });
   });
 
-  it("includes a selected model for a plain session", () => {
+  it("includes selected model and thinking overrides for a plain session", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "use the selected model",
         model: "anthropic/claude-sonnet-4-6",
+        thinkingLevel: "high",
         worktree: false,
       }),
     ).toEqual({
       agentId: "main",
       message: "use the selected model",
       model: "anthropic/claude-sonnet-4-6",
+      thinkingLevel: "high",
     });
   });
 
@@ -51,6 +54,7 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "start coding",
         model: "openai/gpt-5.5",
+        thinkingLevel: "medium",
         worktree: false,
         catalogId: "claude",
       }),
@@ -96,7 +100,42 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
-  it("sends cwd only for non-workspace folders and execNode when picked", () => {
+  it("sends a custom Gateway folder without requiring a worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "bootstrap here",
+        worktree: false,
+        cwd: "/home",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "bootstrap here",
+      cwd: "/home",
+    });
+  });
+
+  it("sends a custom Gateway checkout with an explicit worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "isolated work",
+        worktree: true,
+        cwd: "/other/repo",
+        workspace: "/workspace",
+        baseRef: "main",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "isolated work",
+      cwd: "/other/repo",
+      worktree: true,
+      worktreeBaseRef: "main",
+    });
+  });
+
+  it("sends the selected folder and execNode for node sessions", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",

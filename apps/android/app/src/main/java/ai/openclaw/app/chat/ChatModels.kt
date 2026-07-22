@@ -1,4 +1,9 @@
 package ai.openclaw.app.chat
+
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
 
 private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
@@ -20,6 +25,28 @@ data class ChatMessage(
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
   val idempotencyKey: String? = null,
+  /** Canonical transcript-tree identity supplied by chat.history. */
+  val entryId: String? = null,
+)
+
+/** One selectable transcript branch returned by sessions.branches.list. */
+data class SessionBranch(
+  val leafEntryId: String,
+  val headline: String,
+  val messageCount: Int,
+  val updatedAt: String?,
+  val active: Boolean,
+)
+
+data class SessionRewindResult(
+  val editorText: String?,
+)
+
+data class ChatTranscriptAnchorState(
+  val sessionKey: String,
+  val newestItemId: String?,
+  val completedEndedAt: Long?,
+  val completedNewestItemId: String?,
 )
 
 /**
@@ -32,7 +59,18 @@ data class ChatMessageContent(
   val fileName: String? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val widget: ChatWidgetPreview? = null,
 )
+
+data class ChatWidgetPreview(
+  val title: String?,
+  val path: String,
+  val preferredHeight: Int?,
+  val sandbox: String,
+) {
+  val height: Int
+    get() = (preferredHeight ?: 320).coerceIn(160, 1200)
+}
 
 /**
  * Tool call placeholder shown while a gateway run is still streaming.
@@ -44,6 +82,61 @@ data class ChatPendingToolCall(
   val startedAtMs: Long,
   val isError: Boolean? = null,
 )
+
+enum class ChatPlanStepStatus {
+  Pending,
+  InProgress,
+  Completed,
+}
+
+data class ChatPlanStep(
+  val step: String,
+  val status: ChatPlanStepStatus,
+)
+
+/** Parses a complete gateway plan snapshot, including legacy string-only steps. */
+internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
+  val entries = element as? JsonArray ?: return emptyList()
+  var hasInProgressStep = false
+  return entries.mapNotNull { entry ->
+    val parsed =
+      when (entry) {
+        is JsonObject -> {
+          val step =
+            (entry["step"] as? JsonPrimitive)
+              ?.takeIf { it.isString }
+              ?.content
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?: return@mapNotNull null
+          val status =
+            when ((entry["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+              "pending" -> ChatPlanStepStatus.Pending
+              "in_progress" -> ChatPlanStepStatus.InProgress
+              "completed" -> ChatPlanStepStatus.Completed
+              else -> return@mapNotNull null
+            }
+          ChatPlanStep(step = step, status = status)
+        }
+        is JsonPrimitive -> {
+          val step =
+            entry
+              .takeIf { it.isString }
+              ?.content
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?: return@mapNotNull null
+          ChatPlanStep(step = step, status = ChatPlanStepStatus.Pending)
+        }
+        else -> return@mapNotNull null
+      }
+    if (parsed.status == ChatPlanStepStatus.InProgress) {
+      if (hasInProgressStep) return@mapNotNull null
+      hasInProgressStep = true
+    }
+    parsed
+  }
+}
 
 /** Gateway-advertised thinking choice for the active provider/model pair. */
 data class ChatThinkingLevelOption(
@@ -75,6 +168,7 @@ internal val defaultChatThinkingLevelSelection =
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val ownerAgentId: String? = null,
   val displayName: String? = null,
   val label: String? = null,
   val category: String? = null,
@@ -92,6 +186,15 @@ data class ChatSessionEntry(
   val thinkingDefault: String? = null,
   val contextTokens: Long? = null,
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
+  val hasActiveRun: Boolean? = null,
+  val activeRunIds: List<String>? = null,
+  val status: String? = null,
+  val startedAt: Long? = null,
+  val endedAt: Long? = null,
+  val runtimeMs: Long? = null,
+  val outputTokens: Long? = null,
+  val hasRunMetadata: Boolean =
+    status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )
 
 /** Local fallback for server-side `sessions.list` search over cached entries. */
@@ -125,6 +228,12 @@ data class ChatCommandEntry(
 data class ChatInFlightRun(
   val runId: String,
   val text: String,
+  val plan: ChatPlanSnapshot? = null,
+)
+
+data class ChatPlanSnapshot(
+  val steps: List<ChatPlanStep>,
+  val explanation: String? = null,
 )
 
 /**

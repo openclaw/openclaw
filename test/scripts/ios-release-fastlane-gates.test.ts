@@ -96,16 +96,67 @@ describe("iOS Fastlane release upload gates", () => {
     expect(uploadCall).toBeGreaterThan(validationCall);
   });
 
+  it("finishes fallible local release work before mutating App Store metadata", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+    const screenshots = releaseUpload.indexOf(
+      "screenshots(release_version: context[:version], build_number: context[:build_number])",
+    );
+    const sourceCheck = releaseUpload.indexOf("verify_apple_release_source!(release_sha)");
+    const build = releaseUpload.indexOf("build = build_app_store_release(context)");
+    const metadata = releaseUpload.indexOf("metadata(release_version: context[:short_version])");
+
+    expect(screenshots).toBeGreaterThanOrEqual(0);
+    expect(sourceCheck).toBeGreaterThan(screenshots);
+    expect(build).toBeGreaterThan(sourceCheck);
+    expect(metadata).toBeGreaterThan(build);
+  });
+
+  it("fails from authoritative Xcode results and keeps successful bundles outside screenshots", () => {
+    const fastfile = readFastfile();
+    const screenshots = laneBody(fastfile, "screenshots");
+    const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
+
+    expect(screenshots).toContain("snapshot_devices.each_with_index");
+    expect(screenshots).toContain("result_bundle: true");
+    expect(screenshots).toContain("number_of_retries: 0");
+    expect(screenshots).toContain("stop_after_first_error: true");
+    expect(screenshots).toContain("verify_snapshot_test_result!(result_bundle_path, device)");
+    expect(screenshots).toContain(
+      'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
+    );
+    expect(screenshots.indexOf("verify_snapshot_test_result!")).toBeLessThan(
+      screenshots.indexOf("FileUtils.mv(result_bundle_path, archived_result_bundle_path)"),
+    );
+    expect(
+      screenshots.indexOf("FileUtils.mv(result_bundle_path, archived_result_bundle_path)"),
+    ).toBeLessThan(
+      screenshots.indexOf('FileUtils.rm_rf(File.join(output_directory, "test_output"))'),
+    );
+    expect(verifier).toContain('"xcresulttool"');
+    expect(verifier).toContain('summary.fetch("failedTests")');
+    expect(verifier).toContain("UI.test_failure!");
+  });
+
   it("preserves caller-pinned Swift tools in archive build PATH", () => {
     const fastfile = readFastfile();
     const pathBuilder = functionBody(fastfile, "xcodebuild_shell_join");
-    const callerPath = '*ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)';
+    const callerPath = 'ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)';
 
     expect(pathBuilder).toContain(callerPath);
     expect(pathBuilder).toContain(".reject(&:empty?).uniq.join(File::PATH_SEPARATOR)");
-    expect(pathBuilder.indexOf(callerPath)).toBeLessThan(
-      pathBuilder.indexOf('"/opt/homebrew/bin"'),
+    expect(pathBuilder).toContain(
+      "system_tools_first ? [*system_path, *caller_path] : [*caller_path, *system_path]",
     );
+  });
+
+  it("uses Apple's matched rsync pair when exporting the IPA", () => {
+    const fastfile = readFastfile();
+    const builder = functionBody(fastfile, "build_app_store_release");
+    const exportStart = builder.indexOf('"-exportArchive"');
+
+    expect(exportStart).toBeGreaterThanOrEqual(0);
+    expect(builder.slice(exportStart)).toContain("system_tools_first: true");
   });
 
   it("requires clean matching source before preparing and building release artifacts", () => {

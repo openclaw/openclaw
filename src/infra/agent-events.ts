@@ -5,6 +5,7 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createAbortError } from "./abort-signal.js";
+import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
 
 /** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
 export type AgentEventStream =
@@ -142,6 +143,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Active cadence state by job; admission permits one invocation per job. */
+  cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
@@ -165,6 +168,7 @@ type AgentEventState = {
     }
   >;
   lifecycleGeneration: string;
+  lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
@@ -172,6 +176,7 @@ const AGENT_EVENT_EXECUTION_CONTEXT_KEY = Symbol.for("openclaw.agentEvents.execu
 
 type AgentEventExecutionContext = {
   lifecycleGeneration: string;
+  onceByRun: Map<string, Promise<unknown>>;
 };
 
 function getAgentEventState(): AgentEventState {
@@ -193,16 +198,52 @@ function getAgentEventExecutionContext() {
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
 export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, run: () => T): T {
-  return getAgentEventExecutionContext().run({ lifecycleGeneration }, run);
+  const storage = getAgentEventExecutionContext();
+  const parent = storage.getStore();
+  const onceByRun =
+    parent?.lifecycleGeneration === lifecycleGeneration ? parent.onceByRun : new Map();
+  return storage.run({ lifecycleGeneration, onceByRun }, run);
+}
+
+/** Shares one operation across fallback attempts that belong to the same admitted run. */
+export function runOncePerAgentRun<T>(runId: string, operation: string, run: () => Promise<T>) {
+  const context = getAgentEventExecutionContext().getStore();
+  if (!context) {
+    return run();
+  }
+  const key = `${operation}:${runId}`;
+  const existing = context.onceByRun.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const pending = Promise.resolve().then(run);
+  context.onceByRun.set(key, pending);
+  return pending;
 }
 
 export function getAgentEventLifecycleGeneration(): string {
   return getAgentEventState().lifecycleGeneration;
 }
 
+export function isAgentEventLifecycleGenerationCurrent(lifecycleGeneration: string): boolean {
+  return lifecycleGeneration === getAgentEventState().lifecycleGeneration;
+}
+
+/** Registers process-local state cleanup at the gateway lifecycle boundary. */
+export function registerAgentEventLifecycleRotationHandler(
+  key: string,
+  handler: (lifecycleGeneration: string) => void,
+): void {
+  const state = getAgentEventState();
+  const handlers =
+    state.lifecycleRotationHandlers ??
+    (state.lifecycleRotationHandlers = new Map<string, (lifecycleGeneration: string) => void>());
+  handlers.set(key, handler);
+}
+
 /** Rejects work that no longer belongs to the active gateway lifecycle. */
 export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: string): void {
-  if (lifecycleGeneration === getAgentEventState().lifecycleGeneration) {
+  if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
   throw createAbortError("Agent run belongs to a stale gateway lifecycle");
@@ -221,6 +262,18 @@ export function captureAgentRunLifecycleGeneration(runId: string): string {
 export function rotateAgentEventLifecycleGeneration(): string {
   const state = getAgentEventState();
   state.lifecycleGeneration = randomUUID();
+  // Rotation is the liveness choke point: after it returns, no prior-generation
+  // owner is operationally reachable. Recovery and runtime consumers therefore
+  // agree that only current-generation owners can drive or receive work.
+  const errors: unknown[] = [];
+  notifyListeners(
+    state.lifecycleRotationHandlers?.values() ?? [],
+    state.lifecycleGeneration,
+    (error) => errors.push(error),
+  );
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to retire stale agent lifecycle owners");
+  }
   return state.lifecycleGeneration;
 }
 
@@ -272,6 +325,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   }
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
+  }
+  if (context.cronRunsByJobId !== undefined) {
+    existing.cronRunsByJobId ??= new Map();
+    for (const [jobId, cronRun] of context.cronRunsByJobId) {
+      existing.cronRunsByJobId.set(jobId, cronRun);
+    }
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
@@ -378,6 +437,34 @@ export function claimAgentRunContext(
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+/** Records the latest next-check proposal on the matching paced cron run. */
+export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
+  const context = getAgentEventState().runContextById.get(runId);
+  const cronRun = context?.cronRunsByJobId?.get(jobId);
+  if (!cronRun) {
+    throw new Error("cron next_check is only available to the currently running job");
+  }
+  if (!cronRun.pacingEnabled) {
+    throw new Error("cron next_check requires pacing on the current job");
+  }
+  cronRun.nextCheckMs = delayMs;
+}
+
+/** Consumes one successful cron run's proposal so it cannot affect a later run. */
+export function consumeCronNextCheckProposal(runId: string, jobId: string): number | undefined {
+  const context = getAgentEventState().runContextById.get(runId);
+  const cronRuns = context?.cronRunsByJobId;
+  const cronRun = cronRuns?.get(jobId);
+  if (!cronRun) {
+    return undefined;
+  }
+  cronRuns?.delete(jobId);
+  if (cronRuns?.size === 0 && context) {
+    delete context.cronRunsByJobId;
+  }
+  return cronRun.nextCheckMs;
 }
 
 export function getAgentRunContextOwnerStatus(
@@ -553,6 +640,9 @@ function enrichAgentEvent(
     return undefined;
   }
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
+    return undefined;
+  }
+  if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
     return undefined;
   }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;

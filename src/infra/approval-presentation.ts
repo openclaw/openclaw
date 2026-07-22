@@ -1,5 +1,6 @@
 // Builds the canonical reviewer-safe projection for durable approvals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ApprovalDecision,
   ApprovalKind,
@@ -16,6 +17,7 @@ import {
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -110,13 +112,39 @@ function buildPluginApprovalPresentation(params: {
   };
 }
 
+function buildSystemAgentApprovalPresentation(params: {
+  request: unknown;
+  allowedDecisions: readonly ApprovalDecision[];
+}): ApprovalPresentation | null {
+  if (!isRecord(params.request)) {
+    return null;
+  }
+  const request = params.request as SystemAgentApprovalRequestPayload;
+  const title = normalizeOptionalString(request.title);
+  const description = normalizeOptionalString(request.description);
+  if (!title || !description || !/^[a-f0-9]{64}$/.test(request.proposalHash)) {
+    return null;
+  }
+  return {
+    kind: "system-agent",
+    title: truncateUtf16Safe(sanitizeExecApprovalDisplayText(title), 80),
+    description: truncateUtf16Safe(sanitizeExecApprovalWarningText(description), 512),
+    proposalHash: request.proposalHash,
+    agentId: sanitizeOptionalSingleLine(request.agentId),
+    allowedDecisions: ["allow-once", "deny"],
+  };
+}
+
 /** Returns the safe cross-surface presentation, or null when no prompt can be rendered. */
 export function buildApprovalPresentation(params: {
   kind: ApprovalKind;
   request: unknown;
   allowedDecisions: readonly ApprovalDecision[];
 }): ApprovalPresentation | null {
-  return params.kind === "exec"
-    ? buildExecApprovalPresentation(params)
-    : buildPluginApprovalPresentation(params);
+  if (params.kind === "exec") {
+    return buildExecApprovalPresentation(params);
+  }
+  return params.kind === "plugin"
+    ? buildPluginApprovalPresentation(params)
+    : buildSystemAgentApprovalPresentation(params);
 }

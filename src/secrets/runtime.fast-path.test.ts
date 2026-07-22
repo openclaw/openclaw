@@ -16,9 +16,13 @@ import { asConfig } from "./runtime.test-support.js";
 
 const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() => ({
   resolveRuntimeWebToolsMock: vi.fn(async () => ({
-    search: { providerSource: "none", diagnostics: [] },
-    fetch: { providerSource: "none", diagnostics: [] },
-    diagnostics: [],
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
+    secretOwners: [],
   })),
   runtimePrepareImportMock: vi.fn(),
 }));
@@ -36,11 +40,17 @@ vi.mock("./runtime-prepare.runtime.js", () => {
     }),
     collectConfigAssignments: () => undefined,
     collectAuthStoreAssignments: () => undefined,
-    resolveSecretRefValues: async () => new Map(),
-    applyResolvedAssignments: () => undefined,
     resolveRuntimeWebTools: resolveRuntimeWebToolsMock,
   };
 });
+
+vi.mock("./runtime-owner-assignments.js", () => ({
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
+  }),
+}));
 
 function emptyAuthStore(): AuthProfileStore {
   return { version: 1, profiles: {} };
@@ -330,12 +340,12 @@ describe("secrets runtime fast path", () => {
       agentDirs: [agentDir],
       loadAuthStore: loadInitialAuthStore,
     });
+    activateSecretsRuntimeSnapshot(initialSnapshot);
     newerSnapshot = await prepareSecretsRuntimeSnapshot({
       config: config(19_002),
       agentDirs: [agentDir],
       loadAuthStore: emptyAuthStore,
     });
-    activateSecretsRuntimeSnapshot(initialSnapshot);
 
     publishNewerSnapshot = true;
     await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);

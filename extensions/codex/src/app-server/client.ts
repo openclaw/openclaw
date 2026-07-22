@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
@@ -28,7 +28,7 @@ import {
   closeCodexAppServerTransportAndWait,
   type CodexAppServerTransport,
 } from "./transport.js";
-import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
+import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** Minimum supported Codex app-server version exported for callers/tests. */
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
@@ -36,6 +36,9 @@ const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
+const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
+const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
+const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
 const CODEX_APP_SERVER_CLIENT_INSTANCE_IDS = new WeakMap<object, string>();
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
@@ -62,12 +65,14 @@ export function getCodexAppServerClientInstanceId(client: object): string {
 export class CodexAppServerRpcError extends Error {
   readonly code?: number;
   readonly data?: JsonValue;
+  readonly method: string;
 
   constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
     super(formatCodexAppServerRpcErrorMessage(error, method));
     this.name = "CodexAppServerRpcError";
     this.code = error.code;
     this.data = error.data;
+    this.method = method;
   }
 }
 
@@ -76,12 +81,35 @@ class CodexAppServerLocalRequestCancellationError extends Error {
 
   constructor(
     method: string,
-    reason: "aborted" | "timed out",
+    readonly reason: "aborted" | "timed out",
     readonly mayHaveWritten: boolean,
   ) {
     super(`${method} ${reason}`);
     this.name = "CodexAppServerLocalRequestCancellationError";
   }
+}
+
+export function isCodexAppServerRequestTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
+    "reason" in error &&
+    error.reason === "timed out"
+  );
+}
+
+export function isCodexAppServerBrokenPipeError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "EPIPE") {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 class CodexAppServerIndeterminateTransportError extends Error {
@@ -235,8 +263,8 @@ export class CodexAppServerClient {
     child.stdout.on("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
     );
-    child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (text: string) => {
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
       const trimmed = text.trim();
       if (trimmed) {
@@ -373,6 +401,18 @@ export class CodexAppServerClient {
         ? this.threadSessionRequestGuard
         : undefined;
     if (guard) {
+      if (
+        !options.signal &&
+        !(
+          options.timeoutMs !== undefined &&
+          Number.isFinite(options.timeoutMs) &&
+          options.timeoutMs > 0
+        )
+      ) {
+        return Promise.reject(
+          new TypeError(`${method} requires a positive finite timeout or abort signal`),
+        );
+      }
       return (async () => {
         const guardStartedAt = Date.now();
         const timeoutMessage = `${method} timed out`;
@@ -442,6 +482,96 @@ export class CodexAppServerClient {
   }
 
   private requestWithoutThreadSessionGuard<T>(
+    method: string,
+    params: unknown,
+    options: { timeoutMs?: number; signal?: AbortSignal },
+    onWriteAttempt?: () => void,
+  ): Promise<T> {
+    return this.requestWithOverloadRetry(method, params, options, onWriteAttempt);
+  }
+
+  private async requestWithOverloadRetry<T>(
+    method: string,
+    params: unknown,
+    options: { timeoutMs?: number; signal?: AbortSignal },
+    onWriteAttempt?: () => void,
+  ): Promise<T> {
+    const deadline =
+      options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs)
+        ? Date.now() + options.timeoutMs
+        : undefined;
+    for (let retry = 0; ; retry += 1) {
+      if (options.signal?.aborted) {
+        throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+      }
+      const remainingTimeoutMs = deadline === undefined ? undefined : deadline - Date.now();
+      if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
+        throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
+      }
+      try {
+        return await this.requestOnce<T>(
+          method,
+          params,
+          {
+            ...options,
+            ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
+          },
+          onWriteAttempt,
+        );
+      } catch (error) {
+        // Codex emits -32001 only when ingress rejects a request before enqueue,
+        // so retrying mutating methods cannot duplicate server-side work.
+        if (
+          !(error instanceof CodexAppServerRpcError) ||
+          error.code !== CODEX_APP_SERVER_OVERLOADED_ERROR_CODE ||
+          retry >= CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES
+        ) {
+          throw error;
+        }
+        const backoffMs = Math.round(
+          CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS * 2 ** retry * (0.75 + Math.random() * 0.5),
+        );
+        await this.waitForOverloadRetry(method, backoffMs, deadline, options.signal);
+      }
+    }
+  }
+
+  private async waitForOverloadRetry(
+    method: string,
+    backoffMs: number,
+    deadline: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    if (signal?.aborted) {
+      throw new CodexAppServerLocalRequestCancellationError(method, "aborted", false);
+    }
+    const remainingMs = deadline === undefined ? undefined : deadline - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
+    }
+    const delayMs = remainingMs === undefined ? backoffMs : Math.min(backoffMs, remainingMs);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, delayMs);
+      timer.unref?.();
+      const abortListener = () => {
+        cleanup();
+        reject(new CodexAppServerLocalRequestCancellationError(method, "aborted", false));
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abortListener);
+      };
+      signal?.addEventListener("abort", abortListener, { once: true });
+      if (signal?.aborted) {
+        abortListener();
+      }
+    });
+  }
+
+  private requestOnce<T>(
     method: string,
     params: unknown,
     options: { timeoutMs?: number; signal?: AbortSignal },
@@ -887,7 +1017,7 @@ class CodexAppServerVersionError extends Error {
       ? `detected ${detectedVersion}`
       : "OpenClaw could not determine the running Codex version";
     super(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
     this.name = "CodexAppServerVersionError";
     this.detectedVersion = detectedVersion;
@@ -901,8 +1031,10 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
     !detectedVersion ||
     !parsedVersion ||
     parsedVersion.compare(MIN_CODEX_APP_SERVER_VERSION) < 0 ||
-    // SemVer ignores build metadata for precedence; custom builds at the exact floor stay unstable.
-    (parsedVersion.version === MIN_CODEX_APP_SERVER_VERSION && parsedVersion.build.length > 0)
+    parsedVersion.compare(MAX_CODEX_APP_SERVER_VERSION) > 0 ||
+    // Generated schemas cover stable releases only; prereleases and custom builds can drift.
+    parsedVersion.prerelease.length > 0 ||
+    parsedVersion.build.length > 0
   ) {
     throw new CodexAppServerVersionError(detectedVersion);
   }
@@ -965,7 +1097,7 @@ function redactCodexAppServerLinePreview(value: string): string {
 
 function appendBoundedTail(current: string, next: string, maxLength: number): string {
   const combined = `${current}${next}`;
-  return combined.length > maxLength ? combined.slice(combined.length - maxLength) : combined;
+  return combined.length > maxLength ? sliceUtf16Safe(combined, -maxLength) : combined;
 }
 
 function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {

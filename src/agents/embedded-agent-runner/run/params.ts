@@ -30,6 +30,7 @@ import type {
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { ConversationRecallContext } from "../../conversation-recall.types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
@@ -81,6 +82,8 @@ export type RunEmbeddedAgentParams = {
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
+  /** Out-of-band plugin bindings attached by the run initiator. */
+  toolBindings?: Readonly<Record<string, unknown>>;
   chatType?: ChatType;
   agentAccountId?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
@@ -137,6 +140,8 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
@@ -226,6 +231,8 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted in-process subagent-completion handoff; never derived from public input. */
+  trustedInternalHandoff?: boolean;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -247,6 +254,8 @@ export type RunEmbeddedAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
+  conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
@@ -317,6 +326,22 @@ export type RunEmbeddedAgentParams = {
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  /**
+   * One-shot helper runs may opt in to executing through the provider's CLI
+   * backend instead of the direct-API passthrough when the run targets a CLI
+   * runtime provider whose passthrough credentials are subscription-scoped.
+   * Anthropic routes direct anthropic-messages calls on subscription OAuth to
+   * metered extra-usage billing: without extra-usage balance the passthrough
+   * fails closed with a billing error, and with it the run silently draws
+   * paid usage instead of plan limits. The CLI backend is the plan-limits
+   * path for those credentials. CLI dispatch translates `toolsAllow` into the
+   * selectable-backend surface (no native tools, allowlisted loopback MCP
+   * tools); the same list bounds the loopback MCP grant server-side, so tools
+   * outside it — including the message tool, matching `disableMessageTool`
+   * intent — can be neither listed nor called. Leave unset to keep the
+   * direct-API passthrough.
+   */
+  cliBackendDispatch?: "subscription-auth";
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,
    * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.

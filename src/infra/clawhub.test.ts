@@ -22,6 +22,7 @@ import {
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
+  reportClawHubSkillInstallTelemetry,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
@@ -93,6 +94,17 @@ function createOversizedArchiveResponse(
     }),
     cancel,
   };
+}
+
+function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
+  const prefixBytes = new TextEncoder().encode(prefix);
+  const suffixBytes = new TextEncoder().encode(suffix);
+  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set(prefixBytes);
+  bytes[prefixBytes.byteLength] = 0xff;
+  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
+  return buffer;
 }
 
 const oversizedArchiveCases: Array<{
@@ -179,6 +191,8 @@ describe("clawhub helpers", () => {
     delete process.env.CLAWHUB_AUTH_TOKEN;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
+    delete process.env.CLAWHUB_DISABLE_TELEMETRY;
+    delete process.env.CLAWDHUB_DISABLE_TELEMETRY;
     originalEnv.restore();
   });
 
@@ -405,6 +419,20 @@ describe("clawhub helpers", () => {
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
 
+  it("preserves the legacy telemetry opt-out when the primary env is blank", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "   ";
+    process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "token-123",
+      slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("preserves the configured ClawHub base URL path prefix", async () => {
     process.env.OPENCLAW_CLAWHUB_URL = "https://internal.example.com/clawhub";
     let requestedUrl = "";
@@ -426,6 +454,34 @@ describe("clawhub helpers", () => {
     expect(url.origin).toBe("https://internal.example.com");
     expect(url.pathname).toBe("/clawhub/api/v1/search");
     expect(url.searchParams.get("q")).toBe("calendar");
+  });
+
+  it("treats an empty primary telemetry setting as absent", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "";
+    process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "test-token",
+      slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("lets a nonblank primary telemetry setting override the legacy opt-out", async () => {
+    process.env.CLAWHUB_DISABLE_TELEMETRY = "false";
+    process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await reportClawHubSkillInstallTelemetry({
+      token: "test-token",
+      slug: "calendar",
+      fetchImpl,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {
@@ -705,6 +761,15 @@ describe("clawhub helpers", () => {
     } finally {
       setTimeoutSpy.mockRestore();
     }
+  });
+
+  it("rejects malformed UTF-8 in generated Skill Card markdown", async () => {
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () => new Response(malformedUtf8("# Agent ", "\n")),
+      }),
+    ).rejects.toThrow(TypeError);
   });
 
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
@@ -1016,6 +1081,43 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
+  it.each(["0x10", "1e3", "-1", "-0", "+7", "0.5", "9007199254740993"])(
+    "does not describe malformed RateLimit-Reset values as seconds: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: { "RateLimit-Reset": reset },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+    },
+  );
+
+  it.each(["invalid", "+7", "-0"])(
+    "uses a valid Retry-After hint when RateLimit-Reset is malformed: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: {
+                "RateLimit-Reset": reset,
+                "Retry-After": "7",
+              },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
+    },
+  );
+
   it("retries transient ClawHub reads and honors Retry-After", async () => {
     const cancel = vi.fn();
     let attempts = 0;
@@ -1095,6 +1197,19 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
+  it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        fetchImpl: async () =>
+          new Response(malformedUtf8('{"results":[{"slug":"', '"}]}'), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
   it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
     const stalled = createStalledBodyResponse({
       firstChunk: new TextEncoder().encode('{"results":['),
@@ -1113,22 +1228,29 @@ describe("clawhub helpers", () => {
   });
 
   it("times out and cancels stalled ClawHub error bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode("partial error"),
-      headers: { "content-type": "text/plain" },
-      status: 500,
-      statusText: "Server Error",
-    });
+    const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
       searchClawHubSkills({
         query: "calendar",
         timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
+        fetchImpl: async () => {
+          const stalled = createStalledBodyResponse({
+            firstChunk: new TextEncoder().encode("partial error"),
+            headers: { "content-type": "text/plain", "retry-after": "0" },
+            status: 500,
+            statusText: "Server Error",
+          });
+          stalledResponses.push(stalled);
+          return stalled.response;
+        },
       }),
     ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    for (const stalled of stalledResponses) {
+      expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    }
+    const finalResponse = stalledResponses.at(-1);
+    expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
@@ -1171,7 +1293,8 @@ describe("clawhub helpers", () => {
     try {
       await searchClawHubSkills({
         query: "calendar",
-        fetchImpl: async () => new Response(oversized, { status: 500 }),
+        fetchImpl: async () =>
+          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
       });
     } catch (caught) {
       error = caught;

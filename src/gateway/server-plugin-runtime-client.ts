@@ -16,10 +16,13 @@ export function createSyntheticPluginRuntimeClient(params?: {
   allowModelOverride?: boolean;
   agentRunTracking?: "plugin_subagent";
   cronRunContinuation?: boolean;
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
   scopes?: string[];
-}): GatewayRequestOptions["client"] {
+}): NonNullable<GatewayRequestOptions["client"]> {
   const pluginRuntimeOwnerId =
     typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
       ? params.pluginRuntimeOwnerId.trim()
@@ -41,10 +44,19 @@ export function createSyntheticPluginRuntimeClient(params?: {
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
+      ...(params?.internalDeliveryMediaUrls
+        ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
+        : {}),
+      ...(params?.internalDeliverySuppressText === true
+        ? { internalDeliverySuppressText: true }
+        : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      ...(params?.delegatedToolPolicyHandoff === true
+        ? { delegatedToolPolicyHandoff: true as const }
         : {}),
     },
   };

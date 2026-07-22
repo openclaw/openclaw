@@ -91,6 +91,7 @@ function projectSystemAgentExecutionConfig(
 
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
+  requestedAgentId?: string,
 ): Promise<SystemAgentConfiguredRoute | null> {
   const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
     await Promise.all([
@@ -100,7 +101,9 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       import("../agents/simple-completion-runtime.js"),
       import("../agents/harness/policy.js"),
     ]);
-  const modelOwnerAgentId = agentScope.resolveDefaultAgentId(runConfig);
+  const modelOwnerAgentId = normalizeAgentId(
+    requestedAgentId ?? agentScope.resolveDefaultAgentId(runConfig),
+  );
   if (!agentScope.resolveAgentEffectiveModelPrimary(runConfig, modelOwnerAgentId)) {
     return null;
   }
@@ -194,14 +197,23 @@ function projectRelevantModelMap(params: {
 export async function projectDefaultInferenceRoute(
   config: OpenClawConfig,
 ): Promise<DefaultInferenceRouteProjection> {
+  return await projectInferenceRoute(config);
+}
+
+/** Project every config input that can change one configured agent route. */
+export async function projectInferenceRoute(
+  config: OpenClawConfig,
+  requestedAgentId?: string,
+): Promise<DefaultInferenceRouteProjection> {
   const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/provider-auth-aliases.js"),
   ]);
   const defaultAgentId = resolveDefaultAgentId(config);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const routeAgentId = normalizeAgentId(requestedAgentId ?? defaultAgentId);
+  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId);
   const list = config.agents?.list ?? [];
-  const agent = list.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
+  const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
   const executionAgent = route?.runConfig.agents?.list?.find(
     (entry) => normalizeAgentId(entry.id) === SYSTEM_AGENT_EXECUTION_AGENT_ID,
   );
@@ -241,21 +253,20 @@ export async function projectDefaultInferenceRoute(
     const { runConfig: _runConfig, ...routeWithoutConfig } = route;
     projectedRoute = routeWithoutConfig;
   }
-  const explicitDefaultIds = list
-    .filter((entry) => entry.default)
-    .map((entry) => normalizeAgentId(entry.id));
+  const explicitDefaultIds = requestedAgentId
+    ? [routeAgentId]
+    : list.filter((entry) => entry.default).map((entry) => normalizeAgentId(entry.id));
   return {
     route: projectedRoute,
     defaultSelection: {
       explicitIds: explicitDefaultIds,
-      ...(explicitDefaultIds.length === 0 && list[0]?.id
+      ...(!requestedAgentId && explicitDefaultIds.length === 0 && list[0]?.id
         ? { fallbackId: normalizeAgentId(list[0].id) }
         : {}),
     },
     auth: {
       profiles: authProfiles,
       order: authOrder,
-      cooldowns: structuredClone(config.auth?.cooldowns),
     },
     models: {
       mode: config.models?.mode,

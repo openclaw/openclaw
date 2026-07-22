@@ -112,6 +112,7 @@ function buildChatSendMessageContext(params: {
   suppressCommandInterpretation: boolean;
   systemInputProvenance?: InputProvenance;
   systemProvenanceReceipt?: string;
+  toolBindings?: Readonly<Record<string, unknown>>;
 }) {
   const commandBody = params.parsedMessage;
   const commandSource =
@@ -175,6 +176,7 @@ function buildChatSendMessageContext(params: {
       : {}),
     GatewayClientScopes: params.client?.connect?.scopes ?? [],
     GatewayClientCaps: params.client?.connect?.caps ?? [],
+    GatewayRunToolBindings: params.toolBindings,
   };
   if (params.mediaPathOffloadPaths.length > 0) {
     // Pre-staged offloads must use the channel media fields and marker so the
@@ -203,6 +205,7 @@ export function prepareChatSendUserTurn(params: {
     | "suppressCommandInterpretation"
     | "systemInputProvenance"
     | "systemProvenanceReceipt"
+    | "toolBindings"
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
   admission: Pick<AdmittedChatSend, "originatingRoute">;
@@ -233,12 +236,7 @@ export function prepareChatSendUserTurn(params: {
   userTurn.setInputPromise(
     preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia).then((media) => ({
       ...userTurn.baseInput,
-      ...(media.length > 0
-        ? {
-            media,
-            mediaOnlyText: "[User sent media without caption]",
-          }
-        : {}),
+      ...(media.length > 0 ? { media } : {}),
     })),
   );
   const pluginBoundMediaFieldsPromise =
@@ -259,6 +257,7 @@ export function prepareChatSendUserTurn(params: {
     suppressCommandInterpretation: request.suppressCommandInterpretation,
     systemInputProvenance: request.systemInputProvenance,
     systemProvenanceReceipt: request.systemProvenanceReceipt,
+    toolBindings: request.toolBindings,
   });
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
     type.startsWith("image/"),

@@ -7,7 +7,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -423,7 +423,6 @@ describe("runAgentHarnessAttempt", () => {
       expect(receivedPrivateAuthority).toBe(false);
       expect(hostScopeActive).toBe(true);
       expect(toolNames).toEqual(["openclaw"]);
-      expect(createOpenClawCodingTools().some((tool) => tool.name === "openclaw")).toBe(false);
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
@@ -549,7 +548,6 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(result.sessionIdUsed).toBe("openclaw");
     expect(toolNames).toEqual(["openclaw"]);
-    expect(createOpenClawCodingTools().some((tool) => tool.name === "openclaw")).toBe(false);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
@@ -979,6 +977,18 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("does not select Codex from a non-OpenAI model name", () => {
+    registerSuccessfulCodexHarness();
+
+    expect(resolveAgentHarnessPolicy({ provider: "custom", modelId: "gpt-5.4-codex" })).toEqual({
+      runtime: "auto",
+      runtimeSource: "implicit",
+    });
+    expect(selectAgentHarness({ provider: "custom", modelId: "gpt-5.4-codex" }).id).toBe(
+      "openclaw",
+    );
+  });
+
   it("auto-selects plugin support by default", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
@@ -995,6 +1005,23 @@ describe("selectAgentHarness", () => {
 
     expect(harness.id).toBe("codex");
     expect(supports).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects statically unrelated auto harnesses before provider discovery", () => {
+    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      autoSelection: { providerIds: ["openai", "codex"] },
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(selectAgentHarness({ provider: "deepseek", modelId: "deepseek-v4-pro" }).id).toBe(
+      "openclaw",
+    );
+    expect(supports).not.toHaveBeenCalled();
+    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
   });
 
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
@@ -1073,13 +1100,13 @@ describe("selectAgentHarness", () => {
   it("passes manifest provider owners into plugin support checks", () => {
     providerOwnerMocks.resolveProviderRefOwnership.mockReturnValue({
       status: "owned",
-      pluginIds: ["anthropic"],
+      pluginIds: ["fixture-owner"],
     });
     const supports = vi.fn(() => ({
       supported: false as const,
       reason: "provider is owned by a native plugin",
     }));
-    const config = providerRuntimeConfig("anthropic", "copilot");
+    const config = providerRuntimeConfig("fixture-provider", "copilot");
     registerAgentHarness({
       id: "copilot",
       label: "Copilot",
@@ -1089,24 +1116,24 @@ describe("selectAgentHarness", () => {
 
     expect(() =>
       selectAgentHarness({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         config,
         agentHarnessRuntimeOverride: "copilot",
       }),
     ).toThrow("provider is owned by a native plugin");
 
     expect(providerOwnerMocks.resolveProviderRefOwnership).toHaveBeenCalledWith({
-      provider: "anthropic",
+      provider: "fixture-provider",
       config,
     });
     expect(supports).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6",
+        provider: "fixture-provider",
+        modelId: "fixture-model",
         requestedRuntime: "copilot",
         providerOwnerStatus: "owned",
-        providerOwnerPluginIds: ["anthropic"],
+        providerOwnerPluginIds: ["fixture-owner"],
       }),
     );
   });

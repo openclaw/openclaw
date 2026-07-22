@@ -289,7 +289,7 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
   return env;
 }
 
-export function shellQuote(value: string): string {
+function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 

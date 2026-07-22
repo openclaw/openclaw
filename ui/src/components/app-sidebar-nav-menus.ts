@@ -4,8 +4,10 @@ import { html, nothing } from "lit";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
+  isSessionsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
+  serializeSidebarEntry,
   type NavigationRouteId,
   SIDEBAR_NAV_ROUTES,
   type SidebarNavRoute,
@@ -14,7 +16,8 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
-import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
+import { pluginTabSearch } from "../pages/plugin/route.ts";
+import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -32,7 +35,7 @@ export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-/** Settings routes highlight Settings; Plugins hub tabs highlight Plugins. */
+/** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
   activeRouteId: NavigationRouteId | undefined,
   routeId: NavigationRouteId,
@@ -46,10 +49,13 @@ export function isSidebarRouteActive(
   if (routeId === "plugins") {
     return isPluginsHubRoute(activeRouteId);
   }
+  if (routeId === "sessions") {
+    return isSessionsHubRoute(activeRouteId);
+  }
   return activeRouteId === routeId;
 }
 
-/** Dynamic plugin tabs stay in the More menu; only stable static route ids can be persisted as pins. */
+/** Stable ordering for plugin-provided sidebar tabs. */
 export function sidebarPluginTabs(
   tabs: readonly GatewayControlUiPluginTab[] | undefined,
 ): GatewayControlUiPluginTab[] {
@@ -94,7 +100,36 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
   `;
 }
 
-/** Unpinned routes, plugin tabs, and the pin editor live in a popup behind this row. */
+export function renderSidebarPluginTab(params: {
+  tab: GatewayControlUiPluginTab;
+  basePath: string;
+  active: boolean;
+  onNavigate: (search: string) => void;
+}) {
+  const search = pluginTabSearch({ pluginId: params.tab.pluginId, id: params.tab.id });
+  const iconName = Object.hasOwn(icons, params.tab.icon!)
+    ? (params.tab.icon as IconName)
+    : "puzzle";
+  return html`
+    <a
+      href=${`${pathForRoute("plugin", params.basePath)}${search}`}
+      class="nav-item ${params.active ? "nav-item--active" : ""}"
+      aria-current=${params.active ? "page" : nothing}
+      @click=${(event: MouseEvent) => {
+        if (!shouldHandleNavigationClick(event)) {
+          return;
+        }
+        event.preventDefault();
+        params.onNavigate(search);
+      }}
+    >
+      <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
+      <span class="nav-item__text">${params.tab.label}</span>
+    </a>
+  `;
+}
+
+/** Unpinned routes and the pin editor live in a popup behind this row. */
 export function renderSidebarMoreRow(params: {
   open: boolean;
   active: boolean;
@@ -116,7 +151,6 @@ export function renderSidebarMoreRow(params: {
 
 type SidebarMenuNavigationHandlers = {
   onNavigateRoute: (routeId: SidebarNavRoute) => void;
-  onNavigatePluginTab: (search: string) => void;
   onPreloadRoute: (routeId: SidebarNavRoute, event: Event) => void;
   onCancelPreload: (event: Event) => void;
 };
@@ -125,9 +159,8 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   position: SidebarMenuPosition | null;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
-  activePluginTabId: string;
-  pinnedRoutes: readonly SidebarNavRoute[];
-  pluginTabs: readonly GatewayControlUiPluginTab[];
+  activeWorkboardBoardId: string;
+  sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
   onTabAway: () => void;
@@ -135,7 +168,9 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
 };
 
 function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavRoute) {
-  const active = isSidebarRouteActive(params.activeRouteId, routeId);
+  const active =
+    isSidebarRouteActive(params.activeRouteId, routeId) &&
+    !(routeId === "workboard" && params.activeWorkboardBoardId);
   return html`
     <wa-dropdown-item
       value=${routeId}
@@ -161,39 +196,12 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
   `;
 }
 
-function renderMoreMenuPluginTab(params: SidebarMoreMenuParams, tab: GatewayControlUiPluginTab) {
-  const ref = { pluginId: tab.pluginId, id: tab.id };
-  const search = pluginTabSearch(ref);
-  const active =
-    params.activeRouteId === "plugin" && params.activePluginTabId === pluginTabKey(ref);
-  const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
-  return html`
-    <wa-dropdown-item
-      value=${`plugin:${pluginTabKey(ref)}`}
-      class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
-      aria-current=${active ? "page" : nothing}
-      @click=${(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
-          return;
-        }
-        event.preventDefault();
-      }}
-    >
-      <a href=${`${pathForRoute("plugin", params.basePath)}${search}`} tabindex="-1">
-        <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
-        <span class="sidebar-customize-menu__text">${tab.label}</span>
-      </a>
-    </wa-dropdown-item>
-  `;
-}
-
 export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
   const position = params.position;
   if (!position) {
     return nothing;
   }
-  const moreRoutes = sidebarMoreRoutes(params.pinnedRoutes).filter((routeId) =>
+  const moreRoutes = sidebarMoreRoutes(params.sidebarEntries).filter((routeId) =>
     params.isRouteEnabled(routeId),
   );
   return html`
@@ -216,16 +224,6 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
             params.onEditPinnedItems();
             return;
           }
-          if (value?.startsWith("plugin:")) {
-            const tab = params.pluginTabs.find((candidate) => {
-              const ref = { pluginId: candidate.pluginId, id: candidate.id };
-              return `plugin:${pluginTabKey(ref)}` === value;
-            });
-            if (tab) {
-              params.onNavigatePluginTab(pluginTabSearch({ pluginId: tab.pluginId, id: tab.id }));
-            }
-            return;
-          }
           if (value && moreRoutes.includes(value as SidebarNavRoute)) {
             params.onNavigateRoute(value as SidebarNavRoute);
           }
@@ -243,7 +241,6 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
           style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
-        ${params.pluginTabs.map((tab) => renderMoreMenuPluginTab(params, tab))}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="customize">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
@@ -256,9 +253,12 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 
 type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
-  pinnedRoutes: readonly SidebarNavRoute[];
+  sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
+  workboardBoards: readonly SidebarWorkboardBoard[];
+  workboardRenderers?: SidebarWorkboardRenderers;
   onToggleRoute: (routeId: SidebarNavRoute) => void;
+  onToggleWorkboardBoard: (boardId: string) => void;
   onReset: () => void;
   onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
@@ -282,6 +282,11 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           const value = event.detail.item.value;
           if (value === "reset") {
             params.onReset();
+          } else if (value?.startsWith("workboard:")) {
+            const boardId = value.slice("workboard:".length);
+            if (params.workboardBoards.some((board) => board.id === boardId)) {
+              params.onToggleWorkboardBoard(boardId);
+            }
           } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
             params.onToggleRoute(value as SidebarNavRoute);
           }
@@ -300,13 +305,15 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         ></button>
         <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
         ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
-          const pinned = params.pinnedRoutes.includes(routeId);
+          const visible = params.sidebarEntries.includes(
+            serializeSidebarEntry({ type: "route", route: routeId }),
+          );
           return html`
             <wa-dropdown-item
               class="sidebar-customize-menu__item"
               type="checkbox"
               value=${routeId}
-              .checked=${pinned}
+              .checked=${visible}
             >
               <span slot="icon" class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
@@ -315,6 +322,12 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
             </wa-dropdown-item>
           `;
         })}
+        ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
+          ? params.workboardRenderers?.renderCustomize(
+              params.workboardBoards,
+              params.sidebarEntries,
+            )
+          : nothing}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
@@ -328,14 +341,14 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
 /** More row carries the active highlight when the current route lives inside its menu. */
 export function sidebarMoreMenuHoldsActiveRoute(params: {
   activeRouteId: NavigationRouteId | undefined;
-  pinnedRoutes: readonly SidebarNavRoute[];
+  activeWorkboardBoardId?: string;
+  sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
 }): boolean {
-  return (
-    params.activeRouteId === "plugin" ||
-    sidebarMoreRoutes(params.pinnedRoutes).some(
-      (routeId) =>
-        params.isRouteEnabled(routeId) && isSidebarRouteActive(params.activeRouteId, routeId),
-    )
+  return sidebarMoreRoutes(params.sidebarEntries).some(
+    (routeId) =>
+      params.isRouteEnabled(routeId) &&
+      isSidebarRouteActive(params.activeRouteId, routeId) &&
+      !(routeId === "workboard" && params.activeWorkboardBoardId),
   );
 }

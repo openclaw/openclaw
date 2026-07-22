@@ -15,6 +15,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -294,7 +295,9 @@ async function readOpenRouterAudioStream(
       for (const line of lines) {
         if (processOpenRouterSseLine(line.trim(), result)) {
           flushOpenRouterMusicAudio(result);
-          await reader.cancel();
+          // Once [DONE] is observed, the generated result is authoritative.
+          // Cancellation is cleanup and must not replace it with a transport error.
+          await reader.cancel().catch(() => {});
           return {
             audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),
@@ -393,6 +396,9 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
             "HTTP-Referer": "https://openclaw.ai",
             "X-OpenRouter-Title": "OpenClaw",
           },
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.openrouter?.request,
+          ),
           provider: "openrouter",
           capability: "audio",
           transport: "http",

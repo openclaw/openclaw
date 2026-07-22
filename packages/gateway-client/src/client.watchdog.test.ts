@@ -182,6 +182,23 @@ describe("GatewayClient", () => {
     });
   });
 
+  test("reconnects with updated node manifest metadata", () => {
+    const client = new GatewayClient({ caps: ["system"], commands: ["system.run"] });
+    const close = vi.fn();
+    installSyntheticSocket(client, vi.fn(), close);
+
+    client.updateNodeManifest({
+      caps: ["canvas", "system"],
+      commands: ["canvas.present", "system.run"],
+    });
+
+    expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
+    expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject({
+      caps: ["canvas", "system"],
+      commands: ["canvas.present", "system.run"],
+    });
+  });
+
   test("rejects an unbounded request, reconnects, and does not replay it", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     wss = server;
@@ -449,20 +466,26 @@ describe("GatewayClient", () => {
 
   test("cleans pending request state when websocket send throws", async () => {
     const { client, send } = createOpenGatewayClient(25);
+    const onSent = vi.fn();
     send.mockImplementationOnce(() => {
       throw new Error("synthetic send failure");
     });
 
-    await expect(client.request("status")).rejects.toThrow("synthetic send failure");
+    await expect(client.request("status", undefined, { onSent })).rejects.toThrow(
+      "synthetic send failure",
+    );
+    expect(onSent).not.toHaveBeenCalled();
     expect(getPendingCount(client)).toBe(0);
   });
 
   test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
     const { client, send } = createOpenGatewayClient(25);
 
+    const onSent = vi.fn();
     const onAccepted = vi.fn();
     const requestPromise = client.request<{ status: string }>("agent", undefined, {
       expectFinal: true,
+      onSent,
       onAccepted,
     });
     const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
@@ -474,6 +497,7 @@ describe("GatewayClient", () => {
       payload: { status: "accepted", runId: "run-1" },
     });
 
+    expect(onSent).toHaveBeenCalledOnce();
     expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-1" });
     expect(getPendingCount(client)).toBe(1);
 

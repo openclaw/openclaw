@@ -202,21 +202,6 @@ type QaEvidenceScenarioResultInput = {
   };
 };
 
-type QaEvidenceLiveTransportCheckInput = {
-  id: string;
-  title: string;
-  status: QaEvidenceStatusInput;
-  details: string;
-  posture?: z.infer<typeof qaEvidencePostureSchema>;
-  timing?: QaEvidenceTiming;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs?: number;
-  };
-  coverageIds?: readonly string[];
-  artifactPaths?: Readonly<Record<string, string>>;
-};
-
 type QaEvidenceRttInput = Pick<
   QaEvidenceScenarioResultInput,
   "rttMeasurement" | "rttMs" | "timing"
@@ -300,14 +285,6 @@ function buildQaEvidenceArtifacts(paths: readonly QaEvidenceArtifactInput[], sou
   return paths.map((artifact) => ({
     kind: artifact.kind,
     path: artifact.path,
-    source,
-  }));
-}
-
-function buildQaEvidenceNamedArtifacts(paths: Readonly<Record<string, string>>, source: string) {
-  return Object.entries(paths).map(([kind, artifactPath]) => ({
-    kind,
-    path: artifactPath,
     source,
   }));
 }
@@ -683,79 +660,5 @@ export function buildScriptEvidenceSummary(
     defaultRunner: "script",
     testKind: "script-test",
     runner: params.runner ?? "script",
-  });
-}
-
-export function buildLiveTransportEvidenceSummary(
-  params: QaEvidenceBuildBase & {
-    checks: readonly QaEvidenceLiveTransportCheckInput[];
-    transportId: string;
-  },
-): QaEvidenceSummaryJson {
-  const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment({
-    env: params.env,
-    repoRoot: params.repoRoot,
-  });
-  const packageSource = resolveQaEvidenceBuildPackageSource(params);
-  const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
-  const profile = resolveQaEvidenceProfile({
-    env: params.env,
-    explicit: params.profile,
-  });
-  const channelDriver = resolveQaEvidenceChannelDriver({
-    env: params.env,
-    fallback: params.channelDriver ?? "native",
-  }) ?? { id: "native" };
-  const entries = params.checks.map((check): QaEvidenceSummaryEntry => {
-    const testId = check.id;
-    const liveCoverageId = `channels.${params.transportId}.live`;
-    const coverage = [
-      {
-        id: liveCoverageId,
-        role: "live-transport",
-      },
-      ...uniqueSortedStrings(check.coverageIds ?? [])
-        .filter((coverageId) => coverageId !== liveCoverageId)
-        .map((coverageId) => ({
-          id: coverageId,
-          role: "live-transport-coverage",
-        })),
-    ];
-    const timing = timingForRttResult(check);
-    return {
-      test: {
-        kind: "live-transport-check",
-        id: testId,
-        title: check.title,
-      },
-      coverage,
-      posture: check.posture,
-      execution: {
-        runner,
-        environment,
-        provider,
-        channel: {
-          id: params.transportId,
-          live: true,
-          driver: channelDriver.id,
-        },
-        packageSource,
-        artifacts: [
-          ...buildQaEvidenceArtifacts(params.artifactPaths, `${params.transportId}-live-transport`),
-          ...buildQaEvidenceNamedArtifacts(
-            check.artifactPaths ?? {},
-            `${params.transportId}-live-transport:${testId}`,
-          ),
-        ],
-      },
-      result: resultForEvidence(check, timing),
-    };
-  });
-  return buildQaEvidenceSummary({
-    entries,
-    evidenceMode: params.evidenceMode,
-    generatedAt: params.generatedAt,
-    profile,
   });
 }

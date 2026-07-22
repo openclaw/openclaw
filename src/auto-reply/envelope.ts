@@ -14,7 +14,7 @@ import {
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
-type AgentEnvelopeParams = {
+export type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;
@@ -114,7 +114,7 @@ export function formatEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (!ts) {
+  if (ts === undefined) {
     return undefined;
   }
   const resolved = normalizeEnvelopeOptions(options);
