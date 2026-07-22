@@ -25,7 +25,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 
 const t = createSetupTranslator();

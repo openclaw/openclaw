@@ -12,7 +12,7 @@ import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";

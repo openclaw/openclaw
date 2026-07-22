@@ -8,7 +8,7 @@ import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channe
 import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { normalizeStringifiedEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
