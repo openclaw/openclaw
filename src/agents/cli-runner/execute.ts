@@ -255,10 +255,13 @@ const CLI_ENV_AUTH_LOG_KEYS = [
 ] as const;
 
 const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
-const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
+const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set([
   "ANTHROPIC_API_KEY",
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_OAUTH_TOKEN",
+]);
+const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
+  ...CLAUDE_SELECTED_AUTH_ENV_KEYS,
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
 ]);
 
@@ -913,10 +916,19 @@ export async function executePreparedCliRun(
               captureKey: initialGatewayCaptureKey,
             });
         cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
-        const backendEnv = {
-          ...backend.env,
-          ...context.preparedBackend.env,
-        };
+        const preparedBackendEnv = context.preparedBackend.env ?? {};
+        const hasSelectedClaudeAuth = [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) =>
+          Object.hasOwn(preparedBackendEnv, key),
+        );
+        const selectedClaudeClearEnv = hasSelectedClaudeAuth
+          ? new Set(backend.clearEnv ?? [])
+          : undefined;
+        const configuredBackendEnv = Object.fromEntries(
+          Object.entries(backend.env ?? {}).filter(
+            ([key]) => !selectedClaudeClearEnv?.has(key),
+          ),
+        );
+        const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
         const nodeEnvEntries = Object.entries(backendEnv).filter(([key]) =>
           NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
         );

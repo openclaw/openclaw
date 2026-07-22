@@ -517,6 +517,7 @@ describe("runCliAgent spawn path", () => {
         ],
         forkArg: "--fork-session",
         liveSession: "claude-stdio",
+        env: { ANTHROPIC_API_KEY: "configured-backend-key" },
         clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         systemPromptWhen: "always",
       },
@@ -558,6 +559,7 @@ describe("runCliAgent spawn path", () => {
         clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
       }),
     );
+    expect(invokeNode.mock.calls[0]?.[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
     const argv = invokeNode.mock.calls[0]?.[0].argv ?? [];
     expect(argv).not.toContain("--mcp-config");
     expect(argv).not.toContain("--permission-mode");
