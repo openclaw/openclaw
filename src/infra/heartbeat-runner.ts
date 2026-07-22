@@ -2318,6 +2318,12 @@ export function startHeartbeatRunner(opts: {
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
   stableSchedulerSeed?: string;
+  /**
+   * Optional pre-flight guard called before waking a targeted agent session.
+   * Return `{ skip: true }` to suppress the wake (e.g. no actionable tickets,
+   * or the stored assignee does not match the current heartbeat run context).
+   */
+  wakeGuard?: (agentId: string, sessionKey: string | undefined) => Promise<{ skip: boolean }>;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce ?? runHeartbeatOnce;
@@ -2606,6 +2612,9 @@ export function startHeartbeatRunner(opts: {
             advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
             return { status: "skipped", reason: deferral.reason };
           }
+        }
+        if (opts.wakeGuard && (await opts.wakeGuard(targetAgent.agentId, requestedSessionKey)).skip) {
+          return { status: "skipped", reason: "wake-guard" };
         }
         try {
           const res = await runOnce({
