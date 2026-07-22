@@ -2086,6 +2086,74 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("skips transcript-byte preflight when model policy routes Anthropic to claude-cli without a session runtime pin", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+          ownsNativeCompaction: true,
+        },
+      ],
+    });
+    const sessionFile = path.join(rootDir, "cli-routed-large-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 4,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: { models: [{ id: "claude-opus-4-6", contextWindow: 350_000 }] },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+            cliBackends: { "claude-cli": { command: "claude" } },
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(entry?.compactionCount).toBe(0);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the OpenAI API context window for persisted OpenClaw runtime overrides", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

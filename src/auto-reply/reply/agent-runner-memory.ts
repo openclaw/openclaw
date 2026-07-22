@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -263,32 +264,64 @@ function resolveMemoryFlushModelFallbackOptions(
   };
 }
 
-function followupUsesCliRuntime(params: {
+type FollowupCliRuntimeParams = {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;
   sessionEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
+    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "sessionId"
   >;
-}): boolean {
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+};
+
+function followupUsesCliRuntime(params: FollowupCliRuntimeParams): boolean {
   const provider = params.followupRun.run.provider;
   if (isCliProvider(provider, params.cfg)) {
     return true;
   }
+  if (
+    isCliRuntimeAliasForProvider({
+      provider,
+      runtime: resolvePersistedSessionRuntimeId(params.sessionEntry),
+      cfg: params.cfg,
+    })
+  ) {
+    return true;
+  }
+  // Model/policy-selected CLI runtimes (e.g. anthropic → claude-cli) must also
+  // skip OpenClaw compaction even when the session entry has no runtime pin yet.
   return isCliRuntimeAliasForProvider({
     provider,
-    runtime: resolvePersistedSessionRuntimeId(params.sessionEntry),
+    runtime: resolveFollowupAgentRuntimeId(params),
     cfg: params.cfg,
   });
 }
 
-function resolveFollowupContextConfigProvider(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): string {
+/**
+ * True when the effective CLI backend for this turn declares native compaction
+ * ownership. Defense in depth for routes that reach claude-cli (or similar)
+ * without `followupUsesCliRuntime` recognizing the provider string alone.
+ */
+function followupOwnsNativeCompaction(params: FollowupCliRuntimeParams): boolean {
+  const candidates = [
+    params.followupRun.run.provider,
+    resolvePersistedSessionRuntimeId(params.sessionEntry),
+    resolveFollowupAgentRuntimeId(params),
+  ];
+  for (const candidate of candidates) {
+    const runtimeId = candidate?.trim();
+    if (!runtimeId) {
+      continue;
+    }
+    if (resolveCliBackendConfig(runtimeId, params.cfg)?.ownsNativeCompaction === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveFollowupContextConfigProvider(params: FollowupCliRuntimeParams): string {
   const provider = params.followupRun.run.provider;
   return resolveContextConfigProviderForRuntime({
     provider,
@@ -297,13 +330,8 @@ function resolveFollowupContextConfigProvider(params: {
   });
 }
 
-function resolveFollowupAgentRuntimeId(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): string {
+function resolveFollowupAgentRuntimeId(params: FollowupCliRuntimeParams): string {
+  // Only sessionId + runtime pin fields are needed; callers may pass a Pick.
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -322,13 +350,7 @@ function resolveFollowupAgentRuntimeId(params: {
   });
 }
 
-function followupUsesCodexRuntime(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-  sessionEntry?: SessionEntry;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-}): boolean {
+function followupUsesCodexRuntime(params: FollowupCliRuntimeParams): boolean {
   return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
 }
 
@@ -769,12 +791,21 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const isCli = followupUsesCliRuntime({
+  const cliRuntimeParams = {
     cfg: params.cfg,
     followupRun: params.followupRun,
     sessionEntry: entry,
-  });
-  if (params.isHeartbeat || isCli) {
+    sessionKey: params.sessionKey,
+    runtimePolicySessionKey: params.runtimePolicySessionKey,
+  };
+  const isCli = followupUsesCliRuntime(cliRuntimeParams);
+  const ownsNativeCompaction = followupOwnsNativeCompaction(cliRuntimeParams);
+  if (params.isHeartbeat || isCli || ownsNativeCompaction) {
+    if (ownsNativeCompaction && !isCli && !params.isHeartbeat) {
+      logVerbose(
+        `preflightCompaction skipped: sessionKey=${params.sessionKey} reason=owns_native_compaction`,
+      );
+    }
     return entry ?? params.sessionEntry;
   }
   if (
@@ -1120,11 +1151,21 @@ export async function runMemoryFlushIfNeeded(params: {
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
-  const isCli = followupUsesCliRuntime({
-    cfg: params.cfg,
-    followupRun: params.followupRun,
-    sessionEntry: entry,
-  });
+  const isCli =
+    followupUsesCliRuntime({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    }) ||
+    followupOwnsNativeCompaction({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    });
   const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
