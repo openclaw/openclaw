@@ -62,6 +62,7 @@ import {
   failedOutboundAuditTerminals,
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
+import { validateOutboundDeliverySessionOwnership } from "./session-owner.js";
 
 type RecoverySummary = {
   recovered: number;
@@ -258,12 +259,25 @@ async function applyRecoveryDeliveryAdmission(params: {
   if (admission.status === "allowed") {
     return "allowed";
   }
+  return await failRecoveryEntryPermanentlyBeforeReplay({
+    ...params,
+    reason: admission.reason,
+  });
+}
+
+async function failRecoveryEntryPermanentlyBeforeReplay(params: {
+  entry: QueuedDelivery;
+  reason: string;
+  log: RecoveryLogger;
+  stateDir?: string;
+  logLabel: string;
+}): Promise<"failed" | "not_pending"> {
   markDurableDeliveryFailedBestEffort(params.entry, params.log);
   const result = await failPendingDelivery(
     {
       id: params.entry.id,
       expectedStatus: "pending",
-      lastError: admission.reason,
+      lastError: params.reason,
       entry: params.entry,
     },
     params.stateDir,
@@ -271,14 +285,36 @@ async function applyRecoveryDeliveryAdmission(params: {
   if (result.status === "failed") {
     emitQueuedAuditTerminals(params.entry, () => queuedDeadLetterAuditTerminals(params.entry));
     params.log.warn(
-      `${params.logLabel}: entry ${params.entry.id} permanently rejected before recovery: ${admission.reason}`,
+      `${params.logLabel}: entry ${params.entry.id} permanently rejected before recovery: ${params.reason}`,
     );
     return "failed";
   }
   params.log.info(
-    `${params.logLabel}: entry ${params.entry.id} changed status before admission failure was persisted`,
+    `${params.logLabel}: entry ${params.entry.id} changed status before permanent rejection was persisted`,
   );
   return "not_pending";
+}
+
+async function applyRecoverySessionOwnership(params: {
+  entry: QueuedDelivery;
+  log: RecoveryLogger;
+  stateDir?: string;
+  logLabel: string;
+}): Promise<"allowed" | "failed" | "not_pending"> {
+  // Old queued intents can predate this invariant. Fail them permanently instead
+  // of replaying across agent boundaries; the persisted queue shape is unchanged.
+  const ownership = validateOutboundDeliverySessionOwnership({
+    ownerLabel: "queued delivery",
+    session: params.entry.session,
+    mirror: params.entry.mirror,
+  });
+  if (ownership.ok) {
+    return "allowed";
+  }
+  return await failRecoveryEntryPermanentlyBeforeReplay({
+    ...params,
+    reason: ownership.error.message,
+  });
 }
 
 async function reconcileUnknownQueuedDelivery(opts: {
@@ -1001,6 +1037,18 @@ export async function drainPendingDeliveries(opts: {
           continue;
         }
 
+        // Persisted rows can predate this invariant. Dead-letter invalid ownership
+        // before admission, backoff, reconciliation, or any provider-side work.
+        const ownership = await applyRecoverySessionOwnership({
+          entry: currentEntry,
+          log: opts.log,
+          stateDir: opts.stateDir,
+          logLabel: opts.logLabel,
+        });
+        if (ownership !== "allowed") {
+          continue;
+        }
+
         const admission = await applyRecoveryDeliveryAdmission({
           entry: currentEntry,
           cfg: opts.cfg,
@@ -1125,6 +1173,21 @@ export async function recoverPendingDeliveries(opts: {
       const currentEntry = await loadPendingDelivery(entry.id, opts.stateDir);
       if (!currentEntry) {
         opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
+        continue;
+      }
+
+      // Persisted rows can predate this invariant. Dead-letter invalid ownership
+      // before admission, backoff, reconciliation, or any provider-side work.
+      const ownership = await applyRecoverySessionOwnership({
+        entry: currentEntry,
+        log: opts.log,
+        stateDir: opts.stateDir,
+        logLabel: "Recovery",
+      });
+      if (ownership !== "allowed") {
+        if (ownership === "failed") {
+          summary.failed += 1;
+        }
         continue;
       }
 

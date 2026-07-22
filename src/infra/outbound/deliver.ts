@@ -119,6 +119,7 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
+import { assertOutboundDeliverySessionOwnership } from "./session-owner.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -1494,6 +1495,16 @@ export async function deliverOutboundPayloadsInternal(
       startedAt: auditStartedAt,
     });
   };
+  try {
+    assertOutboundDeliverySessionOwnership({
+      ownerLabel: "deliverOutboundPayloads",
+      session: params.session,
+      mirror: params.mirror,
+    });
+  } catch (error) {
+    emitPreQueueFailure();
+    throw error;
+  }
   if (params.requireUnknownSendReconciliation === true && payloads.length !== 1) {
     emitPreQueueFailure();
     throw new Error(
