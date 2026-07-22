@@ -12,7 +12,7 @@ import {
   type AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexAppServerClient } from "./client.js";
+import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
 import {
   codexNativeSubagentNotifications as nativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
@@ -229,6 +229,7 @@ class Monitor {
     }
     this.releaseRetainedClient();
     for (const state of this.parentStates.values()) {
+      state.mirror?.dispose();
       state.ownerCount = 0;
     }
     for (const [parentThreadId] of this.parentStates) {
@@ -317,6 +318,7 @@ class Monitor {
         parentThreadId: state.parentThreadId,
         requesterSessionKey: state.requesterSessionKey,
         agentId: state.agentId,
+        endpoint: `codex-app-server:${getCodexAppServerClientInstanceId(this.client)}`,
       },
       state.taskRuntime,
     );
@@ -717,6 +719,7 @@ class Monitor {
       ) {
         return false;
       }
+      state.mirror?.markRecoveryHealthy(childState.childThreadId, this.now());
       if (recovery.parentThreadId && recovery.parentThreadId !== childState.parentThreadId) {
         embeddedAgentLog.warn("Codex native subagent parent did not match monitor state", {
           childThreadId: childState.childThreadId,
@@ -853,6 +856,23 @@ class Monitor {
     if (childState.terminal) {
       return;
     }
+    const runId = codexNativeSubagentRunId(completion.childThreadId);
+    if (completion.status === "succeeded") {
+      const health = state.taskRuntime?.evaluateExecutionGate({
+        runId,
+        gate: "healthy",
+        now: eventAt,
+      });
+      if (health && !health.ok) {
+        state.taskRuntime?.recordTaskRunProgressByRunId({
+          runId,
+          lastEventAt: eventAt,
+          progressSummary: `Stalled: missing ${health.missing.join(", ")}.`,
+        });
+        this.scheduleRecoveryPoll(childState);
+        return;
+      }
+    }
     if (!this.claimCompletionDelivery(state, childState)) {
       this.unregisterChild(childState);
       return;
@@ -861,7 +881,7 @@ class Monitor {
     this.clearRecoveryTimers(childState);
     state.mirror?.markAuthoritativeCompletion(completion.childThreadId);
     state.taskRuntime?.finalizeTaskRunByRunId({
-      runId: codexNativeSubagentRunId(completion.childThreadId),
+      runId,
       status: completion.status,
       endedAt: eventAt,
       lastEventAt: eventAt,
@@ -875,7 +895,7 @@ class Monitor {
     }
     childState.pendingCompletion = completion;
     state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
-      runId: codexNativeSubagentRunId(completion.childThreadId),
+      runId,
       deliveryStatus: "pending",
     });
     this.releaseClientRetentionIfIdle();
@@ -1375,6 +1395,7 @@ class Monitor {
         this.pruneParentIfUnused(state);
         return;
       }
+      state.mirror?.markRecoveryHealthy(candidate.childThreadId, this.now());
       if (recovery.threadState === "active") {
         this.observeActiveChild(childState);
       }

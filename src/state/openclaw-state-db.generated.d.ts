@@ -1194,6 +1194,16 @@ export interface TaskDeliveryState {
   task_id: string;
 }
 
+export interface TaskExecutionReceipts {
+  detail_json: string | null;
+  kind: string;
+  recorded_at: number;
+  sequence: number;
+  status: string;
+  summary: string | null;
+  task_id: string;
+}
+
 export interface TaskRuns {
   agent_id: string | null;
   child_session_key: string | null;
@@ -1552,6 +1562,7 @@ export interface DB {
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
+  task_execution_receipts: TaskExecutionReceipts;
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;
   update_check_state: UpdateCheckState;

@@ -1419,6 +1419,21 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
   ON task_runs(runtime, ended_at, created_at, task_id);
 
+CREATE TABLE IF NOT EXISTS task_execution_receipts (
+  task_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK (sequence > 0),
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  summary TEXT,
+  detail_json TEXT,
+  PRIMARY KEY (task_id, sequence),
+  FOREIGN KEY (task_id) REFERENCES task_runs(task_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_task_execution_receipts_kind
+  ON task_execution_receipts(task_id, kind, sequence DESC);
+
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
   child_session_key TEXT NOT NULL,
