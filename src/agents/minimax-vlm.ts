@@ -178,7 +178,10 @@ export async function minimaxUnderstandImage(params: {
     const responseLabel = traceId
       ? `MiniMax VLM response [Trace-Id=${traceId}]`
       : "MiniMax VLM response";
-    const json = await readProviderJsonResponse<unknown>(res, responseLabel);
+    // fetchWithTimeout ends after headers; reuse the request budget for body idle.
+    const json = await readProviderJsonResponse<unknown>(res, responseLabel, {
+      chunkTimeoutMs: timeoutMs,
+    });
     if (!isRecord(json)) {
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM response was not JSON.${trace}`);

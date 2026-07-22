@@ -403,4 +403,51 @@ describe("provider error utils", () => {
 
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
+
+  it.each([
+    {
+      label: "JSON",
+      run: (response: Response, chunkTimeoutMs: number) =>
+        readProviderJsonResponse(response, "Provider catalog failed", { chunkTimeoutMs }),
+      expected: "Provider catalog failed: JSON response stalled after 50ms",
+    },
+    {
+      label: "text",
+      run: (response: Response, chunkTimeoutMs: number) =>
+        readProviderTextResponse(response, "Provider text failed", { chunkTimeoutMs }),
+      expected: "Provider text failed: text response stalled after 50ms",
+    },
+    {
+      label: "binary",
+      run: (response: Response, chunkTimeoutMs: number) =>
+        readProviderBinaryResponse(response, "Provider TTS failed", "audio", { chunkTimeoutMs }),
+      expected: "Provider TTS failed: audio response stalled after 50ms",
+      contentType: "audio/mpeg",
+    },
+  ] as const)(
+    "times out when a successful $label response body stalls after headers",
+    async ({ run, expected, contentType }) => {
+      vi.useFakeTimers();
+      try {
+        const response = new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1, 2, 3]));
+              // Leave the stream open so the idle timer is the only exit.
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": contentType ?? "application/json" },
+          },
+        );
+
+        const rejection = expect(run(response, 50)).rejects.toThrow(expected);
+        await vi.advanceTimersByTimeAsync(60);
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });
