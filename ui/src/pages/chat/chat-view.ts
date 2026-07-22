@@ -73,8 +73,6 @@ import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 
-export { resetChatViewState } from "./chat-view-state.ts";
-
 type ChatReplyTarget = {
   messageId: string;
   text: string;
