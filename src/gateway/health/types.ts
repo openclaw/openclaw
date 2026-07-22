@@ -108,7 +108,6 @@ export type RuntimeConfigHealthSummary = {
 };
 
 export type HealthSummary = {
-  runtimeConfig?: RuntimeConfigHealthSummary;
   ok: true;
   ts: number;
   durationMs: number;

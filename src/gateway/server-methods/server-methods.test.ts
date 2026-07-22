@@ -20,7 +20,6 @@ import {
   resolveContextEngine,
 } from "../../context-engine/registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
-import { bumpConfigReloadObservedGeneration } from "../config-reload-observed.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -37,6 +36,7 @@ import {
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
+import { bumpConfigReloadObservedGeneration } from "../config-reload-observed.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
@@ -5211,19 +5211,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(buildRuntimeConfigHealthMock).toHaveBeenCalledWith({ includeFingerprints: false });
     const payload = mockCallArg(respond, 0, 1) as {
@@ -5256,19 +5259,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
     const call = async () =>
-      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
-        req: {} as never,
-        params: {} as never,
-        respond: respond as never,
-        context: {
-          getHealthCache: () => cached,
-          refreshHealthSnapshot,
-          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-          logHealth: { error: vi.fn() },
-        } as never,
-        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-        isWebchatConnect: () => false,
-      });
+      await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+        healthHandlers,
+        {
+          req: {} as never,
+          params: {} as never,
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot,
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        },
+      );
 
     await call();
     await call();
@@ -5303,19 +5309,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.admin"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     expect(buildRuntimeConfigHealthMock).toHaveBeenCalledWith({ includeFingerprints: true });
     const payload = mockCallArg(respond, 0, 1) as {
@@ -5349,19 +5358,22 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const respond = vi.fn();
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(healthHandlers, {
-      req: {} as never,
-      params: {} as never,
-      respond: respond as never,
-      context: {
-        getHealthCache: () => cached,
-        refreshHealthSnapshot,
-        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-        logHealth: { error: vi.fn() },
-      } as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
-      isWebchatConnect: () => false,
-    });
+    await expectDefined(healthHandlers.health, "healthHandlers.health test invariant").call(
+      healthHandlers,
+      {
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      },
+    );
 
     const payload = mockCallArg(respond, 0, 1) as { runtimeConfig?: unknown };
     expect(payload?.runtimeConfig).toBeUndefined();
