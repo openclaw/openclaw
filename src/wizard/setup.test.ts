@@ -1162,11 +1162,11 @@ describe("runSetupWizard", () => {
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
   });
 
-  it("stops after a deferred import promotion resumes", async () => {
+  it("continues onboarding after a recovered promotion", async () => {
     const workspaceDir = await makeCaseDir("resumed-import-flow-");
     const acknowledgePromotion = vi.fn(async () => {});
     runSetupMigrationImport.mockResolvedValueOnce({
-      kind: "resumed-promotion",
+      kind: "no-imported-inference",
       acknowledgePromotion,
     });
 
@@ -1188,8 +1188,7 @@ describe("runSetupWizard", () => {
       buildWizardPrompter(),
     );
 
-    expect(finalizeSetupWizard).not.toHaveBeenCalled();
-    expect(applyAuthChoice).not.toHaveBeenCalled();
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
     expect(acknowledgePromotion).toHaveBeenCalledOnce();
   });
 

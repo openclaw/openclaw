@@ -52,9 +52,9 @@ import {
 } from "./setup.migration-stage.js";
 
 // Onboarding migration import: detect, preview, stage, verify, and promote into a fresh setup.
-export type SetupMigrationImportOutcome =
-  | (SetupMigrationPromotionOutcome & { acknowledgePromotion?: () => Promise<void> })
-  | { kind: "resumed-promotion"; acknowledgePromotion?: () => Promise<void> };
+export type SetupMigrationImportOutcome = SetupMigrationPromotionOutcome & {
+  acknowledgePromotion?: () => Promise<void>;
+};
 
 function withPromotionAcknowledgement(
   outcome: SetupMigrationImportOutcome,
@@ -514,7 +514,6 @@ async function finalizeSetupMigrationPromotion(params: {
   logger: MigrationProviderContext["logger"];
   prompter: WizardPrompter;
   formatMigrationResult: (result: MigrationApplyResult) => string[];
-  resumed?: boolean;
 }): Promise<SetupMigrationImportOutcome> {
   const { continuation } = params.resume;
   const reportDir = path.dirname(params.resume.journalPath);
@@ -592,7 +591,7 @@ async function finalizeSetupMigrationPromotion(params: {
     params.formatMigrationResult(finalResult).join("\n"),
     t("wizard.migration.appliedTitle"),
   );
-  if (params.resumed || !continuation.continueOnboarding) {
+  if (!continuation.continueOnboarding) {
     await params.prompter.outro(t("wizard.migration.complete"));
   } else {
     await params.prompter.note(
@@ -600,12 +599,9 @@ async function finalizeSetupMigrationPromotion(params: {
       t("wizard.migration.appliedTitle"),
     );
   }
-  const outcome: SetupMigrationImportOutcome = params.resumed
-    ? { kind: "resumed-promotion" }
-    : continuation.outcome;
   return hasPendingActivation
-    ? outcome
-    : withPromotionAcknowledgement(outcome, params.resume.acknowledge);
+    ? continuation.outcome
+    : withPromotionAcknowledgement(continuation.outcome, params.resume.acknowledge);
 }
 
 export async function runSetupMigrationImport(params: {
@@ -678,7 +674,6 @@ export async function runSetupMigrationImport(params: {
         logger: createMigrationLogger(params.runtime),
         prompter: params.prompter,
         formatMigrationResult,
-        resumed: true,
       });
     }
     const lockedBaseConfig = preserveSetupMigrationSecurityAcknowledgement(

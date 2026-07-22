@@ -39,7 +39,7 @@ async function runNonInteractiveMigrationImport(params: {
     config: params.baseConfig,
     runtime: params.runtime,
   });
-  await runSetupMigrationImport({
+  const outcome = await runSetupMigrationImport({
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
     detections,
@@ -77,6 +77,7 @@ async function runNonInteractiveMigrationImport(params: {
       return committed.nextConfig;
     },
   });
+  await outcome.acknowledgePromotion?.();
 }
 
 /** Runs non-interactive onboarding in local, remote, or migration-import mode. */

@@ -490,7 +490,7 @@ describe("transactional setup migration import", () => {
       kind: "no-imported-inference",
     });
     await expect(runImport({ root, source, currentConfig })).resolves.toEqual({
-      kind: "resumed-promotion",
+      kind: "no-imported-inference",
     });
 
     expect(planCalls).toBe(1);

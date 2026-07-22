@@ -700,6 +700,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(appliedPlan).not.toBe(planned);
       expect(appliedPlan.items[0]?.target).toContain(".openclaw-migration-workspace-");
       expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
+      const [reportDir] = await fs.readdir(path.join(stateDir, "migration", "hermes"));
+      await expect(
+        fs.access(
+          path.join(stateDir, "migration", "hermes", reportDir!, "onboarding-promotion.json"),
+        ),
+      ).rejects.toThrow();
       expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
       expect(healthCommandMock).not.toHaveBeenCalled();
     });
