@@ -2,6 +2,7 @@
 export {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
+  listSqliteSessionEntriesSlim,
   listSqliteSessionEntriesByStatus,
   listSqliteSessionTranscriptInstances,
   loadExactSqliteSessionEntry,

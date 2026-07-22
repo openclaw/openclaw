@@ -12,6 +12,7 @@ import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   listSqliteSessionEntries,
   listSqliteSessionEntriesReadOnly,
+  listSqliteSessionEntriesSlim,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
@@ -328,6 +329,19 @@ export function listSessionEntriesReadOnly(
   scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   return listSqliteSessionEntriesReadOnly(scope);
+}
+
+/**
+ * Lists entries with `systemPromptReport`/`skillsSnapshot` omitted from the
+ * returned objects (storage untouched: the projection runs inside SQLite, and
+ * single-entry loads still return both fields). Rows are cached per store and
+ * revalidated with an indexed fingerprint probe; treat them as borrowed and do
+ * not mutate. Prefer this for list views that never read the two report blobs.
+ */
+export function listSessionEntriesSlim(
+  scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
+): SessionEntrySummary[] {
+  return listSqliteSessionEntriesSlim(scope);
 }
 
 /**
