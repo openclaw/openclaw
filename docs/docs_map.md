@@ -7772,6 +7772,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: CLI and slash command
   - H2: Session lifecycle sync
   - H2: Dashboard workflow
+  - H3: Session-board widgets
   - H2: Diagnostics
   - H2: Permissions
   - H2: Storage
