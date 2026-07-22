@@ -62,10 +62,13 @@ export class SessionParticipationTracker {
       return previous?.blocked === true;
     }
     // A session we could previously see vanishing from the authoritative loaded
-    // list while still selected is a redaction (owner switched it to draft); the
-    // gateway rejects our mutations, so fail closed. This clears on reconnect
-    // (reset) and when the row reappears. Distinguishing a redaction from a
-    // delete without an explicit revocation event is a deferred refinement.
+    // list while still selected is treated as a redaction (owner switched it to
+    // draft): the gateway rejects our mutations, so fail closed rather than
+    // leave an enabled composer whose sends will fail. Accepted tradeoff: a
+    // session deleted while viewed is also briefly blocked until navigation or
+    // reconnect (both clear this state), since the gateway sends no explicit
+    // per-connection revocation signal to distinguish redaction from deletion.
+    // An explicit signal is tracked as a follow-up (openclaw/openclaw#112760).
     const blocked = previous?.seen === true;
     this.remember(params.sessionKey, { blocked, seen: previous?.seen === true });
     return blocked;
