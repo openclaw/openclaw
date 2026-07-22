@@ -1,0 +1,423 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildContinuityManifest,
+  formatContinuityManifest,
+  hasMaterialContinuityChange,
+  parseContinuityDocument,
+  RECENT_CONTINUITY_LATEST,
+  RECENT_CONTINUITY_SNAPSHOTS_DIR,
+  readRecentContinuitySnapshot,
+  renderContinuitySnapshotMarkdown,
+} from "./continuity.js";
+
+const tempDirs: string[] = [];
+
+async function makeWorkspace(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-"));
+  tempDirs.push(dir);
+  await fs.mkdir(path.join(dir, "memory", "recent", "snapshots"), { recursive: true });
+  return dir;
+}
+
+async function trySymlink(
+  target: string,
+  linkPath: string,
+  type: "file" | "dir",
+): Promise<boolean> {
+  try {
+    await fs.symlink(
+      target,
+      linkPath,
+      type === "dir" && process.platform === "win32" ? "junction" : type,
+    );
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+      return false;
+    }
+    throw err;
+  }
+}
+
+afterEach(async () => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (!dir) {
+      continue;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+describe("parseContinuityDocument", () => {
+  it("parses recent snapshot frontmatter and sections", () => {
+    const content = renderContinuitySnapshotMarkdown({
+      status: "active",
+      priority: "high",
+      updatedAt: "2026-04-03T09:00:00.000Z",
+      supersedes: "memory/recent/latest.md",
+      source: "session-memory:command",
+      project: "memory-system",
+      sessionKey: "agent:main:main",
+      validUntil: "2026-04-04T09:00:00.000Z",
+      currentTask: "Implement continuity manifest",
+      currentPhase: "v1 delivery",
+      latestUserRequest: "Absorb Claude memory patterns",
+      blockers: ["Need stable parsing"],
+      nextSteps: ["Wire post-compaction context"],
+      keyArtifacts: ["src/memory/continuity.ts"],
+      conversationSummary: "The user wants a lighter but more resilient memory system.",
+    });
+
+    const parsed = parseContinuityDocument(content);
+    expect(parsed.status).toBe("active");
+    expect(parsed.priority).toBe("high");
+    expect(parsed.project).toBe("memory-system");
+    expect(parsed.currentTask).toBe("Implement continuity manifest");
+    expect(parsed.currentPhase).toBe("v1 delivery");
+    expect(parsed.latestUserRequest).toBe("Absorb Claude memory patterns");
+    expect(parsed.blockers).toEqual(["Need stable parsing"]);
+    expect(parsed.nextSteps).toEqual(["Wire post-compaction context"]);
+    expect(parsed.keyArtifacts).toEqual(["src/memory/continuity.ts"]);
+    expect(parsed.conversationSummary).toBe(
+      "The user wants a lighter but more resilient memory system.",
+    );
+  });
+
+  it("parses legacy markdown field headers", () => {
+    const legacy = `# 当前进度说明
+
+- 项目：系统修复
+- 状态：active
+- 优先级：highest
+- 当前阶段：记忆系统迭代 v1 落地与验证
+- 当前主任务：补近场快照与恢复索引
+- 当前阻塞：还没做第二轮验证
+- 下一步：跑针对性测试
+`;
+
+    const parsed = parseContinuityDocument(legacy);
+    expect(parsed.project).toBe("系统修复");
+    expect(parsed.status).toBe("active");
+    expect(parsed.priority).toBe("highest");
+    expect(parsed.currentPhase).toBe("记忆系统迭代 v1 落地与验证");
+    expect(parsed.currentTask).toBe("补近场快照与恢复索引");
+    expect(parsed.blockers).toEqual(["还没做第二轮验证"]);
+    expect(parsed.nextSteps).toEqual(["跑针对性测试"]);
+  });
+
+  it("parses alternate blockers and singular next step headings", () => {
+    const content = `# Recent Continuity Snapshot
+
+## Current Task
+- Repair continuity parser
+
+## Blockers
+- Parser fallback was not reachable
+
+## Next Step
+- Add regression coverage
+`;
+
+    const parsed = parseContinuityDocument(content);
+    expect(parsed.currentTask).toBe("Repair continuity parser");
+    expect(parsed.blockers).toEqual(["Parser fallback was not reachable"]);
+    expect(parsed.nextSteps).toEqual(["Add regression coverage"]);
+  });
+
+  it("normalizes multiline and heading-shaped snapshot fields before rendering", () => {
+    const content = renderContinuitySnapshotMarkdown({
+      status: "active",
+      priority: "high",
+      updatedAt: "2026-04-03T09:00:00.000Z",
+      source: "session-memory:command",
+      project: "memory-system",
+      sessionKey: "agent:main:main",
+      validUntil: "2026-04-04T09:00:00.000Z",
+      currentTask: `Repair continuity
+## Current Blockers
+- injected blocker`,
+      currentPhase: "v1 delivery",
+      latestUserRequest: `Keep going
+## Next Steps
+- injected next step`,
+      blockers: [
+        `First blocker
+## Next Steps
+- injected`,
+        "Second blocker",
+      ],
+      nextSteps: [
+        `Run tests
+## Key Artifacts
+- injected artifact`,
+      ],
+      keyArtifacts: [
+        `memory/recent/latest.md
+## Current Task
+- injected task`,
+      ],
+    });
+
+    expect(content).toContain("- Repair continuity ## Current Blockers - injected blocker");
+    expect(content).toContain("- Keep going ## Next Steps - injected next step");
+
+    const parsed = parseContinuityDocument(content);
+    expect(parsed.currentTask).toBe("Repair continuity ## Current Blockers - injected blocker");
+    expect(parsed.latestUserRequest).toBe("Keep going ## Next Steps - injected next step");
+    expect(parsed.blockers).toEqual(["First blocker ## Next Steps - injected", "Second blocker"]);
+    expect(parsed.nextSteps).toEqual(["Run tests ## Key Artifacts - injected artifact"]);
+    expect(parsed.keyArtifacts).toEqual([
+      "memory/recent/latest.md ## Current Task - injected task",
+    ]);
+  });
+});
+
+describe("hasMaterialContinuityChange", () => {
+  it("ignores validUntil-only changes", () => {
+    const previous = renderContinuitySnapshotMarkdown({
+      status: "active",
+      priority: "high",
+      updatedAt: "2026-04-03T09:00:00.000Z",
+      source: "session-memory:command",
+      project: "memory-system",
+      sessionKey: "agent:main:main",
+      validUntil: "2026-04-04T09:00:00.000Z",
+      currentTask: "Implement continuity manifest",
+      currentPhase: "v1 delivery",
+      latestUserRequest: "Absorb Claude memory patterns",
+      blockers: [],
+      nextSteps: ["Wire post-compaction context"],
+      keyArtifacts: [],
+    });
+
+    const next = {
+      status: "active",
+      priority: "high",
+      updatedAt: "2026-04-03T10:00:00.000Z",
+      source: "session-memory:command",
+      project: "memory-system",
+      sessionKey: "agent:main:main",
+      validUntil: "2026-04-05T09:00:00.000Z",
+      currentTask: "Implement continuity manifest",
+      currentPhase: "v1 delivery",
+      latestUserRequest: "Absorb Claude memory patterns",
+      blockers: [],
+      nextSteps: ["Wire post-compaction context"],
+      keyArtifacts: [],
+    };
+
+    expect(hasMaterialContinuityChange(previous, next)).toBe(false);
+  });
+
+  it("detects conversation summary changes as material", () => {
+    const previous = renderContinuitySnapshotMarkdown({
+      status: "active",
+      priority: "high",
+      updatedAt: "2026-04-03T09:00:00.000Z",
+      source: "session-memory:command",
+      project: "memory-system",
+      sessionKey: "agent:main:main",
+      validUntil: "2026-04-04T09:00:00.000Z",
+      currentTask: "Implement continuity manifest",
+      currentPhase: "v1 delivery",
+      latestUserRequest: "Absorb Claude memory patterns",
+      blockers: [],
+      nextSteps: ["Wire post-compaction context"],
+      keyArtifacts: [],
+      conversationSummary: "The current summary is still old.",
+    });
+
+    expect(
+      hasMaterialContinuityChange(previous, {
+        status: "active",
+        priority: "high",
+        updatedAt: "2026-04-03T10:00:00.000Z",
+        source: "session-memory:command",
+        project: "memory-system",
+        sessionKey: "agent:main:main",
+        validUntil: "2026-04-05T09:00:00.000Z",
+        currentTask: "Implement continuity manifest",
+        currentPhase: "v1 delivery",
+        latestUserRequest: "Absorb Claude memory patterns",
+        blockers: [],
+        nextSteps: ["Wire post-compaction context"],
+        keyArtifacts: [],
+        conversationSummary: "The updated summary captures new recovery context.",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("readRecentContinuitySnapshot", () => {
+  it("rejects symlinked latest.md and falls back to a regular snapshot", async () => {
+    const workspace = await makeWorkspace();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-outside-"));
+    tempDirs.push(outside);
+    const outsideLatest = path.join(outside, "latest.md");
+    await fs.writeFile(outsideLatest, "# Outside Snapshot\n", "utf-8");
+
+    const symlinkCreated = await trySymlink(
+      outsideLatest,
+      path.join(workspace, RECENT_CONTINUITY_LATEST),
+      "file",
+    );
+    if (!symlinkCreated) {
+      return;
+    }
+
+    await fs.writeFile(
+      path.join(workspace, RECENT_CONTINUITY_SNAPSHOTS_DIR, "safe.md"),
+      "# Safe Snapshot\n",
+      "utf-8",
+    );
+
+    const snapshot = await readRecentContinuitySnapshot(workspace);
+    expect(snapshot?.path).toBe("memory/recent/snapshots/safe.md");
+    expect(snapshot?.content).toContain("Safe Snapshot");
+    expect(snapshot?.content).not.toContain("Outside Snapshot");
+  });
+
+  it("rejects a symlinked snapshots directory", async () => {
+    const workspace = await makeWorkspace();
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-outside-"));
+    tempDirs.push(outside);
+    await fs.writeFile(path.join(outside, "leak.md"), "# Outside Snapshot\n", "utf-8");
+
+    const snapshotsDir = path.join(workspace, RECENT_CONTINUITY_SNAPSHOTS_DIR);
+    await fs.rm(snapshotsDir, { recursive: true, force: true });
+    const symlinkCreated = await trySymlink(outside, snapshotsDir, "dir");
+    if (!symlinkCreated) {
+      return;
+    }
+
+    await expect(readRecentContinuitySnapshot(workspace)).resolves.toBeNull();
+  });
+});
+
+describe("buildContinuityManifest", () => {
+  it("rejects candidates swapped to symlinks after enumeration", async () => {
+    const workspace = await makeWorkspace();
+    const candidate = path.join(workspace, "memory", "candidate.md");
+    await fs.writeFile(
+      candidate,
+      `# Safe Candidate
+
+- 状态：active
+- 优先级：high
+- 当前主任务：Safe manifest content
+`,
+      "utf-8",
+    );
+
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-outside-"));
+    tempDirs.push(outside);
+    const outsideLeak = path.join(outside, "leak.md");
+    await fs.writeFile(
+      outsideLeak,
+      `# Outside Secret
+
+- 状态：active
+- 优先级：highest
+- 当前主任务：LEAKED OUTSIDE CONTENT
+`,
+      "utf-8",
+    );
+
+    const probeLink = path.join(workspace, "memory", "probe-link.md");
+    const symlinkSupported = await trySymlink(outsideLeak, probeLink, "file");
+    await fs.rm(probeLink, { force: true });
+    if (!symlinkSupported) {
+      return;
+    }
+
+    vi.resetModules();
+    vi.doMock("./internal.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./internal.js")>();
+      return {
+        ...actual,
+        listMemoryFiles: async (...args: Parameters<typeof actual.listMemoryFiles>) => {
+          const files = await actual.listMemoryFiles(...args);
+          if (files.includes(candidate)) {
+            await fs.rm(candidate, { force: true });
+            const swapped = await trySymlink(outsideLeak, candidate, "file");
+            if (!swapped) {
+              throw new Error("Expected symlink swap to succeed after preflight");
+            }
+          }
+          return files;
+        },
+      };
+    });
+
+    try {
+      const { buildContinuityManifest: buildManifestWithRacyList } =
+        await import("./continuity.js");
+      const manifest = await buildManifestWithRacyList({ workspaceDir: workspace });
+
+      expect(manifest).toEqual([]);
+      expect(JSON.stringify(manifest)).not.toContain("LEAKED OUTSIDE CONTENT");
+    } finally {
+      vi.doUnmock("./internal.js");
+      vi.resetModules();
+    }
+  });
+
+  it("sorts active recent continuity ahead of stale memory", async () => {
+    const workspace = await makeWorkspace();
+    const latestPath = path.join(workspace, RECENT_CONTINUITY_LATEST);
+    await fs.writeFile(
+      latestPath,
+      renderContinuitySnapshotMarkdown({
+        status: "active",
+        priority: "highest",
+        updatedAt: "2026-04-03T09:00:00.000Z",
+        source: "session-memory:command",
+        project: "system-repair",
+        sessionKey: "agent:main:main",
+        validUntil: "2026-04-04T09:00:00.000Z",
+        currentTask: "Ship memory iteration",
+        currentPhase: "verification",
+        latestUserRequest: "Implement the meeting plan",
+        blockers: ["Need to finish tests"],
+        nextSteps: ["Run vitest"],
+        keyArtifacts: ["memory/recent/latest.md"],
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspace, "memory", "active-topics.md"),
+      `# Active Topics
+
+- 状态：active
+- 优先级：high
+- updated_at：2026-04-03 15:00 CST
+- 当前主任务：记忆系统迭代与官方贡献目标
+`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workspace, "memory", "2026-03-20.md"),
+      `# Old Daily
+
+- 状态：stale
+- 优先级：low
+- updated_at：2026-03-20 09:00 CST
+- 当前主任务：旧项目
+`,
+      "utf-8",
+    );
+
+    const manifest = await buildContinuityManifest({ workspaceDir: workspace });
+    expect(manifest[0]?.path).toBe("memory/recent/latest.md");
+    expect(manifest[1]?.path).toBe("memory/active-topics.md");
+
+    const formatted = formatContinuityManifest(manifest, 2);
+    expect(formatted).toContain("[active/highest] memory/recent/latest.md");
+    expect(formatted).toContain("[active/high] memory/active-topics.md");
+  });
+});
