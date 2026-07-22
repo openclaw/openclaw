@@ -500,16 +500,15 @@ describe("tools.exec.denylist config schema", () => {
   it("accepts per-agent exec denylist entries", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "scoped",
+        entries: {
+          scoped: {
             tools: {
               exec: {
                 denylist: [{ pattern: "curl *" }],
               },
             },
           },
-        ],
+        },
       },
     });
 
