@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/reviews/review-completed-event.schema.json",
+  "title": "ReviewCompletedEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "correlation_id",
+    "causation_id",
+    "occurred_at",
+    "project_id",
+    "job_id",
+    "execution_id",
+    "review_id",
+    "decision",
+    "findings",
+    "artifact_ids",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "message_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/message_id"
+    },
+    "correlation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/correlation_id"
+    },
+    "causation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/causation_id"
+    },
+    "occurred_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "job_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/job_id"
+    },
+    "execution_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/execution_id"
+    },
+    "review_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/review_id"
+    },
+    "decision": {
+      "enum": ["approved", "needs_changes", "rejected"]
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "code", "message"],
+        "properties": {
+          "severity": {
+            "enum": ["info", "warning", "error", "critical"]
+          },
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "artifact_id": {
+            "$ref": "../common/primitives.schema.json#/$defs/artifact_id"
+          }
+        }
+      }
+    },
+    "artifact_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "../common/primitives.schema.json#/$defs/artifact_id"
+      }
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    }
+  }
+}

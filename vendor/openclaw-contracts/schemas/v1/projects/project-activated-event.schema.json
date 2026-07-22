@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/projects/project-activated-event.schema.json",
+  "title": "ProjectActivatedEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "correlation_id",
+    "causation_id",
+    "occurred_at",
+    "project_id",
+    "aggregate_version",
+    "status",
+    "slug",
+    "git_repository_id",
+    "head_commit_sha",
+    "git_object_format",
+    "default_branch"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "message_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/message_id"
+    },
+    "correlation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/correlation_id"
+    },
+    "causation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/causation_id"
+    },
+    "occurred_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "aggregate_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/aggregate_version"
+    },
+    "status": {
+      "const": "active"
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "git_repository_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/git_repository_id"
+    },
+    "head_commit_sha": {
+      "$ref": "../common/primitives.schema.json#/$defs/commit_sha"
+    },
+    "git_object_format": {
+      "enum": ["sha1", "sha256"]
+    },
+    "default_branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    }
+  }
+}

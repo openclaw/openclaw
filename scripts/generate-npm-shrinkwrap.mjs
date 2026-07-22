@@ -2,7 +2,18 @@
 // Generates npm-shrinkwrap.json files that mirror pnpm lock policy for
 // published packages while stripping dev-only dependency state.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -418,6 +429,66 @@ function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   return normalized;
 }
 
+function isPathInside(parentDir, candidatePath) {
+  const relative = path.relative(parentDir, candidatePath);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`);
+}
+
+function relativeFileDependencyPath(spec) {
+  const rawPath = spec.slice("file:".length);
+  const portablePath = rawPath.replaceAll("\\", "/");
+  if (
+    rawPath === "" ||
+    path.posix.isAbsolute(portablePath) ||
+    path.win32.isAbsolute(rawPath) ||
+    portablePath.startsWith("//")
+  ) {
+    throw new Error(`relative file dependency must use a relative path: ${spec}`);
+  }
+  const normalizedPath = path.posix.normalize(portablePath);
+  if (normalizedPath === ".." || normalizedPath.startsWith("../")) {
+    throw new Error(`relative file dependency escapes the package directory: ${spec}`);
+  }
+  return normalizedPath;
+}
+
+/**
+ * Copies relative file dependency artifacts into an isolated npm package directory.
+ * @internal Directly tested script implementation detail.
+ */
+export function stageRelativeFileDependencies(packageJson, packageDir, tempDir) {
+  const stagedPaths = new Set();
+  const packageRoot = realpathSync(packageDir);
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = packageJson[field];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+    for (const spec of Object.values(dependencies)) {
+      if (typeof spec !== "string" || !spec.startsWith("file:")) {
+        continue;
+      }
+      const relativePath = relativeFileDependencyPath(spec);
+      if (stagedPaths.has(relativePath)) {
+        continue;
+      }
+      const sourcePath = path.resolve(packageDir, ...relativePath.split("/"));
+      const sourceRealPath = realpathSync(sourcePath);
+      if (!isPathInside(packageRoot, sourceRealPath)) {
+        throw new Error(`relative file dependency escapes the package directory: ${spec}`);
+      }
+      if (!lstatSync(sourcePath).isFile()) {
+        throw new Error(`relative file dependency must reference a regular file: ${spec}`);
+      }
+      const targetPath = path.resolve(tempDir, ...relativePath.split("/"));
+      mkdirSync(path.dirname(targetPath), { recursive: true });
+      copyFileSync(sourcePath, targetPath);
+      stagedPaths.add(relativePath);
+    }
+  }
+  return [...stagedPaths].toSorted((left, right) => left.localeCompare(right));
+}
+
 /**
  * Resolves the npm command invocation used by shrinkwrap generation.
  * @internal Directly tested script implementation detail.
@@ -744,6 +815,7 @@ function generateShrinkwrap(packageDir, options = {}) {
       readShrinkwrapOverrides(),
       {},
     );
+    const normalizedPackageJson = packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides);
     const peerResolutionArgs = shouldUseLegacyPeerDepsForShrinkwrap(packageJson)
       ? ["--legacy-peer-deps"]
       : [];
@@ -755,9 +827,10 @@ function generateShrinkwrap(packageDir, options = {}) {
       "--no-fund",
       ...peerResolutionArgs,
     ];
+    stageRelativeFileDependencies(normalizedPackageJson, packageDir, tempDir);
     writeFileSync(
       path.join(tempDir, "package.json"),
-      `${JSON.stringify(packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides), null, 2)}\n`,
+      `${JSON.stringify(normalizedPackageJson, null, 2)}\n`,
     );
     runNpm(npmInstallArgs, tempDir);
     runNpm(

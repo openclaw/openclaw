@@ -19,6 +19,14 @@ export function createNpmShrinkwrapCommand(
   windowsVerbatimArguments?: boolean;
 };
 /**
+ * Copies relative file dependency artifacts into an isolated npm package directory.
+ */
+export function stageRelativeFileDependencies(
+  packageJson: Record<string, unknown>,
+  packageDir: string,
+  tempDir: string,
+): string[];
+/**
  * Reads a positive integer env override for shrinkwrap subprocess limits.
  */
 export function readPositiveIntEnv(

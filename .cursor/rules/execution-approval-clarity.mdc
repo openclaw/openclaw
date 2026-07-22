@@ -1,0 +1,26 @@
+---
+description: Require precise disclosure of approvals, blockers, and active execution
+alwaysApply: true
+---
+
+# Execution Approval Clarity
+
+- At the start of a multi-step task, identify every known later action that
+  requires a user decision or approval.
+- Never say “nothing is needed from the user” when only the current step needs
+  no input but a known later step does.
+- Distinguish explicitly between:
+  1. work running now,
+  2. safe independent work that can continue automatically, and
+  3. work blocked on a user decision.
+- Request approval at the earliest useful point. Do not wait until the blocked
+  step is reached.
+- Always call out approval for cutovers, destructive or irreversible file
+  operations, service/account/ACL changes, secret entry, deployments, commits,
+  pushes, and external writes.
+- Every progress update must state the active task and its percentage, the
+  overall percentage, exact decisions needed from the user, and what continues
+  while awaiting those decisions.
+- Do not claim the whole execution is paused while safe independent tasks remain.
+- If no approval is needed, state the exact scope, for example: “No approval is
+  needed for the current test run; deployment approval will be needed later.”

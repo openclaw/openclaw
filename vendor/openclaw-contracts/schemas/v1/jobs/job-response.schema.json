@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/jobs/job-response.schema.json",
+  "title": "JobResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "job_id",
+    "project_id",
+    "aggregate_version",
+    "status",
+    "task",
+    "priority",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "job_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/job_id"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "aggregate_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/aggregate_version"
+    },
+    "status": {
+      "enum": [
+        "queued",
+        "executing",
+        "awaiting_review",
+        "reviewing",
+        "approved",
+        "promoting",
+        "completed",
+        "changes_requested",
+        "awaiting_input",
+        "cancellation_requested",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "priority": {
+      "enum": ["low", "normal", "high", "urgent"]
+    },
+    "current_execution_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/execution_id"
+    },
+    "current_review_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/review_id"
+    },
+    "current_promotion_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/promotion_id"
+    },
+    "created_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "updated_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    }
+  }
+}

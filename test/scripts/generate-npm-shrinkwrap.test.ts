@@ -1,4 +1,6 @@
 // Generate Npm Shrinkwrap tests cover generate npm shrinkwrap script behavior.
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -21,6 +23,7 @@ import {
   resolvePackageDirs,
   resolveShrinkwrapJobs,
   restoreCurrentPnpmLockedPackages,
+  stageRelativeFileDependencies,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
@@ -43,6 +46,96 @@ describe("generate-npm-shrinkwrap", () => {
     expect(normalized).not.toHaveProperty("devDependencies");
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
     expect(normalized.peerDependencies).toEqual({});
+  });
+
+  it("stages relative file dependency artifacts at their preserved paths", () => {
+    const packageDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-package-"));
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-stage-"));
+    try {
+      const artifactPath = path.join(
+        packageDir,
+        "vendor",
+        "packages",
+        "openclaw-contracts-0.1.0.tgz",
+      );
+      mkdirSync(path.dirname(artifactPath), { recursive: true });
+      writeFileSync(artifactPath, "contracts");
+
+      expect(
+        stageRelativeFileDependencies(
+          {
+            dependencies: {
+              "@openclaw/contracts": "file:vendor/packages/openclaw-contracts-0.1.0.tgz",
+            },
+            optionalDependencies: {
+              "@openclaw/contracts-optional": "file:vendor/packages/openclaw-contracts-0.1.0.tgz",
+            },
+          },
+          packageDir,
+          tempDir,
+        ),
+      ).toEqual(["vendor/packages/openclaw-contracts-0.1.0.tgz"]);
+      expect(
+        readFileSync(
+          path.join(tempDir, "vendor", "packages", "openclaw-contracts-0.1.0.tgz"),
+          "utf8",
+        ),
+      ).toBe("contracts");
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ships the vendored contracts source tree without npm file dependencies", () => {
+    const packageJson = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+    const relativeFileDependencies = Object.values(packageJson.dependencies)
+      .filter((spec): spec is string => typeof spec === "string" && spec.startsWith("file:"))
+      .map((spec) => spec.slice("file:".length));
+
+    expect(relativeFileDependencies).toEqual([]);
+    expect(packageJson.dependencies["@openclaw/contracts"]).toBeUndefined();
+    expect(packageJson.files).toEqual(expect.arrayContaining(["vendor/openclaw-contracts/"]));
+  });
+
+  it.each([
+    ["absolute POSIX paths", "file:/tmp/contracts.tgz"],
+    ["absolute Windows paths", "file:C:\\temp\\contracts.tgz"],
+    ["path escapes", "file:../contracts.tgz"],
+  ])("rejects %s in relative file dependencies", (_label, spec) => {
+    const packageDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-package-"));
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-stage-"));
+    try {
+      expect(() =>
+        stageRelativeFileDependencies(
+          { dependencies: { "@openclaw/contracts": spec } },
+          packageDir,
+          tempDir,
+        ),
+      ).toThrow(/relative file dependency/u);
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects relative file dependencies that are not regular files", () => {
+    const packageDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-package-"));
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-stage-"));
+    try {
+      mkdirSync(path.join(packageDir, "vendor", "contracts"), { recursive: true });
+
+      expect(() =>
+        stageRelativeFileDependencies(
+          { dependencies: { "@openclaw/contracts": "file:vendor/contracts" } },
+          packageDir,
+          tempDir,
+        ),
+      ).toThrow("relative file dependency must reference a regular file");
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("runs npm shrinkwrap through cmd.exe for Windows npm shims", () => {

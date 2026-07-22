@@ -8786,6 +8786,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Skills (third-party APIs)
   - H2: Related
 
+## reference/contracts-artifact.md
+
+- Route: /reference/contracts-artifact
+- Headings:
+  - H1: Immutable platform contracts artifact
+
 ## reference/credits.md
 
 - Route: /reference/credits
@@ -8879,6 +8885,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Evidence artifact
   - H2: Safety rules
   - H2: Passing result
+
+## reference/platform-orchestration-development.md
+
+- Route: /reference/platform-orchestration-development
+- Headings:
+  - H1: Platform orchestration development
+  - H2: Install the immutable contracts artifact
+  - H2: Cross-repository acceptance evidence
+  - H2: Final implementation status
 
 ## reference/prompt-caching.md
 

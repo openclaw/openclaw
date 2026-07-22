@@ -1,0 +1,25 @@
+---
+description: Route decisions to the correct role and prevent unnecessary user questions
+alwaysApply: true
+---
+
+# Decision Ownership Routing
+
+- Classify a question before escalating it.
+- **Architecture Questions** change service boundaries, public contracts, or
+  workflow states/role handoffs. Route only these to Architecture.
+- **Implementation Decisions** are resolved directly by the implementation team.
+- **Operational Decisions** are resolved by the Project Manager.
+- **Coding Decisions** are resolved by Pi.
+- **Review Decisions** are resolved by Cursor Review.
+- Do not ask the user about sequencing, commands, test strategy, local tooling,
+  implementation details, coding choices, review criteria, or routine operations.
+- Raise no more than three architectural questions at one gate, and only when
+  each one materially blocks execution.
+- If no architectural blocker exists, declare `Design Phase` complete and move
+  immediately to `Implementation Phase`.
+- Continue safe independent work while another role resolves its decision.
+- Record the decision, owner, evidence, and status without turning routine work
+  into a user question.
+- Decision ownership does not bypass mandatory authorization for secrets,
+  destructive actions, commits, pushes, deployments, or external writes.

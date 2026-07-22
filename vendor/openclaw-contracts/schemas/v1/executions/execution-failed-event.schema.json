@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/executions/execution-failed-event.schema.json",
+  "title": "ExecutionFailedEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "message_id",
+    "correlation_id",
+    "causation_id",
+    "occurred_at",
+    "project_id",
+    "job_id",
+    "execution_id",
+    "failure_code",
+    "retryable",
+    "description",
+    "artifact_ids"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "message_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/message_id"
+    },
+    "correlation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/correlation_id"
+    },
+    "causation_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/causation_id"
+    },
+    "occurred_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "job_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/job_id"
+    },
+    "execution_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/execution_id"
+    },
+    "failure_code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "artifact_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "../common/primitives.schema.json#/$defs/artifact_id"
+      }
+    }
+  }
+}

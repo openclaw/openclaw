@@ -34,6 +34,7 @@
     "pnpm-workspace.yaml",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
+    "vendor/openclaw-contracts/",
     "dist/",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
@@ -1609,10 +1610,13 @@
     "plugins:sync:check": "node --import tsx scripts/sync-plugin-versions.ts --check",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
     "postpack": "node scripts/package-changelog.mjs restore",
+    "prebuild": "node scripts/verify-contracts-artifact.mjs",
+    "precheck": "node scripts/verify-contracts-artifact.mjs",
     "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
     "prepare": "node scripts/prepare-git-hooks.mjs",
     "prepush:ci": "bash scripts/prepush-ci.sh",
+    "pretest": "node scripts/verify-contracts-artifact.mjs",
     "probe:anthropic:prompt": "node --import tsx scripts/anthropic-prompt-probe.ts",
     "prompt:snapshots:check": "node --import tsx scripts/generate-prompt-snapshots.ts --check",
     "prompt:snapshots:gen": "node --import tsx scripts/generate-prompt-snapshots.ts --write",
@@ -1879,7 +1883,8 @@
     "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import tsx scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "verify:contracts": "node scripts/verify-contracts-artifact.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.1.0",

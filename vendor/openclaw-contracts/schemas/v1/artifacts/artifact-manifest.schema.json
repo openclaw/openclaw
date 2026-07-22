@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.openclaw.local/v1/artifacts/artifact-manifest.schema.json",
+  "title": "ArtifactManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "project_id",
+    "job_id",
+    "artifact_type",
+    "owner",
+    "sha256",
+    "size_bytes",
+    "created_at",
+    "finalization_status",
+    "retention_policy_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "../common/primitives.schema.json#/$defs/schema_version"
+    },
+    "artifact_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/artifact_id"
+    },
+    "project_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/project_id"
+    },
+    "job_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/job_id"
+    },
+    "artifact_type": {
+      "enum": [
+        "execution_log",
+        "diff",
+        "test_result",
+        "build_result",
+        "evidence",
+        "review_result"
+      ]
+    },
+    "owner": {
+      "enum": ["pi_service", "review_service", "openclaw_core"]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "created_at": {
+      "$ref": "../common/primitives.schema.json#/$defs/utc_timestamp"
+    },
+    "finalization_status": {
+      "enum": ["writing", "finalized"]
+    },
+    "retention_policy_id": {
+      "$ref": "../common/primitives.schema.json#/$defs/policy_id"
+    }
+  }
+}
