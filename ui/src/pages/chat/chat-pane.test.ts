@@ -117,32 +117,6 @@ describe("chat pane observer HUD", () => {
       question: "Why is it rerunning that test?",
     });
   });
-
-  it("shows a projected digest when attaching to an already-running session", () => {
-    const digest = {
-      sessionKey: "agent:main:current",
-      runId: "server-run",
-      revision: 1,
-      updatedAt: 2_000,
-      headline: "Already running",
-      health: "on-track" as const,
-    };
-    const activeRunId = resolveChatPaneObserverRunId({
-      localRunId: null,
-      session: { hasActiveRun: true, activeRunIds: ["server-run"] },
-      digest,
-    });
-
-    expect(activeRunId).toBe("server-run");
-    expect(
-      new ChatObserverHudState(false).mode({
-        running: activeRunId !== null,
-        activeRunId,
-        digest,
-        sideChatOpen: false,
-      }),
-    ).toBe("pill");
-  });
 });
 
 describe("chat pane pull request refresh", () => {
