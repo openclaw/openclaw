@@ -123,7 +123,7 @@ export async function handleClaudeCliNodeInvoke(params: {
     return;
   }
   const approvalCommand = [claudePath, ...request.argv];
-  const preparedApproval = buildSystemRunApprovalPlan({
+  const preparedApproval = await buildSystemRunApprovalPlan({
     command: approvalCommand,
     ...(request.cwd ? { cwd: request.cwd } : {}),
     ...(request.agentId ? { agentId: request.agentId } : {}),

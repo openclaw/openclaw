@@ -5,12 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
-import { withEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
   revalidateApprovedMutableFileOperand,
-  resolveMutableFileOperandSnapshotSync,
+  resolveMutableFileOperandSnapshot,
 } from "./invoke-system-run-plan.js";
 
 type PathTokenSetup = {
@@ -142,11 +142,11 @@ function writeFakeRuntimeBin(binDir: string, binName: string) {
   }
 }
 
-function withFakeRuntimeBins<T>(params: {
+async function withFakeRuntimeBins<T>(params: {
   binNames: string[];
   tmpPrefix?: string;
-  run: () => T;
-}): T {
+  run: () => Promise<T>;
+}): Promise<T> {
   void params.tmpPrefix;
   for (const binName of params.binNames) {
     if (sharedRuntimeBins.has(binName)) {
@@ -155,7 +155,7 @@ function withFakeRuntimeBins<T>(params: {
     writeFakeRuntimeBin(sharedRuntimeBinDir, binName);
     sharedRuntimeBins.add(binName);
   }
-  return withEnv(
+  return await withEnvAsync(
     { PATH: `${sharedRuntimeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
     params.run,
   );
@@ -194,7 +194,7 @@ function resolveNativeBinaryFixturePath(): string {
   throw new Error("expected a native binary fixture path");
 }
 
-function expectShellPayloadApprovalDenied(params: {
+async function expectShellPayloadApprovalDenied(params: {
   tmpPrefix: string;
   fileName: string;
   body: string;
@@ -206,7 +206,7 @@ function expectShellPayloadApprovalDenied(params: {
   const scriptPath = path.join(tmp, params.fileName);
   fs.writeFileSync(scriptPath, params.body);
   fs.chmodSync(scriptPath, 0o755);
-  const prepared = buildSystemRunApprovalPlan({
+  const prepared = await buildSystemRunApprovalPlan({
     command: ["/bin/sh", "-lc", scriptPath],
     rawCommand: scriptPath,
     cwd: tmp,
@@ -214,8 +214,8 @@ function expectShellPayloadApprovalDenied(params: {
   expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
 }
 
-function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
-  const prepared = buildSystemRunApprovalPlan({
+async function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
+  const prepared = await buildSystemRunApprovalPlan({
     command: fixture.command,
     cwd,
   });
@@ -237,19 +237,19 @@ function writeScriptOperandFixture(fixture: ScriptOperandFixture) {
   }
 }
 
-function withScriptOperandPlanFixture<T>(
+async function withScriptOperandPlanFixture<T>(
   params: {
     tmpPrefix: string;
     fixture?: RuntimeFixture;
     afterWrite?: (fixture: ScriptOperandFixture, tmp: string) => void;
   },
-  run: (fixture: ScriptOperandFixture, tmp: string) => T,
-) {
+  run: (fixture: ScriptOperandFixture, tmp: string) => Promise<T>,
+): Promise<T> {
   const tmp = createFixtureDir(params.tmpPrefix);
   const fixture = createScriptOperandFixture(tmp, params.fixture);
   writeScriptOperandFixture(fixture);
   params.afterWrite?.(fixture, tmp);
-  return run(fixture, tmp);
+  return await run(fixture, tmp);
 }
 
 const DENIED_RUNTIME_APPROVAL = {
@@ -257,21 +257,21 @@ const DENIED_RUNTIME_APPROVAL = {
   message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
 } as const;
 
-function runNamedCase(name: string, run: () => void) {
+async function runNamedCase(name: string, run: () => void | Promise<void>) {
   try {
-    run();
+    await run();
   } catch (error) {
     throw new Error(`case failed: ${name}`, { cause: error });
   }
 }
 
-function expectRuntimeApprovalDenied(command: string[], cwd: string) {
-  const prepared = buildSystemRunApprovalPlan({ command, cwd });
+async function expectRuntimeApprovalDenied(command: string[], cwd: string) {
+  const prepared = await buildSystemRunApprovalPlan({ command, cwd });
   expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
 }
 
-function expectApprovalPlanWithoutMutableOperand(command: string[], cwd: string) {
-  const prepared = buildSystemRunApprovalPlan({ command, cwd });
+async function expectApprovalPlanWithoutMutableOperand(command: string[], cwd: string) {
+  const prepared = await buildSystemRunApprovalPlan({ command, cwd });
   expect(prepared.ok).toBe(true);
   if (!prepared.ok) {
     throw new Error("unreachable");
@@ -395,7 +395,7 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
   },
 ];
 
-describe("hardenApprovedExecutionPaths", () => {
+describe("hardenApprovedExecutionPaths", async () => {
   const cases: HardeningCase[] = [
     {
       name: "preserves shell-wrapper argv during approval hardening",
@@ -451,15 +451,15 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   ];
 
-  it.runIf(process.platform !== "win32")("handles approval hardening cases", () => {
+  it.runIf(process.platform !== "win32")("handles approval hardening cases", async () => {
     for (const testCase of cases) {
-      runNamedCase(testCase.name, () => {
+      await runNamedCase(testCase.name, async () => {
         const tmp = createFixtureDir("openclaw-approval-hardening-");
         let pathToken: PathTokenSetup | null = null;
 
-        const checkCase = () => {
+        const checkCase = async () => {
           if (testCase.mode === "build-plan") {
-            const prepared = buildSystemRunApprovalPlan({
+            const prepared = await buildSystemRunApprovalPlan({
               command: testCase.argv,
               cwd: tmp,
             });
@@ -502,7 +502,7 @@ describe("hardenApprovedExecutionPaths", () => {
           const link = path.join(binDir, "poccmd");
           fs.symlinkSync("/bin/echo", link);
           pathToken = { expected: fs.realpathSync(link) };
-          return withEnv(
+          return await withEnvAsync(
             { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
             checkCase,
           );
@@ -657,13 +657,13 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   ];
 
-  it("captures mutable runtime operands in approval plans", () => {
+  it("captures mutable runtime operands in approval plans", async () => {
     const tmp = createFixtureDir("openclaw-approval-script-plan-");
-    withFakeRuntimeBins({
+    await withFakeRuntimeBins({
       binNames: uniqueRuntimeBinNames(mutableOperandCases),
-      run: () => {
+      run: async () => {
         for (const runtimeCase of mutableOperandCases) {
-          runNamedCase(runtimeCase.name, () => {
+          await runNamedCase(runtimeCase.name, async () => {
             if (runtimeCase.skipOnWin32 && process.platform === "win32") {
               return;
             }
@@ -675,30 +675,30 @@ describe("hardenApprovedExecutionPaths", () => {
               fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
               fs.chmodSync(shimPath, 0o755);
             }
-            expectMutableFileOperandApprovalPlan(fixture, tmp);
+            await expectMutableFileOperandApprovalPlan(fixture, tmp);
           });
         }
       },
     });
   });
 
-  it("captures mutable shell script operands in approval plans", () => {
-    withScriptOperandPlanFixture(
+  it("captures mutable shell script operands in approval plans", async () => {
+    await withScriptOperandPlanFixture(
       {
         tmpPrefix: "openclaw-approval-script-plan-",
       },
-      (fixture, tmp) => {
-        expectMutableFileOperandApprovalPlan(fixture, tmp);
+      async (fixture, tmp) => {
+        await expectMutableFileOperandApprovalPlan(fixture, tmp);
       },
     );
   });
 
-  it("handles shell payloads that invoke absolute-path native binaries", () => {
+  it("handles shell payloads that invoke absolute-path native binaries", async () => {
     if (process.platform === "win32") {
       return;
     }
     const binaryPath = resolveNativeBinaryFixturePath();
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["/bin/sh", "-lc", binaryPath],
       rawCommand: binaryPath,
       cwd: process.cwd(),
@@ -714,7 +714,7 @@ describe("hardenApprovedExecutionPaths", () => {
     expect(prepared.plan.mutableFileOperand).toBeUndefined();
   });
 
-  it("recognizes native binary headers across short positional reads", () => {
+  it("recognizes native binary headers across short positional reads", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -738,7 +738,7 @@ describe("hardenApprovedExecutionPaths", () => {
       return realReadSync(fd, buffer, offset, cappedLength, position);
     }) as typeof fs.readSync);
     try {
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: ["/bin/sh", "-lc", binaryPath],
         rawCommand: binaryPath,
         cwd: process.cwd(),
@@ -755,7 +755,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("keeps fail-closed behavior for relative native-binary shell payloads", () => {
+  it("keeps fail-closed behavior for relative native-binary shell payloads", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -764,7 +764,7 @@ describe("hardenApprovedExecutionPaths", () => {
     const relativeBinaryPath = path.join(tmp, "tool");
     fs.copyFileSync(binaryPath, relativeBinaryPath);
     fs.chmodSync(relativeBinaryPath, 0o755);
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["/bin/sh", "-lc", "./tool"],
       rawCommand: "./tool",
       cwd: tmp,
@@ -772,7 +772,7 @@ describe("hardenApprovedExecutionPaths", () => {
     expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
-  it("keeps fail-closed behavior for writable absolute native-binary shell payloads", () => {
+  it("keeps fail-closed behavior for writable absolute native-binary shell payloads", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -781,7 +781,7 @@ describe("hardenApprovedExecutionPaths", () => {
     const copiedBinaryPath = path.join(tmp, "tool");
     fs.copyFileSync(binaryPath, copiedBinaryPath);
     fs.chmodSync(copiedBinaryPath, 0o755);
-    const prepared = buildSystemRunApprovalPlan({
+    const prepared = await buildSystemRunApprovalPlan({
       command: ["/bin/sh", "-lc", copiedBinaryPath],
       rawCommand: copiedBinaryPath,
       cwd: tmp,
@@ -789,7 +789,7 @@ describe("hardenApprovedExecutionPaths", () => {
     expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
-  it("keeps fail-closed behavior for owner-controlled read-only absolute binaries", () => {
+  it("keeps fail-closed behavior for owner-controlled read-only absolute binaries", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -799,7 +799,7 @@ describe("hardenApprovedExecutionPaths", () => {
       fs.copyFileSync(resolveNativeBinaryFixturePath(), binaryPath);
       fs.chmodSync(binaryPath, 0o555);
       fs.chmodSync(tmp, 0o555);
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: ["/bin/sh", "-lc", binaryPath],
         rawCommand: binaryPath,
         cwd: tmp,
@@ -810,7 +810,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("keeps fail-closed behavior for symlinked binaries with writable targets", () => {
+  it("keeps fail-closed behavior for symlinked binaries with writable targets", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -827,7 +827,7 @@ describe("hardenApprovedExecutionPaths", () => {
       fs.chmodSync(targetBinaryPath, 0o755);
       fs.symlinkSync(targetBinaryPath, symlinkPath);
       fs.chmodSync(stableDir, 0o555);
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: ["/bin/sh", "-lc", symlinkPath],
         rawCommand: symlinkPath,
         cwd: tmp,
@@ -838,7 +838,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("keeps fail-closed behavior for mutable or ambiguous shell payload files", () => {
+  it("keeps fail-closed behavior for mutable or ambiguous shell payload files", async () => {
     for (const testCase of [
       {
         tmpPrefix: "openclaw-shell-script-binding-",
@@ -861,11 +861,11 @@ describe("hardenApprovedExecutionPaths", () => {
         body: "SAFE\u0000maybe-binary\n",
       },
     ]) {
-      expectShellPayloadApprovalDenied(testCase);
+      await expectShellPayloadApprovalDenied(testCase);
     }
   });
 
-  it("keeps fail-closed behavior when the shell payload probe stops seeing a file", () => {
+  it("keeps fail-closed behavior when the shell payload probe stops seeing a file", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -886,7 +886,7 @@ describe("hardenApprovedExecutionPaths", () => {
       return realStatSync(pathLike, options);
     });
     try {
-      const prepared = buildSystemRunApprovalPlan({
+      const prepared = await buildSystemRunApprovalPlan({
         command: ["/bin/sh", "-lc", scriptPath],
         rawCommand: scriptPath,
         cwd: tmp,
@@ -897,26 +897,26 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("rejects unsafe runtime invocation forms", () => {
-    withFakeRuntimeBins({
+  it("rejects unsafe runtime invocation forms", async () => {
+    await withFakeRuntimeBins({
       binNames: [...new Set(unsafeRuntimeInvocationCases.map((testCase) => testCase.binName))],
-      run: () => {
+      run: async () => {
         for (const testCase of unsafeRuntimeInvocationCases) {
-          runNamedCase(testCase.name, () => {
+          await runNamedCase(testCase.name, async () => {
             const tmp = createFixtureDir(testCase.tmpPrefix);
             testCase.setup?.(tmp);
-            expectRuntimeApprovalDenied(testCase.command, tmp);
+            await expectRuntimeApprovalDenied(testCase.command, tmp);
           });
         }
       },
     });
   });
 
-  it("detects rewritten script operands for pnpm dlx approval plans", () => {
-    withFakeRuntimeBins({
+  it("detects rewritten script operands for pnpm dlx approval plans", async () => {
+    await withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],
-      run: () => {
-        withScriptOperandPlanFixture(
+      run: async () => {
+        await withScriptOperandPlanFixture(
           {
             tmpPrefix: "openclaw-pnpm-dlx-approval-",
             fixture: {
@@ -927,8 +927,8 @@ describe("hardenApprovedExecutionPaths", () => {
               expectedArgvIndex: 3,
             },
           },
-          (fixture, tmp) => {
-            const prepared = buildSystemRunApprovalPlan({
+          async (fixture, tmp) => {
+            const prepared = await buildSystemRunApprovalPlan({
               command: fixture.command,
               cwd: tmp,
             });
@@ -942,7 +942,7 @@ describe("hardenApprovedExecutionPaths", () => {
             }
             fs.writeFileSync(fixture.scriptPath, 'console.log("PWNED");\n');
             expect(
-              revalidateApprovedMutableFileOperand({
+              await revalidateApprovedMutableFileOperand({
                 snapshot: mutableFileOperand,
                 argv: prepared.plan.argv,
                 cwd: prepared.plan.cwd ?? tmp,
@@ -954,14 +954,14 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
-  it("does not bind pnpm dlx shell-mode commands to a mutable file operand", () => {
-    withFakeRuntimeBins({
+  it("does not bind pnpm dlx shell-mode commands to a mutable file operand", async () => {
+    await withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],
-      run: () => {
+      run: async () => {
         const tmp = createFixtureDir("openclaw-pnpm-dlx-shell-mode-");
         fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
         expect(
-          resolveMutableFileOperandSnapshotSync({
+          await resolveMutableFileOperandSnapshot({
             argv: ["pnpm", "dlx", "--shell-mode", "tsx ./run.ts"],
             cwd: tmp,
             shellCommand: null,
@@ -971,10 +971,10 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
-  it("allows pnpm dlx package binaries that do not bind mutable local files", () => {
-    withFakeRuntimeBins({
+  it("allows pnpm dlx package binaries that do not bind mutable local files", async () => {
+    await withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],
-      run: () => {
+      run: async () => {
         const casesResult = [
           {
             prefix: "openclaw-pnpm-dlx-package-bin-",
@@ -1007,17 +1007,17 @@ describe("hardenApprovedExecutionPaths", () => {
         for (const testCase of casesResult) {
           const tmp = createFixtureDir(testCase.prefix);
           testCase.setup?.(tmp);
-          expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
+          await expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
         }
       },
     });
   });
 
-  it("treats -- as the end of pnpm dlx option parsing", () => {
-    withFakeRuntimeBins({
+  it("treats -- as the end of pnpm dlx option parsing", async () => {
+    await withFakeRuntimeBins({
       binNames: ["pnpm", "tsx"],
-      run: () => {
-        withScriptOperandPlanFixture(
+      run: async () => {
+        await withScriptOperandPlanFixture(
           {
             tmpPrefix: "openclaw-pnpm-dlx-double-dash-",
             fixture: {
@@ -1028,15 +1028,15 @@ describe("hardenApprovedExecutionPaths", () => {
               expectedArgvIndex: 4,
             },
           },
-          (fixture, tmp) => {
-            expectMutableFileOperandApprovalPlan(fixture, tmp);
+          async (fixture, tmp) => {
+            await expectMutableFileOperandApprovalPlan(fixture, tmp);
           },
         );
       },
     });
   });
 
-  it("captures the real shell script operand after value-taking shell flags", () => {
+  it("captures the real shell script operand after value-taking shell flags", async () => {
     const casesValue = [
       {
         name: "separate set option",
@@ -1083,12 +1083,12 @@ describe("hardenApprovedExecutionPaths", () => {
     ];
 
     for (const testCase of casesValue) {
-      runNamedCase(testCase.name, () => {
+      await runNamedCase(testCase.name, async () => {
         const tmp = createFixtureDir("openclaw-shell-option-value-");
         const scriptPath = path.join(tmp, "run.sh");
         fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
         fs.writeFileSync(path.join(tmp, testCase.decoyName), "decoy\n");
-        const snapshot = resolveMutableFileOperandSnapshotSync({
+        const snapshot = await resolveMutableFileOperandSnapshot({
           argv: testCase.argv,
           cwd: tmp,
           shellCommand: null,
@@ -1106,7 +1106,7 @@ describe("hardenApprovedExecutionPaths", () => {
         }
         fs.writeFileSync(scriptPath, "#!/bin/sh\necho CHANGED\n");
         expect(
-          revalidateApprovedMutableFileOperand({
+          await revalidateApprovedMutableFileOperand({
             snapshot: snapshot.snapshot,
             argv: testCase.argv,
             cwd: tmp,
@@ -1116,7 +1116,7 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
-  it("captures fish script operands with plus-prefixed filenames", () => {
+  it("captures fish script operands with plus-prefixed filenames", async () => {
     const casesLocal = [
       {
         name: "plus-prefixed fish script",
@@ -1129,11 +1129,11 @@ describe("hardenApprovedExecutionPaths", () => {
     ];
 
     for (const testCase of casesLocal) {
-      runNamedCase(testCase.name, () => {
+      await runNamedCase(testCase.name, async () => {
         const tmp = createFixtureDir("openclaw-fish-plus-script-");
         const scriptPath = path.join(tmp, "+setup.fish");
         fs.writeFileSync(scriptPath, "echo SAFE\n");
-        const snapshot = resolveMutableFileOperandSnapshotSync({
+        const snapshot = await resolveMutableFileOperandSnapshot({
           argv: testCase.argv,
           cwd: tmp,
           shellCommand: null,
@@ -1151,7 +1151,7 @@ describe("hardenApprovedExecutionPaths", () => {
         }
         fs.writeFileSync(scriptPath, "echo CHANGED\n");
         expect(
-          revalidateApprovedMutableFileOperand({
+          await revalidateApprovedMutableFileOperand({
             snapshot: snapshot.snapshot,
             argv: testCase.argv,
             cwd: tmp,
@@ -1160,5 +1160,41 @@ describe("hardenApprovedExecutionPaths", () => {
       });
     }
   });
+});
+
+it("accepts mutable file operand larger than 8 MiB using chunked hashing", async () => {
+  const tmp = createFixtureDir("openclaw-oversize-script-");
+  const scriptPath = path.join(tmp, "huge.js");
+  // Create a file just over the 8 MiB cap (8 MiB + 1 byte)
+  const oversizedBytes = 8 * 1024 * 1024 + 1;
+  const buf = Buffer.alloc(oversizedBytes, "x");
+  fs.writeFileSync(scriptPath, buf);
+  const snapshot = await resolveMutableFileOperandSnapshot({
+    argv: ["node", "huge.js"],
+    cwd: tmp,
+    shellCommand: null,
+  });
+  expect(snapshot.ok).toBe(true);
+  if (snapshot.ok && snapshot.snapshot) {
+    expect(snapshot.snapshot.sha256).toBe(sha256FileSync(scriptPath));
+  }
+});
+
+it("accepts mutable file operand exactly at 8 MiB size cap", async () => {
+  const tmp = createFixtureDir("openclaw-boundary-script-");
+  const scriptPath = path.join(tmp, "ok.js");
+  // Create a file exactly at the 8 MiB cap
+  const exactBytes = 8 * 1024 * 1024;
+  const buf = Buffer.alloc(exactBytes, "x");
+  fs.writeFileSync(scriptPath, buf);
+  const snapshot = await resolveMutableFileOperandSnapshot({
+    argv: ["node", "ok.js"],
+    cwd: tmp,
+    shellCommand: null,
+  });
+  expect(snapshot.ok).toBe(true);
+  if (snapshot.ok && snapshot.snapshot) {
+    expect(snapshot.snapshot.sha256).toBe(sha256FileSync(scriptPath));
+  }
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
