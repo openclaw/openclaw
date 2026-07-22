@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
 
 const CONTRACT_VERSION = "v1";
-export const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
-export const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
+const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
+const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
 const AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS = 5 * 60 * 1000;
 const AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 

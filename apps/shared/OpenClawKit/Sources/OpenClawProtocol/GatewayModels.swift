@@ -11151,6 +11151,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let optional: Bool?
     public let risk: AnyCodable?
     public let tags: [String]?
+    public let parameters: [String]?
     public let defaultprofiles: [AnyCodable]
 
     public init(
@@ -11162,6 +11163,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         optional: Bool? = nil,
         risk: AnyCodable? = nil,
         tags: [String]? = nil,
+        parameters: [String]? = nil,
         defaultprofiles: [AnyCodable])
     {
         self.id = id
@@ -11172,6 +11174,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         self.optional = optional
         self.risk = risk
         self.tags = tags
+        self.parameters = parameters
         self.defaultprofiles = defaultprofiles
     }
 
@@ -11184,6 +11187,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         case optional
         case risk
         case tags
+        case parameters
         case defaultprofiles = "defaultProfiles"
     }
 }
@@ -11222,21 +11226,25 @@ public struct ToolsCatalogResult: Codable, Sendable {
     public let agentid: String
     public let profiles: [ToolCatalogProfile]
     public let groups: [ToolCatalogGroup]
+    public let tools: [ToolCatalogEntry]?
 
     public init(
         agentid: String,
         profiles: [ToolCatalogProfile],
-        groups: [ToolCatalogGroup])
+        groups: [ToolCatalogGroup],
+        tools: [ToolCatalogEntry]? = nil)
     {
         self.agentid = agentid
         self.profiles = profiles
         self.groups = groups
+        self.tools = tools
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case profiles
         case groups
+        case tools
     }
 }
 

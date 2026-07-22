@@ -55,6 +55,13 @@ const CURRENT_TRAIN_METHODS = [
   "device.pair.rename",
   "sessions.observer.ask",
   "sessions.observer.visibility",
+  "subagents.allowLease.acquire",
+  "subagents.allowLease.status",
+  "subagents.allowLease.release",
+  "sessions_spawn",
+  "sessions_list",
+  "sessions_status",
+  "sessions_history",
 ] as const;
 
 describe("core gateway method release trains", () => {

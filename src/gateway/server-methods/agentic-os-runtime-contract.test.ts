@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
+import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
-  vi.fn(async (_params?: { task?: string }) => ({
+  vi.fn<typeof spawnSubagentDirect>(async () => ({
     status: "accepted",
     childSessionKey: "agent:ai-engineer:subagent:real-child",
     runId: "run-real-child",
     mode: "run",
   })),
 );
-const waitForAgentJobMock = vi.hoisted(() => vi.fn(async () => null));
+const waitForAgentJobMock = vi.hoisted(() => vi.fn<typeof waitForAgentJob>(async () => null));
 const findTaskByRunIdForStatusMock = vi.hoisted(() =>
   vi.fn((): { status: string; startedAt?: number; endedAt?: number } | undefined => ({
     status: "running",
@@ -258,7 +260,7 @@ describe("Agentic OS runtime contract v1", () => {
 
   it("coalesces concurrent duplicate sessions_spawn calls onto one child runner", async () => {
     const gatewayLeaseId = await acquireLease();
-    let resolveSpawn!: (value: Record<string, unknown>) => void;
+    let resolveSpawn!: (value: Awaited<ReturnType<typeof spawnSubagentDirect>>) => void;
     spawnSubagentDirectMock.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveSpawn = resolve;
