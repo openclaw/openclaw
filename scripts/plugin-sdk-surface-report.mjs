@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
   pluginSdkEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
@@ -45,6 +46,7 @@ function parsePluginSdkSurfaceReportArgs(argv) {
 }
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
+const packagedPrivateRuntimeEntrypointSet = new Set(packagedPrivatePluginSdkRuntimeEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
@@ -103,7 +105,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 26,
   "channel-reply-pipeline": 12,
   "interactive-runtime": 13,
-  "infra-runtime": 593,
+  "infra-runtime": 594,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -144,7 +146,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +1: resetSessionEntryLifecycle.
-      4722,
+      // +2: narrow settled-turn finalization result and safe full-attempt projector.
+      4724,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -152,7 +155,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: resetSessionEntryLifecycle.
-      2880,
+      // +1: settled-turn full-attempt projector.
+      2882,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -383,8 +387,9 @@ export function collectPluginSdkSurfaceReport() {
   const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
     forbiddenPublicSubpaths.has(subpath),
   );
-  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter((entrypoint) =>
-    publicEntrypointSet.has(entrypoint),
+  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter(
+    (entrypoint) =>
+      publicEntrypointSet.has(entrypoint) && !packagedPrivateRuntimeEntrypointSet.has(entrypoint),
   );
   const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
     (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),

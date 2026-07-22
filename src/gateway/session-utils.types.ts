@@ -2,6 +2,8 @@
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionPlacement } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionCreatorIdentity } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
@@ -44,6 +46,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  createdBy?: SessionCreatorIdentity;
   spawnedBy?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
@@ -80,6 +83,11 @@ export type GatewaySessionRow = {
   icon?: string;
   unread?: boolean;
   lastReadAt?: number;
+  agentStatus?: SessionEntry["agentStatus"];
+  observerDigest?: Pick<
+    SessionObserverDigest,
+    "runId" | "headline" | "health" | "updatedAt" | "revision"
+  >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
   lastActivityAt?: number;

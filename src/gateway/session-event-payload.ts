@@ -27,6 +27,7 @@ export function buildGatewaySessionEventFields(params: {
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
+    createdBy: sessionRow.createdBy ?? null,
     kind: sessionRow.kind,
     channel: sessionRow.channel,
     subject: sessionRow.subject,
@@ -41,6 +42,8 @@ export function buildGatewaySessionEventFields(params: {
     icon: sessionRow.icon ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
+    agentStatus: sessionRow.agentStatus ?? null,
+    observerDigest: sessionRow.observerDigest ?? null,
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
     swarmGroupId: sessionRow.swarmGroupId,

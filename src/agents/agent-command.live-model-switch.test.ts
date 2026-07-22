@@ -172,6 +172,7 @@ vi.mock("./command/run-context.js", () => ({
 
 vi.mock("./command/session-store.runtime.js", () => ({
   loadSessionEntry: (...args: unknown[]) => state.loadSessionEntryMock(...args),
+  loadSessionEntryReadOnly: (...args: unknown[]) => state.loadSessionEntryMock(...args),
   updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
@@ -328,7 +329,9 @@ vi.mock("../infra/agent-events.js", () => ({
   clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
   getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: vi.fn(),
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
   registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),
   withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
 }));
@@ -1328,7 +1331,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       agents: {
         defaults: {
           models: state.defaultRuntimeConfig.agents.defaults.models,
-          cliBackends: { codex: { command: "codex" } },
         },
       },
     };

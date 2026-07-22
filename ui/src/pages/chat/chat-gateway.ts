@@ -13,10 +13,9 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
-import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
-import { preserveSteeredQueueItemsForRun } from "./queued-user-turn.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { appendChatMessageToCache } from "./session-message-cache.ts";
+import { retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
@@ -43,6 +42,10 @@ function setChatRunError(state: ChatState, summary: string) {
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
   return chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId);
+}
+
+function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
+  return state.chatQueue.some((item) => item.sendRunId === runId && item.sendState === "sending");
 }
 
 function isTerminalChatState(value: unknown): boolean {
@@ -205,7 +208,12 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     return null;
   }
-  if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
+  if (
+    !state.chatRunId &&
+    sessionMatches &&
+    typeof payload.runId === "string" &&
+    (payload.state !== "status" || isPendingLocalChatRun(state, payload.runId))
+  ) {
     state.chatRunId = payload.runId;
     state.chatRunError = null;
     state.chatStreamStartedAt ??= Date.now();
@@ -242,7 +250,23 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
 
+  if (payload.state === "status") {
+    if (!payload.runId || payload.runId !== state.chatRunId) {
+      return null;
+    }
+    if (
+      payload.phase &&
+      !(state.chatRunStartup?.state === "activity" && state.chatRunStartup.runId === payload.runId)
+    ) {
+      state.chatRunStartup = { state: "status", runId: payload.runId, phase: payload.phase };
+    }
+    return payload.state;
+  }
+
   if (payload.state === "delta") {
+    if (payload.runId && payload.runId === state.chatRunId) {
+      state.chatRunStartup = { state: "activity", runId: payload.runId };
+    }
     const next = resolveDeltaChatStreamText(state.chatStream, payload);
     if (
       typeof next === "string" &&
@@ -317,7 +341,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           state,
           {
             isHiddenStreamText: isHiddenAssistantStreamText,
-            persistCommentary: state.settings?.chatPersistCommentary === true,
+            persistCommentary: state.settings?.chatPersistCommentary !== false,
           },
         );
         if (replacesVisibleStream) {
@@ -397,19 +421,15 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
   const activeRunIdBeforeEvent = state.chatRunId;
   if (
     isTerminalChatState(payload?.state) &&
+    payload !== undefined &&
+    (chatEventSessionMatches(state, payload) || payload.runId === activeRunIdBeforeEvent) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
   ) {
     // A steered chip can be the only local copy while transcript persistence lags.
     // Materialize it before the terminal assistant so user/assistant order stays stable.
-    preserveSteeredQueueItemsForRun(state, payload?.runId);
+    retireSteeredChipsForTerminalRun(state, payload?.runId);
   }
   const result = handleChatEvent(state, payload);
-  if (
-    isTerminalChatState(result) &&
-    !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
-  ) {
-    clearPendingQueueItemsForRun(state, payload?.runId);
-  }
   return result;
 }
 

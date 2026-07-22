@@ -259,23 +259,38 @@ function addUserRwx(mode: number): number {
 }
 
 function countJsonlLines(filePath: string): number {
+  let fd: number;
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
+    fd = fs.openSync(filePath, "r");
+  } catch {
+    return 0;
+  }
+  try {
+    const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    for (const char of raw) {
-      if (char === "\n") {
-        count += 1;
+    let hasBytes = false;
+    let endsWithNewline = false;
+    for (;;) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      hasBytes = true;
+      endsWithNewline = chunk[bytesRead - 1] === 0x0a;
+      for (let index = 0; index < bytesRead; index += 1) {
+        if (chunk[index] === 0x0a) {
+          count += 1;
+        }
       }
     }
-    if (!raw.endsWith("\n")) {
+    if (hasBytes && !endsWithNewline) {
       count += 1;
     }
     return count;
   } catch {
     return 0;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

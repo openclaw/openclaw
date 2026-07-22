@@ -559,12 +559,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const dmAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(dmAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(dmAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(dmAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.isDirectMessage).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
@@ -605,7 +607,6 @@ describe("preflightDiscordMessage", () => {
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
-        placeholder: "<media:image>",
       },
     ]);
   });
@@ -1744,7 +1745,7 @@ describe("preflightDiscordMessage", () => {
     expect(entries).toHaveLength(1);
     expect(entries?.[0]).toMatchObject({
       sender: "Alice",
-      body: "<media:image> (1 image)",
+      body: "<media:image>",
       messageId: "m-history-image",
       media: [
         {
@@ -1814,7 +1815,7 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)).toEqual([
       expect.objectContaining({
         sender: "Alice",
-        body: "<media:document> (1 file)",
+        body: "<media:document>",
         messageId: "m-history-doc",
       }),
     ]);
@@ -1883,13 +1884,13 @@ describe("preflightDiscordMessage", () => {
     expect(guildHistories.get(channelId)).toEqual([
       expect.objectContaining({
         sender: "Alice",
-        body: "<media:sticker> (1 sticker)",
+        body: "<media:sticker>",
         messageId: "m-history-sticker",
         media: [
           {
             path: "/tmp/openclaw-discord-test/sticker.png",
             contentType: "image/png",
-            kind: "image",
+            kind: "sticker",
             messageId: "m-history-sticker",
           },
         ],
@@ -2121,12 +2122,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(guildAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(guildAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(guildAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.wasMentioned).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hey openclaw");

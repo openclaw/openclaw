@@ -1,4 +1,5 @@
 import type {
+  SessionCreatorIdentity,
   SessionApprovalReplay,
   SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -49,6 +50,7 @@ import type {
 } from "../server-instance-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
@@ -76,6 +78,8 @@ export type GatewayClient = {
     hasAvatar: boolean;
     updatedAt: number;
   };
+  /** Trusted operator identity resolved once during connection admission. */
+  operatorIdentity?: SessionCreatorIdentity;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
@@ -92,6 +96,8 @@ export type GatewayClient = {
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
+    /** In-process subagent-completion handoff eligible for verified policy inheritance. */
+    delegatedToolPolicyHandoff?: true;
   };
 };
 
@@ -134,6 +140,8 @@ type GatewaySystemAgentSession = {
   };
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
+  /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
+  welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
@@ -145,8 +153,10 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  sessionObserver?: SessionObserverService;
   notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
+  ensureSandboxHostPort?: () => Promise<number>;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
@@ -193,10 +203,10 @@ export type GatewayRequestContext = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
-  nodeSubscribe: (nodeId: string, sessionKey: string) => void;
-  nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
+  nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
+  nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
-  hasConnectedTalkNode: () => boolean;
+  hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   /** Instance-local native approval subscribers; never derived from a network client. */

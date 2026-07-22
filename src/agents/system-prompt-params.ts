@@ -10,7 +10,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatActiveNodeContextLabel,
-  getActiveNodeContext,
+  getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
@@ -62,13 +62,14 @@ export function buildSystemPromptParams(params: {
     cwd: params.cwd,
   });
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+  const userTimeFormat = resolveUserTimeFormat(undefined);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   return {
     runtimeInfo: {
       agentId: params.agentId,
       ...params.runtime,
-      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()) ?? params.runtime.activeNode,
+      activeNode:
+        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
       repoRoot,
     },
     userTimezone,

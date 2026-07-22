@@ -9,7 +9,11 @@ import {
 } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import { canvasWidgetNameForDocument, type BoardProvider } from "../../../lib/board/provider.ts";
+import {
+  canvasWidgetNameForDocument,
+  mcpAppWidgetNameForViewId,
+  type BoardProvider,
+} from "../../../lib/board/provider.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
 import {
   isInternalCanvasEntryUrl,
@@ -42,14 +46,43 @@ async function pinCanvasWidget(
   name: string,
 ): Promise<void> {
   const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement) || !preview.viewId) {
+  const docId = preview.viewId?.trim();
+  if (!(button instanceof HTMLButtonElement) || !docId) {
     return;
   }
   button.disabled = true;
   button.textContent = t("chat.toolCards.pinToDashboardPending");
   try {
     await provider.pinWidget({
-      docId: preview.viewId,
+      docId,
+      name,
+      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
+    });
+    button.textContent = t("chat.toolCards.pinnedToDashboard");
+    button.dataset.pinned = "true";
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = t("chat.toolCards.pinToDashboard");
+    button.title = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function pinMcpAppWidget(
+  event: Event,
+  preview: ToolPreview,
+  provider: BoardProvider,
+  name: string,
+  viewId: string,
+): Promise<void> {
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.disabled = true;
+  button.textContent = t("chat.toolCards.pinToDashboardPending");
+  try {
+    await provider.pinMcpApp({
+      viewId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
     });
@@ -66,7 +99,8 @@ function canvasWidgetName(preview: ToolPreview): string | undefined {
   if (preview.boardWidgetName) {
     return preview.boardWidgetName;
   }
-  return preview.viewId ? canvasWidgetNameForDocument(preview.viewId) : undefined;
+  const viewId = preview.viewId?.trim();
+  return viewId ? canvasWidgetNameForDocument(viewId) : undefined;
 }
 
 function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
@@ -99,6 +133,7 @@ function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -171,6 +206,9 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
+  // The wrapper waits for this trusted adoption signal before using the
+  // legacy inline channel, so board widgets can wait for their view ticket.
+  port.postMessage({ type: WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE });
 }
 
 function installWidgetPromptOfferListener() {
@@ -427,17 +465,28 @@ function renderWidgetCard(
   }
   const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
-  const pinName = canvasWidgetName(preview);
-  const pinned = Boolean(
-    pinName &&
-    options?.boardProvider?.snapshot$.value.widgets.some((widget) => widget.name === pinName),
-  );
+  const provider = options?.boardProvider;
+  const mcpAppViewId = preview.mcpApp?.viewId?.trim();
+  const pinName = preview.mcpApp
+    ? mcpAppViewId
+      ? mcpAppWidgetNameForViewId(mcpAppViewId)
+      : undefined
+    : canvasWidgetName(preview);
+  const pinnedWidget = pinName
+    ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
+    : undefined;
+  const pinned = Boolean(pinnedWidget);
+  // Chat keeps its labeled card shell, but the inner inset follows the pinned
+  // widget's presentation so authored edge-to-edge content matches the board.
+  const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
   const pinAction =
-    contentKind === "canvas-html" &&
-    preview.sandbox === "scripts" &&
-    options?.boardProvider?.canPinWidgets &&
-    isManagedCanvasDocumentPreview(preview) &&
-    pinName
+    provider &&
+    (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
+    pinName &&
+    ((contentKind === "canvas-html" &&
+      preview.sandbox === "scripts" &&
+      isManagedCanvasDocumentPreview(preview)) ||
+      (contentKind === "mcp-app" && mcpAppViewId))
       ? html`<button
           class="chat-tool-card__widget-action"
           type="button"
@@ -449,7 +498,9 @@ function renderWidgetCard(
             pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
           )}
           @click=${(event: Event) =>
-            void pinCanvasWidget(event, preview, options.boardProvider!, pinName)}
+            contentKind === "mcp-app" && mcpAppViewId
+              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
+              : void pinCanvasWidget(event, preview, provider, pinName)}
         >
           ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
         </button>`
@@ -463,7 +514,7 @@ function renderWidgetCard(
           ${renderWidgetActions(preview)}
         </div>
       </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas">
+      <div class="chat-tool-card__preview-panel" data-side="canvas" ?data-bleed=${bleed}>
         ${renderWidgetContent(contentKind, preview, options)}
       </div>
     </div>

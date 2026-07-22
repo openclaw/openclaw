@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
@@ -28,6 +29,7 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
   blockedCodexModelIdentities?: readonly string[];
@@ -629,9 +631,9 @@ async function runReleaseConfiguredPluginInstallsHealth(
     meta: {
       ...ctx.cfg.meta,
       lastTouchedVersion,
-      lastTouchedAt: new Date().toISOString(),
     },
   };
+  writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
 async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -1251,12 +1253,12 @@ function inferMemorySearchFindingPath(message: string): string {
     return "memory.backend";
   }
   if (message.includes("OpenAI-compatible embeddings endpoint")) {
-    return "agents.defaults.memorySearch.remote.baseUrl";
+    return "memory.search.remote.baseUrl";
   }
   if (message.includes("OpenAI-compatible embedding model")) {
-    return "agents.defaults.memorySearch.model";
+    return "memory.search.model";
   }
-  return "agents.defaults.memorySearch.provider";
+  return "memory.search.provider";
 }
 
 async function collectMemorySearchHealthFindings(
@@ -1316,10 +1318,12 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
-    ctx.cfg = applyWizardMetadata(ctx.cfg, {
-      command: "doctor",
-      mode: resolveDoctorMode(ctx.cfg),
-    });
+    if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
+      ctx.cfg = applyWizardMetadata(ctx.cfg, {
+        command: "doctor",
+        mode: resolveDoctorMode(ctx.cfg),
+      });
+    }
     if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
@@ -1466,8 +1470,7 @@ function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext): {
   if (!isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)) {
     return {};
   }
-  const version =
-    ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion;
+  const version = ctx.configResult.sourceLastTouchedVersion?.trim();
   return version ? { lastTouchedVersionOverride: version } : {};
 }
 

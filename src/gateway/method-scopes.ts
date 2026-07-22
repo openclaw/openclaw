@@ -110,9 +110,10 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   }
   // cwd targets arbitrary host checkouts; execNode routes exec onto a paired
   // node host. Both match the sessions.patch execNode admin bar.
-  return Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")
-    ? [ADMIN_SCOPE]
-    : [WRITE_SCOPE];
+  if (Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")) {
+    return [ADMIN_SCOPE];
+  }
+  return [WRITE_SCOPE];
 }
 
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
@@ -190,6 +191,13 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
         ? (params as { includeSecrets?: unknown }).includeSecrets
         : undefined;
     return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
+  }
+  if (method === "channels.pairing.approve") {
+    const bootstrapCommandOwner =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as { bootstrapCommandOwner?: unknown }).bootstrapCommandOwner
+        : undefined;
+    return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
   }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);

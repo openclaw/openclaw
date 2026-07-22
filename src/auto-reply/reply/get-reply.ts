@@ -18,6 +18,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
@@ -95,14 +96,8 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
   };
 }
 
-function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
-  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  return Math.max(
-    0,
-    agentHeartbeat?.ackMaxChars ??
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  );
+function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -218,7 +213,7 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const isFastTestEnv = isFastTestRuntimeEnv();
   const cfg = resolveGetReplyConfig({
     getRuntimeConfig,
     isFastTestEnv,
@@ -351,7 +346,8 @@ export async function getReplyFromConfig(
       };
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
-    const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
+    const configuredTypingSeconds =
+      agentEntry?.typingIntervalSeconds ?? agentCfg?.typingIntervalSeconds;
     const typingIntervalSeconds =
       typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
     const controller = createTypingController({

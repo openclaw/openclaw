@@ -76,10 +76,15 @@ export type CronServiceDeps = {
     job: CronJob;
     script: string;
     state: unknown;
+    streamBatch?: string;
     abortSignal?: AbortSignal;
   }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
+  /** Resolve the current default when runtime config can change after startup. */
+  resolveDefaultAgentId?: () => string;
+  /** Revalidate agent ownership inside the cron mutation lock. */
+  isAgentAvailable?: (agentId: string) => boolean;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -180,7 +185,11 @@ export type CronServiceDeps = {
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome
   >;
-  runScriptJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+  runScriptJob?: (params: {
+    job: CronJob;
+    streamBatch?: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
     {
       delivered?: boolean;
       deliveryAttempted?: boolean;
@@ -307,7 +316,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
-  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
+  /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */
   storage: "sqlite";

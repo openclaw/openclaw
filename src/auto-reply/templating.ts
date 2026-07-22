@@ -5,6 +5,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -42,6 +43,18 @@ type UntrustedStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
+  sessionTranscriptDedupeMessageIds?: string[];
+  /** Internal visible-text hints for legacy assistant rows without transcript ids. */
+  sessionTranscriptAssistantTextDedupeKeys?: string[];
+};
+
+export type SessionTranscriptContext = {
+  chatWindow?: boolean;
+  historyLimit: number;
+  beforeTimestampMs?: number;
+  minTimestampMs?: number;
+  senderLabels?: { assistant: string; user: string };
 };
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
@@ -91,6 +104,8 @@ export type MsgContext = {
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
   InboundHistory?: HistoryEntry[];
+  /** Internal facts used to merge canonical transcript turns before dispatch. */
+  SessionTranscriptContext?: SessionTranscriptContext;
   /**
    * @deprecated Use CommandBody.
    *
@@ -206,6 +221,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Ordered current-turn media facts; array position is attachment identity. */
+  media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
   MediaWorkspaceDir?: string;
@@ -259,6 +276,8 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Trusted Gateway operator identity used only when creating a session. */
+  SessionCreator?: import("../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
