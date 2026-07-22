@@ -139,7 +139,7 @@ function buildSnapshotKey(opts: ShellSnapshotWrapOptions): string {
         shell: opts.shell,
         shellArgs: opts.shellArgs,
         cwd: path.resolve(opts.cwd),
-        home: getTrustedShellHome(),
+        home: resolveTrustedShellHome(),
         stateDir: resolveStateDir(process.env),
         env: buildSafeEnvSignature(process.env),
         startup: buildStartupSignature(opts.shell),
@@ -158,7 +158,7 @@ function buildSafeEnvSignature(
 
 function buildStartupSignature(shell: string): Array<[string, number, number] | [string, null]> {
   const shellName = path.basename(shell);
-  const home = getTrustedShellHome();
+  const home = resolveTrustedShellHome();
   const zdotdir = process.env.ZDOTDIR?.trim() || home;
   const candidates =
     shellName === "zsh"
@@ -176,8 +176,11 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
   });
 }
 
-function getTrustedShellHome(): string {
-  return process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+export function resolveTrustedShellHome(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return [env.HOME, env.USERPROFILE].find((value) => value?.trim()) ?? homedir();
 }
 
 async function createShellSnapshot(

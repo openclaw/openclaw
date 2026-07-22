@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
+import { maybeWrapCommandWithShellSnapshot, resolveTrustedShellHome } from "./shell-snapshot.js";
 import { getBashShellConfig, getShellConfig } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -68,6 +68,12 @@ function setSnapshotStateForTest(
 describe("exec shell snapshots", () => {
   const tempDirs: string[] = [];
   let envSnapshot: ReturnType<typeof captureEnv>;
+
+  it("falls back from a blank HOME to USERPROFILE", () => {
+    expect(
+      resolveTrustedShellHome({ HOME: "", USERPROFILE: "C:\\Users\\operator" }, () => "/os/home"),
+    ).toBe("C:\\Users\\operator");
+  });
 
   beforeEach(() => {
     envSnapshot = captureEnv([
