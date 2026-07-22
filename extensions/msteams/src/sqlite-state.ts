@@ -43,8 +43,17 @@ export function resolveMSTeamsSqliteStateEnv(
 }
 
 export function toPluginJsonValue<T>(value: T): T {
-  const serialized = JSON.stringify(value);
-  return JSON.parse(serialized) as T;
+  try {
+    const serialized = JSON.stringify(value, (_key, val) => {
+      if (typeof val === "bigint") return String(val);
+      return val;
+    });
+    return JSON.parse(serialized) as T;
+  } catch {
+    // Structural issues (e.g. circular references) cannot be safely
+    // persisted; return a defined JSON-safe fallback.
+    return {} as T;
+  }
 }
 
 function resolveMSTeamsSqliteStateDir(options: MSTeamsSqliteStateOptions | undefined): string {
