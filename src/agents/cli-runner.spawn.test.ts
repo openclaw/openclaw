@@ -614,6 +614,7 @@ describe("runCliAgent spawn path", () => {
       /truncated the Claude CLI stream before the terminal result/,
     );
     expect(invokeNode.mock.calls[0]?.[0].env).toBeUndefined();
+    expect(invokeNode.mock.calls[0]?.[0].clearEnv).toBeUndefined();
   });
 
   it("cancels a node-placed Claude process when the run aborts", async () => {

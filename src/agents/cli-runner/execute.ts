@@ -1744,7 +1744,7 @@ export async function executePreparedCliRun(
               stdinPayload,
               ...(nodeSystemPrompt !== undefined ? { nodeSystemPrompt } : {}),
               ...(nodeEnv ? { nodeEnv } : {}),
-              ...(backend.clearEnv ? { nodeClearEnv: backend.clearEnv } : {}),
+              ...(selectedClaudeClearEnv ? { nodeClearEnv: [...selectedClaudeClearEnv] } : {}),
               noOutputTimeoutMs,
               consumeStdout,
               consumeStderr,

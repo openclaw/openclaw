@@ -74,18 +74,18 @@ function prepareClaudeNodeSecretInput(params: {
   requestEnv: Record<string, string> | undefined;
   childEnv: Record<string, string>;
 }): { secretInput?: { fd: 3; createData: () => Buffer }; cleanup: () => void } {
+  const selected = CLAUDE_NODE_AUTH_INPUTS.find(({ requestEnv }) =>
+    Object.hasOwn(params.requestEnv ?? {}, requestEnv),
+  );
+  if (!selected) {
+    return { cleanup: () => {} };
+  }
   for (const key of [
     "ANTHROPIC_API_KEY",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
   ]) {
     delete params.childEnv[key];
-  }
-  const selected = CLAUDE_NODE_AUTH_INPUTS.find(({ requestEnv }) =>
-    Object.hasOwn(params.requestEnv ?? {}, requestEnv),
-  );
-  if (!selected) {
-    return { cleanup: () => {} };
   }
   const source = Buffer.from(params.requestEnv?.[selected.requestEnv] ?? "", "utf8");
   params.childEnv[selected.descriptorEnv] = "3";
