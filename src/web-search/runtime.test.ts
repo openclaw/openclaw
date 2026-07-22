@@ -167,13 +167,15 @@ function createDuckDuckGoSearchProvider(
 describe("web search runtime", () => {
   let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
+  let resolveWebSearchProviderId: typeof import("./runtime.js").resolveWebSearchProviderId;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
+    ({ hasUsableWebSearchProvider, runWebSearch, resolveWebSearchProviderId } =
+      await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
     ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
@@ -1272,6 +1274,55 @@ describe("web search runtime", () => {
         args: { query: "all-null-tools" },
       }),
     ).rejects.toThrow("web_search is enabled but no provider is currently available.");
+  });
+
+  // ── Own-property checks: Object.hasOwn() on search config objects ──
+
+  it("ignores proto-inherited 'provider' in search config resolution", () => {
+    const search = Object.create({ provider: "brave" });
+    // The search object has no own "provider" — inherited from prototype.
+    // resolveWebSearchProviderId must not treat it as user-configured.
+    // Register a provider whose id matches the inherited value to make the
+    // pre-patch ("provider" in search) return "brave" instead of "".
+    const braveProvider = createWebSearchTestProvider({
+      pluginId: "brave",
+      id: "brave",
+      credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+      autoDetectOrder: 10,
+      createTool: () => ({
+        description: "brave search",
+        parameters: {},
+        execute: async () => ({ results: [] }),
+      }),
+    });
+
+    expect(
+      resolveWebSearchProviderId({
+        search,
+        providers: [braveProvider],
+      }),
+    ).toBe("");
+  });
+
+  it("resolves own 'provider' in search config", () => {
+    const firecrawlProvider = createWebSearchTestProvider({
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+      autoDetectOrder: 10,
+      createTool: () => ({
+        description: "firecrawl search",
+        parameters: {},
+        execute: async () => ({ results: [] }),
+      }),
+    });
+
+    expect(
+      resolveWebSearchProviderId({
+        search: { provider: "firecrawl" },
+        providers: [firecrawlProvider],
+      }),
+    ).toBe("firecrawl");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
