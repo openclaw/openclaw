@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
+import {
+  handleTelegramAction as handleTelegramActionRuntime,
+  telegramActionRuntime,
+} from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
@@ -17,6 +20,17 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
+
+function handleTelegramAction(
+  params: Parameters<typeof handleTelegramActionRuntime>[0],
+  cfg: Parameters<typeof handleTelegramActionRuntime>[1],
+  options?: Parameters<typeof handleTelegramActionRuntime>[2],
+) {
+  return handleTelegramActionRuntime(params, cfg, {
+    conversationReadOrigin: "direct-operator",
+    ...options,
+  });
+}
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
 const sendMessageTelegram = vi.fn(
   async (_to: string, _text: string, _opts?: Record<string, unknown>) => ({
@@ -473,6 +487,72 @@ describe("handleTelegramAction", () => {
           currentThreadTs: "77",
         },
       },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: false, reason: "error" });
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("rejects threadless cross-chat mutations before provider execution", async () => {
+    const context = {
+      conversationReadOrigin: "delegated" as const,
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "telegram" as const,
+        currentChannelId: "telegram:-1001",
+        currentMessageId: "456",
+      },
+    };
+
+    const reaction = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1002",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      context,
+    );
+    expect(resultDetails(reaction)).toMatchObject({ ok: false, reason: "error" });
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editMessage",
+          chatId: "-1002",
+          messageId: 456,
+          content: "updated",
+        },
+        telegramConfig(),
+        context,
+      ),
+    ).rejects.toThrow("provider-observed binding");
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId: "-1002",
+          messageId: 456,
+        },
+        telegramConfig(),
+        context,
+      ),
+    ).rejects.toThrow("provider-observed binding");
+
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("treats missing invocation origin as delegated for threadless mutations", async () => {
+    const result = await handleTelegramActionRuntime(
+      {
+        action: "react",
+        chatId: "-1001",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
     );
 
     expect(resultDetails(result)).toMatchObject({ ok: false, reason: "error" });

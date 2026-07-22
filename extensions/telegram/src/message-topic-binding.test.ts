@@ -167,6 +167,71 @@ describe("Telegram message topic binding", () => {
     ).rejects.toThrow("provider-observed binding");
   });
 
+  it.each([
+    {
+      name: "different chat",
+      chatId: "-1002",
+      context: delegatedContext({
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001",
+          currentMessageId: "901",
+        },
+      }),
+    },
+    {
+      name: "different provider",
+      chatId: "-1001",
+      context: delegatedContext({
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "telegram:-1001",
+          currentMessageId: "901",
+        },
+      }),
+    },
+    {
+      name: "different account",
+      chatId: "-1001",
+      context: delegatedContext({
+        requesterAccountId: "work",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001",
+          currentMessageId: "901",
+        },
+      }),
+    },
+  ])("rejects a threadless $name mutation", async ({ chatId, context }) => {
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId,
+        messageId: 901,
+        cfg,
+        accountId: "default",
+        context,
+      }),
+    ).rejects.toThrow("provider-observed binding");
+  });
+
+  it("allows a threadless exact-current mutation with a matching account", async () => {
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId: "-1001",
+        messageId: 901,
+        cfg,
+        accountId: "default",
+        context: delegatedContext({
+          toolContext: {
+            currentChannelProvider: "telegram",
+            currentChannelId: "telegram:-1001",
+            currentMessageId: "901",
+          },
+        }),
+      }),
+    ).resolves.toBe("-1001");
+  });
+
   it("allows an earlier provider-observed same-topic message after restart", async () => {
     await recordMessage({ messageId: 900, threadId: 77, providerObserved: true });
     resetTelegramMessageCacheForTest();

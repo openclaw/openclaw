@@ -81,14 +81,6 @@ export async function resolveTelegramMessageMutationChatId(params: {
     params.context?.toolContext,
     target.chatId,
   );
-  const threadId = target.messageThreadId ?? currentConversation.threadId;
-  if (threadId === undefined && !currentConversation.hasThreadContext) {
-    return params.chatId;
-  }
-  if (threadId === undefined) {
-    return rejectUnboundTopicMutation();
-  }
-
   const selectedAccountId = normalizeOptionalAccountId(
     params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
   );
@@ -97,9 +89,16 @@ export async function resolveTelegramMessageMutationChatId(params: {
     !selectedAccountId ||
     !requesterAccountId ||
     normalizeAccountId(selectedAccountId) !== normalizeAccountId(requesterAccountId) ||
-    !currentConversation.matchesChat ||
-    currentConversation.threadId !== threadId
+    !currentConversation.matchesChat
   ) {
+    return rejectUnboundTopicMutation();
+  }
+
+  const threadId = target.messageThreadId ?? currentConversation.threadId;
+  if (threadId === undefined && !currentConversation.hasThreadContext) {
+    return target.chatId;
+  }
+  if (threadId === undefined || currentConversation.threadId !== threadId) {
     return rejectUnboundTopicMutation();
   }
 
