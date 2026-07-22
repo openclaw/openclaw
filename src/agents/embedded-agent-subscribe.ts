@@ -632,14 +632,18 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     return undefined;
   };
   const emitRunUsage = (outputTokens: number) => {
+    const lifecycleGeneration = params.lifecycleGeneration;
+    if (!lifecycleGeneration) {
+      return;
+    }
     const data = recordAgentRunOutputTokens({
       runId: params.runId,
-      lifecycleGeneration: params.lifecycleGeneration,
+      lifecycleGeneration,
       outputTokens,
       emit: (usage) =>
         emitAgentEventIfCurrent({
           runId: params.runId,
-          lifecycleGeneration: params.lifecycleGeneration,
+          lifecycleGeneration,
           stream: "usage",
           data: usage,
         }),

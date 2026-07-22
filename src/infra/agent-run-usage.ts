@@ -5,7 +5,7 @@ type AgentRunUsage = {
 
 type RecordAgentRunOutputTokensParams = {
   runId: string;
-  lifecycleGeneration?: string;
+  lifecycleGeneration: string;
   outputTokens: number;
   emit: (usage: AgentRunUsage) => boolean;
 };
@@ -20,16 +20,15 @@ export function recordAgentRunOutputTokens(
   if (!Number.isFinite(outputTokens) || outputTokens <= 0) {
     return undefined;
   }
-  const lifecycleGeneration = params.lifecycleGeneration ?? "";
   const usageByGeneration = usageByRun.get(params.runId) ?? new Map<string, AgentRunUsage>();
-  const previous = usageByGeneration.get(lifecycleGeneration);
+  const previous = usageByGeneration.get(params.lifecycleGeneration);
   const usage = {
     outputTokens: (previous?.outputTokens ?? 0) + outputTokens,
   };
   if (!params.emit(usage)) {
     return undefined;
   }
-  usageByGeneration.set(lifecycleGeneration, usage);
+  usageByGeneration.set(params.lifecycleGeneration, usage);
   usageByRun.set(params.runId, usageByGeneration);
   return usage;
 }
