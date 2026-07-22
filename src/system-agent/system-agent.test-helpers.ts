@@ -42,7 +42,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
         ...(selectedProfileId ? { authProfileId: selectedProfileId } : {}),
       })
     : undefined;
-  const selectedCredential = selectedProfileId
+  const selectedCredential = selectedProfileId && selection
     ? ({
         type: "api_key",
         provider: cliExecutionProvider ?? selection.runtimeProvider ?? selection.provider,
