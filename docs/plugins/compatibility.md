@@ -88,13 +88,13 @@ New channel plugins should use `MsgContext.ChannelPromptContext`,
 `SupplementalContextFacts.channelStructuredContext`. The older
 `UntrustedContext`, `UntrustedStructuredContext`,
 `UntrustedStructuredContextEntry`, and supplemental `untrustedContext` names
-remain as deprecated SDK aliases until the next SDK major. Inbound finalization
-folds those deprecated fields into the channel-named fields and removes the old
-keys from runtime context.
+remain as deprecated SDK aliases until 2026-10-22 (registry record
+`sdk-untrusted-context-identifier-aliases`). Inbound finalization folds those
+deprecated fields into the channel-named fields and removes the old keys from
+runtime context.
 
 The security runtime similarly exports `buildChannelMetadata`; the deprecated
-`buildUntrustedChannelMetadata` alias remains available until the next SDK
-major.
+`buildUntrustedChannelMetadata` alias remains available on the same schedule.
 
 ### WhatsApp inbound callback flat aliases
 

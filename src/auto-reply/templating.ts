@@ -44,7 +44,7 @@ export type ChannelStructuredContextEntry = {
   payload: unknown;
 };
 
-/** @deprecated Use ChannelStructuredContextEntry. Removal: next SDK major. */
+/** @deprecated Use ChannelStructuredContextEntry. Removal: after 2026-10-22 (see sdk-untrusted-context-identifier-aliases). */
 export type UntrustedStructuredContextEntry = ChannelStructuredContextEntry;
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
@@ -75,7 +75,7 @@ export type SupplementalContextFacts = {
     senderAllowed?: boolean;
   };
   channelStructuredContext?: ChannelStructuredContextEntry[];
-  /** @deprecated Use channelStructuredContext. Removal: next SDK major. */
+  /** @deprecated Use channelStructuredContext. Removal: after 2026-10-22 (see sdk-untrusted-context-identifier-aliases). */
   untrustedContext?: ChannelStructuredContextEntry[];
   groupSystemPrompt?: string;
   /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
@@ -256,11 +256,11 @@ export type MsgContext = {
   SupplementalContext?: SupplementalContextFacts;
   /** Channel-provided metadata that must not be treated as system instructions. */
   ChannelPromptContext?: string[];
-  /** @deprecated Use ChannelPromptContext. Removal: next SDK major. */
+  /** @deprecated Use ChannelPromptContext. Removal: after 2026-10-22 (see sdk-untrusted-context-identifier-aliases). */
   UntrustedContext?: string[];
   /** Structured channel metadata rendered by prompt assembly as fenced JSON. */
   ChannelStructuredContext?: ChannelStructuredContextEntry[];
-  /** @deprecated Use ChannelStructuredContext. Removal: next SDK major. */
+  /** @deprecated Use ChannelStructuredContext. Removal: after 2026-10-22 (see sdk-untrusted-context-identifier-aliases). */
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
