@@ -6,7 +6,7 @@ import {
   runSetupWizardFinalize,
   runSetupWizardPrepare,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedSetupWizardProxy,
