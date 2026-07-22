@@ -4815,6 +4815,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Recommended: openclaw update
   - H2: Switch between npm and git installs
+  - H2: Source-checkout servers (reference script)
   - H2: Alternative: re-run the installer
   - H2: Alternative: manual npm, pnpm, or bun
   - H3: Advanced npm install topics

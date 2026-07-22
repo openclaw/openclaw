@@ -34,12 +34,38 @@ remote="${OPENCLAW_UPDATE_REMOTE:-origin}"
 # regenerates it from source every run.
 git checkout -- extensions/browser/chrome-extension/modules/copilot-runtime.js 2>/dev/null || true
 
+# Never update over an in-progress git operation: aborting or rebasing on top
+# of an operator's paused rebase/merge would discard their progress.
+git_dir="$(git rev-parse --git-dir)"
+if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] || \
+  [ -f "$git_dir/MERGE_HEAD" ] || [ -f "$git_dir/CHERRY_PICK_HEAD" ]; then
+  log "a git rebase/merge/cherry-pick is in progress; finish or abort it first"
+  exit 1
+fi
+
 # Fail closed on any other local changes: an agent or operator may have
 # uncommitted work in this checkout, and an update must never eat it.
 if ! git diff --quiet || ! git diff --cached --quiet; then
   log "working tree has local changes; commit, stash, or restore them first:"
   git status --short | head -20
   exit 1
+fi
+
+# Untracked files outside the build dirs cannot change what the updated commit
+# builds, so they only warn (servers accumulate harmless scratch files). Inside
+# the dirs the clean build deletes, untracked work would be silently destroyed,
+# so those fail closed. Accepted tradeoff: a build that globs untracked inputs
+# keeps them, same as before the update.
+untracked="$(git ls-files --others --exclude-standard)"
+if [ -n "$untracked" ]; then
+  doomed="$(printf '%s\n' "$untracked" | grep -E '^(dist|dist-runtime|\.artifacts/tsgo-cache)(/|$)' || true)"
+  if [ -n "$doomed" ]; then
+    log "untracked files inside build dirs would be deleted by the clean build; move them first:"
+    printf '%s\n' "$doomed" | head -10
+    exit 1
+  fi
+  log "note: untracked files present (kept, not deployed):"
+  printf '%s\n' "$untracked" | head -10
 fi
 
 log "fetching ${remote}/main"
