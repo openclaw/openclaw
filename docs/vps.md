@@ -43,8 +43,6 @@ A community video walkthrough is available at
   (`gateway.auth.token` or `gateway.auth.password`) unless auth is delegated to a
   trusted proxy.
 
-Related pages: [Gateway remote access](/gateway/remote), [Platforms hub](/platforms).
-
 ## Harden admin access first
 
 Before you install OpenClaw on a public VPS, decide how you want to administer
@@ -133,6 +131,8 @@ diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-p
 ## Related
 
 - [Install overview](/install)
+- [Gateway remote access](/gateway/remote)
+- [Platforms hub](/platforms)
 - [DigitalOcean](/install/digitalocean)
 - [Fly.io](/install/fly)
 - [Hetzner](/install/hetzner)
