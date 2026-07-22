@@ -686,6 +686,17 @@ function updateSendPayloadPartsFromReplyPayload(
   };
 }
 
+function applySendLocationToActionParams(
+  actionParams: Record<string, unknown>,
+  location: ReplyPayload["location"],
+) {
+  if (location) {
+    actionParams.location = location;
+  } else {
+    delete actionParams.location;
+  }
+}
+
 function applySendPayloadPartsToActionParams(
   actionParams: Record<string, unknown>,
   parts: SendPayloadParts,
@@ -703,11 +714,7 @@ function applySendPayloadPartsToActionParams(
   actionParams.asVoice = parts.asVoice || undefined;
   actionParams.audioAsVoice = parts.asVoice || undefined;
   actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
-  if (parts.payload.location) {
-    actionParams.location = parts.payload.location;
-  } else {
-    delete actionParams.location;
-  }
+  applySendLocationToActionParams(actionParams, parts.payload.location);
 }
 
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
@@ -1194,16 +1201,12 @@ async function buildSendPayloadParts(params: {
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
   const rawLocation = actionParams.location;
   // The flat tool schema also carries scheduled-event `location` as a string,
-  // and some models pad unused optional slots with "". Keep real send locations strict.
+  // and some models pad unused optional slots with blanks. Keep real send locations strict.
   const location =
     typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
       ? undefined
       : normalizeOutboundLocation(rawLocation);
-  if (location) {
-    actionParams.location = location;
-  } else {
-    delete actionParams.location;
-  }
+  applySendLocationToActionParams(actionParams, location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {

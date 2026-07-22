@@ -473,20 +473,23 @@ describe("runMessageAction send validation", () => {
     expect(result.kind).toBe("send");
   });
 
-  it("allows send when the shared schema pads event location with an empty string", async () => {
-    const result = await runDrySend({
-      cfg: workspaceConfig,
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hello",
-        location: "",
-      },
-      toolContext: { currentChannelId: "C12345678" },
-    });
+  it.each(["", " \t\n"])(
+    "treats blank shared-schema event location %j as omitted on send",
+    async (location) => {
+      const result = await runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: "hello",
+          location,
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      });
 
-    expect(result.kind).toBe("send");
-  });
+      expect(result.kind).toBe("send");
+    },
+  );
 
   it("keeps rejecting a non-empty event location string on send", async () => {
     await expect(
