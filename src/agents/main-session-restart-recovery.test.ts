@@ -894,6 +894,103 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("reconciles an interrupted announce run after same-process lifecycle rotation", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100:topic:2";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-2-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          {
+            runId: "announce:v1:agent:main:subagent:child:run-1",
+            lifecycleGeneration: "generation-old",
+          },
+        ],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-2-session", [
+      { role: "user", content: "earlier human request" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "child completion" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "killed",
+      abortedLastRun: false,
+    });
+    expect(readStore(storePath)[sessionKey]).not.toHaveProperty("restartRecoveryRuns");
+  });
+
+  it("reconciles an interrupted completion report after a full restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100:topic:8893";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-8893-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-8893-session", [
+      {
+        role: "user",
+        content: "A background task finished.",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "killed",
+      abortedLastRun: false,
+    });
+  });
+
+  it("still resumes an interrupted human turn", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:telegram:group:-100:topic:41817";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-41817-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "human-run-1", lifecycleGeneration: "generation-old" }],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41817-session", [
+      { role: "user", content: "real human request" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams().sessionKey).toBe(sessionKey);
+  });
+
   it("delivers resumed marked sessions through the current run recovery context", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

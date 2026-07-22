@@ -2198,6 +2198,73 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("disables CLI tools for a subagent completion announce handoff", async () => {
+    const sessionKey = "agent:main:direct:claude-announce";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cli-announce",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("tool-free announce"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "A background task finished. Process the completion update now.",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-announce",
+      opts: {
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:openclaw:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:openclaw:subagent:child",
+            announceType: "subagent task",
+            taskLabel: "review",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child output",
+            replyInstruction: "Relay this completion.",
+          },
+        ],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      disableTools: true,
+    });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("stamps CLI prompts with current timestamp context", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-06-05T15:30:00Z"));
