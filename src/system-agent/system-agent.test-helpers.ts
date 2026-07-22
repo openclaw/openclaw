@@ -8,8 +8,6 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
-import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -63,14 +61,11 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     throw new Error("missing test route");
   }
   const profileId = configuredRoute.authProfileId;
-  const credential =
-    selectedProfileId === profileId && selectedCredential
-      ? selectedCredential
-      : {
-          type: "api_key" as const,
-          provider: configuredRoute.provider,
-          key: "test-key",
-        };
+  const credential = {
+    type: "api_key" as const,
+    provider: configuredRoute.provider,
+    key: "test-key",
+  };
   const resolvedAuth = {
     apiKey: "test-key",
     ...(profileId ? { profileId } : {}),

@@ -189,7 +189,6 @@ function setCliBackendForPrepareTest(
   params: {
     authEpochMode?: CliBackendPlugin["authEpochMode"];
     autoSelectAuthProfile?: boolean;
-    authEpochMode?: CliBackendPlugin["authEpochMode"];
     bundleMcp?: boolean;
     command?: string;
     id?: string;

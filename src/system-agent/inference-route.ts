@@ -4,7 +4,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
-  type CliExecutionAuthProfileDeps,
 } from "../agents/cli-execution-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -25,7 +24,7 @@ export type SystemAgentConfiguredRoute = {
     }
 );
 
-export type SystemAgentConfiguredRouteDeps = CliExecutionAuthProfileDeps & {
+export type SystemAgentConfiguredRouteDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
 };
@@ -202,16 +201,15 @@ function projectRelevantModelMap(params: {
 /** Project every config input that can change the configured default-agent route. */
 export async function projectDefaultInferenceRoute(
   config: OpenClawConfig,
-  deps: SystemAgentConfiguredRouteDeps = {},
 ): Promise<DefaultInferenceRouteProjection> {
-  return await projectInferenceRoute(config, undefined, deps);
+  return await projectInferenceRoute(config);
 }
 
 /** Project every config input that can change one configured agent route. */
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentConfiguredRouteDeps = {},
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<DefaultInferenceRouteProjection> {
   const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
     import("../agents/agent-scope.js"),
