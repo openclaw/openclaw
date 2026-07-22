@@ -100,6 +100,7 @@ type ChatComposerProps = {
   sessionKey: string;
   currentAgentId: string;
   connected: boolean;
+  offline?: boolean;
   canSend: boolean;
   disabledReason: string | null;
   disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
@@ -2744,9 +2745,14 @@ export function renderChatComposer(props: ChatComposerProps) {
         : nothing}
       ${showComposer
         ? html`<div
-            class="agent-chat__input"
+            class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
           >
+            ${props.offline
+              ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
+                  ${t("chat.composer.offlineHint")}
+                </div>`
+              : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget

@@ -1793,7 +1793,6 @@ describe("createOpenClawCodingTools", () => {
       modelCompat: {
         toolSchemaProfile: "xai",
         unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },
     });

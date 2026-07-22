@@ -17,6 +17,7 @@ import {
   validateNodePresenceActivityPayload,
   validateSessionsListParams,
   validateSessionsObserverAskParams,
+  validateSessionsObserverVisibilityParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -290,6 +291,13 @@ describe("lazy protocol validators", () => {
         question: "x".repeat(401),
       }),
     ).toBe(false);
+  });
+
+  it("validates closed session observer visibility declarations", () => {
+    expect(validateSessionsObserverVisibilityParams({ visible: true })).toBe(true);
+    expect(validateSessionsObserverVisibilityParams({})).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: "true" })).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: false, extra: true })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {

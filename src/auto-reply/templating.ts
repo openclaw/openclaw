@@ -276,6 +276,8 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Trusted Gateway operator identity used only when creating a session. */
+  SessionCreator?: import("../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;

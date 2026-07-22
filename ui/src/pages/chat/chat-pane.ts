@@ -64,6 +64,7 @@ import {
 import "../../components/modal-dialog.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { icons } from "../../components/icons.ts";
+import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
@@ -148,7 +149,7 @@ import {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-import { requestSessionObserverAnswer } from "./chat-observer.ts";
+import { requestSessionObserverAnswer, sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -181,12 +182,8 @@ import {
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
-import {
-  renderChat,
-  renderChatResizableDivider,
-  resetChatViewState,
-  type ChatProps,
-} from "./chat-view.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
+import { renderChat, renderChatResizableDivider, type ChatProps } from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
@@ -196,6 +193,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
@@ -458,6 +456,13 @@ class ChatPane extends OpenClawLightDomElement {
       return Promise.reject(new Error("Gateway is disconnected"));
     }
     return requestSessionObserverAnswer(state.client, sessionKey, question);
+  };
+  private readonly setSessionObserverVisibility = (visible: boolean) => {
+    const state = this.state;
+    if (state?.connected && state.client) {
+      void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
+    }
+    this.requestUpdate();
   };
   private resetConfirmation:
     | {
@@ -923,9 +928,10 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    // Close old-session portals and listener-owning popovers before the next
-    // render detaches their DOM and makes owner-scoped cleanup impossible.
-    resetChatThreadPresentationState(this.paneId, this);
+    // Close old-session listener owners before the next render detaches their
+    // DOM; thread-global portals and caches are reset separately.
+    dismissConfirmedActionPopovers(this);
+    resetChatThreadPresentationState(this.paneId);
     this.sessionDiscussionOpenUrls.clear();
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
@@ -2431,10 +2437,17 @@ class ChatPane extends OpenClawLightDomElement {
         }
       });
     }
-    const projectedObserverDigest = this.state?.sessionsResult?.sessions.find((row) =>
+    const selectedSessionRow = this.state?.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
-    )?.observerDigest;
-    if (this.state?.observerDigest || projectedObserverDigest) {
+    );
+    // Active runs count even without a digest: a hidden observer generates
+    // none, and the HUD module owns the restore control for turning it back on.
+    const observerRunId = resolveChatPaneObserverRunId({
+      localRunId: this.state?.chatRunId ?? null,
+      session: selectedSessionRow,
+      digest: null,
+    });
+    if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
       this.ensureObserverHud();
     }
   }
@@ -2476,7 +2489,8 @@ class ChatPane extends OpenClawLightDomElement {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId, this);
+    dismissConfirmedActionPopovers(this);
+    resetChatViewState(this.paneId);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
@@ -3110,7 +3124,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
       state.sidebarContent.sessionKey === sessionKey;
-    const label = t("chat.sessionDiscussion.show");
+    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return html`
       <openclaw-tooltip .content=${label}>
         <button
@@ -3118,7 +3132,7 @@ class ChatPane extends OpenClawLightDomElement {
           type="button"
           aria-label=${label}
           aria-pressed=${String(active)}
-          @click=${() => state.handleOpenSidebar(content)}
+          @click=${() => (active ? state.handleCloseSidebar() : state.handleOpenSidebar(content))}
         >
           ${icons.messageSquare}
         </button>
@@ -3181,6 +3195,11 @@ class ChatPane extends OpenClawLightDomElement {
       mergedChrome: this.mergedChrome,
       title: this.paneTitle,
       session: row,
+      showOwnerChip:
+        (
+          this.state?.sessionsResult?.creators ??
+          listSessionCreators(this.state?.sessionsResult?.sessions ?? [])
+        ).length >= 2,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,
@@ -3386,6 +3405,9 @@ class ChatPane extends OpenClawLightDomElement {
       observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       observerLastReadAt: selectedSession?.lastReadAt,
       onObserverAsk: catalogKey ? undefined : this.askSessionObserver,
+      // Unconditional: catalog chats never render the HUD (observerHudReady is
+      // forced false), and a hide/show from any surface must reach the gateway.
+      onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -3425,6 +3447,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkVideoPending: state.realtimeTalkVideoPending,
       realtimeTalkCameraError: state.realtimeTalkCameraError,
       connected: state.connected,
+      offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
@@ -3673,6 +3696,10 @@ class ChatPane extends OpenClawLightDomElement {
         }
         state.handleCloseSidebar();
       },
+      imageLightbox: state.imageLightbox,
+      onRequestOpenImage: state.beginImageOpen,
+      onOpenImage: state.handleOpenImage,
+      onCloseImage: state.handleCloseImage,
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,

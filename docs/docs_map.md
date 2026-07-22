@@ -784,7 +784,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/pairing
 - Headings:
   - H2: 1) DM pairing (inbound chat access)
-  - H3: Approve a sender
+  - H3: Approve from the Control UI
+  - H3: Approve from the CLI
   - H3: Reusable sender groups
   - H3: Where the state lives
   - H2: 2) Node device pairing (iOS/Android/macOS/headless nodes)
@@ -1375,6 +1376,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Inspect and preview
   - H2: Inspect installed state
   - H2: Remove an installed Claw
+  - H2: Export an installed agent
   - H2: Command reference
   - H2: See also
 
@@ -2775,6 +2777,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Platform examples
   - H2: Common patterns
   - H2: Per-agent sandbox and tool configuration
+  - H2: Related
+
+## concepts/multi-user.md
+
+- Route: /concepts/multi-user
+- Headings:
+  - H2: Trust boundary
+  - H2: Ownership and presence
+  - H2: Turn attribution
   - H2: Related
 
 ## concepts/oauth.md
@@ -7457,6 +7468,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
   - H3: Terminal tool outcomes
+  - H3: Settled tool finalization
   - H2: Current limitations
   - H2: Related
 

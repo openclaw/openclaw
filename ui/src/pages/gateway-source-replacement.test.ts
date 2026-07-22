@@ -40,6 +40,7 @@ function gatewayWithClient(
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

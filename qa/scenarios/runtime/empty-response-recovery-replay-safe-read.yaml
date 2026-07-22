@@ -27,7 +27,7 @@ scenario:
       promptSnippet: Empty response continuation QA check
       prompt: "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK."
       expectedReply: EMPTY-RECOVERED-OK
-      retryNeedle: The previous attempt did not produce a user-visible answer.
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
 
 flow:
   steps:

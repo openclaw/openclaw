@@ -82,6 +82,7 @@ function createGateway(client: GatewayBrowserClient): MutableGateway {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

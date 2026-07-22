@@ -79,6 +79,7 @@ export type SessionListOptions = {
   spawnedBy?: string;
   activeMinutes?: number;
   search?: string;
+  creatorId?: string;
   offset?: number;
   limit?: number;
   includeGlobal?: boolean;
@@ -191,6 +192,7 @@ export type SessionCapability = {
   /** Advances only when a canonical sessions.list response is published. */
   readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
+  setCreatorFilter: (creatorId: string | null) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -376,6 +378,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   const agentId = options.agentId?.trim();
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
+  const creatorId = options.creatorId?.trim();
   if (agentId) {
     params.agentId = agentId;
   }
@@ -384,6 +387,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   }
   if (search) {
     params.search = search;
+  }
+  if (creatorId) {
+    params.creatorId = creatorId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -1067,6 +1073,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (normalizedAgentId) {
       options.agentId = normalizedAgentId;
     }
+    return refresh({ ...options, force: true });
+  };
+
+  const setCreatorFilter = (creatorId: string | null) => {
+    const options = { ...lastListOptions, creatorId: creatorId?.trim() || undefined };
+    delete options.offset;
     return refresh({ ...options, force: true });
   };
 
@@ -1878,6 +1890,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return canonicalListRevision;
     },
     list: requestList,
+    setCreatorFilter,
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,

@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
+import { ClawCronInstallError } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
   persistClawPackageRef,
@@ -594,5 +595,54 @@ describe("applyClawAddPlan", () => {
       applyClawAddPlan(plan, { consentPlanIntegrity: "sha256:stale" }),
     ).rejects.toMatchObject({ code: "plan_integrity_mismatch" });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
+  });
+
+  it("returns partial cron ownership when scheduler installation fails", async () => {
+    const { root, plan } = await makePlan({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      cronJobs: [
+        {
+          id: "daily-report",
+          schedule: { cron: "0 9 * * *", timezone: "UTC" },
+          session: "isolated",
+          message: "Prepare report",
+        },
+      ],
+    });
+    const failedRef = {
+      schemaVersion: "openclaw.clawCronRef.v1" as const,
+      agentId: "worker",
+      manifestId: "daily-report",
+      declarationKey: "claw:worker:daily-report",
+      status: "failed" as const,
+      job: {
+        id: "daily-report",
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "isolated" as const,
+        message: "Prepare report",
+      },
+      error: "gateway unavailable",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    };
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      commitConfig: async (transform) => {
+        transform({});
+      },
+      installCronJobs: async () => {
+        throw new ClawCronInstallError("cron_install_failed", "gateway unavailable", [failedRef]);
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      cronJobs: [{ manifestId: "daily-report", status: "failed" }],
+      installRecord: { status: "config_committed" },
+      error: { code: "cron_install_failed", message: "gateway unavailable" },
+    });
   });
 });

@@ -837,6 +837,21 @@
   padding: 0;
 }
 
+.chat-tool-card__preview-image-button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.chat-tool-card__preview-image-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .chat-tool-card__preview-frame {
   display: block;
   width: 100%;
@@ -1689,20 +1704,8 @@
 /* Hover preview on the status row: the latest tasks in a read-only card. The
    tooltip body is content-sized (width: max-content up to --max-width), so a
    single task stays one compact line instead of a fixed-size panel. */
-wa-tooltip.chat-tasks-status__preview {
-  --max-width: min(360px, calc(100vw - 24px));
-  font-family: var(--font-body);
-}
-
-wa-tooltip.chat-tasks-status__preview::part(body) {
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
+openclaw-tooltip.chat-tasks-status__preview {
+  --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
 }
 
 .chat-tasks-preview {

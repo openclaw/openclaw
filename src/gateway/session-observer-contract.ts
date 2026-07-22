@@ -31,6 +31,8 @@ export class SessionObserverAskError extends Error {
 
 export type SessionObserverService = {
   handleEvent: (event: SessionObserverEvent) => void;
+  setConnectionVisibility: (connId: string, visible: boolean) => void;
+  removeConnection: (connId: string) => void;
   ask: (params: {
     sessionKey: string;
     question: string;
