@@ -425,7 +425,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           // An unstaged final-fence failure is retryable even after an unchanged
           // manifest commit; the journal remains authoritative for the next attempt.
           await cancelUnstagedFailedReclaim(
-            error instanceof WorkerWorkspaceFinalFenceError && error.retryableForReclaim,
+            error instanceof WorkerWorkspaceFinalFenceError && error.reclaimDisposition === "retry",
           ).catch(() => undefined);
           throw error;
         }

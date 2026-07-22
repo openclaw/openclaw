@@ -1,5 +1,5 @@
 // Signal tests cover config schema plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
 
 function expectValidSignalConfig(config: unknown) {
@@ -33,6 +33,38 @@ describe("signal groups schema", () => {
     if (res.success) {
       expect(res.data.dmPolicy).toBe("open");
     }
+  });
+
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    const issues = expectInvalidSignalConfig({ dmPolicy: "allowlist" });
+    expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectValidSignalConfig({
+      allowFrom: ["+15550001111"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+  });
+
+  it("accepts channel and account scoped reply-to modes", () => {
+    expectValidSignalConfig({
+      replyToMode: "first",
+      replyToModeByChatType: { direct: "all", group: "first" },
+      accounts: {
+        work: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "first", group: "off" },
+        },
+      },
+    });
+  });
+
+  it("rejects unreachable channel and account reply-to overrides", () => {
+    expectInvalidSignalConfig({ replyToModeByChatType: { channel: "off" } });
+    expectInvalidSignalConfig({
+      accounts: { work: { replyToModeByChatType: { channel: "off" } } },
+    });
   });
 
   it("defaults dm/group policy", () => {
@@ -257,5 +289,38 @@ describe("signal groups schema", () => {
     });
 
     expect(issues.map((issue) => issue.path.join("."))).toEqual(["groups.*"]);
+  });
+});
+
+describe("Signal post-core update schema", () => {
+  const legacyConfig = {
+    account: "+15555550123",
+    apiMode: "container",
+    httpUrl: "http://signal-container:8080",
+    autoStart: false,
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("accepts shipped transport fields only while update finalization owns migration", () => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+
+    expect(SignalConfigSchema.safeParse(legacyConfig).success).toBe(true);
+  });
+
+  it("keeps normal runtime validation canonical", () => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+
+    expect(SignalConfigSchema.safeParse(legacyConfig).success).toBe(false);
+  });
+
+  it("closes the temporary schema window without reloading modules", () => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    expect(SignalConfigSchema.safeParse(legacyConfig).success).toBe(true);
+
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+    expect(SignalConfigSchema.safeParse(legacyConfig).success).toBe(false);
   });
 });
