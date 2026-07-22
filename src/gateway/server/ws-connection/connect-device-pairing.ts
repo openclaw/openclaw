@@ -7,6 +7,7 @@ import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
+  ConnectErrorDetailCodes,
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
@@ -132,6 +133,21 @@ export async function authorizeGatewayConnectDevice(
       // without any trusted operator. Existing paired operators keep the
       // normal owner-approval boundary for every other browser.
       buildRequestContext().completeControlUiDeviceAuthMigration?.(existingOperator.deviceId);
+      if (!device) {
+        const message =
+          "control ui requires device identity (use HTTPS or localhost secure context)";
+        setHandshakeState("failed");
+        send({
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
+            details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+          }),
+        });
+        close(1008, truncateCloseReason(message));
+        return undefined;
+      }
     } else {
       allowControlUiDeviceAuthMigrationForUnpairedInstall = true;
     }

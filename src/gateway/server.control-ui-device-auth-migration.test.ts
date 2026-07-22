@@ -236,6 +236,57 @@ describe("Control UI device-auth upgrade migration", () => {
     }
   });
 
+  it("rejects a device-less migration handshake when an operator is already paired", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const { approveDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const ownerIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-device-auth-migration-existing-owner-${randomUUID()}.sqlite`,
+    );
+    const ownerIdentity = loadOrCreateDeviceIdentity({ path: ownerIdentityPath });
+    const ownerRequest = await requestDevicePairing({
+      deviceId: ownerIdentity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
+      role: "operator",
+      scopes: SCOPES,
+    });
+    await expect(
+      approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    let ws: WebSocket | undefined;
+    try {
+      ws = await harness.openWs({
+        origin: BROWSER_ORIGIN,
+        "x-forwarded-for": "203.0.113.50",
+      });
+      const connected = await connectReq(ws, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: null,
+      });
+      expect(connected.ok).toBe(false);
+      expect(connected.error?.message).toContain("requires device identity");
+    } finally {
+      ws?.close();
+      await harness.close();
+    }
+  });
+
   it("denies a stale migration session after another operator is paired", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
