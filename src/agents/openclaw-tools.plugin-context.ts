@@ -1,3 +1,4 @@
+import type { InboundChatType } from "../channels/inbound-chat-type.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -28,6 +29,7 @@ export type OpenClawPluginToolOptions = {
   currentChannelId?: string;
   agentThreadId?: string | number;
   nativeChannelId?: string;
+  inboundChatType?: InboundChatType;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -111,6 +113,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       nativeChannelId: options?.nativeChannelId,
+      inboundChatType: options?.inboundChatType,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(

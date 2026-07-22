@@ -1,3 +1,4 @@
+import type { InboundChatType } from "../channels/inbound-chat-type.js";
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
@@ -251,6 +252,8 @@ export type MsgContext = {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
+  /** Runtime-owned normalized conversation type retained from channel ingress. */
+  InboundChatType?: InboundChatType;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;

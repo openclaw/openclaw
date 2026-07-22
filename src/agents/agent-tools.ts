@@ -10,6 +10,7 @@ import type {
 } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import type { ChatType } from "../channels/chat-type.js";
+import type { InboundChatType } from "../channels/inbound-chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -286,6 +287,8 @@ type OpenClawCodingToolsOptions = {
   conversationRecall?: ConversationRecallContext;
   /** Normalized conversation kind when the caller already has channel metadata. */
   chatType?: ChatType;
+  /** Runtime-owned normalized conversation type retained from channel ingress. */
+  inboundChatType?: InboundChatType;
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
   agentAccountId?: string;
@@ -869,6 +872,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,
+            inboundChatType: options?.inboundChatType,
             agentDir: options?.agentDir,
             workspaceDir: workspaceRoot,
             config: options?.config,
@@ -965,6 +969,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
             nativeChannelId: options?.nativeChannelId,
+            inboundChatType: options?.inboundChatType,
             messageActionTurnCapability: options?.messageActionTurnCapability,
             agentGroupId: options?.groupId ?? null,
             agentGroupChannel: options?.groupChannel ?? null,

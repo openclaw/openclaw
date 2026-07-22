@@ -1,3 +1,4 @@
+import type { InboundChatType } from "openclaw/plugin-sdk";
 // Telegram plugin module implements bot message context.session behavior.
 import {
   type BuildChannelInboundEventContextParams,
@@ -27,6 +28,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { normalizeTelegramInboundChatType } from "./bot-chat-type.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
@@ -67,6 +69,7 @@ type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
   To: string;
   ChatType: string;
+  InboundChatType?: InboundChatType;
   RawBody: string;
   ReplyToIsExternal?: boolean;
   ReplyToQuotePosition?: number;
@@ -679,6 +682,7 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     contextVisibility: contextVisibilityMode,
     extra: {
+      InboundChatType: normalizeTelegramInboundChatType(msg.chat.type),
       BotUsername: primaryCtx.me?.username ?? undefined,
       AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,
       AmbientTranscriptBody: options?.ambientTranscriptBody,

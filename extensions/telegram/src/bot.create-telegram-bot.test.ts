@@ -1858,35 +1858,48 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("routes generic callback_query payloads as callback_data messages and answers callbacks", async () => {
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = requireValue(
-      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
-        | ((ctx: Record<string, unknown>) => Promise<void>)
-        | undefined,
-      "callback_query handler",
-    );
+  it.each([
+    ["private", "direct", 1234],
+    ["group", "group", -1234],
+    ["supergroup", "supergroup", -1001234],
+  ] as const)(
+    "routes %s callback_query payloads with verified actor and originating chat",
+    async (chatType, expectedInboundChatType, chatId) => {
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = requireValue(
+        onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+          | ((ctx: Record<string, unknown>) => Promise<void>)
+          | undefined,
+        "callback_query handler",
+      );
 
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-1",
-        data: "cmd:option_a",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 10,
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-1",
+          data: "cmd:option_a?senderId=99&chatId=1&inboundChatType=direct",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: chatId, type: chatType },
+            from: { id: 99, first_name: "Original author" },
+            date: 1736380800,
+            message_id: 10,
+          },
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.Body).toContain("callback_data: cmd:option_a");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
-  });
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+      expect(payload.Body).toContain(
+        "callback_data: cmd:option_a?senderId=99&chatId=1&inboundChatType=direct",
+      );
+      expect(payload.SenderId).toBe("9");
+      expect(payload.ChatId).toBe(String(chatId));
+      expect(payload.InboundChatType).toBe(expectedInboundChatType);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+    },
+  );
 
   it("routes plugin callback_query payloads to plugin handlers without fallback callback_data text", async () => {
     const pluginHandler = vi.fn(async (ctx) => {

@@ -137,6 +137,7 @@ export type {
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+export type { InboundChatType } from "../channels/inbound-chat-type.js";
 export type {
   OpenClawPluginActiveModelContext,
   OpenClawPluginToolContext,

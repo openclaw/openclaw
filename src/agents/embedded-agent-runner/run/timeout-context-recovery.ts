@@ -4,7 +4,10 @@ import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { deriveContextPromptTokens, normalizeUsage } from "../../usage.js";
 import { runPostCompactionSideEffects } from "../compaction-hooks.js";
-import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
+import {
+  buildEmbeddedCompactionRuntimeContext,
+  buildEmbeddedRecoveryChatContext,
+} from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -114,10 +117,7 @@ export async function recoverEmbeddedRunTimeout(input: {
     const timeoutCompactionRuntimeContext = {
       ...buildEmbeddedCompactionRuntimeContext({
         sessionKey: runParams.sessionKey,
-        messageChannel: runParams.messageChannel,
-        messageProvider: runParams.messageProvider,
-        clientCaps: runParams.clientCaps,
-        chatType: runParams.chatType,
+        ...buildEmbeddedRecoveryChatContext(runParams),
         agentAccountId: runParams.agentAccountId,
         currentChannelId: runParams.currentChannelId,
         currentThreadTs: runParams.currentThreadTs,

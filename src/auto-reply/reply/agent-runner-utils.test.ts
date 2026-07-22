@@ -219,6 +219,24 @@ describe("agent-runner-utils", () => {
     expect("chatType" in resolved.runBaseParams).toBe(false);
   });
 
+  it("carries runtime-owned inbound chat type outside queued model arguments", () => {
+    const resolved = buildEmbeddedRunExecutionParams({
+      run: makeRun({ chatType: "group" }),
+      sessionCtx: {
+        Provider: "telegram",
+        ChatType: "Group",
+        InboundChatType: "supergroup",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext.inboundChatType).toBe("supergroup");
+    expect("inboundChatType" in resolved.runBaseParams).toBe(false);
+  });
+
   it("passes through recovered auto fallback provenance for embedded run params", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({

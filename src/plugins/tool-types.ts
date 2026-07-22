@@ -2,6 +2,7 @@
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { InboundChatType } from "../channels/inbound-chat-type.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -52,6 +53,8 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted platform-native conversation id for the active inbound turn. */
   nativeChannelId?: string;
+  /** Trusted normalized conversation type from channel ingress (runtime-provided, not tool args). */
+  inboundChatType?: InboundChatType;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */

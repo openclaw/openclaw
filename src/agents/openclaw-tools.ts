@@ -7,6 +7,7 @@ import type {
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import type { ChatType } from "../channels/chat-type.js";
+import type { InboundChatType } from "../channels/inbound-chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
@@ -129,6 +130,8 @@ export function createOpenClawTools(
     agentThreadId?: string | number;
     /** Trusted platform-native conversation id for the active inbound turn. */
     nativeChannelId?: string;
+    /** Runtime-owned normalized conversation type retained from channel ingress. */
+    inboundChatType?: InboundChatType;
     /** Opaque host-issued capability for current-turn channel message actions. */
     messageActionTurnCapability?: string;
     sandboxRoot?: string;

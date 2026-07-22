@@ -149,6 +149,44 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(firstResolvePluginToolsParams().allowGatewaySubagentBinding).toBe(true);
   });
 
+  it("keeps inbound chat type runtime-owned when invocation arguments spoof it", async () => {
+    let trustedInboundChatType: string | undefined;
+    hoisted.resolvePluginTools.mockImplementation((params: unknown) => {
+      trustedInboundChatType = (params as { context?: { inboundChatType?: string } }).context
+        ?.inboundChatType;
+      return [
+        {
+          name: "trusted_context_fixture",
+          description: "trusted context fixture",
+          parameters: {
+            type: "object",
+            properties: { inboundChatType: { type: "string" } },
+          },
+          async execute(_toolCallId: string, args: { inboundChatType?: string }) {
+            return {
+              content: [{ type: "text", text: "ok" }],
+              details: {
+                trustedInboundChatType,
+                argumentInboundChatType: args.inboundChatType,
+              },
+            };
+          },
+        },
+      ];
+    });
+    const config = { plugins: { allow: ["fixture"] } } as OpenClawConfig;
+    const tools = resolveOpenClawPluginToolsForOptions({
+      options: { config, inboundChatType: "supergroup" },
+      resolvedConfig: config,
+    });
+
+    const result = await tools[0]?.execute("tool-call", { inboundChatType: "direct" });
+    expect(result?.details).toStrictEqual({
+      trustedInboundChatType: "supergroup",
+      argumentInboundChatType: "direct",
+    });
+  });
+
   it("forwards auth profile helpers to plugin resolution and context", async () => {
     let capturedParams:
       | {

@@ -174,6 +174,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     chatType: params.chatType,
+    inboundChatType: params.inboundChatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,

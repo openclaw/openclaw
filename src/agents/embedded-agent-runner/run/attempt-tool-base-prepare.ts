@@ -212,6 +212,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           clientCaps: attempt.clientCaps,
           toolBindings: attempt.toolBindings,
           chatType: attempt.chatType,
+          inboundChatType: attempt.inboundChatType,
           exec: {
             ...attempt.execOverrides,
             config: attempt.config,

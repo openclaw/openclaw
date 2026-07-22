@@ -42,6 +42,26 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.nativeChannelId).toBe("oc_native_chat");
   });
 
+  it.each(["direct", "group", "supergroup"] as const)(
+    "forwards runtime-owned inbound chat type %s",
+    (inboundChatType) => {
+      const result = resolveOpenClawPluginToolInputs({
+        options: {
+          config: {} as never,
+          inboundChatType,
+        },
+      });
+
+      expect(result.context.inboundChatType).toBe(inboundChatType);
+    },
+  );
+
+  it("leaves inbound chat type absent when the runtime does not provide it", () => {
+    const result = resolveOpenClawPluginToolInputs({ options: { config: {} as never } });
+
+    expect(result.context.inboundChatType).toBeUndefined();
+  });
+
   it("defaults missing and unknown conversation-read origins to delegated", () => {
     const missing = resolveOpenClawPluginToolInputs({
       options: { config: {} as never },

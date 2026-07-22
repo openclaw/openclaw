@@ -272,6 +272,7 @@ function buildEmbeddedContextFromTemplate(params: {
       provider: sessionCtx.Provider,
     }),
     ...(sessionCtx.ChatType ? { chatType: sessionCtx.ChatType } : {}),
+    ...(sessionCtx.InboundChatType ? { inboundChatType: sessionCtx.InboundChatType } : {}),
     agentAccountId: sessionCtx.AccountId,
     messageTo: resolveOriginMessageTo({
       originatingTo: sessionCtx.OriginatingTo,
