@@ -256,11 +256,12 @@ Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
 every backend-native tool for an individual run. For those restricted runs,
 `ctx.toolAvailability.native` is the exact backend-native tool list and
 `ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags and return argv that enforces both values;
-OpenClaw calls it once with the final fresh or resume argv and fails closed when
-the backend cannot enforce the restriction. MCP names in this context are safe
-to auto-approve only because the host has already limited the generated MCP
-configuration to those servers and tools.
+must replace conflicting tool flags, disable backend customization surfaces
+that can execute outside those tools, and return argv that enforces both
+values. OpenClaw calls it once with the final fresh or resume argv and fails
+closed when the backend cannot enforce the restriction. MCP names in this
+context are safe to auto-approve only because the host has already limited the
+generated MCP configuration to those servers and tools.
 
 To support OpenClaw runtime caps such as cron `toolsAllow`, also implement
 `resolveRuntimeToolAvailability(ctx)`. OpenClaw passes a normalized,

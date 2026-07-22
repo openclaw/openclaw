@@ -305,13 +305,15 @@ When bundle MCP is enabled, OpenClaw:
 
 Restricted runs such as cron jobs with `toolsAllow` require an exact
 backend-owned translation. The bundled `claude-cli` backend disables Claude's
-native tools and exposes every allowed OpenClaw tool through the grant-scoped
-MCP server. This keeps filesystem, process, exec, approval, and sandbox policy
-inside OpenClaw instead of widening authority to Claude's native equivalents.
-The same MCP list is enforced in Claude's generated config and again by the
-Gateway on tool listing and execution. Before minting the grant, core rejects
-backend translations that name any MCP permission outside the original
-allowlist. Backends without an exact translation still fail closed.
+native tools and user, project, and local customizations, including hooks,
+plugins, agents, skills, and `CLAUDE.md`. It then exposes every allowed
+OpenClaw tool through the grant-scoped MCP server. This keeps filesystem,
+process, exec, approval, and sandbox policy inside OpenClaw instead of widening
+authority to Claude's native tools or customization processes. The same MCP
+list is enforced in Claude's generated config and again by the Gateway on tool
+listing and execution. Before minting the grant, core rejects backend
+translations that name any MCP permission outside the original allowlist.
+Backends without an exact translation still fail closed.
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
