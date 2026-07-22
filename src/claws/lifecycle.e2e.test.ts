@@ -1,7 +1,6 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -199,7 +198,7 @@ describe("claws lifecycle cli e2e", () => {
   });
 
   it("blocks mutation when declared components need later lifecycle slices", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claws-deferred-components-"));
+    const root = tempDirs.make("openclaw-claws-deferred-components-");
     const deferredManifestPath = join(root, "deferred.claw.json");
     await writeFile(
       deferredManifestPath,
