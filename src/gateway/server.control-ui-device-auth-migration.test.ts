@@ -287,6 +287,78 @@ describe("Control UI device-auth upgrade migration", () => {
     }
   });
 
+  it("closes an active device-less migration session after signed pairing completes", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const headers = {
+      origin: BROWSER_ORIGIN,
+      "x-forwarded-for": "203.0.113.50",
+    };
+    const identityPath = path.join(
+      os.tmpdir(),
+      `openclaw-device-auth-migration-secure-completion-${randomUUID()}.sqlite`,
+    );
+    let deviceLessWs: WebSocket | undefined;
+    let signedWs: WebSocket | undefined;
+    try {
+      deviceLessWs = await harness.openWs(headers);
+      const deviceLessConnect = await connectReq(deviceLessWs, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: null,
+      });
+      expect(deviceLessConnect.ok).toBe(true);
+      const deviceLessClosed = new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("device-less migration session remained open after completion"));
+        }, 5_000);
+        deviceLessWs!.once("close", (code) => {
+          clearTimeout(timer);
+          resolve(code);
+        });
+      });
+
+      signedWs = await harness.openWs(headers);
+      const signed = await signedDevice(signedWs, identityPath);
+      const signedConnect = await connectReq(signedWs, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: signed.device,
+      });
+      expect(signedConnect.ok).toBe(true);
+      const list = await rpcReq<{
+        pending: Array<{ requestId: string; deviceId: string }>;
+      }>(signedWs, "device.pair.list", {});
+      const pending = list.payload?.pending.find(
+        (request) => request.deviceId === signed.identity.deviceId,
+      );
+      expect(pending).toBeDefined();
+      const approval = await rpcReq(signedWs, "device.pair.approve", {
+        requestId: pending?.requestId,
+      });
+      expect(approval.ok).toBe(true);
+      await expect(deviceLessClosed).resolves.toBe(4001);
+      deviceLessWs = undefined;
+    } finally {
+      deviceLessWs?.close();
+      signedWs?.close();
+      await harness.close();
+    }
+  });
+
   it("denies a stale migration session after another operator is paired", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({

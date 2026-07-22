@@ -302,6 +302,7 @@ export async function attachAuthenticatedGatewayConnect(
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
+    isControlUiDeviceAuthMigrationSession: state.controlUiDeviceAuthMigrationPending,
     // Only identity-bearing migration sessions may use bounded self-pairing.
     // Device-less legacy sessions retain shared-auth access for remediation.
     isControlUiDeviceAuthMigration:

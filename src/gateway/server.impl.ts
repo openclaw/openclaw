@@ -2066,7 +2066,7 @@ export async function startGatewayServer(
             // durable receipt prevents stale legacy config from reopening it.
             controlUiDeviceAuthMigrationPending = false;
             for (const client of clients) {
-              if (!client.isControlUiDeviceAuthMigration) {
+              if (!client.isControlUiDeviceAuthMigrationSession) {
                 continue;
               }
               // Only the approving browser is cleared before this callback. Any

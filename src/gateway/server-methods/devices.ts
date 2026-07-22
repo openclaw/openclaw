@@ -401,6 +401,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     );
     if (authz.isDeviceAuthMigrationCaller) {
       client!.isControlUiDeviceAuthMigration = false;
+      client!.isControlUiDeviceAuthMigrationSession = false;
       context.completeControlUiDeviceAuthMigration?.(normalizedDeviceId);
     }
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
