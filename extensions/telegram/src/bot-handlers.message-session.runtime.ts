@@ -81,7 +81,7 @@ export function createTelegramMessageSessionRuntime({
     });
     const entry = (telegramDeps.getSessionEntry ?? getSessionEntry)({ storePath, sessionKey });
     const store = Object.fromEntries(
-      (telegramDeps.listSessionEntries ?? listSessionEntries)({ storePath }).map(
+      (telegramDeps.listSessionEntries ?? listSessionEntries)({ storePath, readOnly: true }).map(
         ({ sessionKey: key, entry: value }) => [key, value],
       ),
     );

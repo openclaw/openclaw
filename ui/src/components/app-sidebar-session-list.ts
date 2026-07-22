@@ -86,6 +86,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       "sidebar-recent-session",
       "session-row-host",
       session.isChild ? "sidebar-recent-session--child" : "",
+      session.archived ? "sidebar-session--archived" : "",
       session.visuallyActive ? "sidebar-recent-session--active" : "",
       this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
@@ -140,7 +141,16 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
         >
           <span class="sidebar-session-indicator">${leadingIndicator}</span>
           <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            <span class="sidebar-recent-session__name hover-marquee"
+              >${session.archived
+                ? html`<span
+                    class="sidebar-session__archive-glyph"
+                    aria-label=${t("sessionsView.archived")}
+                    title=${t("sessionsView.archived")}
+                    >${icons.archive}</span
+                  >`
+                : nothing}${label}</span
+            >
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
           </span>
           ${!session.isChild && sessionHasBoard(session.key)
@@ -557,6 +567,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
           !showDraft &&
+          this.sessionsStatusFilter === "active" &&
           this.draggingSessionKey === null
         ) {
           return nothing;
@@ -646,16 +657,18 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
             showDraft:
               Boolean(this.draftSessionAgentId) &&
               normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
-            codingTrailing: html`${this.renderSessionCatalogs(navigationState)}`,
-            codingTrailingPresent: this.sessionCatalogs.length > 0,
+            codingTrailing:
+              this.sessionsStatusFilter === "archived"
+                ? nothing
+                : html`${this.renderSessionCatalogs(navigationState)}`,
+            codingTrailingPresent:
+              this.sessionsStatusFilter !== "archived" && this.sessionCatalogs.length > 0,
           })}
-          <button
-            type="button"
-            class="sidebar-view-archived"
-            @click=${() => this.onNavigate?.("sessions", { search: "?showArchived=1" })}
-          >
-            ${icons.archive} ${t("sessionsView.viewArchived")}
-          </button>
+          ${this.sessionsStatusFilter === "archived" && visibleSessions.length === 0
+            ? html`<span class="sidebar-session-empty-hint"
+                >${t("sessionsView.noArchivedSessions")}</span
+              >`
+            : nothing}
         </div>
       </section>
     `;

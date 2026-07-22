@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawKit
 import Security
 
 struct MacGatewayProfile: Codable, Equatable, Identifiable, Sendable {
@@ -105,6 +106,7 @@ actor MacGatewayProfileStore {
                 url: url,
                 token: stored.credentials.token,
                 password: stored.credentials.password),
+            tls: Self.tlsRoute(for: stored.profile),
             routeAuthority: nil,
             deviceAuthGatewayID: stored.profile.id)
     }
@@ -162,6 +164,14 @@ actor MacGatewayProfileStore {
     static func profileID(url: URL) -> String {
         let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
         return "manual-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func tlsRoute(for profile: MacGatewayProfile) -> GatewayTLSRoute? {
+        GatewayTLSRoute.resolve(
+            url: profile.url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storeKey: "profile:\(profile.id)")
     }
 
     static func resolvedCredentials(

@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
+import "./components/chat-sidebar.ts";
 
 type DiscussionTestPane = TestChatPane & {
   probeSessionDiscussion: (sessionKey: string) => Promise<void>;
@@ -51,6 +52,42 @@ describe("chat pane session discussion auto-show", () => {
     const content = handleOpenSidebar.mock.calls[0]?.[0];
     expect(content?.kind).toBe("session-discussion");
     expect(content && "sessionKey" in content ? content.sessionKey : null).toBe(SESSION_KEY);
+  });
+
+  it("shows the reported external URL in the outer sidebar header", async () => {
+    const openUrl = "https://clack.example/channels/c1";
+    const { pane, state, handleOpenSidebar } = createDiscussionPane({
+      info: {
+        state: "open",
+        embedUrl: "https://clack.example/embed/c1",
+        openUrl,
+      },
+    });
+
+    await pane.probeSessionDiscussion(SESSION_KEY);
+
+    const content = handleOpenSidebar.mock.calls[0]?.[0];
+    if (!content || content.kind !== "session-discussion") {
+      throw new Error("expected a session discussion sidebar");
+    }
+    content.onStateChange(SESSION_KEY, "open", openUrl);
+
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: SidebarContent;
+      onClose: () => void;
+      updateComplete: Promise<unknown>;
+    };
+    panel.content = state.sidebarContent as SidebarContent;
+    panel.onClose = vi.fn();
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const external = panel.querySelector<HTMLAnchorElement>(".sidebar-header a");
+    expect(external?.href).toBe(openUrl);
+    expect(external?.target).toBe("_blank");
+    expect(external?.rel).toBe("noopener");
+    expect(panel.querySelector(".session-discussion__header")).toBeNull();
+    panel.remove();
   });
 
   it("does not auto-show for a merely available discussion", async () => {

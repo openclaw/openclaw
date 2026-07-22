@@ -146,6 +146,10 @@ struct RootTabs: View {
                     await self.sidebarModel.refresh(appModel: self.appModel)
                 }
             }
+            .task(id: "\(self.sidebarRefreshID):events") {
+                guard self.scenePhase == .active else { return }
+                await self.sidebarModel.observeSessionEvents(appModel: self.appModel)
+            }
         }
     }
 

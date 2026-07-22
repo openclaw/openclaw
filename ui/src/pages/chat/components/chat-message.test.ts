@@ -1674,6 +1674,9 @@ describe("grouped chat rendering", () => {
         "chat-reading-indicator--spin",
         "chat-reading-indicator--shadowbox",
         "chat-reading-indicator--backflip",
+        "chat-reading-indicator--zen",
+        "chat-reading-indicator--drummer",
+        "chat-reading-indicator--peekaboo",
       ]).toContain(cls);
     }
   });

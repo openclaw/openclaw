@@ -1745,9 +1745,6 @@ describe("activateSetupInference", () => {
       agents: {
         defaults: {
           model: "claude-cli/claude-opus-4-8",
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
         },
       },
     } satisfies OpenClawConfig;
@@ -5789,11 +5786,7 @@ describe("verifySetupInference", () => {
     const result = await verifySetupInferenceConfig({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
           list: [
             {
               id: "ops",
@@ -5888,7 +5881,6 @@ describe("verifySetupInference", () => {
         agents: {
           defaults: {
             model: "claude-cli/claude-opus-4-8@claude-cli:locked",
-            cliBackends: { "claude-cli": { command: "claude" } },
           },
         },
       },
@@ -5940,7 +5932,7 @@ describe("verifySetupInference", () => {
         order: { [testCase.profileProvider]: [testCase.profileId] },
       },
       agents: {
-        defaults: { cliBackends: { "google-gemini-cli": { command: "gemini" } } },
+        defaults: {},
         list: [
           {
             id: "ops",

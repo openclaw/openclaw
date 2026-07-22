@@ -46,6 +46,7 @@ function snapshot(
   return {
     client,
     connected,
+    offlineStable: false,
     reconnecting: !connected,
     hello: null,
     assistantAgentId: null,
@@ -133,7 +134,7 @@ describe("route preload gateway provenance", () => {
       search: undefined,
       includeGlobal: true,
       includeUnknown: false,
-      showArchived: false,
+      archivedFilter: "active",
     });
     expect(list.mock.calls[0]?.[0]).not.toHaveProperty("activeMinutes");
   });

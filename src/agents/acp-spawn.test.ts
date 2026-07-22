@@ -93,21 +93,24 @@ const hoisted = vi.hoisted(() => {
       >;
       return store[scope.sessionKey];
     };
+    const listMockEntries = (
+      scope: {
+        agentId?: string;
+        env?: NodeJS.ProcessEnv;
+        storePath?: string;
+      } = {},
+    ) => {
+      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    };
     return {
-      listSessionEntries: (
-        scope: {
-          agentId?: string;
-          env?: NodeJS.ProcessEnv;
-          storePath?: string;
-        } = {},
-      ) => {
-        const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-          string,
-          SessionEntry
-        >;
-        return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      },
+      listSessionEntries: listMockEntries,
+      listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
+      loadSessionEntryReadOnly: loadMockEntry,
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
         sessionId: string;
