@@ -344,7 +344,9 @@ describe("beforeDeliver in reply dispatcher", () => {
     dispatcher.sendFinalReply({ text: "hello" });
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(delivered).toEqual(["hello"]);
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });

@@ -4376,11 +4376,11 @@ describe("deliverOutboundPayloads", () => {
     expect(normalizePayload).not.toHaveBeenCalled();
   });
 
-  it("safely reports a thrown batch normalization value in best-effort mode", async () => {
+  it("safely reports a batch normalization failure in best-effort mode", async () => {
     const normalizePayloadBatch = vi.fn<
       NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
     >(() => {
-      throw undefined;
+      throw new Error("batch normalization failed");
     });
     const sendText = vi.fn();
     const onError = vi.fn();
