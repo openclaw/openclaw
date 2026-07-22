@@ -66,6 +66,26 @@ describe("sameFileIdentity", () => {
       platform: "win32" as const,
       expected: true,
     },
+    {
+      // 72057594037932382n and 72057594037932383n both round to 72057594037932380
+      // when represented as a JS Number (> 2^53), so fs.statSync() without
+      // {bigint: true} incorrectly treats them as the same inode.  The fix in
+      // resolveSessionStorePathRelationship passes {bigint: true} so the full
+      // precision is preserved.  This test documents the correct behavior that
+      // the fix enables (#112341 — virtiofs/Kata inode precision).
+      name: "rejects adjacent inodes above 2^53 when both stats use BigInt (virtiofs/Kata, issue #112341)",
+      left: stat(2n, 72057594037932382n),
+      right: stat(2n, 72057594037932383n),
+      platform: "linux" as const,
+      expected: false,
+    },
+    {
+      name: "accepts same inode above 2^53 when both stats use BigInt",
+      left: stat(2n, 72057594037932382n),
+      right: stat(2n, 72057594037932382n),
+      platform: "linux" as const,
+      expected: true,
+    },
   ])("$name", ({ left, right, platform, expected }) => {
     expect(sameFileIdentity(left, right, platform)).toBe(expected);
   });
