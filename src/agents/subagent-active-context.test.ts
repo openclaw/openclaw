@@ -46,12 +46,12 @@ describe("buildActiveSubagentSystemPromptAddition", () => {
       cfg: {} as OpenClawConfig,
       controllerSessionKey: "agent:main:main",
       hasSessionsYield: true,
-      recentMinutes: 30,
     });
 
     expect(prompt).toBeDefined();
     expect(prompt).not.toContain("## Active Subagents");
     expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("last 120m");
     expect(prompt).toContain("taskName=read_email");
     expect(prompt).toContain("session=agent:main:subagent:recent-context");
     expect(prompt).toContain("status=done");

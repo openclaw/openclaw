@@ -36,7 +36,7 @@ export function buildActiveSubagentSystemPromptAddition(params: {
   if (runs.length === 0) {
     return undefined;
   }
-  const recentMinutes = params.recentMinutes ?? 30;
+  const recentMinutes = params.recentMinutes ?? 120;
   const list = buildSubagentList({
     cfg: params.cfg,
     runs,
