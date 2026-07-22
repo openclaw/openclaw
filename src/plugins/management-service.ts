@@ -9,7 +9,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
-import { loadConfig } from "../config/io.runtime.js";
+import { getRuntimeConfig } from "../config/io.runtime.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1048,7 +1048,7 @@ async function wasConfigCommitFailed(params: {
   targetDir: string;
 }): Promise<boolean> {
   try {
-    const current = loadConfig({ skipPluginValidation: true });
+    const current = getRuntimeConfig({ skipPluginValidation: true });
     const install = current.plugins?.installs?.[params.pluginId];
     return !install || !installRecordOwnsTarget(install, params.targetDir);
   } catch {

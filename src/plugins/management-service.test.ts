@@ -42,7 +42,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/io.runtime.js", () => ({
-  loadConfig: () => mocks.loadConfigResult(),
+  getRuntimeConfig: () => mocks.loadConfigResult(),
 }));
 
 vi.mock("./install-persistence.js", () => ({
@@ -976,7 +976,7 @@ describe("plugin management service", () => {
     mocks.installRecords.mockResolvedValue({
       demo: { source: "clawhub", installPath: targetDir, installAttemptToken: attemptToken },
     });
-    // loadConfig returns the config WITH the install → commitConfirmed
+    // getRuntimeConfig returns the config WITH the install → commitConfirmed
     mocks.loadConfigResult.mockReturnValue({
       plugins: { installs: { demo: { source: "clawhub", installPath: targetDir } } },
     });

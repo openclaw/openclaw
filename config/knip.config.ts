@@ -343,6 +343,9 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // cleanupFailedManagedPluginInstall is exported for the real-SQLite proof
+    // test; production Knip cannot see the test-only import.
+    "src/plugins/management-service.ts": ["exports"],
   },
   workspaces: {
     ".": {
