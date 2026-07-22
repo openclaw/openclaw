@@ -1299,7 +1299,7 @@ describe("preflightDiscordMessage", () => {
     const message = createDiscordMessage({
       id: "m-bot-mentions-authoritative",
       channelId,
-      content: `example: \`<@${botId}>\``,
+      content: `hi <@${botId}>`,
       author: {
         id: "relay-bot-1",
         bot: true,
@@ -1345,6 +1345,9 @@ describe("preflightDiscordMessage", () => {
       content: (botId: string) => `example:\n\`\`\`text\n<@${botId}>\n\`\`\``,
     },
     { name: "escaped syntax", content: (botId: string) => `example: \\<@${botId}>` },
+    { name: "another user", content: () => "hi <@987654321098765432>" },
+    { name: "role mention", content: (botId: string) => `hi <@&${botId}>` },
+    { name: "longer user id", content: (botId: string) => `hi <@${botId}9>` },
   ])("does not trust $name when REST hydration fails", async ({ content }) => {
     const channelId = "channel-bot-mentions-untrusted";
     const guildId = "guild-bot-mentions-untrusted";

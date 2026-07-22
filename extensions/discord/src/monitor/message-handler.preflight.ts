@@ -250,15 +250,12 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  let messageHydrationFailed = false;
-  message = await hydrateDiscordMessageIfNeeded({
+  const hydration = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
-    onMessageHydrationFailure: () => {
-      messageHydrationFailed = true;
-    },
   });
+  message = hydration.message;
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
@@ -466,7 +463,7 @@ export async function preflightDiscordMessage(
   const explicitlyMentioned = Boolean(
     botId &&
     (message.mentionedUsers?.some((user: User) => user.id === botId) ||
-      (messageHydrationFailed && hasRawDiscordUserMention(baseText, botId))),
+      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
   );
   const hasAnyMention =
     !isDirectMessage &&
