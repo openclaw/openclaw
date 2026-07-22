@@ -18,7 +18,7 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_PATH = "identity/device-auth.json";
 type DeviceAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;
-export type LegacyDeviceAuthDetection = {
+type LegacyDeviceAuthDetection = {
   sourcePath: string;
   sourcePresent: boolean;
   hasLegacy: boolean;
