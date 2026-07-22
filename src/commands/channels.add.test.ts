@@ -2,8 +2,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
+import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -614,17 +614,15 @@ describe("channelsAddCommand", () => {
   });
 
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
-    const prepareAccountConfigInput = vi.fn(
-      ({ input }: PrepareAccountConfigInputParams) => {
-        const setupInput = input as NextcloudTalkSetupInput;
-        return {
-          ...setupInput,
-          baseUrl: setupInput.baseUrl ?? setupInput.url,
-          secret: setupInput.secret ?? setupInput.token ?? setupInput.password,
-          secretFile: setupInput.secretFile ?? setupInput.tokenFile,
-        };
-      },
-    );
+    const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
+      const setupInput = input as NextcloudTalkSetupInput;
+      return {
+        ...setupInput,
+        baseUrl: setupInput.baseUrl ?? setupInput.url,
+        secret: setupInput.secret ?? setupInput.token ?? setupInput.password,
+        secretFile: setupInput.secretFile ?? setupInput.tokenFile,
+      };
+    });
     const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => {
       const setupInput = input as NextcloudTalkSetupInput;
       return {
