@@ -137,6 +137,11 @@ describe("gateway tool defaults", () => {
     expect(opts.token).toBe("env-token");
   });
 
+  it("treats non-positive timeout overrides as absent", () => {
+    expect(resolveGatewayOptions({ timeoutMs: 0 }).timeoutMs).toBe(30_000);
+    expect(resolveGatewayOptions({ timeoutMs: -1 }).timeoutMs).toBe(30_000);
+  });
+
   it("falls back to config gateway.auth.token when env is unset for local overrides", () => {
     mocks.configState.value = {
       gateway: {

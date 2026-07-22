@@ -191,9 +191,14 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         explicitToken,
       })
     : explicitToken;
+  // Ignore non-positive timeoutMs overrides. The previous clamp
+  // (Math.max(1, Math.floor(opts.timeoutMs))) turned a caller-supplied 0 into
+  // 1ms, which fails the very next request. GPT-5.5 / Codex routinely fill
+  // optional `timeoutMs` with 0; the intent is "use the default", not
+  // "time out immediately".
   const timeoutMs =
-    typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-      ? Math.max(1, Math.floor(opts.timeoutMs))
+    typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.floor(opts.timeoutMs)
       : 30_000;
   const envGatewayUrl = trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const target =
