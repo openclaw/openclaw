@@ -168,7 +168,6 @@ describe("dispatch beforeDeliver composition", () => {
       assistantMessageIndex: 5,
       outboundHookLifecycle: {
         state: "prepared",
-        preparedMediaCount: 0,
       },
     });
   });

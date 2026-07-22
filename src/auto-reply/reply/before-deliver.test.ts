@@ -327,6 +327,29 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
   });
 
+  it("keeps afterDeliver error-reporter failures non-interfering", async () => {
+    const delivered: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+      onError: () => {
+        throw new Error("error reporter failed");
+      },
+    });
+    dispatcher.appendAfterDeliver?.(() => {
+      throw new Error("observer failed");
+    });
+
+    dispatcher.sendFinalReply({ text: "hello" });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(delivered).toEqual(["hello"]);
+    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+  });
+
   it("defers afterDeliver observers until channel finalization settles", async () => {
     let resolveCompletion!: (result: { messageId: string }) => void;
     const completion = new Promise<{ messageId: string }>((resolve) => {

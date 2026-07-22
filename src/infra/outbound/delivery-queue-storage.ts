@@ -340,9 +340,8 @@ export async function failDeliveryBeforePlatformSend(
         )
       : undefined;
     const hasRetainedSendEvidence =
-      clearedPayloadIndexes !== undefined &&
-      ((retainedProviderAttempts?.length ?? 0) > 0 ||
-        entry.messageSentHookEvents?.some((event) => event.event.success) === true);
+      (retainedProviderAttempts?.length ?? 0) > 0 ||
+      entry.messageSentHookEvents?.some((event) => event.event.success) === true;
     return {
       ...entry,
       retryCount: entry.retryCount + 1,

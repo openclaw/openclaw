@@ -232,8 +232,8 @@ export type ReplyPayloadMetadata = {
       }
     | {
         state: "prepared";
-        /** Media fan-out accepted after all modifying hooks completed. */
-        preparedMediaCount: number;
+        /** Media fan-out from canonical channel planning, when already available. */
+        preparedMediaCount?: number;
         runId?: string;
       };
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */

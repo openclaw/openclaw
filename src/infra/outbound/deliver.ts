@@ -2974,7 +2974,7 @@ async function deliverOutboundPayloadsCore(
     const payloadRunId = preparedHookLifecycle?.runId ?? params.replyPayloadSendingHook?.runId;
     const preparedMediaCount =
       preparedHookLifecycle?.state === "prepared"
-        ? preparedHookLifecycle.preparedMediaCount
+        ? (preparedHookLifecycle.preparedMediaCount ?? planEntry.parts.mediaCount)
         : planEntry.parts.mediaCount;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;

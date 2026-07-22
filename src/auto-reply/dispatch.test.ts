@@ -389,7 +389,6 @@ describe("withReplyDispatcher", () => {
       assistantMessageIndex: 3,
       outboundHookLifecycle: {
         state: "prepared",
-        preparedMediaCount: 1,
       },
     });
     expect(runMessageSending).toHaveBeenCalledWith(
@@ -511,7 +510,6 @@ describe("withReplyDispatcher", () => {
       assistantMessageIndex: 4,
       outboundHookLifecycle: {
         state: "prepared",
-        preparedMediaCount: 0,
         runId: "run-123",
       },
     });
@@ -582,7 +580,6 @@ describe("withReplyDispatcher", () => {
     expect(getReplyPayloadMetadata(prepared!)?.outboundHookLifecycle?.state).toBe("prepared");
     expect(getReplyPayloadMetadata(prepared!)?.outboundHookLifecycle).toMatchObject({
       state: "prepared",
-      preparedMediaCount: 2,
     });
   });
 

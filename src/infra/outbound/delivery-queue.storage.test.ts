@@ -603,6 +603,37 @@ describe("delivery-queue storage", () => {
       ]);
     });
 
+    it("retains finalized success evidence on an unscoped pre-send failure", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "first" }, { text: "second" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir(), { payloadIndex: 0 });
+      await recordDeliveryMessageSentHookEvent(
+        id,
+        {
+          payloadIndex: 0,
+          event: { success: true, content: "first", messageId: "message-1" },
+        },
+        tmpDir(),
+      );
+      await clearDeliveryMessageSentProviderAttempts(id, [0], tmpDir());
+
+      await failDeliveryBeforePlatformSend(id, "later planning failed", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.recoveryState).toBe("send_attempt_started");
+      expect(entry.platformSendStartedAt).toEqual(expect.any(Number));
+      expect(entry.messageSentProviderAttemptedPayloadIndexes).toBeUndefined();
+      expect(entry.messageSentHookEvents).toEqual([
+        {
+          payloadIndex: 0,
+          event: { success: true, content: "first", messageId: "message-1" },
+        },
+      ]);
+    });
+
     it("persists provider-finalized success by payload and ignores retryable failure events", async () => {
       const id = await enqueueTextDelivery({
         channel: "matrix",

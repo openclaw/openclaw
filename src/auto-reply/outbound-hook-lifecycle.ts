@@ -91,10 +91,6 @@ function buildMessageSendingBeforeDeliver(
   );
 }
 
-function countReplyPayloadMedia(payload: ReplyPayload): number {
-  return createOutboundPayloadPlan([payload])[0]?.parts.mediaCount ?? 0;
-}
-
 function buildOutboundHookLifecycleStart(
   runState: ReplyPayloadRunState,
 ): ReplyDispatchBeforeDeliver {
@@ -115,7 +111,6 @@ function buildOutboundHookLifecycleComplete(): ReplyDispatchBeforeDeliver {
     setReplyPayloadMetadata(payload, {
       outboundHookLifecycle: {
         state: "prepared",
-        preparedMediaCount: countReplyPayloadMedia(payload),
         ...(lifecycle?.runId ? { runId: lifecycle.runId } : {}),
       },
     });

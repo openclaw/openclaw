@@ -58,9 +58,8 @@ export function createReplyDispatchAfterDeliverObservers(
       for (const observer of observers) {
         void Promise.resolve()
           .then(async () => observer(payload, info, await resolvedOutcome))
-          .catch((err: unknown) => {
-            onError(err, info);
-          });
+          .catch((err: unknown) => onError(err, info))
+          .catch(() => undefined);
       }
     },
   };
