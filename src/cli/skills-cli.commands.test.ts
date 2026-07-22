@@ -488,6 +488,31 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("routes skills-sh refs through ClawHub without translating them", async () => {
+    const reference = "skills-sh:openclaw/skills/weather";
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "weather",
+      version: "a".repeat(40),
+      targetDir: "/tmp/workspace/skills/weather",
+    });
+
+    await runCommand(["skills", "install", reference]);
+
+    expect(mockFirstObjectArg(installSkillFromClawHubMock).slug).toBe(reference);
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects --version for skills-sh refs", async () => {
+    await expect(
+      runCommand(["skills", "install", "skills-sh:openclaw/skills/weather", "--version", "1.2.3"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("--version is not supported for skills-sh references.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+  });
+
   it("documents owner-qualified ClawHub install refs in command help", () => {
     const skillsCommand = createProgram().commands.find((command) => command.name() === "skills");
     const installCommand = skillsCommand?.commands.find((command) => command.name() === "install");
