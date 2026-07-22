@@ -463,12 +463,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = true;
     params.contextEngine = contextEngine;
     params.contextTokenBudget = 321;
     params.requestedModelId = "gpt-5.4-codex-primary";
     params.fallbackReason = "provider_unavailable";
     params.degradedReason = "context_overflow";
-    params.config = { memory: { citations: "on" } } as EmbeddedRunAttemptParams["config"];
+    params.config = {
+      memory: { citations: "on" },
+      tools: { web: { search: { enabled: false } } },
+    } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -815,7 +819,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-bootstrapped",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -875,6 +878,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           },
         },
       },
+      tools: { web: { search: { enabled: false } } },
     } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
@@ -900,7 +904,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-bootstrapped",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -988,7 +991,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-stale-bootstrap",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1045,6 +1047,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           },
         },
       },
+      tools: { web: { search: { enabled: false } } },
     } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params);
@@ -1074,7 +1077,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-per-turn-context",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1118,7 +1120,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1205,7 +1206,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1287,7 +1287,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-old",
         cwd: workspaceDir,
-        dynamicToolsFingerprint: "[]",
         contextEngine: {
           schemaVersion: 1,
           engineId: "lossless-claw",
@@ -1321,6 +1320,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         return undefined;
       });
       const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = true;
       params.contextEngine = contextEngine;
       params.config = {
         agents: {
@@ -1382,7 +1382,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1452,7 +1451,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1554,7 +1552,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1621,7 +1618,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1657,7 +1653,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         await writeCodexAppServerBinding(sessionFile, {
           threadId: "thread-new",
           cwd: workspaceDir,
-          dynamicToolsFingerprint: "[]",
         });
         throw new Error("Codex ran out of room in the model's context window");
       }
@@ -1693,7 +1688,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -1851,7 +1845,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-old",
       cwd: workspaceDir,
-      dynamicToolsFingerprint: "[]",
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
