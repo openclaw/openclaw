@@ -569,6 +569,11 @@ export async function runPreparedReply(
   });
   const inboundEventKind = promptSessionCtx.InboundEventKind;
   const isInternalPromptChannel = isInternalSourceReplyChannel(promptSessionCtx);
+  // Capture the internal-source fact before system-event restoration may
+  // replace the webchat Provider/Surface with the persisted delivery channel.
+  // The silent-reply decision should use the original event context so
+  // internal prompt channels are recognised even after restoration.
+  const isInternalPromptChannelOrigin = isInternalSourceReplyChannel(sessionCtx);
   const sourceReplyDeliveryMode =
     inboundEventKind === "room_event" && !isInternalPromptChannel
       ? "message_tool_only"
@@ -662,7 +667,8 @@ export async function runPreparedReply(
         sessionEntry,
         defaultActivation,
         silentReplyPolicy: silentReplySettings.policy,
-      }).allowEmptyAssistantReplyAsSilent);
+      }).allowEmptyAssistantReplyAsSilent) ||
+    (isInternalPromptChannelOrigin && silentReplySettings.policy === "allow");
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },

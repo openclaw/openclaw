@@ -14,6 +14,16 @@ import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-d
 import { createReplyOperation } from "./reply-run-registry.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
+const resolveSilentReplySettingsMock = vi.fn<
+  (params: { conversationType?: string }) => { policy: string }
+>((params) => ({
+  policy: params?.conversationType === "direct" ? "disallow" : "allow",
+}));
+
+vi.mock("../../config/silent-reply.js", () => ({
+  resolveSilentReplySettings: resolveSilentReplySettingsMock,
+}));
+
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
 }));
@@ -401,6 +411,45 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it("allows empty assistant replies as silent on internal prompt channels with allow policy", async () => {
+    // Internal prompt channels (e.g. subagent completion wake) use the webchat
+    // provider with a silent-reply policy of "allow".  When isInternalPromptChannel
+    // is true and the resolved silent-reply policy is "allow", the empty assistant
+    // reply should be treated as silent, skipping the empty-response retry nudges
+    // that could leak internal instructions into the user channel.
+    //
+    // resolveSilentReplySettings is mocked so that with surface=webchat and
+    // no explicit conversation type, the resolved policy is "allow".
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          ...baseParams().ctx,
+          ChatType: "webchat",
+        },
+        sessionCtx: {
+          ...baseParams().sessionCtx,
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "webchat",
+        },
+        cfg: {
+          agents: {
+            defaults: {
+              silentReply: {
+                internal: "allow",
+              },
+            },
+          },
+          session: {},
+          channels: {},
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
