@@ -18,7 +18,7 @@ export function buildMinimaxModelDiscovery(
     endpointPath: "v1/models",
     // API-key discovery follows MiniMax's documented X-Api-Key contract;
     // portal OAuth keeps the Bearer scheme used by its inference transport.
-    buildRequestHeaders: ({ apiKey, discoveryApiKey }) => {
+    buildRequestHeaders: ({ apiKey, discoveryApiKey }): HeadersInit => {
       const requestApiKey = discoveryApiKey ?? apiKey;
       if (!requestApiKey) {
         return {};
