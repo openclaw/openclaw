@@ -1184,24 +1184,36 @@ describe("tryDispatchAcpReply", () => {
         path: "/tmp/recent-2.png",
         contentType: "image/png",
         sender: "Recent 2",
+        sentAtMs: 1_699_999_997_000,
+        messagePosition: 6,
+        messageCount: 9,
         messageId: "recent-2",
       },
       {
         path: "/tmp/recent-3.png",
         contentType: "image/png",
         sender: "Recent 3",
+        sentAtMs: 1_699_999_998_000,
+        messagePosition: 7,
+        messageCount: 9,
         messageId: "recent-3",
       },
       {
         path: "/tmp/recent-4.png",
         contentType: "image/png",
         sender: "Recent 4",
+        sentAtMs: 1_699_999_999_000,
+        messagePosition: 8,
+        messageCount: 9,
         messageId: "recent-4",
       },
       {
         path: "C:\\Users\\Alice\\Pictures\\recent.png",
         contentType: "image/png",
         sender: "Windows",
+        sentAtMs: 1_699_999_999_500,
+        messagePosition: 9,
+        messageCount: 9,
         messageId: "windows",
       },
     ]);
@@ -1215,6 +1227,9 @@ describe("tryDispatchAcpReply", () => {
           path: "/tmp/secret.png",
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 2,
+          messageCount: 5,
           messageId: "msg-1",
         },
       ],
@@ -1222,6 +1237,8 @@ describe("tryDispatchAcpReply", () => {
 
     expect(text).toContain("what is this?");
     expect(text).toContain("Recent image 1 from @alice, message msg-1");
+    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("thread message 2 of 5");
     expect(text).not.toContain("/tmp/secret.png");
   });
 
@@ -1277,6 +1294,9 @@ describe("tryDispatchAcpReply", () => {
           path: imagePath,
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
           messageId: "msg-1",
         },
       ]);
@@ -1521,6 +1541,9 @@ describe("tryDispatchAcpReply", () => {
           path: historyPath,
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
           messageId: "msg-history",
         },
       ]);
@@ -1553,6 +1576,54 @@ describe("tryDispatchAcpReply", () => {
       {
         mediaType: "image/png",
         data: image.data,
+      },
+    ]);
+  });
+
+  it("annotates recent history images with sent time and thread position in ACP turns", async () => {
+    setReadyAcpResolution();
+    const historyPath = "/tmp/openclaw-history-metadata.png";
+    const historyImage = Buffer.from("history-image");
+    acpAttachmentBuffers.set(historyPath, historyImage);
+
+    await runDispatch({
+      bodyForAgent: "describe current state",
+      ctxOverrides: {
+        Timestamp: 1_700_000_060_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "bug report",
+            timestamp: 1_699_999_980_000,
+            messageId: "msg-before",
+          },
+          {
+            sender: "@bob",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            messageId: "msg-history",
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+          {
+            sender: "@alice",
+            body: "fixed after refresh",
+            timestamp: 1_700_000_060_000,
+            messageId: "msg-after",
+          },
+        ],
+      },
+    });
+
+    const text = String(runTurnCall().text);
+    expect(text).toContain("describe current state");
+    expect(text).toContain("Recent image 1 from @bob, message msg-history");
+    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("thread message 2 of 3");
+    expect(text).not.toContain(historyPath);
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: historyImage.toString("base64"),
       },
     ]);
   });
