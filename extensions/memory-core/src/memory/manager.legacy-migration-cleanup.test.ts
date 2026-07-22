@@ -10,7 +10,17 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-storage", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-storage")>();
+  return {
+    ...actual,
+    loadSqliteVecExtension: async () => ({ ok: true, extensionPath: "/test/vec0.so" }),
+  };
+});
+
 import "./test-runtime-mocks.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -198,11 +208,19 @@ describe("memory legacy migration cleanup", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
       count: 2,
     });
-    (
-      manager as unknown as {
-        pruneOrphanedVectorRows(): void;
-      }
-    ).pruneOrphanedVectorRows();
+    const vectorState = Reflect.get(manager, "vector") as {
+      available: boolean | null;
+      enabled: boolean;
+    };
+    vectorState.enabled = true;
+    vectorState.available = null;
+    await expect(
+      (
+        manager as unknown as {
+          loadVectorExtension(): Promise<boolean>;
+        }
+      ).loadVectorExtension(),
+    ).resolves.toBe(true);
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
       count: 0,
     });
