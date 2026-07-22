@@ -416,6 +416,7 @@ async function executeMemoryReadResult(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  workspaceDir?: string;
 }) {
   try {
     const result = await params.read();
@@ -432,6 +433,23 @@ async function executeMemoryReadResult(params: {
       if (supplement) {
         return jsonResult(supplement);
       }
+    }
+    // Best-effort recall tracking: explicitly-read daily memory files
+    // contribute to the dreaming promotion pipeline (#94769).
+    if (params.workspaceDir && result) {
+      void recordShortTermRecalls({
+        workspaceDir: params.workspaceDir,
+        query: params.relPath,
+        results: [{
+          source: "memory" as const,
+          path: params.relPath,
+          startLine: params.from ?? 1,
+          endLine: params.lines ? (params.from ?? 1) + params.lines : 0,
+          score: 0.5,
+        }],
+      }).catch(() => {
+        // Recall tracking is best-effort and must never block memory reads.
+      });
     }
     return jsonResult(result);
   } catch (error) {
@@ -903,6 +921,7 @@ export function createMemoryGetTool(options: {
           );
         }
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        const workspaceDir: string | undefined = cfg.workspace;
         if (resolved.backend === "builtin") {
           return await executeMemoryReadResult({
             read: async () =>
@@ -920,6 +939,7 @@ export function createMemoryGetTool(options: {
             agentId,
             agentSessionKey: options.agentSessionKey,
             sandboxed: options.sandboxed,
+            workspaceDir,
           });
         }
         const memory = await getMemoryManagerContextWithPurpose({
@@ -946,6 +966,7 @@ export function createMemoryGetTool(options: {
           agentId,
           agentSessionKey: options.agentSessionKey,
           sandboxed: options.sandboxed,
+          workspaceDir,
         });
       },
   });
