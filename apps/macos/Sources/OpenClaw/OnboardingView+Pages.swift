@@ -715,6 +715,7 @@ extension OnboardingView {
     func permissionsPage() -> some View {
         onboardingPage {
             VStack(spacing: 12) {
+                // Keep intro and rows in one document so short windows can reveal every permission.
                 HStack(spacing: 8) {
                     Text("Grant permissions")
                         .font(.largeTitle.weight(.semibold))
@@ -745,6 +746,7 @@ extension OnboardingView {
                 }
             }
         }
+        // The root onboarding layout keeps navigation outside this scrollable document.
     }
 
     func cliPage() -> some View {
