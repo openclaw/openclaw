@@ -59,7 +59,7 @@ describe("run-oxlint", () => {
         async () => {
           process.exitCode = 2;
         },
-        (line) => lines.push(line),
+        (line: unknown) => lines.push(line),
       );
       expect(lines).toEqual(["[oxlint] FAILED (exit 2)"]);
     } finally {
@@ -78,7 +78,7 @@ describe("run-oxlint", () => {
         async () => {
           throw new Error("artifact prep failed");
         },
-        (line) => lines.push(line),
+        (line: unknown) => lines.push(line),
       );
       expect(process.exitCode).toBe(1);
       expect(lines).toHaveLength(2);
@@ -96,7 +96,7 @@ describe("run-oxlint", () => {
       process.exitCode = 0;
       await runOxlintCliEntry(
         async () => {},
-        (line) => lines.push(line),
+        (line: unknown) => lines.push(line),
       );
       expect(lines).toEqual([]);
     } finally {
