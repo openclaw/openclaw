@@ -77,6 +77,26 @@ describe("CallManager closed-loop turns", () => {
     expect(metadata.turnCount).toBe(1);
   });
 
+  it("does not listen for a reply when prompt playback fails", async () => {
+    const { manager, provider } = await createManagerHarness({
+      transcriptTimeoutMs: 5000,
+    });
+
+    const started = await manager.initiateCall("+15550000004");
+    expect(started.success).toBe(true);
+
+    markCallAnswered(manager, started.callId, "evt-playback-failed-answered");
+    vi.spyOn(provider, "playTts").mockRejectedValueOnce(new Error("playback failed"));
+
+    const turn = await manager.continueCall(started.callId, "Can you hear me?");
+
+    expect(turn).toEqual({ success: false, error: "playback failed" });
+    expect(provider.startListeningCalls).toHaveLength(0);
+    expect(provider.stopListeningCalls).toHaveLength(0);
+    const call = requireCall(manager, started.callId);
+    expect(call.transcript).toHaveLength(0);
+  });
+
   it("rejects overlapping continueCall requests for the same call", async () => {
     const { manager, provider } = await createManagerHarness({
       transcriptTimeoutMs: 5000,
