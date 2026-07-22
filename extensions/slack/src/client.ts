@@ -4,7 +4,7 @@ import { type WebClientOptions, WebClient } from "@slack/web-api";
 import type { SlackLookupClientOptions } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
-  resolveSlackWebClientOptions,
+  resolveSlackReadClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
@@ -26,7 +26,9 @@ export {
 } from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
-  return new WebClient(token, resolveSlackWebClientOptions(options));
+  // Dedicated read factory — Bolt App.client keeps resolveSlackWebClientOptions()
+  // (no default timeout) to avoid mutator timeout/retry hazards.
+  return new WebClient(token, resolveSlackReadClientOptions(options));
 }
 
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {

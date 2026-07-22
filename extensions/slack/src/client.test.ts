@@ -467,3 +467,53 @@ describe("slack proxy agent", () => {
     expect(options.agent).toBeUndefined();
   });
 });
+
+describe("slack read vs Bolt client timeouts", () => {
+  beforeEach(() => {
+    clearProxyEnvForTest();
+  });
+
+  afterEach(() => {
+    restoreProxyEnvForTest();
+  });
+
+  it("keeps Bolt/shared WebClient options free of a default request timeout", () => {
+    // monitor/provider.ts passes resolveSlackWebClientOptions() into Bolt App.client.
+    const options = resolveSlackWebClientOptions({ retryConfig: SLACK_DEFAULT_RETRY_OPTIONS });
+    expect(options.timeout).toBeUndefined();
+  });
+
+  it("wires createSlackWebClient through the private read-client deadline", () => {
+    createSlackWebClient("xoxb-read-timeout");
+    expect(WebClient).toHaveBeenCalledWith(
+      "xoxb-read-timeout",
+      expect.objectContaining({ timeout: 30_000 }),
+    );
+  });
+
+  it("preserves an explicit timeout override on createSlackWebClient", () => {
+    createSlackWebClient("xoxb-read-override", { timeout: 60_000 });
+    expect(WebClient).toHaveBeenCalledWith(
+      "xoxb-read-override",
+      expect.objectContaining({ timeout: 60_000 }),
+    );
+  });
+
+  it("does not add a default timeout on write-client options", () => {
+    const options = resolveSlackWriteClientOptions();
+    expect(options.timeout).toBeUndefined();
+  });
+
+  it("preserves explicit write-client timeout: 0 (upload completion)", () => {
+    const options = resolveSlackWriteClientOptions({ timeout: 0 });
+    expect(options.timeout).toBe(0);
+  });
+
+  it("keeps lookup clients on the same 30s read deadline", () => {
+    createSlackLookupClient("xoxb-lookup-timeout");
+    expect(WebClient).toHaveBeenCalledWith(
+      "xoxb-lookup-timeout",
+      expect.objectContaining({ timeout: 30_000, rejectRateLimitedCalls: true }),
+    );
+  });
+});
