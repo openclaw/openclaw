@@ -53,9 +53,12 @@ dump_logs_on_error() {
   if [ "$status" -ne 0 ]; then
     openclaw_e2e_dump_logs \
       /tmp/cron-cli-gateway.log \
-      /tmp/cron-cli-device-seed.json \
       /tmp/cron-cli-status.json \
       /tmp/cron-cli-add.json \
+      /tmp/cron-cli-agent-add.json \
+      /tmp/cron-cli-agent-default.json \
+      /tmp/cron-cli-agent-restricted.json \
+      /tmp/cron-cli-agent-cleared.json \
       /tmp/cron-cli-edit-exact.json \
       /tmp/cron-cli-edit-timeout.json \
       /tmp/cron-cli-get-after-edit.json \
@@ -78,81 +81,6 @@ cron_cli() {
   node "$entry" cron "$@" --token "${GW_TOKEN:?missing GW_TOKEN}"
 }
 
-seed_paired_cli_device() {
-  node --input-type=module <<'NODE'
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-
-async function importDistChunk(prefix, marker) {
-  const distDir = join(process.cwd(), "dist");
-  const entries = await readdir(distDir);
-  for (const entry of entries) {
-    if (!entry.startsWith(prefix) || !entry.endsWith(".js")) {
-      continue;
-    }
-    const fullPath = join(distDir, entry);
-    if ((await readFile(fullPath, "utf8")).includes(marker)) {
-      return await import(pathToFileURL(fullPath).href);
-    }
-  }
-  throw new Error(`missing dist chunk ${prefix} containing ${marker}`);
-}
-
-const identityModule = await importDistChunk("device-identity-", "loadOrCreateDeviceIdentity");
-const pairingModule = await importDistChunk("device-pairing-", "requestDevicePairing");
-const loadOrCreateDeviceIdentity =
-  identityModule.loadOrCreateDeviceIdentity ?? identityModule.r;
-const publicKeyRawBase64UrlFromPem =
-  identityModule.publicKeyRawBase64UrlFromPem ?? identityModule.a;
-const approveDevicePairing = pairingModule.approveDevicePairing ?? pairingModule.n;
-const getPairedDevice = pairingModule.getPairedDevice ?? pairingModule.a;
-const requestDevicePairing = pairingModule.requestDevicePairing ?? pairingModule.m;
-
-if (
-  typeof loadOrCreateDeviceIdentity !== "function" ||
-  typeof publicKeyRawBase64UrlFromPem !== "function" ||
-  typeof approveDevicePairing !== "function" ||
-  typeof getPairedDevice !== "function" ||
-  typeof requestDevicePairing !== "function"
-) {
-  throw new Error("missing device pairing exports in dist chunks");
-}
-
-const identity = loadOrCreateDeviceIdentity();
-const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-const requiredScopes = ["operator.admin"];
-const paired = await getPairedDevice(identity.deviceId);
-const pairedScopes = Array.isArray(paired?.approvedScopes)
-  ? paired.approvedScopes
-  : Array.isArray(paired?.scopes)
-    ? paired.scopes
-    : [];
-
-if (paired?.publicKey !== publicKey || !requiredScopes.every((scope) => pairedScopes.includes(scope))) {
-  const pairing = await requestDevicePairing({
-    deviceId: identity.deviceId,
-    publicKey,
-    displayName: "cron cli docker smoke",
-    platform: process.platform,
-    clientId: "cli",
-    clientMode: "cli",
-    role: "operator",
-    scopes: requiredScopes,
-    silent: true,
-  });
-  const approved = await approveDevicePairing(pairing.request.requestId, {
-    callerScopes: requiredScopes,
-  });
-  if (approved?.status !== "approved") {
-    throw new Error(`failed to seed paired CLI device: ${approved?.status ?? "missing-result"}`);
-  }
-}
-
-process.stdout.write(JSON.stringify({ ok: true, deviceId: identity.deviceId }) + "\n");
-NODE
-}
-
 read_json_field() {
   local file="$1"
   local field="$2"
@@ -167,7 +95,6 @@ read_json_field() {
   ' "$file" "$field"
 }
 
-seed_paired_cli_device > /tmp/cron-cli-device-seed.json
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" 18789 /tmp/cron-cli-gateway.log)"
 openclaw_e2e_wait_gateway_ready "$gateway_pid" /tmp/cron-cli-gateway.log 300 18789
 
@@ -183,6 +110,38 @@ cron_add_args=(
 cron_cli add "${cron_add_args[@]}" > /tmp/cron-cli-add.json
 
 job_id="$(read_json_field /tmp/cron-cli-add.json id)"
+
+cron_cli add \
+  "agent authority smoke" \
+  --every 1h \
+  --session isolated \
+  --message "verify explicit cron tool authority" \
+  --no-deliver \
+  --json > /tmp/cron-cli-agent-add.json
+agent_job_id="$(read_json_field /tmp/cron-cli-agent-add.json id)"
+
+cron_cli show "$agent_job_id" --json > /tmp/cron-cli-agent-default.json
+cron_cli edit "$agent_job_id" --tools read
+cron_cli show "$agent_job_id" --json > /tmp/cron-cli-agent-restricted.json
+cron_cli edit "$agent_job_id" --clear-tools
+cron_cli show "$agent_job_id" --json > /tmp/cron-cli-agent-cleared.json
+node --input-type=module -e '
+  const fs = await import("node:fs/promises");
+  const readPayload = async (path) => JSON.parse(await fs.readFile(path, "utf8")).payload;
+  const defaultPayload = await readPayload("/tmp/cron-cli-agent-default.json");
+  const restrictedPayload = await readPayload("/tmp/cron-cli-agent-restricted.json");
+  const clearedPayload = await readPayload("/tmp/cron-cli-agent-cleared.json");
+  if (JSON.stringify(defaultPayload?.toolsAllow) !== JSON.stringify(["*"])) {
+    throw new Error(`new agent job is not explicitly unrestricted: ${JSON.stringify(defaultPayload)}`);
+  }
+  if (JSON.stringify(restrictedPayload?.toolsAllow) !== JSON.stringify(["read"])) {
+    throw new Error(`cron edit --tools did not persist: ${JSON.stringify(restrictedPayload)}`);
+  }
+  if (JSON.stringify(clearedPayload?.toolsAllow) !== JSON.stringify(["*"])) {
+    throw new Error(`cron edit --clear-tools is not explicit: ${JSON.stringify(clearedPayload)}`);
+  }
+'
+cron_cli rm "$agent_job_id" --json >/dev/null
 
 cron_cli edit "$job_id" --exact > /tmp/cron-cli-edit-exact.json
 cron_cli edit "$job_id" --timeout-seconds 30 > /tmp/cron-cli-edit-timeout.json
