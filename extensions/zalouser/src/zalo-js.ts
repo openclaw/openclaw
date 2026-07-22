@@ -62,6 +62,7 @@ const GROUP_CONTEXT_CACHE_TTL_MS = 5 * 60_000;
 const GROUP_CONTEXT_CACHE_MAX_ENTRIES = 500;
 const LISTENER_WATCHDOG_INTERVAL_MS = 30_000;
 const LISTENER_WATCHDOG_MAX_GAP_MS = 35_000;
+const LISTENER_HANDSHAKE_TIMEOUT_MS = 30_000;
 const ZALO_TIMESTAMP_MS_THRESHOLD = 1_000_000_000_000;
 const MAX_SAFE_ZALO_TIMESTAMP_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
@@ -1742,6 +1743,10 @@ export async function startZaloListener(params: {
       return;
     }
     stopped = true;
+    if (connectTimer) {
+      clearTimeout(connectTimer);
+      connectTimer = undefined;
+    }
     if (watchdogTimer) {
       clearInterval(watchdogTimer);
       watchdogTimer = null;
@@ -1750,6 +1755,7 @@ export async function startZaloListener(params: {
       api.listener.off("message", onMessage);
       api.listener.off("error", onError);
       api.listener.off("closed", onClosed);
+      api.listener.off("connected", connectedHandler);
     } catch {
       // ignore listener detachment errors
     }
@@ -1798,6 +1804,20 @@ export async function startZaloListener(params: {
     cleanup();
     throw error;
   }
+
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  const connectedHandler = () => {
+    if (connectTimer) {
+      clearTimeout(connectTimer);
+      connectTimer = undefined;
+    }
+  };
+  api.listener.on("connected", connectedHandler);
+  connectTimer = setTimeout(() => {
+    connectTimer = undefined;
+    failListener(new Error("Zalo listener websocket handshake timed out"));
+  }, LISTENER_HANDSHAKE_TIMEOUT_MS);
+  connectTimer.unref?.();
 
   watchdogTimer = setInterval(() => {
     if (stopped || params.abortSignal.aborted) {
