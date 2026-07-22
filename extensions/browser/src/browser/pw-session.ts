@@ -1414,11 +1414,15 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
       }
       try {
         const timeout = 5000 + attempt * 2000;
+        let endpointDiscoveryError: unknown;
         const resolvedEndpoint = await getChromeWebSocketEndpoint(
           normalized,
           timeout,
           ssrfPolicy,
-        ).catch(() => null);
+        ).catch((err: unknown) => {
+          endpointDiscoveryError = err;
+          return null;
+        });
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
         if (!resolvedEndpoint && hasUrlCredentials && !isWebSocketUrl(normalized)) {
           // Playwright preserves explicit headers across HTTP discovery redirects.
@@ -1429,7 +1433,10 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         const needsPinnedDependencyConnect =
           Boolean(configuredPin?.lookup) && !isLoopbackHost(normalizedCdpHostname);
         if (!resolvedEndpoint && ssrfPolicy && needsPinnedDependencyConnect) {
-          throw new Error("Guarded CDP endpoint did not expose a usable WebSocket URL.");
+          const detail = endpointDiscoveryError
+            ? ` Reason: ${redactCdpErrorText(formatErrorMessage(endpointDiscoveryError))}`
+            : "";
+          throw new Error(`Guarded CDP endpoint did not expose a usable WebSocket URL.${detail}`);
         }
         const endpointUrl = resolvedEndpoint?.url ?? normalized;
         const endpointLookup =

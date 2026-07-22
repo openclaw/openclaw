@@ -215,21 +215,18 @@ describe("pw-session connection scoping", () => {
   });
 
   it("does not fall back to Playwright discovery for guarded non-loopback CDP hosts", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockRejectedValue(new Error("discovery unavailable"));
-    try {
-      await expect(
-        listPagesViaPlaywright({
-          cdpUrl: "http://93.184.216.34:9222",
-          ssrfPolicy: { allowPrivateNetwork: true },
-        }),
-      ).rejects.toThrow("Guarded CDP endpoint did not expose a usable WebSocket URL.");
+    getChromeWebSocketEndpointSpy.mockRejectedValue(new Error("discovery unavailable"));
 
-      expect(connectOverCdpSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
+    const connection = listPagesViaPlaywright({
+      cdpUrl: "http://93.184.216.34:9222",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    await expect(connection).rejects.toThrow(
+      "Guarded CDP endpoint did not expose a usable WebSocket URL.",
+    );
+    await expect(connection).rejects.toThrow("discovery unavailable");
+
+    expect(connectOverCdpSpy).not.toHaveBeenCalled();
   });
 
   it("connects guarded Playwright CDP through the pinned WebSocket transport", async () => {
