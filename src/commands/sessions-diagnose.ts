@@ -27,7 +27,64 @@ const MAX_TAIL = 200;
 const INVALID_TAIL_MESSAGE = "--tail must be an integer between 1 and 200.";
 
 function countSelectors(opts: SessionsDiagnoseOptions): number {
-  return [opts.sessionKey, opts.sessionId, opts.label].filter((value) => Boolean(value)).length;
+  return [opts.sessionKey, opts.sessionId, opts.label].filter((value) => value !== undefined)
+    .length;
+}
+
+function normalizeDiagnoseCliValue(
+  value: string | undefined,
+  flag: string,
+): { ok: true; value?: string } | { ok: false; message: string } {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  const trimmed = value.trim();
+  return trimmed
+    ? { ok: true, value: trimmed }
+    : { ok: false, message: `${flag} cannot be empty.` };
+}
+
+function buildDiagnoseCliParams(
+  opts: SessionsDiagnoseOptions,
+  tail: number,
+):
+  | {
+      ok: true;
+      params: {
+        key?: string;
+        sessionId?: string;
+        label?: string;
+        agentId?: string;
+        tail: number;
+      };
+    }
+  | { ok: false; message: string } {
+  const sessionKey = normalizeDiagnoseCliValue(opts.sessionKey, "--session-key");
+  if (!sessionKey.ok) {
+    return sessionKey;
+  }
+  const sessionId = normalizeDiagnoseCliValue(opts.sessionId, "--session-id");
+  if (!sessionId.ok) {
+    return sessionId;
+  }
+  const label = normalizeDiagnoseCliValue(opts.label, "--label");
+  if (!label.ok) {
+    return label;
+  }
+  const agent = normalizeDiagnoseCliValue(opts.agent, "--agent");
+  if (!agent.ok) {
+    return agent;
+  }
+  return {
+    ok: true,
+    params: {
+      ...(sessionKey.value ? { key: sessionKey.value } : {}),
+      ...(sessionId.value ? { sessionId: sessionId.value } : {}),
+      ...(label.value ? { label: label.value } : {}),
+      ...(agent.value ? { agentId: agent.value } : {}),
+      tail,
+    },
+  };
 }
 
 function parseTail(value: string | undefined): { ok: true; value: number } | { ok: false } {
@@ -181,16 +238,21 @@ export async function sessionsDiagnoseCommand(
     });
     return;
   }
+  const requestParams = buildDiagnoseCliParams(opts, tail.value);
+  if (!requestParams.ok) {
+    writeCommandError({
+      runtime,
+      json: opts.json,
+      code: "invalid_session_selector",
+      message: requestParams.message,
+      exitCode: 1,
+    });
+    return;
+  }
   try {
     const result = await callGateway<SessionsDiagnoseResult>({
       method: "sessions.diagnose",
-      params: {
-        ...(opts.sessionKey ? { key: opts.sessionKey } : {}),
-        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
-        ...(opts.label ? { label: opts.label } : {}),
-        ...(opts.agent ? { agentId: opts.agent } : {}),
-        tail: tail.value,
-      },
+      params: requestParams.params,
       config: getRuntimeConfig(),
       timeoutMs: opts.timeoutMs,
       mode: GATEWAY_CLIENT_MODES.CLI,

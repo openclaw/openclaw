@@ -156,6 +156,26 @@ describe("sessionsDiagnoseCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("rejects an explicitly empty selector before calling the Gateway", async () => {
+    await sessionsDiagnoseCommand({ sessionId: "   " }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith("--session-id cannot be empty.");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("trims selector values before calling the Gateway", async () => {
+    await sessionsDiagnoseCommand({ sessionKey: "  agent:main:main  " }, runtime);
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          key: "agent:main:main",
+        }),
+      }),
+    );
+  });
+
   it("rejects ambiguous selectors before calling the Gateway", async () => {
     await sessionsDiagnoseCommand(
       {

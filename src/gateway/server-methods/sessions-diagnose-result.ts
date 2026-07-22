@@ -167,6 +167,7 @@ function summarizeDiagnose(params: {
   const hasError = params.findings.some((finding) => finding.severity === "error");
   const hasWarn = params.findings.some((finding) => finding.severity === "warn");
   const hasQueued = params.findings.some((finding) => finding.code === "queued_without_active_run");
+  const hasStall = params.findings.some((finding) => isDiagnoseStallFindingCode(finding.code));
   const hasLowConfidence = params.findings.some(
     (finding) => finding.code === "unknown_low_confidence",
   );
@@ -177,7 +178,7 @@ function summarizeDiagnose(params: {
     ? "unknown"
     : hasQueued
       ? "queued"
-      : hasWarn
+      : hasStall
         ? "stalled"
         : hasActive
           ? "active"
@@ -208,7 +209,7 @@ function selectDiagnoseSummaryHeadlineFinding(params: {
     );
   }
   if (params.state === "stalled") {
-    return params.findings.find((finding) => finding.severity === "warn");
+    return params.findings.find((finding) => isDiagnoseStallFindingCode(finding.code));
   }
   if (params.state === "active") {
     return params.findings.find(
@@ -223,6 +224,15 @@ function selectDiagnoseSummaryHeadlineFinding(params: {
     );
   }
   return params.findings[0];
+}
+
+function isDiagnoseStallFindingCode(code: DiagnoseFinding["code"]): boolean {
+  return (
+    code === "last_progress_stale" ||
+    code === "stale_diagnostic_tool" ||
+    code === "store_terminal_but_live_processing" ||
+    code === "lane_blocked"
+  );
 }
 
 async function readDiagnoseTranscriptEvidence(params: {

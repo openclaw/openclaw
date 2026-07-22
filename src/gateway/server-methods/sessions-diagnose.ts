@@ -142,6 +142,7 @@ function scoreDiagnoseCandidatePreselect(params: {
   const hasQueuedEvidence = (diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0;
   const hasProcessingEvidence = diagnostic.state === "processing";
   const hasCurrentWorkEvidence = hasActiveEvidence || hasQueuedEvidence || hasProcessingEvidence;
+  const terminal = isDiagnoseRowTerminal(buildDiagnoseRow(params.key, params.entry));
   let score = 0;
   if (hasActiveEvidence) {
     score += 50;
@@ -151,6 +152,9 @@ function scoreDiagnoseCandidatePreselect(params: {
   }
   if (hasProcessingEvidence) {
     score += 30;
+  }
+  if (terminal && (hasActiveEvidence || hasProcessingEvidence)) {
+    score += 80;
   }
   if (
     hasCurrentWorkEvidence &&
@@ -349,6 +353,9 @@ function scoreDiagnoseCandidate(params: {
   }
   if (hasQueuedEvidence) {
     score += 40;
+  }
+  if (hasProcessingEvidence) {
+    score += 30;
   }
   if (
     terminal &&

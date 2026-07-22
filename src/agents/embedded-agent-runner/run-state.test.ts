@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID,
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
@@ -15,6 +16,7 @@ afterEach(() => {
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
   ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.clear();
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
+  ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
 });
 
 describe("getEmbeddedRunDiagnosticSnapshot", () => {
@@ -114,6 +116,40 @@ describe("getEmbeddedRunDiagnosticSnapshot", () => {
     ).toEqual({
       active: false,
       sessionKey: "agent:main:target",
+    });
+  });
+
+  it("prefers active file-indexed runs over abandoned key-indexed runs", () => {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set("agent:main:main", "session-old");
+    ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set("session-old", {
+      sessionId: "session-old",
+      sessionKey: "agent:main:main",
+      abandonedAtMs: 10,
+      reason: "timeout",
+    });
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
+      resolveEmbeddedSessionFileKey("/tmp/session-current.jsonl"),
+      "session-current",
+    );
+    ACTIVE_EMBEDDED_RUNS.set("session-current", {
+      isStreaming: () => true,
+      isCompacting: () => false,
+      queueMessage: async () => {},
+      abort: () => {},
+    });
+
+    expect(
+      getEmbeddedRunDiagnosticSnapshot({
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session-current.jsonl",
+      }),
+    ).toEqual({
+      active: true,
+      sessionId: "session-current",
+      sessionKey: "agent:main:main",
+      streaming: true,
+      compacting: false,
+      hasTranscriptSnapshot: false,
     });
   });
 });

@@ -9,12 +9,15 @@ import {
 import { resolveEmbeddedSessionFileKey } from "../../agents/embedded-agent-runner/session-file-key.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticRunProgressForTest } from "../../logging/diagnostic-run-activity.test-support.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../../logging/diagnostic-session-state.js";
 import { writeSessionStore } from "../test-helpers.js";
+import { writeSessionEntryJsonWithoutSessionId } from "../test/server-sessions-sqlite-fixtures.test-helper.js";
 import {
   directSessionReq,
   seedLinearSessionTranscript,
@@ -41,47 +44,8 @@ afterEach(() => {
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
   resetDiagnosticRunActivityForTest();
+  resetDiagnosticSessionStateForTest();
 });
-
-function writeSessionEntryJsonWithoutSessionId(params: {
-  storePath: string;
-  sessionKey: string;
-  sessionId: string;
-  entryJson: Record<string, unknown>;
-  updatedAt: number;
-}): void {
-  const target = resolveSqliteTargetFromSessionStorePath(params.storePath, { agentId: "main" });
-  const database = openOpenClawAgentDatabase({
-    agentId: target.agentId ?? "main",
-    path: target.path,
-  });
-  database.db
-    .prepare(
-      `INSERT INTO sessions (
-        session_id, session_key, session_scope, created_at, updated_at, status
-      ) VALUES (?, ?, 'conversation', ?, ?, ?)`,
-    )
-    .run(
-      params.sessionId,
-      params.sessionKey,
-      params.updatedAt,
-      params.updatedAt,
-      typeof params.entryJson.status === "string" ? params.entryJson.status : null,
-    );
-  database.db
-    .prepare(
-      `INSERT INTO session_entries (
-        session_key, session_id, entry_json, updated_at, status
-      ) VALUES (?, ?, ?, ?, ?)`,
-    )
-    .run(
-      params.sessionKey,
-      params.sessionId,
-      JSON.stringify(params.entryJson),
-      params.updatedAt,
-      typeof params.entryJson.status === "string" ? params.entryJson.status : null,
-    );
-}
 
 test("sessions.diagnose returns read-only live and stored evidence without transcript paths", async () => {
   const { dir } = await createSessionStoreDir();
@@ -300,6 +264,112 @@ test("sessions.diagnose picks a lifecycle-projected active session beyond the bo
   }
 });
 
+test("sessions.diagnose keeps processing-only evidence through final selection", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:processing": sessionStoreEntry("sess-processing", {
+        status: "running",
+        updatedAt: 1,
+      }),
+      "agent:main:newest": sessionStoreEntry("sess-newest", {
+        updatedAt: 2,
+      }),
+    },
+  });
+  const state = getDiagnosticSessionState({
+    sessionId: "sess-processing",
+    sessionKey: "agent:main:processing",
+  });
+  state.state = "processing";
+  state.queueDepth = 0;
+  state.lastActivity = Date.now();
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {});
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "highest live or contradictory evidence score",
+    session: {
+      key: "agent:main:processing",
+      sessionId: "sess-processing",
+    },
+    live: {
+      diagnostic: {
+        state: "processing",
+      },
+    },
+  });
+});
+
+test("sessions.diagnose keeps terminal live contradictions before the candidate cap", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  const entries: Record<string, SessionEntry> = {
+    "agent:main:contradiction": sessionStoreEntry("sess-contradiction", {
+      status: "done",
+      endedAt: now - 1_000,
+      updatedAt: 1,
+    }),
+  };
+  const chatAbortControllers = new Map([
+    [
+      "run-contradiction",
+      {
+        controller: new AbortController(),
+        sessionId: "sess-contradiction",
+        sessionKey: "agent:main:contradiction",
+        agentId: "main",
+        startedAtMs: now - 2_000,
+        expiresAtMs: now + 60_000,
+        kind: "agent" as const,
+      },
+    ],
+  ]);
+  for (let index = 0; index < 105; index += 1) {
+    const sessionKey = `agent:main:active-${index}`;
+    const sessionId = `sess-active-${index}`;
+    entries[sessionKey] = sessionStoreEntry(sessionId, {
+      status: "running",
+      updatedAt: now + index,
+    });
+    chatAbortControllers.set(`run-active-${index}`, {
+      controller: new AbortController(),
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      startedAtMs: now - 1_000,
+      expiresAtMs: now + 60_000,
+      kind: "agent" as const,
+    });
+  }
+  await writeSessionStore({ entries });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>(
+    "sessions.diagnose",
+    {},
+    {
+      context: { chatAbortControllers },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "highest live or contradictory evidence score",
+    session: {
+      key: "agent:main:contradiction",
+      sessionId: "sess-contradiction",
+      status: "done",
+      hasActiveRun: true,
+    },
+    findings: expect.arrayContaining([
+      expect.objectContaining({ code: "store_terminal_but_live_processing" }),
+    ]),
+  });
+});
+
 test("sessions.diagnose does not preselect a stale row from a conflicting keyed run id", async () => {
   await createSessionStoreDir();
   const now = Date.now();
@@ -500,7 +570,7 @@ test("sessions.diagnose reports no_sessions when no stored sessions exist", asyn
   });
 });
 
-test("sessions.diagnose keeps label matches whose entry json lacks a session id", async () => {
+test("sessions.diagnose hydrates label and session-id matches from stored row identity", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: {} });
   writeSessionEntryJsonWithoutSessionId({
@@ -529,12 +599,25 @@ test("sessions.diagnose keeps label matches whose entry json lacks a session id"
     chosenBecause: "explicit label selector",
     session: {
       key: "agent:main:no-id",
+      sessionId: "sess-column-only",
       label: "ops",
       status: "running",
       hasActiveRun: false,
     },
   });
-  expect("sessionId" in payload.session).toBe(false);
+
+  const sessionIdResult = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    sessionId: "sess-column-only",
+  });
+  expect(sessionIdResult.ok).toBe(true);
+  expect(sessionIdResult.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "explicit session id selector",
+    session: {
+      key: "agent:main:no-id",
+      sessionId: "sess-column-only",
+    },
+  });
 });
 
 test("sessions.diagnose returns low confidence when no dominant signal exists", async () => {

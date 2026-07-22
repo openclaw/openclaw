@@ -272,10 +272,6 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
     if (activeSessionId) {
       return activeSessionId;
     }
-    const abandonedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey);
-    if (abandonedSessionId) {
-      return abandonedSessionId;
-    }
   }
   const sessionFile = params.sessionFile?.trim();
   const sessionFileKey = sessionFile ? resolveEmbeddedSessionFileKey(sessionFile) : undefined;
@@ -286,6 +282,14 @@ function resolveEmbeddedRunDiagnosticSessionId(params: {
     if (activeSessionId) {
       return activeSessionId;
     }
+  }
+  if (sessionKey) {
+    const abandonedSessionId = ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(sessionKey);
+    if (abandonedSessionId) {
+      return abandonedSessionId;
+    }
+  }
+  if (sessionFileKey) {
     const abandonedSessionId = sessionFileKey
       ? ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey)
       : undefined;
