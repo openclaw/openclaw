@@ -253,6 +253,54 @@ describe("Control UI device-auth upgrade migration", () => {
     }
   });
 
+  it("does not silently auto-approve a local signed migration browser", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const identityPath = path.join(
+      os.tmpdir(),
+      `openclaw-device-auth-migration-local-explicit-${randomUUID()}.sqlite`,
+    );
+    let ws: WebSocket | undefined;
+    try {
+      ws = await harness.openWs({ origin: BROWSER_ORIGIN });
+      const signed = await signedDevice(ws, identityPath);
+      const connected = await connectReq(ws, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: signed.device,
+      });
+      expect(connected.ok).toBe(true);
+      expect(connected.payload).toMatchObject({
+        deviceAuthMigration: { pending: true },
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+      });
+      expect(
+        (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
+      ).toBeUndefined();
+
+      const list = await rpcReq<{
+        pending: Array<{ requestId: string; deviceId: string }>;
+      }>(ws, "device.pair.list", {});
+      expect(list.payload?.pending).toContainEqual(
+        expect.objectContaining({ deviceId: signed.identity.deviceId }),
+      );
+    } finally {
+      ws?.close();
+      await harness.close();
+    }
+  });
+
   it("rejects a device-less migration handshake when an operator is already paired", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({

@@ -382,7 +382,8 @@ export async function authorizeGatewayConnectDevice(
         return replacementPending?.requestId;
       };
       const inlineApprovalAttempted =
-        trustedProxyAutoApproveScopes !== null || pairing.request.silent === true;
+        !allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        (trustedProxyAutoApproveScopes !== null || pairing.request.silent === true);
       if (inlineApprovalAttempted) {
         approved =
           trustedProxyAutoApproveScopes !== null
