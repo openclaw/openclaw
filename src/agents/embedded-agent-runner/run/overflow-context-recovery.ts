@@ -189,6 +189,56 @@ export async function recoverEmbeddedRunOverflow(input: {
     return { action: "retry" };
   }
 
+  // Tool-heavy sessions can often recover deterministically without waiting for
+  // model-driven compaction. Preflight-owned routes already apply their selected
+  // recovery policy inside the attempt, so keep this fallback scoped to overflows
+  // that reached the generic recovery loop.
+  if (!input.state.toolResultTruncationAttempted && !preflightRecovery) {
+    const toolResultMaxChars = resolveLiveToolResultMaxChars({
+      contextWindowTokens: input.contextTokenBudget,
+      cfg: runParams.config,
+      agentId: input.sessionAgentId,
+    });
+    const hasToolResultPressure = input.attempt.messagesSnapshot
+      ? sessionLikelyHasOversizedToolResults({
+          messages: input.attempt.messagesSnapshot,
+          contextWindowTokens: input.contextTokenBudget,
+          maxCharsOverride: toolResultMaxChars,
+        })
+      : false;
+
+    if (hasToolResultPressure) {
+      input.state.toolResultTruncationAttempted = true;
+      log.warn(
+        `[context-overflow-recovery] Attempting tool result truncation before compaction for ${input.provider}/${input.modelId} ` +
+          `(contextWindow=${input.contextTokenBudget} tokens)`,
+      );
+      const session = input.getActiveSession();
+      const truncResult = await truncateOversizedToolResultsInActiveTarget({
+        scope: {
+          sessionId: session.id,
+          sessionKey: runParams.sessionKey ?? session.id,
+          sessionFile: session.file,
+          agentId: input.sessionAgentId,
+        },
+        contextWindowTokens: input.contextTokenBudget,
+        maxCharsOverride: toolResultMaxChars,
+        config: runParams.config,
+        protectTrailingToolResults: false,
+      });
+      if (truncResult.truncated) {
+        log.info(
+          `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt before compaction`,
+        );
+        await input.prepareCompactedTranscriptRetry();
+        return { action: "retry" };
+      }
+      log.warn(
+        `[context-overflow-recovery] Pre-compaction tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+      );
+    }
+  }
+
   if (
     !isCompactionFailure &&
     input.attemptCompactionCount === 0 &&
