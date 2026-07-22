@@ -132,7 +132,7 @@ export type PluginManifestProviderEndpoint = {
   googleVertexRegionHostSuffix?: string;
 };
 
-type PluginManifestProviderRequestProvider = {
+export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
   openAICompletions?: {
