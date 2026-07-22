@@ -49,7 +49,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.String({
       minLength: 1,
       description:
-        "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
+        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Requires operator.admin.",
     }),
   ),
 });

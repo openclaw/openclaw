@@ -243,7 +243,11 @@ describe("createApplicationGateway reconnecting snapshot", () => {
       seq: 2,
       stateVersion: { presence: 2, health: 1 },
     });
-    expect(gateway.snapshot.selfUser).toBeNull();
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Ada Lovelace",
+      avatarUrl: "/api/users/profile-1/avatar?v=3",
+    });
   });
 
   it("clears identity while disconnected", () => {
