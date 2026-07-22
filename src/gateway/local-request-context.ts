@@ -67,7 +67,7 @@ function createLocalGatewayRequestContext(
     ...unavailableCron,
     removeAgentJobsTransactional: async (agentId, commit) => {
       const cfg = params.getRuntimeConfig();
-      const storePath = resolveCronJobsStorePath(cfg.cron?.store);
+      const storePath = resolveCronJobsStorePath();
       const service = new CronService({
         storePath,
         cronEnabled: cfg.cron?.enabled !== false,
@@ -154,7 +154,7 @@ function createLocalGatewayRequestContext(
     nodeSubscribe: () => {},
     nodeUnsubscribe: () => {},
     nodeUnsubscribeAll: () => {},
-    hasConnectedTalkNode: () => false,
+    hasConnectedTalkNode: async () => false,
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),

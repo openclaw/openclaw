@@ -1,8 +1,10 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
@@ -14,6 +16,14 @@ import type {
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
+export type ChannelsPairingAccount =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingAccount;
+export type ChannelsPairingApproveResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingApproveResult;
+export type ChannelsPairingListResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
+export type ChannelsPairingRequest =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -482,6 +492,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  createdBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   spawnedBy?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
@@ -509,6 +520,10 @@ export type GatewaySessionRow = {
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionAgentStatus;
+  observerDigest?: Pick<
+    SessionObserverDigest,
+    "runId" | "headline" | "health" | "updatedAt" | "revision"
+  >;
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
@@ -640,37 +655,21 @@ type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string };
+  | { kind: "on-exit"; command: string; cwd?: string }
+  | {
+      kind: "stream";
+      command: string[];
+      cwd?: string;
+      mode?: "line" | "match";
+      match?: string;
+      batchMs?: number;
+      maxBatchBytes?: number;
+    };
 
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 type CronWakeMode = "next-heartbeat" | "now";
 
-export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | {
-      kind: "command";
-      argv: string[];
-      cwd?: string;
-      env?: Record<string, string>;
-      input?: string;
-      timeoutSeconds?: number;
-      noOutputTimeoutSeconds?: number;
-      outputMaxBytes?: number;
-    }
-  | {
-      kind: "agentTurn";
-      message: string;
-      model?: string;
-      fallbacks?: string[];
-      thinking?: string;
-      timeoutSeconds?: number;
-      allowUnsafeExternalContent?: boolean;
-      lightContext?: boolean;
-      deliver?: boolean;
-      channel?: string;
-      to?: string;
-      bestEffortDeliver?: boolean;
-    };
+export type CronPayload = CoreCronPayload;
 
 type CronDelivery = {
   mode: "none" | "announce" | "webhook";
@@ -714,6 +713,15 @@ type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
   lastFailureAlertAtMs?: number;
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamSourceIdentity?: string;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
 };
 
 export type CronJob = CronJobBase<

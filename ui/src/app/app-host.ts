@@ -11,7 +11,6 @@ import {
 import type { GatewayAgentRow } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
-import "../components/connection-banner.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
@@ -22,7 +21,14 @@ import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
+import {
+  EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
+  type SidebarWorkboardRenderers,
+  type SidebarWorkboardRuntime,
+  type SidebarWorkboardRuntimeFactory,
+} from "../components/app-sidebar-workboard.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   COMMAND_PALETTE_TARGET_EVENT,
@@ -381,7 +387,7 @@ class OpenClawApp extends OpenClawLightDomElement {
       `;
     }
     // Transport drops after an established session keep the shell mounted
-    // (offline banner + client auto-retry); the login gate is reserved for
+    // (offline presentation + client auto-retry); the login gate is reserved for
     // credential-less first connects, credential rejections, and manual gate
     // submissions. A first connect backed by stored credentials paints the
     // connecting splash instead of flashing the login gate; the gate returns
@@ -494,6 +500,12 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private sidebarWorkboardSnapshot = EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT;
+  private sidebarWorkboardRuntime: SidebarWorkboardRuntime | null = null;
+  private sidebarWorkboardHost: ApplicationContext["workboard"] | null = null;
+  private sidebarWorkboardRenderers: SidebarWorkboardRenderers | undefined;
+  private sidebarWorkboardRuntimeLoad: Promise<SidebarWorkboardRuntimeFactory> | null = null;
+  private sidebarWorkboardEpoch = 0;
   private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private lastNativeNavState: NativeNavState | undefined;
   private didConsiderNativeRouteRestore = false;
@@ -577,6 +589,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
             this.reconcileServerUiPrefs(runtimeConfig);
+            this.syncSidebarWorkboard();
             notify();
           }),
         (runtimeConfig) => {
@@ -585,6 +598,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             this.ensureRuntimeConfig(snapshot, runtimeConfig);
           }
           this.reconcileServerUiPrefs(runtimeConfig);
+          this.syncSidebarWorkboard();
         },
       );
   }
@@ -681,6 +695,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.sessionKeyClient = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
+    this.disposeSidebarWorkboard();
     if (this.agentRosterRefreshTimer !== null) {
       globalThis.clearTimeout(this.agentRosterRefreshTimer);
       this.agentRosterRefreshTimer = null;
@@ -693,6 +708,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
+    this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
     if (event.event === "config.changed") {
       // Another writer (agent-approved config_set, other device, CLI) changed
       // openclaw.json; refresh the snapshot so ui.prefs reconcile live. A
@@ -1240,6 +1256,88 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.updateGatewaySessionKey(snapshot);
     this.ensureAgentsList(snapshot);
     this.ensureRuntimeConfig(snapshot);
+    this.syncSidebarWorkboard();
+  }
+
+  private syncSidebarWorkboard() {
+    const context = this.context;
+    const snapshot = context?.gateway.snapshot;
+    const configSnapshot = context?.runtimeConfig.state.configSnapshot;
+    if (!context || !snapshot || !configSnapshot) {
+      return;
+    }
+    if (!isWorkboardEnabledInConfigSnapshot(configSnapshot)) {
+      this.disposeSidebarWorkboard();
+      return;
+    }
+    const runtime = this.sidebarWorkboardRuntime;
+    if (runtime) {
+      if (this.sidebarWorkboardHost !== context.workboard) {
+        this.disposeSidebarWorkboard();
+        this.syncSidebarWorkboard();
+        return;
+      }
+      runtime.sync(snapshot.client, snapshot.connected);
+      return;
+    }
+    if (this.sidebarWorkboardRuntimeLoad) {
+      return;
+    }
+    const epoch = this.sidebarWorkboardEpoch;
+    const load = import("../components/app-sidebar-workboard.runtime.ts");
+    this.sidebarWorkboardRuntimeLoad = load;
+    void load
+      .then((module) => {
+        if (this.sidebarWorkboardEpoch !== epoch || this.sidebarWorkboardRuntime) {
+          return;
+        }
+        const current = this.context;
+        if (!current) {
+          return;
+        }
+        const loadedRuntime = module.createSidebarWorkboardRuntime((nextSnapshot) => {
+          if (this.sidebarWorkboardRuntime === loadedRuntime) {
+            this.sidebarWorkboardSnapshot = nextSnapshot;
+            this.requestUpdate();
+          }
+        }, current.workboard);
+        this.sidebarWorkboardRuntime = loadedRuntime;
+        this.sidebarWorkboardHost = current.workboard;
+        this.sidebarWorkboardRenderers = {
+          renderEntry: module.renderSidebarWorkboardEntry,
+          renderCustomize: module.renderSidebarWorkboardCustomize,
+        };
+        const gateway = current?.gateway.snapshot;
+        if (
+          current &&
+          gateway &&
+          isWorkboardEnabledInConfigSnapshot(current.runtimeConfig.state.configSnapshot)
+        ) {
+          loadedRuntime.sync(gateway.client, gateway.connected);
+        }
+      })
+      .catch(() => {
+        if (this.sidebarWorkboardEpoch === epoch && this.sidebarWorkboardRuntimeLoad === load) {
+          this.sidebarWorkboardRuntimeLoad = null;
+        }
+      });
+  }
+
+  private disposeSidebarWorkboard() {
+    this.sidebarWorkboardEpoch += 1;
+    const runtime = this.sidebarWorkboardRuntime;
+    runtime?.dispose();
+    if (!runtime) {
+      this.context?.workboard.clearBoards();
+    }
+    this.sidebarWorkboardRuntime = null;
+    this.sidebarWorkboardHost = null;
+    this.sidebarWorkboardRenderers = undefined;
+    this.sidebarWorkboardRuntimeLoad = null;
+    if (this.sidebarWorkboardSnapshot !== EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT) {
+      this.sidebarWorkboardSnapshot = EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT;
+      this.requestUpdate();
+    }
   }
 
   private ensureRuntimeConfig(
@@ -1498,7 +1596,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 activeRouteId: activeRoute,
                 activeSearch: this.routeState.location?.search ?? "",
                 activeHash: this.routeState.location?.hash ?? "",
-                connected: gatewaySnapshot.connected,
+                offline: gatewaySnapshot.offlineStable,
+                lastError: gatewaySnapshot.lastError,
                 version:
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
@@ -1509,6 +1608,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 searchQuery: this.settingsSearchQuery,
                 searchBlockMatches: settingsSearchBlocks,
                 onExit: () => this.exitSettings(),
+                onRetryConnect: () => context.gateway.connect(),
                 onNavigate: (routeId, options) => this.navigate(routeId, options),
                 onPreload: (routeId) => context.preload(routeId),
                 onSearchQueryChange: (nextQuery) => {
@@ -1521,13 +1621,22 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
                 .enabledRouteIds=${this.enabledRouteIds()}
+                .activeWorkboardBoardId=${workboardBoardIdFromPath(
+                  this.routeState.location?.pathname ?? "",
+                  context.basePath,
+                ) ?? ""}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
+                .offline=${gatewaySnapshot.offlineStable}
+                .lastError=${gatewaySnapshot.lastError}
                 .terminalAvailable=${terminalAvailable}
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
+                .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
+                .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
+                .workboardRenderers=${this.sidebarWorkboardRenderers}
                 .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
@@ -1543,6 +1652,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .onOpenPalette=${this.openPalette}
                 .onOpenApprovals=${this.openApprovals}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onRetryConnect=${() => context.gateway.connect()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
                   const search = newSessionSearch(agentId, target);
                   this.navigate("new-session", { search });
@@ -1579,14 +1689,6 @@ class OpenClawShell extends OpenClawLightDomElement {
             : ""}"
           .tabIndex=${-1}
         >
-          ${gatewaySnapshot.connected
-            ? nothing
-            : html`<openclaw-connection-banner
-                .props=${{
-                  lastError: gatewaySnapshot.lastError,
-                  onRetry: () => context.gateway.connect(),
-                }}
-              ></openclaw-connection-banner>`}
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.controlUiRefreshRequired
