@@ -28,6 +28,7 @@ type SubagentSurface = {
     message: string;
     model?: string;
     extraSystemPrompt?: string;
+    promptMode?: "full" | "minimal" | "none";
     lane?: string;
     lightContext?: boolean;
     deliver?: boolean;
@@ -245,6 +246,7 @@ async function startNarrativeRunOrFallback(params: {
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      promptMode: "minimal",
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,
