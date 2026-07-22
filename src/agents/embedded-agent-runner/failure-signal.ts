@@ -50,3 +50,34 @@ export function resolveEmbeddedRunFailureSignal(params: {
     fatalForCron: true,
   };
 }
+
+/**
+ * Detects a ===DONE_ERR=== terminal failure sentinel in the final agent-visible text and
+ * returns a structured failure signal. Only the last non-empty line is checked so mid-text
+ * occurrences (followed by recovery) are ignored.
+ * Cron-only: non-cron triggers are ignored so user-initiated runs are not affected.
+ */
+const DONE_ERR_SENTINEL = "===DONE_ERR===";
+
+export function resolveEmbeddedRunSentinelSignal(params: {
+  trigger?: string | undefined;
+  finalAssistantVisibleText?: string | undefined;
+}): EmbeddedRunFailureSignal | undefined {
+  if (params.trigger !== "cron") {
+    return undefined;
+  }
+  const normalizedText = normalizeOptionalString(params.finalAssistantVisibleText);
+  if (!normalizedText) {
+    return undefined;
+  }
+  const lastLine = normalizedText.trim().split("\n").at(-1)?.trim();
+  if (lastLine?.startsWith(DONE_ERR_SENTINEL) === true) {
+    return {
+      kind: "done_err_sentinel",
+      source: "agent_text",
+      message: lastLine,
+      fatalForCron: true,
+    };
+  }
+  return undefined;
+}

@@ -400,4 +400,64 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     ).rejects.toBe(timeoutError);
     expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });
+
+  it("marks a cron run as error when the embedded agent result carries a fatal failureSignal (===DONE_ERR=== sentinel path)", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "Vault check complete" }],
+        meta: {
+          failureSignal: { fatalForCron: true, message: "===DONE_ERR=== vault delivery blocked" },
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("===DONE_ERR=== vault delivery blocked");
+    // The sentinel-derived failureSignal flows through resolveCronPayloadOutcome
+    // which produces hasFatalErrorPayload=true, embeddedRunError with sentinel text.
+    // The cron run layer then returns status: "error" with that error text.
+  });
+
+  it("does not mark a cron run as error when a nonfatal failureSignal is present", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "Some tool warning was emitted but work continued" }],
+        meta: {
+          failureSignal: { fatalForCron: false, message: "tool warning: retrying" },
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "tool warning: retrying",
+      outputText: "Some tool warning was emitted but work continued",
+      synthesizedText: "Some tool warning was emitted but work continued",
+      deliveryPayload: undefined,
+      deliveryPayloads: [{ text: "Some tool warning was emitted but work continued" }],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
 });

@@ -5,6 +5,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { resolveEmbeddedRunSentinelSignal } from "../failure-signal.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import type {
@@ -41,6 +42,25 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
 const MAX_TOOL_USE_TERMINAL_CONTINUATIONS = 1;
+/** Merges an existing failureSignal with a sentinel-derived signal. Fatal existing signal takes
+ *  priority. Otherwise, if the final text contains a ===DONE_ERR=== sentinel, it takes priority
+ *  over a nonfatal existing signal. Returns the existing signal unchanged if no sentinel is found. */
+function resolveEffectiveFailureSignal(input: {
+  failureSignal?: EmbeddedRunFailureSignal;
+  finalAssistantVisibleText?: string;
+  runParams: { trigger?: string };
+}): EmbeddedRunFailureSignal | undefined {
+  if (input.failureSignal?.fatalForCron === true) {
+    return input.failureSignal;
+  }
+  return (
+    resolveEmbeddedRunSentinelSignal({
+      trigger: input.runParams.trigger,
+      finalAssistantVisibleText: input.finalAssistantVisibleText,
+    }) ?? input.failureSignal
+  );
+}
+
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
@@ -416,7 +436,9 @@ async function surfaceIncompleteTurn(
           terminalPresentation: input.terminalToolPresentation !== undefined,
         },
         toolSummary: input.attemptToolSummary,
-        ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(resolveEffectiveFailureSignal(input)
+          ? { failureSignal: resolveEffectiveFailureSignal(input) }
+          : {}),
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
       },
       ...copyAttemptDeliveryState(input.attempt),
@@ -546,7 +568,9 @@ function completeEmbeddedRun(
             : {}),
         },
         toolSummary: input.attemptToolSummary,
-        ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(resolveEffectiveFailureSignal(input)
+          ? { failureSignal: resolveEffectiveFailureSignal(input) }
+          : {}),
         completion: {
           ...(stopReason ? { stopReason } : {}),
           ...(stopReason ? { finishReason: stopReason } : {}),
