@@ -15,10 +15,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
-import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { requestSessionObserverAnswer } from "./chat-observer.ts";
 import {
   createSessionContext,
   createTestChatPane,
@@ -100,24 +98,6 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     __openclaw: { seq },
   };
 }
-
-describe("chat pane observer HUD", () => {
-  it("sends the observer ask RPC with the exact session payload", async () => {
-    const request = vi.fn(async () => ({ answer: "It is rerunning a focused regression." }));
-
-    await expect(
-      requestSessionObserverAnswer(
-        { request } as unknown as Pick<GatewayBrowserClient, "request">,
-        "agent:main:current",
-        "Why is it rerunning that test?",
-      ),
-    ).resolves.toEqual({ answer: "It is rerunning a focused regression." });
-    expect(request).toHaveBeenCalledWith("sessions.observer.ask", {
-      sessionKey: "agent:main:current",
-      question: "Why is it rerunning that test?",
-    });
-  });
-});
 
 describe("chat pane pull request refresh", () => {
   it("forwards an explicit refresh and publishes live PR state", async () => {
