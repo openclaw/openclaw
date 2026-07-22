@@ -14,13 +14,90 @@ beforeEach(() => {
 });
 
 describe("buildActiveSubagentSystemPromptAddition", () => {
-  it("returns nothing without active children", () => {
+  it("returns nothing without active or recently completed children", () => {
     expect(
       buildActiveSubagentSystemPromptAddition({
         cfg: {} as OpenClawConfig,
         controllerSessionKey: "agent:main:main",
       }),
     ).toBeUndefined();
+  });
+
+  it("summarizes recently completed children when no active runs remain", () => {
+    const endedAt = Date.now() - 60_000;
+    const run = {
+      runId: "run-recent-context",
+      childSessionKey: "agent:main:subagent:recent-context",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "read email MSG_ID:1546",
+      taskName: "read_email",
+      label: "Email reader",
+      cleanup: "keep",
+      createdAt: endedAt - 120_000,
+      startedAt: endedAt - 120_000,
+      endedAt,
+      outcome: { status: "ok" },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+      hasSessionsYield: true,
+      recentMinutes: 30,
+    });
+
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain("## Active Subagents");
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("taskName=read_email");
+    expect(prompt).toContain("session=agent:main:subagent:recent-context");
+    expect(prompt).toContain("status=done");
+    expect(prompt).toContain("do not re-spawn the same task");
+    expect(prompt).not.toContain("sessions_yield");
+  });
+
+  it("includes both active and recently completed sections when mixed", () => {
+    const now = Date.now();
+    addSubagentRunForTests({
+      runId: "run-mixed-active",
+      childSessionKey: "agent:main:subagent:mixed-active",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "still working",
+      taskName: "active_task",
+      cleanup: "keep",
+      createdAt: now,
+      startedAt: now,
+    } satisfies SubagentRunRecord);
+    addSubagentRunForTests({
+      runId: "run-mixed-recent",
+      childSessionKey: "agent:main:subagent:mixed-recent",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "already finished",
+      taskName: "recent_task",
+      cleanup: "keep",
+      createdAt: now - 180_000,
+      startedAt: now - 180_000,
+      endedAt: now - 30_000,
+      outcome: { status: "ok" },
+    } satisfies SubagentRunRecord);
+
+    const prompt = buildActiveSubagentSystemPromptAddition({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+      hasSessionsYield: true,
+    });
+
+    expect(prompt).toContain("## Active Subagents");
+    expect(prompt).toContain("## Recently Completed Subagents");
+    expect(prompt).toContain("taskName=active_task");
+    expect(prompt).toContain("taskName=recent_task");
   });
 
   it("summarizes active child state for the current requester", () => {
