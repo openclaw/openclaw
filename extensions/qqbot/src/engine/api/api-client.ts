@@ -139,6 +139,9 @@ export class ApiClient {
       guarded = await fetchWithSsrFGuard({
         url,
         init: fetchInit,
+        // Bound redirect resolution alongside the caller's AbortController
+        // so a slow or hanging redirect cannot outlive the request deadline.
+        timeoutMs: timeout,
         auditContext: "qqbot-api",
         policy: resolveQqbotApiSsrfPolicy(url),
         timeoutMs: guardedTimeoutMs,

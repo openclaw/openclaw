@@ -78,6 +78,7 @@ describe("executeChannelApi", () => {
         },
         signal: expect.any(AbortSignal),
       },
+      timeoutMs: 30_000,
       auditContext: "qqbot-channel-api",
       policy: {
         hostnameAllowlist: ["api.sgroup.qq.com"],

@@ -88,6 +88,7 @@ describe("ApiClient", () => {
           "User-Agent": "QQBotPlugin/unknown",
         },
       },
+      timeoutMs: 30_000,
       auditContext: "qqbot-api",
       policy: {
         hostnameAllowlist: ["qqbot.test"],

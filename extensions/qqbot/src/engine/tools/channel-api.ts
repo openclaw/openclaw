@@ -329,6 +329,9 @@ export async function executeChannelApi(
       const guarded = await fetchWithSsrFGuard({
         url,
         init: fetchOptions,
+        // Bound redirect resolution alongside the caller's AbortController
+        // so a slow or hanging redirect cannot outlive the request deadline.
+        timeoutMs: DEFAULT_TIMEOUT_MS,
         auditContext: "qqbot-channel-api",
         policy: resolveChannelApiSsrfPolicy(url),
       });
