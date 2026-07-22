@@ -4029,6 +4029,12 @@ export const en: TranslationMap = {
       askPending: "Checking the observations…",
       askBusy: "The observer is already answering a question.",
       askUnavailable: "The observer cannot answer right now.",
+      boardCurrentStatus: "Current status",
+      boardTimeline: "Health timeline",
+      boardCurrentRun: "Current run",
+      boardPreviousRun: "Previous run",
+      boardUnknownRun: "Unidentified run",
+      boardSinceYouLeft: "Since you left",
       health: {
         "on-track": "On track",
         grinding: "Working",
