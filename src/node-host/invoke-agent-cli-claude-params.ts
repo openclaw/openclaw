@@ -54,7 +54,6 @@ const ENV_ALLOWLIST = new Set([
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
   "FORCE_COLOR",
   "LANG",
   "LC_ALL",
@@ -287,6 +286,9 @@ export async function decodeClaudeCliNodeRunParams(
         throw new Error(`INVALID_REQUEST: environment key is not allowed: ${key}`);
       }
       env[key] = requireBoundedString(candidate, `env.${key}`, MAX_ARG_BYTES);
+    }
+    if (Object.hasOwn(env, "ANTHROPIC_API_KEY") && Object.hasOwn(env, "CLAUDE_CODE_OAUTH_TOKEN")) {
+      throw new Error("INVALID_REQUEST: exactly one Claude credential may be provided");
     }
   }
   let clearEnv: string[] | undefined;

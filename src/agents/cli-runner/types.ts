@@ -19,6 +19,7 @@ import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -216,11 +217,9 @@ export type RunCliAgentParams = {
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
-export type CliSecretInput = {
-  fd: number;
+export type CliSecretInput = SpawnSecretInput & {
   /** Process-local non-secret generation used only to invalidate a warm child. */
   fingerprint: string;
-  createData: () => Buffer;
 };
 
 type CliPreparedBackend = {

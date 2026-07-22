@@ -1,6 +1,5 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
-import type { Writable } from "node:stream";
 import { toErrorObject } from "../../../infra/errors.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import {
@@ -9,6 +8,11 @@ import {
 } from "../../../plugin-sdk/windows-spawn.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
+import {
+  addSecretInputStdio,
+  type SpawnStdioEntry,
+  writeSecretInputToChild,
+} from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -98,20 +102,8 @@ export async function createChildAdapter(params: {
   // existing POSIX detached behavior.
   const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
 
-  const stdio: Array<"ignore" | "inherit" | "overlapped" | "pipe"> = [
-    stdinMode === "inherit" ? "inherit" : "pipe",
-    "pipe",
-    "pipe",
-  ];
-  if (params.secretInput) {
-    if (!Number.isInteger(params.secretInput.fd) || params.secretInput.fd < 3) {
-      throw new Error("secret input file descriptor must be an integer greater than 2");
-    }
-    while (stdio.length <= params.secretInput.fd) {
-      stdio.push("ignore");
-    }
-    stdio[params.secretInput.fd] = process.platform === "win32" ? "overlapped" : "pipe";
-  }
+  const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
+  addSecretInputStdio(stdio, params.secretInput);
 
   const options: SpawnOptions = {
     cwd: params.cwd,
@@ -136,32 +128,11 @@ export async function createChildAdapter(params: {
   });
 
   if (params.secretInput) {
-    const stream = spawned.child.stdio[params.secretInput.fd] as Writable | null | undefined;
-    if (!stream || typeof stream.end !== "function") {
-      spawned.child.kill("SIGKILL");
-      throw new Error(`secret input file descriptor ${params.secretInput.fd} is unavailable`);
-    }
-    let data: Buffer | undefined;
     try {
-      data = params.secretInput.createData();
-      // Claude consumes and closes this descriptor before launching hooks. End
-      // the parent pipe immediately so no descendant can inherit usable bytes.
-      await new Promise<void>((resolve, reject) => {
-        const onError = (error: Error) => {
-          stream.off("error", onError);
-          reject(error);
-        };
-        stream.once("error", onError);
-        stream.end(data, () => {
-          stream.off("error", onError);
-          resolve();
-        });
-      });
+      await writeSecretInputToChild(spawned.child, params.secretInput);
     } catch (error) {
       spawned.child.kill("SIGKILL");
       throw error;
-    } finally {
-      data?.fill(0);
     }
   }
 

@@ -521,16 +521,18 @@ describe("runCliAgent spawn path", () => {
         clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         systemPromptWhen: "always",
       },
-      preparedEnv: {
-        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-      },
+      preparedEnv: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
       resolveExecutionArgs: (execution) => {
         toolAvailability = execution.toolAvailability;
         return [...execution.baseArgs];
       },
       cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
     });
+    context.preparedBackend.secretInput = {
+      fd: 3,
+      fingerprint: "selected-node-token-fingerprint",
+      createData: () => Buffer.from("selected-node-token"),
+    };
     context.openClawHistoryPrompt = "gateway transcript reseed";
     context.claudeSkillsPluginArgs = ["--plugin-dir", "/tmp/gateway-skills"];
     context.params.forkCliSessionOnResume = true;
@@ -552,14 +554,14 @@ describe("runCliAgent spawn path", () => {
         stdin: "current turn",
         argv: expect.arrayContaining(["--resume", "source-node-session", "--fork-session"]),
         systemPrompt: "You are a helpful assistant.",
-        env: {
-          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-        },
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
         clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
       }),
     );
     expect(invokeNode.mock.calls[0]?.[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(invokeNode.mock.calls[0]?.[0].env).not.toHaveProperty(
+      "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+    );
     const argv = invokeNode.mock.calls[0]?.[0].argv ?? [];
     expect(argv).not.toContain("--mcp-config");
     expect(argv).not.toContain("--permission-mode");

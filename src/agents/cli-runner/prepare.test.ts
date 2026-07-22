@@ -4107,9 +4107,11 @@ describe("prepareCliRunContext", () => {
     });
     try {
       const prepareExecution = vi.fn(async () => ({
-        env: {
-          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+        env: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
+        secretInput: {
+          fd: 3,
+          fingerprint: "selected-node-token-fingerprint",
+          createData: () => Buffer.from("selected-node-token"),
         },
         clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
       }));
@@ -4194,9 +4196,11 @@ describe("prepareCliRunContext", () => {
       expect(orphanCheck).not.toHaveBeenCalled();
       expect(prepareExecution).toHaveBeenCalledOnce();
       expect(context.preparedBackend.env).toMatchObject({
-        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
-        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+        CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
       });
+      expect(context.preparedBackend.secretInput?.fingerprint).toBe(
+        "selected-node-token-fingerprint",
+      );
       expect(context.preparedBackend.backend.clearEnv).toEqual(
         expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
       );

@@ -256,11 +256,29 @@ const CLI_ENV_AUTH_LOG_KEYS = [
 
 const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
 const CLAUDE_SELECTED_AUTH_ENV_KEYS = new Set(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
-const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
-  ...CLAUDE_SELECTED_AUTH_ENV_KEYS,
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-  "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
-]);
+const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set(["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]);
+
+function resolveNodeClaudeAuthEnv(context: PreparedCliRunContext): Record<string, string> {
+  const secretInput = context.preparedBackend.secretInput;
+  if (!secretInput) {
+    return {};
+  }
+  const descriptorEnv = context.preparedBackend.env ?? {};
+  const requestEnv = Object.hasOwn(descriptorEnv, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR")
+    ? "CLAUDE_CODE_OAUTH_TOKEN"
+    : Object.hasOwn(descriptorEnv, "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR")
+      ? "ANTHROPIC_API_KEY"
+      : undefined;
+  if (!requestEnv) {
+    return {};
+  }
+  const data = secretInput.createData();
+  try {
+    return { [requestEnv]: data.toString("utf8") };
+  } finally {
+    data.fill(0);
+  }
+}
 
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
@@ -914,9 +932,9 @@ export async function executePreparedCliRun(
             });
         cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
         const preparedBackendEnv = context.preparedBackend.env ?? {};
-        const hasSelectedClaudeAuth = [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) =>
-          Object.hasOwn(preparedBackendEnv, key),
-        );
+        const hasSelectedClaudeAuth =
+          Boolean(context.preparedBackend.secretInput) ||
+          [...CLAUDE_SELECTED_AUTH_ENV_KEYS].some((key) => Object.hasOwn(preparedBackendEnv, key));
         const selectedClaudeClearEnv = hasSelectedClaudeAuth
           ? new Set(backend.clearEnv ?? [])
           : undefined;
@@ -927,7 +945,16 @@ export async function executePreparedCliRun(
         const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
           NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
         );
-        const nodeEnv = nodeEnvEntries.length > 0 ? Object.fromEntries(nodeEnvEntries) : undefined;
+        const nodeEnv = (() => {
+          if (!nodePlacement) {
+            return undefined;
+          }
+          const forwarded = {
+            ...Object.fromEntries(nodeEnvEntries),
+            ...resolveNodeClaudeAuthEnv(context),
+          };
+          return Object.keys(forwarded).length > 0 ? forwarded : undefined;
+        })();
         const env = (() => {
           const next = sanitizeHostExecEnv({
             baseEnv: process.env,
