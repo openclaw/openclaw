@@ -21,6 +21,7 @@ import {
   sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
+import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
 
@@ -33,6 +34,26 @@ async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsMo
 describe("agent-events sequencing", () => {
   beforeEach(() => {
     resetAgentEventsForTest();
+  });
+
+  test("emits typed run startup status with run context", () => {
+    registerAgentRunContext("run-status", { sessionKey: "session-status", agentId: "main" });
+    const events: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((event) => events.push(event));
+
+    emitAgentRunStatusEvent({ runId: "run-status", phase: "preparing_workspace" });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        runId: "run-status",
+        seq: 1,
+        stream: "run_status",
+        sessionKey: "session-status",
+        agentId: "main",
+        data: { phase: "preparing_workspace" },
+      }),
+    ]);
+    unsubscribe();
   });
 
   test("stores and clears run context", () => {

@@ -162,7 +162,12 @@ async function createAmbientVerifiedBinding(config: OpenClawConfig) {
   return await createSystemAgentVerifiedInferenceBinding({
     configuredRoute: route,
     executionRoute: route,
-    auth: { authFingerprint, ...harnessBinding.auth },
+    auth: {
+      authFingerprint,
+      modelId: route.model,
+      modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
+      ...harnessBinding.auth,
+    },
     deps: harnessBinding.deps,
   });
 }

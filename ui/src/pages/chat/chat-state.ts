@@ -1271,6 +1271,7 @@ export function createPageState(
     chatRunId: null,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatRunStartup: null,
     lastError: null,
     chatError: null,
     chatRunError: null,

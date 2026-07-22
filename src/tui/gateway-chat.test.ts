@@ -9,6 +9,7 @@ import {
   resolveGatewayPortMock as resolveGatewayPort,
   resolveStateDirMock as resolveStateDir,
 } from "../gateway/gateway-connection.test-mocks.js";
+import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const readActiveGatewayLockPortMock = vi.hoisted(() => vi.fn());
@@ -64,13 +65,11 @@ type ModeExecProviderFixture = {
       source: "exec";
       command: string;
       args: string[];
-      allowInsecurePath: true;
     };
     passwordprovider: {
       source: "exec";
       command: string;
       args: string[];
-      allowInsecurePath: true;
     };
   };
 };
@@ -94,24 +93,24 @@ async function withModeExecProviderFixture(
   ].join("");
 
   try {
-    await run({
-      tokenMarker,
-      passwordMarker,
-      providers: {
-        tokenprovider: {
-          source: "exec",
-          command: process.execPath,
-          args: ["-e", tokenExecProgram],
-          allowInsecurePath: true,
+    await withSecureTestNodeCommand(async (command) =>
+      run({
+        tokenMarker,
+        passwordMarker,
+        providers: {
+          tokenprovider: {
+            source: "exec",
+            command,
+            args: ["-e", tokenExecProgram],
+          },
+          passwordprovider: {
+            source: "exec",
+            command,
+            args: ["-e", passwordExecProgram],
+          },
         },
-        passwordprovider: {
-          source: "exec",
-          command: process.execPath,
-          args: ["-e", passwordExecProgram],
-          allowInsecurePath: true,
-        },
-      },
-    });
+      }),
+    );
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -514,27 +513,28 @@ describe("resolveGatewayConnection", () => {
       ");",
     ].join("");
 
-    loadConfig.mockReturnValue({
-      secrets: {
-        providers: {
-          execprovider: {
-            source: "exec",
-            command: process.execPath,
-            args: ["-e", execProgram],
-            allowInsecurePath: true,
+    await withSecureTestNodeCommand(async (command) => {
+      loadConfig.mockReturnValue({
+        secrets: {
+          providers: {
+            execprovider: {
+              source: "exec",
+              command,
+              args: ["-e", execProgram],
+            },
           },
         },
-      },
-      gateway: {
-        mode: "local",
-        auth: {
-          token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
+        gateway: {
+          mode: "local",
+          auth: {
+            token: { source: "exec", provider: "execprovider", id: "EXEC_GATEWAY_TOKEN" },
+          },
         },
-      },
-    });
+      });
 
-    const result = await resolveGatewayConnection({});
-    expect(result.token).toBe("exec-secret-token");
+      const result = await resolveGatewayConnection({});
+      expect(result.token).toBe("exec-secret-token");
+    });
   });
 
   it("resolves only token SecretRef when gateway.auth.mode is token", async () => {
