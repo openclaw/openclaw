@@ -129,6 +129,7 @@ jobs:
       matrix:
         locale:
           [
+            sv,
             zh-CN,
             zh-TW,
             pt-BR,

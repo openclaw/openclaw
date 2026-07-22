@@ -224,7 +224,7 @@ export async function verifyRuntimeLocaleConfig() {
     "utf8",
   );
   const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
+  for (const entry of CONTROL_UI_LOCALE_ENTRIES.filter((entry) => entry.runtime !== false)) {
     if (!registryRaw.includes(`"${entry.locale}"`) || !typesRaw.includes(`| "${entry.locale}"`)) {
       throw new Error(`runtime locale config is missing ${entry.locale}`);
     }
