@@ -1,5 +1,5 @@
 /** Cumulative output-token usage for one active agent run. */
-export type AgentRunUsage = {
+type AgentRunUsage = {
   outputTokens: number;
 };
 
