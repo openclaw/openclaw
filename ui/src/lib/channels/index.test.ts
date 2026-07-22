@@ -98,6 +98,106 @@ describe("channels controller WhatsApp wait", () => {
     channels.dispose();
   });
 
+  it("keeps an active login wait across pairing-scope changes", async () => {
+    const pending = createDeferred<{
+      message: string;
+      connected: boolean;
+      qrDataUrl: string;
+    }>();
+    const request = vi.fn((method: string) =>
+      method === "web.login.wait"
+        ? pending.promise
+        : Promise.resolve(createChannelsSnapshot("refreshed")),
+    );
+    const client = { request };
+    let snapshot = {
+      client,
+      connected: true,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+    };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+
+    const wait = channels.waitWhatsApp();
+    await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
+    snapshot = {
+      ...snapshot,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] } },
+    };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    expect(channels.state.whatsappBusy).toBe(true);
+
+    pending.resolve({
+      message: "login survived scope change",
+      connected: false,
+      qrDataUrl: "data:image/png;base64,scope-change",
+    });
+    await wait;
+
+    expect(channels.state.whatsappLoginMessage).toBe("login survived scope change");
+    expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,scope-change");
+    channels.dispose();
+  });
+
+  it("rejects an active login result when admin access is revoked", async () => {
+    const pending = createDeferred<{
+      message: string;
+      connected: boolean;
+      qrDataUrl: string;
+    }>();
+    const request = vi.fn(() => pending.promise);
+    const client = { request };
+    let snapshot = {
+      client,
+      connected: true,
+      hello: { auth: { role: "operator", scopes: ["operator.admin", "operator.pairing"] } },
+    };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,existing";
+
+    const wait = channels.waitWhatsApp();
+    await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
+    snapshot = {
+      ...snapshot,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+    };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    expect(channels.state.whatsappBusy).toBe(false);
+    expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
+
+    pending.resolve({
+      message: "stale login",
+      connected: true,
+      qrDataUrl: "data:image/png;base64,stale",
+    });
+    await wait;
+
+    expect(channels.state.whatsappLoginMessage).toBeNull();
+    expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
+    channels.dispose();
+  });
+
   it("does not apply or refresh a login result after its capability is disposed", async () => {
     const pending = createDeferred<{
       message: string;
@@ -494,6 +594,45 @@ describe("channels controller DM pairing", () => {
 });
 
 describe("channel refresh sequencing", () => {
+  it("rejects an in-flight channel snapshot after read access is revoked", async () => {
+    const pending = createDeferred<ChannelsStatusSnapshot | null>();
+    const request = vi.fn(() => pending.promise);
+    const client = { request };
+    let snapshot = {
+      client,
+      connected: true,
+      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+    };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+
+    const refresh = channels.refresh();
+    await vi.waitFor(() => expect(channels.state.channelsLoading).toBe(true));
+    snapshot = {
+      ...snapshot,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+    };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    expect(channels.state.channelsLoading).toBe(false);
+    expect(channels.state.channelsSnapshot).toBeNull();
+
+    pending.resolve(createChannelsSnapshot("stale"));
+    await refresh;
+
+    expect(channels.state.channelsSnapshot).toBeNull();
+    channels.dispose();
+  });
+
   it("keeps a stale slow probe from replacing a newer runtime snapshot", async () => {
     const slowProbe = createDeferred<ChannelsStatusSnapshot | null>();
     const fastRuntime = createDeferred<ChannelsStatusSnapshot | null>();
