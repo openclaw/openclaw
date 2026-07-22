@@ -372,9 +372,9 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(firstDueMs + 1);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // The wake layer retries after DEFAULT_RETRY_MS (1 s).  No scheduleNext()
+    // The wake layer retries after REQUESTS_IN_FLIGHT_RETRY_MS (60 s).  No scheduleNext()
     // is called inside runOnce, so we must wait for the full cooldown.
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
 
     runner.stop();
@@ -518,10 +518,10 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(firstDueMs + 1);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Simulate 4 more retries at short intervals (wake layer retries).
+    // Simulate 4 more retries at the requests-in-flight delay (wake layer retries).
     for (let i = 0; i < 4; i++) {
       requestHeartbeat(wake("retry", { coalesceMs: 0 }));
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     }
     const scheduledSlotCallsBeforeInterval = callTimes.filter(
       (time) => time >= firstDueMs + intervalMs,
@@ -1000,8 +1000,8 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Wake layer retries via DEFAULT_RETRY_MS (1s). Advance past it.
-    await vi.advanceTimersByTimeAsync(1500);
+    // Wake layer retries via REQUESTS_IN_FLIGHT_RETRY_MS (60s). Advance past it.
+    await vi.advanceTimersByTimeAsync(60_500);
 
     // The retry must NOT be deferred to `not-due` or `min-spacing`. Since the
     // first attempt was a retryable busy skip, the cooldown bookkeeping was
