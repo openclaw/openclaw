@@ -33,3 +33,10 @@ export function resolveOperatorSessionCreation(
     ...(profileId ? { actor: { type: "human" as const, id: profileId } } : {}),
   };
 }
+
+export function resolveAgentRunSessionCreation(
+  client: SessionCreationClient | null | undefined,
+): TrustedSessionCreation {
+  const actor = resolveOperatorSessionCreation(client).actor;
+  return { via: "run", ...(actor ? { actor } : {}) };
+}

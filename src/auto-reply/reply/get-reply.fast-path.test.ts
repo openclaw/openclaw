@@ -788,6 +788,57 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
+  it("preserves node provenance and lineage during fast reset bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-lineage-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:lineage";
+    await seedFastPathSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-fast-reset-lineage",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:dashboard:parent",
+        spawnedWorkspaceDir: "/tmp/workspace",
+        spawnedCwd: "/tmp/repo",
+        forkSource: { sessionKey: "agent:main:main", sessionId: "source-generation" },
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+        createdAt: 1_234,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      },
+    });
+
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        SessionKey: sessionKey,
+      }),
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: home,
+    });
+
+    expect(result.sessionEntry).toMatchObject({
+      previousSessionId: "existing-fast-reset-lineage",
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:dashboard:parent",
+      spawnedWorkspaceDir: "/tmp/workspace",
+      spawnedCwd: "/tmp/repo",
+      forkSource: { sessionKey: "agent:main:main", sessionId: "source-generation" },
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: 1_234,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+    });
+  });
+
   it("rejects a fast reset bootstrap for a model-locked session", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-locked-"));
     const storePath = path.join(home, "sessions.json");

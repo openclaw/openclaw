@@ -214,6 +214,23 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
+    ...(resetTriggered && existingEntry
+      ? {
+          previousSessionId: existingEntry.sessionId,
+          spawnedBy: existingEntry.spawnedBy,
+          spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
+          spawnedCwd: existingEntry.spawnedCwd,
+          parentSessionKey: existingEntry.parentSessionKey,
+          forkedFromParent: existingEntry.forkedFromParent,
+          forkSource: existingEntry.forkSource,
+          createdVia: existingEntry.createdVia,
+          createdActor: existingEntry.createdActor,
+          createdAt: existingEntry.createdAt,
+          spawnDepth: existingEntry.spawnDepth,
+          subagentRole: existingEntry.subagentRole,
+          subagentControlScope: existingEntry.subagentControlScope,
+        }
+      : {}),
     sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),

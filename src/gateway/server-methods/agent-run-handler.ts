@@ -23,6 +23,7 @@ import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 import { prepareAgentSession } from "./agent-session-prepare.js";
+import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
@@ -336,6 +337,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         canonicalSessionKey,
         sessionAgentId,
         mainSessionKey,
+        creation: resolveAgentRunSessionCreation(client),
         lifecycleGeneration,
         isRestartRecoveryResumeRun,
         runId,
