@@ -1,57 +1,34 @@
 // Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
+import {
+  dropMemoryPathFtsTriggers,
+  ensureMemoryPathFtsSchema,
+  ensureMemoryPathFtsTriggers,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  rebuildMemoryChunkFts,
+} from "./memory-schema-fts.js";
 import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
+
+export {
+  dropMemoryPathFtsTriggers,
+  ensureMemoryPathFtsTriggers,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+} from "./memory-schema-fts.js";
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.
 
 export const MEMORY_INDEX_META_TABLE = "memory_index_meta";
-export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
-export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_EMBEDDING_CACHE_TABLE = "memory_embedding_cache";
 export const MEMORY_INDEX_STATE_TABLE = "memory_index_state";
-export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
-export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
-
-/** Optional canonical triggers owned by the derived path FTS index. */
-export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
-  {
-    name: "memory_index_paths_fts_after_insert",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
-      AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-        VALUES (NEW.id, NEW.path, NEW.source);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_paths_fts_after_update",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
-      AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-        WHERE rowid = OLD.id;
-        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-        VALUES (NEW.id, NEW.path, NEW.source);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_paths_fts_after_delete",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
-      AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-        WHERE rowid = OLD.id;
-      END;
-    `,
-  },
-] as const;
 
 const LEGACY_MEMORY_INDEX_TRIGGERS = [
   "memory_files_revision_after_insert",
@@ -369,9 +346,10 @@ function copyLegacyMemoryIndexRows(
 ): void {
   // A (path, source) the canonical index already has chunks for keeps its whole
   // canonical chunk set. If legacy has additional chunk identities, invalidate
-  // the source metadata so sync rebuilds instead of accepting an incomplete set.
+  // the source hash so sync rebuilds instead of accepting an incomplete set.
   // Chunkless canonical sources import legacy chunks only when their source rows
-  // match; diverged chunkless sources are invalidated for the same reason.
+  // match; diverged chunkless sources get the same dirty hash. The source row
+  // remains as the cleanup identity if its backing file was already deleted.
   // Snapshot exclusions before inserts so the predicate sees canonical state.
   db.exec(`
     CREATE TEMP TABLE legacy_import_chunk_excluded_sources AS
@@ -424,7 +402,10 @@ function copyLegacyMemoryIndexRows(
         WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
       );
 
-      DELETE FROM main.${MEMORY_INDEX_SOURCES_TABLE}
+      -- Content hashes are SHA-256 hex, so an empty hash cannot match a file.
+      -- Retaining the row lets normal sync either rebuild or delete its derived rows.
+      UPDATE main.${MEMORY_INDEX_SOURCES_TABLE}
+      SET hash = ''
       WHERE EXISTS (
         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
         WHERE excluded.force_reindex = 1
@@ -518,6 +499,7 @@ function copyLegacyMemoryIndexRows(
 function migrateLegacyMemoryIndexTables(
   db: DatabaseSync,
   preservedEmbeddingCacheTable?: string,
+  ftsTable = MEMORY_INDEX_FTS_TABLE,
 ): void {
   if (!hasLegacyMemoryIndexTables(db)) {
     return;
@@ -526,6 +508,13 @@ function migrateLegacyMemoryIndexTables(
   db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
   try {
     copyLegacyMemoryIndexRows(db, "main", preservedEmbeddingCacheTable);
+    // `chunks_fts` belongs to the legacy schema and is dropped below even when
+    // a deprecated caller also supplied that name as its preferred FTS table.
+    if (ftsTable !== "chunks_fts" && tableExists(db, ftsTable)) {
+      // FTS is derived from canonical chunks. Rebuild inside the migration
+      // savepoint so imported rows and removed stale rows publish atomically.
+      rebuildMemoryChunkFts(db, ftsTable);
+    }
     if (preservedEmbeddingCacheTable !== "embedding_cache" && hasLegacyEmbeddingCacheTable(db)) {
       db.exec("DROP TABLE embedding_cache");
     }
@@ -542,47 +531,6 @@ function migrateLegacyMemoryIndexTables(
   } catch (err) {
     db.exec("ROLLBACK TO migrate_legacy_memory_index_tables");
     db.exec("RELEASE migrate_legacy_memory_index_tables");
-    throw err;
-  }
-}
-
-/** Drop the canonical source-to-path-FTS maintenance triggers. */
-export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
-  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
-    db.exec(`DROP TRIGGER IF EXISTS main.${trigger.name}`);
-  }
-}
-
-/** Install the canonical source-to-path-FTS maintenance triggers. */
-export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
-  // The named integer source identity survives VACUUM and gives every
-  // FTS update/delete a direct rowid lookup instead of a virtual-table scan.
-  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
-    db.exec(trigger.sql);
-  }
-}
-
-function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: string }): void {
-  params.db.exec("SAVEPOINT ensure_memory_index_paths_fts");
-  try {
-    params.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
-        path,
-        source UNINDEXED
-        ${params.tokenizeClause}
-      );
-      -- The initial copy and trigger installation share this savepoint. Once
-      -- populated, the triggers own completeness; per-row FTS probes are too costly.
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      SELECT id, path, source
-      FROM ${MEMORY_INDEX_SOURCES_TABLE}
-      WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
-    `);
-    ensureMemoryPathFtsTriggers(params.db);
-    params.db.exec("RELEASE ensure_memory_index_paths_fts");
-  } catch (err) {
-    params.db.exec("ROLLBACK TO ensure_memory_index_paths_fts");
-    params.db.exec("RELEASE ensure_memory_index_paths_fts");
     throw err;
   }
 }
@@ -705,7 +653,7 @@ export function ensureMemoryIndexSchema(params: {
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
-  migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable);
+  migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable, ftsTable);
   if (params.cacheEnabled) {
     const updatedAtIndex =
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE
@@ -742,8 +690,8 @@ export function ensureMemoryIndexSchema(params: {
           `  end_line UNINDEXED\n` +
           `${tokenizeClause});`,
       );
-      // The shipped generic-table migration and a later FTS enablement both
-      // create an empty derived table beside already-canonical chunk rows.
+      // A migration rebuilds an existing FTS table in its savepoint. If the
+      // table is new, this same empty-table bootstrap covers all canonical rows.
       params.db.exec(`
         INSERT INTO ${ftsTable} (
           text, id, path, source, model, start_line, end_line

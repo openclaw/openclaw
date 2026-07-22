@@ -145,8 +145,12 @@ describe("memory index same-file legacy migration", () => {
           { key: "memory_index_meta_v1", value: "canonical" },
         ],
         // The extra legacy chunk identity makes doc.md's canonical chunk set
-        // ambiguous, so removing its source row forces a normal sync rebuild.
-        sources: [{ path: "old-note.md", hash: "old-note-hash", size: 10 }],
+        // ambiguous. Its impossible hash forces a rebuild while preserving the
+        // source identity needed to clean up a file deleted before migration.
+        sources: [
+          { path: "doc.md", hash: "", size: 42 },
+          { path: "old-note.md", hash: "old-note-hash", size: 10 },
+        ],
         chunks: [
           { id: "chunk-new-1", text: "current canonical body" },
           { id: "chunk-old-2", text: "note body" },
@@ -189,6 +193,84 @@ describe("memory index same-file legacy migration", () => {
     } finally {
       db.close();
       fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebuilds a nonempty canonical FTS index after importing legacy-only chunks", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      db.exec(`
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('canonical.md', 'memory', 'canonical-hash', 200, 20);
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-canonical', 'canonical.md', 'memory', 1, 2, 'canonical-chunk-hash',
+          'fts-only', 'canonical nebula', '[]', 200
+        );
+        INSERT INTO memory_index_chunks_fts
+          (text, id, path, source, model, start_line, end_line)
+        VALUES
+          ('canonical nebula', 'chunk-canonical', 'canonical.md', 'memory', 'fts-only', 1, 2),
+          ('orphaned starlight', 'chunk-orphan', 'deleted.md', 'memory', 'fts-only', 1, 2);
+
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO files VALUES ('legacy.md', 'memory', 'legacy-hash', 100, 10);
+        INSERT INTO chunks VALUES (
+          'chunk-legacy', 'legacy.md', 'memory', 1, 2, 'legacy-chunk-hash',
+          'fts-only', 'imported saffronquasar', '[]', 100
+        );
+      `);
+
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+
+      expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual([
+        { id: "chunk-canonical" },
+        { id: "chunk-legacy" },
+      ]);
+      expect(db.prepare("SELECT id FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
+        { id: "chunk-canonical" },
+        { id: "chunk-legacy" },
+      ]);
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'saffronquasar'",
+          )
+          .all(),
+      ).toEqual([{ id: "chunk-legacy" }]);
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'starlight'",
+          )
+          .all(),
+      ).toEqual([]);
+
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual({
+        count: 2,
+      });
+    } finally {
+      db.close();
     }
   });
 
@@ -283,17 +365,17 @@ describe("memory index same-file legacy migration", () => {
         { id: "chunk-partial-1", text: "canonical first half" },
         { id: "chunk-pending-legacy", text: "only searchable content for pending" },
       ]);
-      // Removing ambiguous or diverged sources prevents hash-based sync from
-      // skipping them; the next sync must rebuild current content from disk.
+      // An impossible hash prevents hash-based sync from skipping these rows,
+      // while retaining the identities needed for deleted-file cleanup.
       expect(
         db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'doc.md'").get(),
-      ).toBeUndefined();
+      ).toEqual({ hash: "" });
       expect(
         db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'partial.md'").get(),
-      ).toBeUndefined();
+      ).toEqual({ hash: "" });
       expect(
         db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'diverged.md'").get(),
-      ).toBeUndefined();
+      ).toEqual({ hash: "" });
       expect(
         db
           .prepare(
