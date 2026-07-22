@@ -6,7 +6,6 @@ import {
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
-  isAnthropicLongContextUsageError,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
@@ -492,28 +491,6 @@ describe("error classifiers", () => {
         expect(check.matcher(sample)).toBe(false);
       }
     }
-  });
-});
-
-describe("isAnthropicLongContextUsageError", () => {
-  it("detects Anthropic long-context usage errors", () => {
-    expect(
-      isAnthropicLongContextUsageError("Extra usage is required for long context requests."),
-    ).toBe(true);
-    expect(
-      isAnthropicLongContextUsageError("extra usage is required for long context requests"),
-    ).toBe(true);
-    expect(
-      isAnthropicLongContextUsageError(
-        "429 Extra usage is required for long context requests. Please contact support.",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not match unrelated rate limit messages", () => {
-    expect(isAnthropicLongContextUsageError("Rate limit exceeded")).toBe(false);
-    expect(isAnthropicLongContextUsageError("429 Too Many Requests")).toBe(false);
-    expect(isAnthropicLongContextUsageError("context length exceeded")).toBe(false);
   });
 });
 

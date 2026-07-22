@@ -172,7 +172,7 @@ const RATE_LIMIT_HINT_RE =
  * (the session is too large for the standard usage tier), not a transient rate limit.
  * It should be routed to the compact+retry path instead of the model fallback chain.
  */
-export function isAnthropicLongContextUsageError(errorMessage: string): boolean {
+function isAnthropicLongContextUsageError(errorMessage: string): boolean {
   return normalizeLowercaseStringOrEmpty(errorMessage).includes(
     "extra usage is required for long context",
   );
