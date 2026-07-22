@@ -40363,7 +40363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1248,
+      "line": 1241,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptCache.swift",
       "source": "'queued', 'sending', 'awaiting_confirmation', 'failed'",
       "surface": "apple",
@@ -40371,7 +40371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1249,
+      "line": 1242,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatTranscriptCache.swift",
       "source": "'queued', 'sending', 'awaiting_confirmation'",
       "surface": "apple",
