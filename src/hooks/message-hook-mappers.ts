@@ -245,6 +245,20 @@ export function buildCanonicalSentMessageHookContext(params: {
   };
 }
 
+/** Resolves the outbound hook target for a reply produced by an inbound channel turn. */
+export function resolveInboundReplyHookTarget(
+  finalized: FinalizedMsgContext,
+  hookCtx: CanonicalInboundMessageHookContext,
+): string {
+  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
+    return finalized.OriginatingTo;
+  }
+  if (hookCtx.isGroup) {
+    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
+  }
+  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
+}
+
 type DiagnosticTraceHookFields = Pick<
   PluginHookMessageContext,
   "trace" | "traceId" | "spanId" | "parentSpanId"

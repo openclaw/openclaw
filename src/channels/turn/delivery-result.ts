@@ -9,6 +9,7 @@ export function createChannelDeliveryResultFromReceipt(params: {
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  content?: string;
   deliveryIntent?: ChannelDeliveryIntent;
 }): ChannelDeliveryResult {
   const messageIds = listMessageReceiptPlatformIds(params.receipt);
@@ -18,6 +19,7 @@ export function createChannelDeliveryResultFromReceipt(params: {
     ...(params.threadId ? { threadId: params.threadId } : {}),
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.visibleReplySent === undefined ? {} : { visibleReplySent: params.visibleReplySent }),
+    ...(params.content === undefined ? {} : { content: params.content }),
     ...(params.deliveryIntent ? { deliveryIntent: params.deliveryIntent } : {}),
   };
 }

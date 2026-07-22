@@ -3,6 +3,7 @@ import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveInboundMessageHookContext,
+  resolveInboundReplyHookTarget,
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
@@ -337,19 +338,6 @@ function resolveDispatcherSilentReplyContext(
     surface: finalized.Surface ?? finalized.Provider,
     conversationType,
   };
-}
-
-function resolveInboundReplyHookTarget(
-  finalized: FinalizedMsgContext,
-  hookCtx: ReturnType<typeof deriveInboundMessageHookContext>,
-): string {
-  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
-    return finalized.OriginatingTo;
-  }
-  if (hookCtx.isGroup) {
-    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
-  }
-  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
 }
 
 function buildMessageSendingBeforeDeliver(
