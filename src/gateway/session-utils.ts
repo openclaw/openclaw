@@ -81,9 +81,7 @@ import {
   buildGroupDisplayTitle,
   getSessionStoreCacheVersion,
   isConfiguredSessionStoreAgentId,
-  isLegacyOnlySessionStoreTarget,
   isTerminalSessionStatus,
-  readLegacySessionStoreTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -1351,15 +1349,9 @@ function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: { allowLegacyFallback?: boolean; readOnly?: boolean } = {},
+  options: { readOnly?: boolean } = {},
 ): Record<string, SessionEntry> {
   try {
-    if (options.allowLegacyFallback) {
-      const legacyStore = readLegacySessionStoreTarget(storePath, agentId);
-      if (legacyStore) {
-        return legacyStore;
-      }
-    }
     const listEntries = options.readOnly
       ? listAccessorSessionEntriesReadOnly
       : listAccessorSessionEntries;
@@ -1405,8 +1397,7 @@ function resolveGatewaySessionStoreLookup(params: {
   }
   const loadStore = (target: SessionStoreTarget) =>
     loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
-      allowLegacyFallback: !configured,
-      readOnly: params.readOnly,
+      readOnly: params.readOnly || !configured,
     });
   const firstCandidate = candidates[0] ?? fallback;
   let selectedStorePath = firstCandidate.storePath;
@@ -1489,7 +1480,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
       continue;
     }
     const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
-      readOnly: params.readOnly,
+      readOnly: true,
     });
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
@@ -1993,10 +1984,7 @@ export function buildGatewaySessionRow(params: {
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
   );
-  const skipTranscriptUsage =
-    params.skipTranscriptUsageFallback === true ||
-    (!isConfiguredSessionStoreAgentId(cfg, sessionAgentId) &&
-      isLegacyOnlySessionStoreTarget(storePath, sessionAgentId));
+  const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const rowContext = params.rowContext;
   const subagentRun = rowContext
     ? rowContext.subagentRuns.getDisplaySubagentRun(key)
