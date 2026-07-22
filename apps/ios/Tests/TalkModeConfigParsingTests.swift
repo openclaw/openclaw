@@ -1065,11 +1065,17 @@ struct TalkModeManagerTests {
     }
 
     @Test func `native Talk chat request inherits thinking policy`() {
-        let request = TalkModeManager.makeChatSendRequest(
-            message: "hello",
+        let request = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: "agent:main:main",
-            idempotencyKey: "talk-1")
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "hello",
+            thinking: TalkModeManager.chatThinkingOverride,
+            idempotencyKey: "talk-1",
+            attachments: [],
+            runTimeoutMs: 30000)
 
+        #expect(TalkModeManager.chatThinkingOverride == nil)
         #expect(request.method == "chat.send")
         #expect(request.params["message"]?.value as? String == "hello")
         #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")

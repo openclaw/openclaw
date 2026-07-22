@@ -2769,22 +2769,6 @@ final class TalkModeManager: NSObject {
         self.isTerminalChatSendSuccess(response.status) ? nil : startedAt
     }
 
-    static func makeChatSendRequest(
-        message: String,
-        sessionKey: String,
-        idempotencyKey: String) -> OpenClawChatGatewayRequest
-    {
-        OpenClawChatGatewayRequests.sendMessage(
-            sessionKey: sessionKey,
-            agentID: nil,
-            expectedSessionRoutingContract: nil,
-            message: message,
-            thinking: nil,
-            idempotencyKey: idempotencyKey,
-            attachments: [],
-            runTimeoutMs: 30000)
-    }
-
     private func sendChat(
         _ message: String,
         gateway: GatewayNodeSession,
@@ -2792,10 +2776,15 @@ final class TalkModeManager: NSObject {
         gatewayRoute: GatewayNodeSessionRoute,
         idempotencyKey: String) async throws -> OpenClawChatSendResponse
     {
-        let request = Self.makeChatSendRequest(
-            message: message,
+        let request = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: sessionKey,
-            idempotencyKey: idempotencyKey)
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: message,
+            thinking: Self.chatThinkingOverride,
+            idempotencyKey: idempotencyKey,
+            attachments: [],
+            runTimeoutMs: 30000)
         let res = try await gateway.request(
             request,
             ifCurrentRoute: gatewayRoute)
@@ -5178,6 +5167,10 @@ extension TalkModeManager {
     }
 }
 #endif
+
+extension TalkModeManager {
+    static let chatThinkingOverride: String? = nil
+}
 
 private struct IncrementalSpeechContext: Equatable {
     let apiKey: String?
