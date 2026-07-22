@@ -254,7 +254,11 @@ function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | und
   if (!publicRoute || !docsRouteIndex.routes.has(publicRoute)) {
     return undefined;
   }
-  const publicHref = anchor ? `${publicRoute}#${anchor}` : publicRoute;
+  // Mintlify serves docs/<dir>/index.md as /<dir>, so drop a trailing /index
+  // (and bare `index` → ``) while preserving any fragment.
+  const canonicalRoute =
+    publicRoute === "index" ? "" : publicRoute.replace(/\/index$/, "");
+  const publicHref = anchor ? `${canonicalRoute}#${anchor}` : canonicalRoute;
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
 }
 

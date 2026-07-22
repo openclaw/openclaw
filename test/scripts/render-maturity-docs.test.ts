@@ -286,4 +286,24 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("end-to-end coverage above 90%");
   });
+
+  it("canonicalizes taxonomy docs links by stripping trailing /index", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "passing-scenario", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+
+    expect(result.status).toBe(0);
+    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
+    expect(taxonomy).toContain("[Index](/gateway)");
+    expect(taxonomy).toContain("[Index](/gateway/security)");
+    expect(taxonomy).not.toMatch(/\]\(\/[^)\s]*\/index(?:#[^)\s]*)?\)/);
+    expect(taxonomy).not.toContain("](/gateway/index)");
+    expect(taxonomy).not.toContain("](/install/index)");
+  });
 });
