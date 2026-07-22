@@ -296,10 +296,13 @@ export async function attachAuthenticatedGatewayConnect(
   clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
-    connect: connectParams,
+    connect: state.controlUiDeviceAuthMigrationPending
+      ? { ...connectParams, scopes }
+      : connectParams,
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
+    isControlUiDeviceAuthMigration: state.controlUiDeviceAuthMigrationPending,
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,

@@ -6,18 +6,37 @@ import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
 type ControlUiAuthPolicy = {
   isControlUi: boolean;
   device: ConnectParams["device"] | null | undefined;
+  deviceAuthMigrationPending: boolean;
 };
 
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
   controlUiConfig: unknown;
   deviceRaw: ConnectParams["device"] | null | undefined;
+  deviceAuthMigrationPending?: boolean;
 }): ControlUiAuthPolicy {
   void params.controlUiConfig;
   return {
     isControlUi: params.isControlUi,
     device: params.deviceRaw,
+    deviceAuthMigrationPending: params.deviceAuthMigrationPending === true,
   };
+}
+
+export function shouldAllowControlUiDeviceAuthMigration(params: {
+  policy: ControlUiAuthPolicy;
+  role: GatewayRole;
+  sharedAuthOk: boolean;
+  authMethod?: string;
+}): boolean {
+  return (
+    params.policy.deviceAuthMigrationPending &&
+    params.policy.isControlUi &&
+    params.role === "operator" &&
+    Boolean(params.policy.device) &&
+    params.sharedAuthOk &&
+    (params.authMethod === "token" || params.authMethod === "password")
+  );
 }
 
 export function shouldSkipControlUiPairing(

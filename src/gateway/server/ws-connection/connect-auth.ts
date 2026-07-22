@@ -23,6 +23,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldAllowControlUiDeviceAuthMigration,
   shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -105,6 +106,7 @@ export async function authenticateGatewayConnect(
     isControlUi,
     controlUiConfig: configSnapshot.gateway?.controlUi,
     deviceRaw,
+    deviceAuthMigrationPending: context.handler.isControlUiDeviceAuthMigrationPending?.(),
   });
   const device = controlUiAuthPolicy.device;
   const hasBootstrapProof = Boolean(connectParams.auth?.bootstrapToken);
@@ -446,6 +448,12 @@ export async function authenticateGatewayConnect(
     resolvedAuth.mode,
     authMethod,
   );
+  const allowControlUiDeviceAuthMigration = shouldAllowControlUiDeviceAuthMigration({
+    policy: controlUiAuthPolicy,
+    role,
+    sharedAuthOk,
+    authMethod,
+  });
 
   return {
     resolvedAuth,
@@ -477,6 +485,7 @@ export async function authenticateGatewayConnect(
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     trustedProxyAuthOk,
+    allowControlUiDeviceAuthMigration,
     skipControlUiPairingForDevice,
     skipLocalBackendSelfPairing,
     rejectUnauthorized,

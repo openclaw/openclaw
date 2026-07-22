@@ -45,6 +45,17 @@ The dashboard settings panel keeps a token for the current browser tab session a
 
 Connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`.
 
+<Warning>
+When upgrading directly from a release that used the retired
+`gateway.controlUi.dangerouslyDisableDeviceAuth=true` break-glass setting,
+OpenClaw keeps a signed, token/password-authenticated Control UI browser online
+long enough to pair itself. Click **Secure this browser** in the warning banner.
+The Gateway then returns to normal device-auth enforcement. It never approves
+the browser silently, and the transition is not available when another operator
+device is already paired. Gateway startup and `openclaw doctor --fix` both
+report this migration explicitly instead of silently discarding the old key.
+</Warning>
+
 <Steps>
   <Step title="List pending requests">
     ```bash

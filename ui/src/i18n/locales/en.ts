@@ -3581,6 +3581,13 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    deviceAuthMigration: {
+      banner: "This browser still needs one-time device approval after the update.",
+      action: "Secure this browser",
+      pendingUnavailable: "The browser pairing request is not available yet. Retry in a moment.",
+      loadFailed: "Could not load this browser's pairing request: {error}",
+      approvalFailed: "Could not secure this browser: {error}",
+    },
     passwordPlaceholder: "optional",
     showToken: "Show token",
     hideToken: "Hide token",

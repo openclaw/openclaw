@@ -729,6 +729,37 @@ export async function startGatewayServer(
   );
   const cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
+  const {
+    claimControlUiDeviceAuthMigration,
+    completeControlUiDeviceAuthMigration,
+    importPendingControlUiDeviceAuthMigration,
+    isLegacyControlUiDeviceAuthMigrationInput,
+    readControlUiDeviceAuthMigrationState,
+    recoverControlUiDeviceAuthMigrationClaim,
+    releaseControlUiDeviceAuthMigrationClaim,
+  } = await import("../state/control-ui-device-auth-migration.js");
+  const legacyControlUiDeviceAuthBypass = isLegacyControlUiDeviceAuthMigrationInput({
+    disabledDeviceAuth: cfgAtStart.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true,
+    lastTouchedVersion: cfgAtStart.meta?.lastTouchedVersion,
+  });
+  let controlUiDeviceAuthMigrationState = legacyControlUiDeviceAuthBypass
+    ? importPendingControlUiDeviceAuthMigration({ env: process.env })
+    : readControlUiDeviceAuthMigrationState({ env: process.env });
+  if (
+    controlUiDeviceAuthMigrationState?.status === "pending" &&
+    controlUiDeviceAuthMigrationState.claimedDeviceId
+  ) {
+    // A process crash between claim and approval must not strand the upgrade.
+    controlUiDeviceAuthMigrationState = recoverControlUiDeviceAuthMigrationClaim({
+      env: process.env,
+    });
+  }
+  let controlUiDeviceAuthMigrationPending = controlUiDeviceAuthMigrationState?.status === "pending";
+  if (controlUiDeviceAuthMigrationPending) {
+    log.warn(
+      "Retired gateway.controlUi.dangerouslyDisableDeviceAuth config detected. Shared token/password auth remains available only for the explicit pairing transition; open the Control UI and click Secure this browser.",
+    );
+  }
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
   }
@@ -2030,6 +2061,32 @@ export async function startGatewayServer(
               clients,
             });
           },
+          completeControlUiDeviceAuthMigration: (deviceId: string) => {
+            // Close the process-local grace immediately after approval. The
+            // durable receipt prevents stale legacy config from reopening it.
+            controlUiDeviceAuthMigrationPending = false;
+            for (const client of clients) {
+              if (!client.isControlUiDeviceAuthMigration) {
+                continue;
+              }
+              // Only the approving browser is cleared before this callback. Any
+              // other temporary sessions must not outlive the one-time transition.
+              client.invalidated = true;
+              client.invalidatedReason = "device-auth-migration-completed";
+              client.socket.close(4001, "device auth migration completed");
+            }
+            try {
+              completeControlUiDeviceAuthMigration(deviceId, { env: process.env });
+            } catch (error) {
+              log.warn(
+                `failed to persist Control UI device-auth migration completion: ${String(error)}`,
+              );
+            }
+          },
+          claimControlUiDeviceAuthMigration: (deviceId: string) =>
+            claimControlUiDeviceAuthMigration(deviceId, { env: process.env }),
+          releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
+            releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
           nodeRegistry,
           ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
           ...(workerPlacementRuntime
@@ -2156,6 +2213,7 @@ export async function startGatewayServer(
         nodeReapprovalCoordinator,
         preauthHandshakeTimeoutMs,
         isStartupPending: isGatewayStartupPending,
+        isControlUiDeviceAuthMigrationPending: () => controlUiDeviceAuthMigrationPending,
         gatewayMethods: runtimeState.gatewayMethods,
         events: GATEWAY_EVENTS,
         logGateway: log,

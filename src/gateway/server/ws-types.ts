@@ -27,6 +27,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
+  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
+  isControlUiDeviceAuthMigration?: boolean;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
   usesSharedGatewayAuth: boolean;

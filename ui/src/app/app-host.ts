@@ -1711,6 +1711,27 @@ class OpenClawShell extends OpenClawLightDomElement {
               statusBanner: overlaySnapshot.updateStatusBanner,
             }}
           ></openclaw-update-banner>
+          <openclaw-update-banner
+            .props=${{
+              statusBanner:
+                gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
+                  ? {
+                      tone: overlaySnapshot.deviceAuthMigrationError ? "danger" : "warn",
+                      text:
+                        overlaySnapshot.deviceAuthMigrationError ??
+                        t("login.deviceAuthMigration.banner"),
+                    }
+                  : null,
+              action:
+                overlaySnapshot.deviceAuthMigrationRequestId &&
+                !overlaySnapshot.deviceAuthMigrationBusy
+                  ? {
+                      label: t("login.deviceAuthMigration.action"),
+                      onClick: () => void context.overlays.secureThisBrowser(),
+                    }
+                  : undefined,
+            }}
+          ></openclaw-update-banner>
           ${renderFloatingUpdateCard({
             navigationSurfaceHidden,
             onboarding,

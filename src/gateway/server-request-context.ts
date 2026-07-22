@@ -58,6 +58,9 @@ type GatewayRequestContextParams = {
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
+  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
+  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
+  completeControlUiDeviceAuthMigration?: (deviceId: string) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
@@ -289,6 +292,9 @@ export function createGatewayRequestContext(
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
+    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
+    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
+    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }

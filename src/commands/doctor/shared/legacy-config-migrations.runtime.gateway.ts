@@ -34,6 +34,13 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
+  path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
+  message:
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve a one-time explicit browser pairing transition, remove the legacy key, and prompt you to click Secure this browser. Run "openclaw doctor --fix".',
+  match: (value) => value === true,
+};
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
 }
@@ -77,6 +84,25 @@ function escapeControlForLog(value: string): string {
 
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.control-ui-device-auth-bypass->pairing-migration",
+    describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
+    legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const controlUi = getRecord(gateway?.controlUi);
+      if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
+        return;
+      }
+      const migrationRequired = controlUi.dangerouslyDisableDeviceAuth === true;
+      delete controlUi.dangerouslyDisableDeviceAuth;
+      changes.push(
+        migrationRequired
+          ? "Preserved the retired Control UI device-auth bypass as a one-time explicit pairing migration. Open the Control UI and click Secure this browser."
+          : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+      );
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.webchat-remove",
     describe: "Remove retired WebChat gateway config",

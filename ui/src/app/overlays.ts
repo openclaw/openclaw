@@ -15,6 +15,7 @@ import {
   type DevicePairSetup,
   type DevicePairSetupAccess,
 } from "../lib/device-pair-setup.ts";
+import { createDeviceAuthMigrationController } from "./device-auth-migration.ts";
 import {
   clearExecApprovalTimers,
   clearResolvedExecApprovalPrompt,
@@ -29,11 +30,7 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-
-type ApplicationStatusBanner = {
-  tone: "danger" | "warn" | "info";
-  text: string;
-};
+import { resolveUpdateStatusBanner, type ApplicationStatusBanner } from "./update-status-banner.ts";
 
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -51,6 +48,9 @@ type ApplicationOverlaySnapshot = {
   devicePairSetup: DevicePairSetup | null;
   devicePairSetupAccess: DevicePairSetupAccess;
   devicePairPendingCount: number;
+  deviceAuthMigrationRequestId: string | null;
+  deviceAuthMigrationBusy: boolean;
+  deviceAuthMigrationError: string | null;
 };
 
 export type ApplicationOverlays = {
@@ -62,6 +62,7 @@ export type ApplicationOverlays = {
   refreshDevicePairSetup: () => Promise<void>;
   setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
   closeDevicePairSetup: () => void;
+  secureThisBrowser: () => Promise<void>;
   dispose: () => void;
 };
 
@@ -106,41 +107,6 @@ function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | nu
         channel: value.channel,
       }
     : null;
-}
-
-function resolveUpdateStatusBanner(params: {
-  status?: string;
-  reason?: string;
-}): ApplicationStatusBanner {
-  const status = (params.status ?? "error").trim() || "error";
-  const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
-  const guidance =
-    {
-      dirty: "Commit or stash changes, then retry.",
-      "no-upstream": "Set an upstream branch, then retry.",
-      "not-git-install":
-        "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
-      "not-openclaw-root":
-        "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
-      "deps-install-failed": "Dependency install failed. Fix the install error and retry.",
-      "build-failed": "Build failed. Fix the build error and retry.",
-      "ui-build-failed": "The control UI rebuild failed. Fix the UI build error and retry.",
-      "global-install-failed":
-        "The global package install did not verify on disk. Retry or reinstall from the CLI.",
-      "restart-disabled":
-        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry.",
-      "restart-unavailable":
-        "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
-      "restart-unhealthy":
-        "The replacement process never became healthy. The previous process stayed up so you can recover.",
-      "managed-service-handoff-already-running":
-        "Another managed update is already running. Wait for it to complete, then refresh update status.",
-      "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
-    }[reason] ?? "See the gateway logs for the exact failure and retry once the cause is fixed.";
-  return {
-    tone: status === "skipped" ? "warn" : "danger",
-    text: `Update ${status}: ${reason}. ${guidance}`,
-  };
 }
 
 function resolveUpdateVerificationBanner(params: {
@@ -233,6 +199,9 @@ export function createApplicationOverlays(
     devicePairSetup: null,
     devicePairSetupAccess: "full",
     devicePairPendingCount: 0,
+    deviceAuthMigrationRequestId: null,
+    deviceAuthMigrationBusy: false,
+    deviceAuthMigrationError: null,
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
@@ -292,6 +261,14 @@ export function createApplicationOverlays(
     activeClient === client &&
     gateway.snapshot.client === client &&
     gateway.snapshot.connected;
+  const deviceAuthMigration = createDeviceAuthMigrationController({
+    gateway,
+    isCurrent: (client, epoch) => epoch === connectedEpoch && isCurrentClient(client),
+    onChange: (next) => {
+      snapshot = { ...snapshot, ...next };
+      publish();
+    },
+  });
 
   const refreshDevicePairPendingCount = async () => {
     const client = gateway.snapshot.client;
@@ -472,6 +449,7 @@ export function createApplicationOverlays(
     if (previousClient !== next.client || !next.connected) {
       approvalDecision = null;
       devicePairPendingCountGeneration += 1;
+      deviceAuthMigration.reset();
       closeDevicePairSetupState(devicePairSetupState);
       devicePairSetupState.pendingCount = 0;
     }
@@ -479,7 +457,14 @@ export function createApplicationOverlays(
       promptState.execApprovalQueue = [];
       promptState.execApprovalBusy = false;
       promptState.execApprovalErrors.clear();
-      snapshot = { ...snapshot, updateAvailable: null, updateRunning: false };
+      snapshot = {
+        ...snapshot,
+        updateAvailable: null,
+        updateRunning: false,
+        deviceAuthMigrationRequestId: null,
+        deviceAuthMigrationBusy: false,
+        deviceAuthMigrationError: null,
+      };
       if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
@@ -499,6 +484,7 @@ export function createApplicationOverlays(
     if (connectedSourceChanged) {
       connectedEpoch += 1;
       void refreshApprovals(next.client, connectedEpoch);
+      void deviceAuthMigration.refresh(next.client, connectedEpoch);
       void verifyPendingUpdateVersion(next.client, connectedEpoch);
     }
   };
@@ -510,6 +496,9 @@ export function createApplicationOverlays(
     }
     if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
       void refreshDevicePairPendingCount();
+      if (activeClient) {
+        void deviceAuthMigration.refresh(activeClient, connectedEpoch);
+      }
       return;
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
@@ -719,11 +708,15 @@ export function createApplicationOverlays(
       devicePairSetupState.pendingCount = 0;
       publish();
     },
+    async secureThisBrowser() {
+      await deviceAuthMigration.secure(activeClient, connectedEpoch);
+    },
     dispose() {
       disposed = true;
       approvalDecision = null;
       updateRunGeneration += 1;
       devicePairPendingCountGeneration += 1;
+      deviceAuthMigration.dispose();
       cancelUpdateVerification();
       closeDevicePairSetupState(devicePairSetupState);
       stopGateway();

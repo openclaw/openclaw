@@ -268,6 +268,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
+    let migrationApprovalScopes: string[] | undefined;
     if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
@@ -312,13 +313,46 @@ export const deviceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (authz.isDeviceAuthMigrationCaller) {
+        migrationApprovalScopes = pending.scopes ?? [];
+      }
     }
-    const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
+    const migrationDeviceId = authz.isDeviceAuthMigrationCaller ? authz.callerDeviceId : null;
+    if (
+      authz.isDeviceAuthMigrationCaller &&
+      (!migrationDeviceId ||
+        context.claimControlUiDeviceAuthMigration?.(migrationDeviceId) !== true)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
+      );
+      return;
+    }
+    const releaseMigrationClaim = () => {
+      if (migrationDeviceId) {
+        context.releaseControlUiDeviceAuthMigrationClaim?.(migrationDeviceId);
+      }
+    };
+    let approved: Awaited<ReturnType<typeof approveDevicePairing>>;
+    try {
+      approved = await approveDevicePairing(requestId, {
+        // The temporary session itself is pairing-only. This one bounded
+        // self-approval restores the scopes the legacy browser requested.
+        callerScopes: migrationApprovalScopes ?? authz.callerScopes,
+      });
+    } catch (error) {
+      releaseMigrationClaim();
+      throw error;
+    }
     if (!approved) {
+      releaseMigrationClaim();
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
     if (approved.status === "forbidden") {
+      releaseMigrationClaim();
       emitDevicePairingDeniedSecurityEvent({
         authz,
         controlId: "device.pair.approve",
@@ -365,6 +399,10 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    if (authz.isDeviceAuthMigrationCaller) {
+      client!.isControlUiDeviceAuthMigration = false;
+      context.completeControlUiDeviceAuthMigration?.(normalizedDeviceId);
+    }
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
     if (approved.nodePairingGenerationChanged) {
       queueMicrotask(() => {

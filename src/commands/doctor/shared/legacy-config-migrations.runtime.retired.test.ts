@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
+import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY } from "./legacy-config-migrations.runtime.gateway.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations.runtime.mcp.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS } from "./legacy-config-migrations.runtime.models.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED } from "./legacy-config-migrations.runtime.retired.js";
@@ -8,6 +9,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION } from "./legacy-config-migrat
 function applyAll(raw: Record<string, unknown>) {
   const changes: string[] = [];
   for (const migration of [
+    ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY,
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP,
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON,
     ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.filter(
@@ -42,6 +44,26 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
+  it("uses a dedicated, actionable migration for the retired device-auth bypass", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
+      (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } },
+    };
+    const changes: string[] = [];
+    migration?.apply(raw, changes);
+
+    expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
+    expect(changes).toEqual([
+      "Preserved the retired Control UI device-auth bypass as a one-time explicit pairing migration. Open the Control UI and click Secure this browser.",
+    ]);
+    expect(migration?.legacyRules?.[0]?.message).toContain(
+      "prompt you to click Secure this browser",
+    );
+  });
+
   it("consolidates modality model lists with capability tags and exact deduplication", () => {
     const result = applyAll({
       tools: {

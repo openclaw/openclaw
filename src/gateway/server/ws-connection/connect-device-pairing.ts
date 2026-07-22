@@ -112,14 +112,31 @@ export async function authorizeGatewayConnectDevice(
     pairingLocality,
     skipLocalBackendSelfPairing,
     skipControlUiPairingForDevice,
+    allowControlUiDeviceAuthMigration,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
+  let controlUiDeviceAuthMigrationPending = false;
+  let allowControlUiDeviceAuthMigrationForUnpairedInstall = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
     ? normalizeChromeExtensionOrigin(requestOrigin)
     : undefined;
   if (device && devicePublicKey) {
+    if (allowControlUiDeviceAuthMigration) {
+      const pairingSnapshot = await listDevicePairing();
+      const existingOperator = pairingSnapshot.paired.find((candidate) =>
+        hasEffectivePairedDeviceRole(candidate, "operator"),
+      );
+      if (existingOperator) {
+        // The transition is only for installs whose retired bypass left them
+        // without any trusted operator. Existing paired operators keep the
+        // normal owner-approval boundary for every other browser.
+        buildRequestContext().completeControlUiDeviceAuthMigration?.(existingOperator.deviceId);
+      } else {
+        allowControlUiDeviceAuthMigrationForUnpairedInstall = true;
+      }
+    }
     const formatAuditList = (items: string[] | undefined): string => {
       const normalized = normalizeSortedUniqueTrimmedStringList(items);
       return normalized.length > 0 ? normalized.join(",") : "<none>";
@@ -449,12 +466,24 @@ export async function authorizeGatewayConnectDevice(
       });
       // Re-resolve: another connection may have superseded/approved the request since we created it
       recoveryRequestId = await resolveLivePendingRequestId();
+      const pairingResolved =
+        inlineApprovalAttempted &&
+        (approved?.status === "approved" || resolvedByConcurrentApproval);
       if (
-        !(
-          inlineApprovalAttempted &&
-          (approved?.status === "approved" || resolvedByConcurrentApproval)
-        )
+        allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        reason === "not-paired" &&
+        !existingPairedDevice &&
+        !pairingResolved &&
+        recoveryRequestId
       ) {
+        // A shipped break-glass configuration can leave an install with no
+        // approved browser. Keep only this signed, shared-authenticated
+        // operator online long enough to approve its own pending request.
+        controlUiDeviceAuthMigrationPending = true;
+        scopes = ["operator.pairing"];
+        return true;
+      }
+      if (!pairingResolved) {
         const exposeApprovedAccess = existingPairedDevice?.publicKey === devicePublicKey;
         const approvedRoles = exposeApprovedAccess
           ? listApprovedPairedDeviceRoles(existingPairedDevice)
@@ -526,12 +555,16 @@ export async function authorizeGatewayConnectDevice(
         if (!ok) {
           return undefined;
         }
-        const approvedDevice = await getPairedDevice(device.id);
-        pairedClientId =
-          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
-        pairedBrowserOrigin =
-          approvedDevice?.publicKey === devicePublicKey ? approvedDevice.browserOrigin : undefined;
-        hasServerApprovedDeviceTokenBaseline = true;
+        if (!controlUiDeviceAuthMigrationPending) {
+          const approvedDevice = await getPairedDevice(device.id);
+          pairedClientId =
+            approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
+          pairedBrowserOrigin =
+            approvedDevice?.publicKey === devicePublicKey
+              ? approvedDevice.browserOrigin
+              : undefined;
+          hasServerApprovedDeviceTokenBaseline = true;
+        }
       } else if (
         skipControlUiPairingForDevice ||
         (skipLocalBackendSelfPairing && authMethod !== "device-token")
@@ -591,5 +624,6 @@ export async function authorizeGatewayConnectDevice(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    controlUiDeviceAuthMigrationPending,
   };
 }
