@@ -62,6 +62,13 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         role: "operator",
         scopes: ["operator.admin", "operator.read", "operator.write"],
       });
+      const writeOnlyClient = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+        role: "operator",
+        scopes: ["operator.write", "operator.read"],
+        deviceFamily: "writeonly",
+      });
       const readOnlyClient = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
@@ -112,6 +119,9 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         };
         await expect(
           readOnlyClient.request("subagents.allowLease.acquire", acquireParams),
+        ).rejects.toThrow();
+        await expect(
+          writeOnlyClient.request("subagents.allowLease.acquire", acquireParams),
         ).rejects.toThrow();
 
         const firstLease = await client.request<{ gateway_lease_id: string }>(

@@ -127,7 +127,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tools.invoke", scope: "operator.write", since: "<=2026.7" },
   {
     name: "subagents.allowLease.acquire",
-    scope: "operator.write",
+    scope: "operator.admin",
     since: "2026.7",
     nativeProtocol: false,
   },

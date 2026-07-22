@@ -90,6 +90,23 @@ describe("core gateway method release trains", () => {
     expect(nativeMethods).toContain("sessions.list");
   });
 
+  it("keeps allow-lease acquisition behind the admin-scoped spawn gate", () => {
+    const byName = new Map(listCoreGatewayMethodMetadata().map((method) => [method.name, method]));
+
+    expect(byName.get("subagents.allowLease.acquire")).toMatchObject({
+      scope: "operator.admin",
+      nativeProtocol: false,
+    });
+    expect(byName.get("sessions_spawn")).toMatchObject({
+      scope: "operator.write",
+      nativeProtocol: false,
+    });
+    expect(byName.get("subagents.allowLease.status")).toMatchObject({
+      scope: "operator.read",
+      nativeProtocol: false,
+    });
+  });
+
   it("records a valid train for every method and dates the 2026.7 families", () => {
     const methods = listCoreGatewayMethodMetadata();
 
