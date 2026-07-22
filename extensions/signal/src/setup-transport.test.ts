@@ -525,6 +525,19 @@ describe("probeSignalTransport", () => {
 });
 
 describe("writeSignalAccountTransport", () => {
+  it("ignores the unconfigured implicit default account during endpoint collision checks", () => {
+    const next = writeSignalAccountTransport({
+      cfg: {},
+      accountId: "work",
+      transport: { kind: "external-native", url: "http://localhost:8080" },
+    });
+
+    expect(next.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "external-native",
+      url: "http://localhost:8080",
+    });
+  });
+
   it("rejects explicit non-HTTP endpoint schemes", () => {
     expect(() =>
       writeSignalAccountTransport({
