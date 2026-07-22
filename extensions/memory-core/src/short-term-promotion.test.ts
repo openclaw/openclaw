@@ -3670,6 +3670,78 @@ describe("short-term promotion", () => {
         expect(memoryText).not.toContain("🚀");
       });
     });
+
+    it("does not throw when the dreaming narrative lead window contains an astral character", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        // 199 prefix chars force the 200th code unit to be the high surrogate of 🚀,
+        // exercising the surrogate-safe lead-window boundary.
+        const prefix = "x".repeat(199);
+        const snippet = `${prefix}🚀Candidate: confidence: 1 evidence: memory/ status: staged recalls: 1`;
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "boundary test",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              source: "memory",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet,
+            },
+          ],
+        });
+
+        // Ranking exercises the 200-code-unit dreaming narrative lead check.
+        // The Candidate marker starts after the lead window, so ranking returns one candidate.
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+        expect(ranked).toHaveLength(1);
+      });
+    });
+
+    it("does not throw when heading context contains an astral character", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-05-28", [
+          "# 2026-05-28",
+          "",
+          "## 🚀模型切换 (16:23)",
+          "- **需求**: 用户想使用小米 Mimo 模型作为默认",
+        ]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "__dreaming_daily__:2026-05-28",
+          signalType: "daily",
+          dedupeByQueryPerDay: true,
+          dayBucket: "2026-05-28",
+          results: [
+            {
+              path: "memory/2026-05-28.md",
+              startLine: 4,
+              endLine: 4,
+              score: 0.91,
+              snippet: "🚀模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认",
+              source: "memory",
+            },
+          ],
+        });
+
+        // Ranking exercises targetSnippetHasHeadingContext with an emoji in the heading.
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse("2026-05-31T00:00:00.000Z"),
+        });
+        expect(ranked).toHaveLength(1);
+        expect(ranked[0]?.key).toBe("memory:memory/2026-05-28.md:4:4");
+      });
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
