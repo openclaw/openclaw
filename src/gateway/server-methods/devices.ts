@@ -12,6 +12,7 @@ import {
   validateDeviceTokenRotateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  approveControlUiDeviceAuthMigrationPairing,
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
@@ -337,12 +338,10 @@ export const deviceHandlers: GatewayRequestHandlers = {
     };
     let approved: Awaited<ReturnType<typeof approveDevicePairing>>;
     try {
-      approved = await approveDevicePairing(requestId, {
-        // The temporary session itself is pairing-only. This one bounded
-        // self-approval restores the scopes the legacy browser requested.
-        callerScopes: migrationApprovalScopes ?? authz.callerScopes,
-        requireNoEffectiveOperator: authz.isDeviceAuthMigrationCaller,
-      });
+      const callerScopes = migrationApprovalScopes ?? authz.callerScopes;
+      approved = authz.isDeviceAuthMigrationCaller
+        ? await approveControlUiDeviceAuthMigrationPairing(requestId, { callerScopes })
+        : await approveDevicePairing(requestId, { callerScopes });
     } catch (error) {
       releaseMigrationClaim();
       throw error;

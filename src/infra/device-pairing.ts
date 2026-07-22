@@ -903,8 +903,6 @@ export async function approveDevicePairing(
      * auto-approval.
      */
     autoApproveNewDeviceScopes?: readonly string[];
-    /** Migration self-approval must still be the installation's first effective operator. */
-    requireNoEffectiveOperator?: boolean;
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -919,7 +917,6 @@ export async function approveDevicePairing(
           "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
         autoApproveNewDeviceScopes?: readonly string[];
-        requireNoEffectiveOperator?: boolean;
       }
     | string,
   maybeBaseDir?: string,
@@ -929,6 +926,38 @@ export async function approveDevicePairing(
       ? undefined
       : optionsOrBaseDir;
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
+  return await approveDevicePairingWithOptions(requestId, options, baseDir);
+}
+
+/** Approve the legacy Control UI migration only while no effective operator is paired. */
+export async function approveControlUiDeviceAuthMigrationPairing(
+  requestId: string,
+  options: { callerScopes: readonly string[] },
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult> {
+  return await approveDevicePairingWithOptions(
+    requestId,
+    { ...options, requireNoEffectiveOperator: true },
+    baseDir,
+  );
+}
+
+async function approveDevicePairingWithOptions(
+  requestId: string,
+  options:
+    | {
+        callerScopes?: readonly string[];
+        accessMetadata?: DevicePairingAccessMetadata;
+        approvedVia?: Extract<
+          PairedDeviceApprovalKind,
+          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
+        >;
+        autoApproveNewDeviceScopes?: readonly string[];
+        requireNoEffectiveOperator?: boolean;
+      }
+    | undefined,
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pendingRecord = state.pendingById[requestId];
