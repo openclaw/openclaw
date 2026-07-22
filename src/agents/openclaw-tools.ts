@@ -69,6 +69,7 @@ import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js"
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
+import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
@@ -487,6 +488,7 @@ export function createOpenClawTools(
       ? []
       : [
           nodesTool,
+          createMobileUiTool({ idempotencyScope: options?.runId }),
           ...(options?.modelHasVision === false
             ? []
             : [

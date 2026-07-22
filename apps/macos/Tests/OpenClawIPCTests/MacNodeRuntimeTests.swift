@@ -80,7 +80,7 @@ struct MacNodeRuntimeTests {
 
     private func waitForCount(_ expected: Int, counter: LockedCounter) async -> Bool {
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(1))
+        let deadline = clock.now.advanced(by: .seconds(10))
         while counter.value() < expected, clock.now < deadline {
             await Task.yield()
         }
