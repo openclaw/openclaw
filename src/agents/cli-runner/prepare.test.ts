@@ -3606,6 +3606,65 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("rejects a backend that expands runtime toolsAllow beyond the requested grant", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file",
+          nativeToolMode: "selectable",
+          resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+          resolveRuntimeToolAvailability: () => ({
+            mcp: ["mcp__openclaw__read", "mcp__openclaw__exec"],
+          }),
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            jsonlDialect: "claude-stream-json",
+            input: "stdin",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "claude-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-runtime-tools-expansion",
+          config: createCliBackendConfig(),
+          toolsAllow: ["read"],
+        }),
+      ).rejects.toThrow(
+        "CLI backend claude-cli expanded runtime toolsAllow outside the requested OpenClaw MCP grant: mcp__openclaw__exec",
+      );
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("bounds the loopback grant to the selectable MCP tool allowlist", async () => {
     const { dir, sessionFile } = createSessionFile();
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [

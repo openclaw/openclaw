@@ -121,7 +121,10 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { resolveLoopbackToolsAllowFromMcpPermissions } from "./tool-policy.js";
+import {
+  OPENCLAW_MCP_TOOL_PREFIX,
+  resolveLoopbackToolsAllowFromMcpPermissions,
+} from "./tool-policy.js";
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 function resolveClaudeCliContextModelId(modelId: string): string {
@@ -368,12 +371,26 @@ export async function prepareCliRunContext(
           `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
         );
       }
+      const resolvedMcpPermissions = uniqueStrings(
+        resolvedAvailability.mcp.map((permission) => permission.trim()).filter(Boolean),
+      );
+      const allowedMcpPermissions = new Set(
+        normalizedToolsAllow.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
+      );
+      const expandedMcpPermissions = resolvedMcpPermissions.filter(
+        (permission) => !allowedMcpPermissions.has(permission),
+      );
+      if (expandedMcpPermissions.length > 0) {
+        throw new Error(
+          `CLI backend ${backendResolved.id} expanded runtime toolsAllow outside the requested OpenClaw MCP grant: ${expandedMcpPermissions.join(", ")}`,
+        );
+      }
       params = {
         ...params,
         toolsAllow: undefined,
         cliToolAvailability: {
           native: [],
-          mcp: uniqueStrings([...resolvedAvailability.mcp]),
+          mcp: resolvedMcpPermissions,
         },
       };
     }

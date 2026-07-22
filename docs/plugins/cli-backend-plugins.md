@@ -268,7 +268,8 @@ group-expanded allowlist and always disables backend-native tools. Return only
 host-isolated MCP names selected from that allowlist. Returning `null` or
 `undefined` keeps the generic runner fail-closed. A backend may omit an allowed
 tool it cannot represent, but must never add authority absent from the
-allowlist.
+allowlist. Before minting a grant, the host rejects any returned entry that is
+not the exact `mcp__openclaw__<tool>` name for one of the allowed tools.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
