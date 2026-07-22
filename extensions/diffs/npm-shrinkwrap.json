@@ -155,13 +155,13 @@
       }
     },
     "node_modules/@shikijs/transformers": {
-      "version": "4.3.0",
-      "resolved": "https://registry.npmjs.org/@shikijs/transformers/-/transformers-4.3.0.tgz",
-      "integrity": "sha512-5/elhJEcUrxdyQ95SSx0HzrnbzVPuipk6TYiXZL67tHhw8J+4N5shzmrTYyCaudiSnpuuwPdpaVtciwRFwSA7A==",
+      "version": "4.3.1",
+      "resolved": "https://registry.npmjs.org/@shikijs/transformers/-/transformers-4.3.1.tgz",
+      "integrity": "sha512-z6ir0bGDgWcF2FduktEfPgIsdOtIlDiLAjFBgBzE42Q9xHbkkIXZtORHzlLVB71iZP9elEcqKg6keajvOUwE2A==",
       "license": "MIT",
       "dependencies": {
-        "@shikijs/core": "4.3.0",
-        "@shikijs/types": "4.3.0"
+        "@shikijs/core": "4.3.1",
+        "@shikijs/types": "4.3.1"
       },
       "engines": {
         "node": ">=20"
@@ -187,9 +187,9 @@
       "license": "MIT"
     },
     "node_modules/@types/hast": {
-      "version": "3.0.4",
-      "resolved": "https://registry.npmjs.org/@types/hast/-/hast-3.0.4.tgz",
-      "integrity": "sha512-WPs+bbQw5aCj+x6laNGWLH3wviHtoCv/P3+otBhbOhJgG8qtpdAMlTCxLtsTWA7LH1Oh/bFCHsBn0TPS5m30EQ==",
+      "version": "3.0.5",
+      "resolved": "https://registry.npmjs.org/@types/hast/-/hast-3.0.5.tgz",
+      "integrity": "sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g==",
       "license": "MIT",
       "dependencies": {
         "@types/unist": "*"
@@ -211,9 +211,9 @@
       "license": "MIT"
     },
     "node_modules/@ungap/structured-clone": {
-      "version": "1.3.2",
-      "resolved": "https://registry.npmjs.org/@ungap/structured-clone/-/structured-clone-1.3.2.tgz",
-      "integrity": "sha512-5jsZFwgR5rTdKwidH9Qmat75RKwqfpKlWWB1frDkljN127mwqBu8K0PYo7/hFpF03IEJpfVPpCQDY/eDx3iHvA==",
+      "version": "1.3.3",
+      "resolved": "https://registry.npmjs.org/@ungap/structured-clone/-/structured-clone-1.3.3.tgz",
+      "integrity": "sha512-60YRaenCQcVjYEKOcG824+DRGGIQ3VKErcBoAEDJZz5bKIs2ZG+X/H9Nk+Q6EVkwJk5QNApxbrc5QtBSwtrXAg==",
       "license": "ISC"
     },
     "node_modules/ccount": {

@@ -12,7 +12,7 @@
         "@matrix-org/matrix-sdk-crypto-wasm": "18.3.1",
         "fake-indexeddb": "6.2.5",
         "markdown-it": "14.3.0",
-        "matrix-js-sdk": "42.0.0-rc.0",
+        "matrix-js-sdk": "41.9.0-rc.0",
         "music-metadata": "11.14.0",
         "typebox": "1.3.6",
         "zod": "4.4.3"
@@ -253,6 +253,15 @@
         "url": "https://github.com/sponsors/sindresorhus"
       }
     },
+    "node_modules/jwt-decode": {
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/jwt-decode/-/jwt-decode-4.0.0.tgz",
+      "integrity": "sha512-+KJGIyHgkGuIq3IEBNftfhW/LfWhXUIY6OmyVWjliu5KH1y0fw7VQ8YndE2O4qZdMSd9SqbnC8GOcZEy0Om7sA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      }
+    },
     "node_modules/linkify-it": {
       "version": "5.0.2",
       "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.2.tgz",
@@ -319,9 +328,9 @@
       "license": "Apache-2.0"
     },
     "node_modules/matrix-js-sdk": {
-      "version": "42.0.0-rc.0",
-      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-42.0.0-rc.0.tgz",
-      "integrity": "sha512-M8Osn45Yf3aru2Do82LhJUJT3O/NrL4OQUFcU+55zC+StjCHGnt7Pkd7E/L40jz42hQJf97bgcIQmERw7zNU9w==",
+      "version": "41.9.0-rc.0",
+      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.9.0-rc.0.tgz",
+      "integrity": "sha512-W3KPvaRhmvZxsnOrpsnpyboirfjQDaIZ8K0aJrw5wdkD9YSK02NutaFRG9UFAEOolG0ythj6dQIeUS/icZKzCQ==",
       "license": "Apache-2.0",
       "dependencies": {
         "@babel/runtime": "^8.0.0",
@@ -329,9 +338,11 @@
         "another-json": "^0.2.0",
         "bs58": "^6.0.0",
         "content-type": "^2.0.0",
+        "jwt-decode": "^4.0.0",
         "loglevel": "^1.9.2",
         "matrix-events-sdk": "0.0.1",
         "matrix-widget-api": "^1.16.1",
+        "oidc-client-ts": "^3.0.1",
         "p-retry": "8",
         "sdp-transform": "^3.0.0",
         "unhomoglyph": "^1.0.6"
@@ -416,6 +427,18 @@
       },
       "engines": {
         "node": ">=14.18"
+      }
+    },
+    "node_modules/oidc-client-ts": {
+      "version": "3.5.0",
+      "resolved": "https://registry.npmjs.org/oidc-client-ts/-/oidc-client-ts-3.5.0.tgz",
+      "integrity": "sha512-l2q8l9CTCTOlbX+AnK4p3M+4CEpKpyQhle6blQkdFhm0IsBqsxm15bYaSa11G7pWdsYr6epdsRZxJpCyCRbT8A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "jwt-decode": "^4.0.0"
+      },
+      "engines": {
+        "node": ">=18"
       }
     },
     "node_modules/p-retry": {
