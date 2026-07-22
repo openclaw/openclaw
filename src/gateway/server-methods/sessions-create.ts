@@ -29,7 +29,6 @@ import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { chatHandlers } from "./chat.js";
-import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -331,7 +330,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     ).allowed;
     const created = await createGatewaySession({
       cfg,
-      createdBy: gatewayClientSessionCreator(client),
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,

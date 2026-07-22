@@ -74,51 +74,6 @@ function requireNonEmptyString(value: string | undefined, label: string): string
   return value;
 }
 
-test("sessions.create stamps the trusted creator and preserves it until reset", async () => {
-  await createSessionStoreDir();
-  const adaClient = {
-    operatorIdentity: { id: "profile-ada", label: "Ada Lovelace" },
-    connect: { scopes: ["operator.admin"] },
-  } as never;
-  const bobClient = {
-    operatorIdentity: { id: "profile-bob", label: "Bob Hopper" },
-    connect: { scopes: ["operator.admin"] },
-  } as never;
-
-  const created = await directSessionReq<{
-    key: string;
-    entry: { createdBy?: { id: string; label?: string } };
-  }>("sessions.create", { agentId: "main" }, { client: adaClient });
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry.createdBy).toEqual({
-    id: "profile-ada",
-    label: "Ada Lovelace",
-  });
-  const key = requireNonEmptyString(created.payload?.key, "created session key");
-
-  const reused = await directSessionReq<{ entry: { createdBy?: { id: string } } }>(
-    "sessions.create",
-    { agentId: "main", key },
-    { client: bobClient },
-  );
-  expect(reused.payload?.entry.createdBy?.id).toBe("profile-ada");
-
-  const listed = await directSessionReq<{
-    sessions: Array<{ key: string; createdBy?: { id: string; label?: string } }>;
-  }>("sessions.list", { agentId: "main" });
-  expect(listed.payload?.sessions.find((row) => row.key === key)?.createdBy).toEqual({
-    id: "profile-ada",
-    label: "Ada Lovelace",
-  });
-
-  const reset = await directSessionReq<{ entry: { createdBy?: { id: string; label?: string } } }>(
-    "sessions.reset",
-    { agentId: "main", key },
-    { client: bobClient },
-  );
-  expect(reset.payload?.entry.createdBy).toEqual({ id: "profile-bob", label: "Bob Hopper" });
-});
-
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-session-worktree-"),

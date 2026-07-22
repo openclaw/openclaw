@@ -34,7 +34,7 @@ function sessionsList(creators: [string, string]) {
         kind: "direct",
         label: "Ada research",
         category: "Research",
-        createdBy: { id: creators[0], label: "Ada" },
+        createdActor: { type: "human", id: creators[0], label: "Ada" },
         updatedAt: 2,
       },
       {
@@ -42,7 +42,11 @@ function sessionsList(creators: [string, string]) {
         kind: "direct",
         label: "Bob operations",
         category: "Operations",
-        createdBy: { id: creators[1], label: creators[1] === creators[0] ? "Ada" : "Bob" },
+        createdActor: {
+          type: "human",
+          id: creators[1],
+          label: creators[1] === creators[0] ? "Ada" : "Bob",
+        },
         updatedAt: 1,
       },
     ],

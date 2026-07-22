@@ -13,10 +13,6 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -40,7 +36,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
-  isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -74,6 +69,7 @@ import {
   shouldPreserveSessionAuthProfileOverride,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -125,10 +121,6 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
-}
-
-function supportsSpawnLineage(storeKey: string): boolean {
-  return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
 
 type SessionPatchProjectionEntry = {
@@ -222,92 +214,14 @@ export async function projectSessionsPatchEntry(params: {
     delete next.displayName;
   }
 
-  type PatchError = ReturnType<typeof invalid> | null;
-  const checkSpawnLineage = (field: string): PatchError =>
-    supportsSpawnLineage(storeKey)
-      ? null
-      : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
-  if ("completionOwnerSessionKey" in patch) {
-    const raw = patch.completionOwnerSessionKey;
-    if (raw === null) {
-      if (existing?.completionOwnerSessionKey) {
-        return invalid("completionOwnerSessionKey cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      const lineage = checkSpawnLineage("completionOwnerSessionKey");
-      if (lineage) {
-        return lineage;
-      }
-      const normalized = normalizeOptionalString(raw);
-      if (!normalized) {
-        return invalid("invalid completionOwnerSessionKey: empty");
-      }
-      if (
-        existing?.completionOwnerSessionKey &&
-        existing.completionOwnerSessionKey !== normalized
-      ) {
-        return invalid("completionOwnerSessionKey cannot be changed once set");
-      }
-      next.completionOwnerSessionKey = normalized;
-    }
-  }
-
-  if ("inheritedToolPolicyVersion" in patch) {
-    const raw = patch.inheritedToolPolicyVersion;
-    if (raw === null) {
-      if (existing?.inheritedToolPolicyVersion !== undefined) {
-        return invalid("inheritedToolPolicyVersion cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      const lineage = checkSpawnLineage("inheritedToolPolicyVersion");
-      if (lineage) {
-        return lineage;
-      }
-      if (raw !== 1) {
-        return invalid("invalid inheritedToolPolicyVersion (expected 1)");
-      }
-      next.inheritedToolPolicyVersion = 1;
-    }
-  }
-
-  if ("inheritedToolDeny" in patch) {
-    const raw = patch.inheritedToolDeny;
-    if (raw === null) {
-      delete next.inheritedToolDeny;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolDeny (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
-      if (inheritedToolDeny.length > 0) {
-        next.inheritedToolDeny = inheritedToolDeny;
-      } else {
-        delete next.inheritedToolDeny;
-      }
-    }
-  }
-
-  if ("inheritedToolAllow" in patch) {
-    const raw = patch.inheritedToolAllow;
-    if (raw === null) {
-      delete next.inheritedToolAllow;
-    } else if (raw !== undefined) {
-      if (!Array.isArray(raw)) {
-        return invalid("invalid inheritedToolAllow (use an array of tool names)");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("inheritedToolAllow is only supported for subagent:* or acp:* sessions");
-      }
-      const inheritedToolAllow = normalizeInheritedToolAllowlist(raw);
-      if (inheritedToolAllow.length > 0) {
-        next.inheritedToolAllow = inheritedToolAllow;
-      } else {
-        delete next.inheritedToolAllow;
-      }
-    }
+  const subagentPolicyError = applySessionsPatchSubagentPolicy({
+    existing,
+    next,
+    patch,
+    storeKey,
+  });
+  if (subagentPolicyError) {
+    return invalid(subagentPolicyError);
   }
 
   if ("label" in patch) {
@@ -757,4 +671,3 @@ export async function applySessionsPatchToStore(params: {
   }
   return projected;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

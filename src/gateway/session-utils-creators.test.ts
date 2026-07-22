@@ -1,17 +1,27 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+const getUserProfileListItem = vi.hoisted(() =>
+  vi.fn((profileId: string) => ({
+    id: profileId,
+    displayName: profileId === "profile-ada" ? "Ada" : "Bob",
+  })),
+);
+
+vi.mock("../state/user-profiles.js", () => ({ getUserProfileListItem }));
+
 import { listSessionsFromStore } from "./session-utils.js";
 
 it("returns the complete deterministic creator facet independently of pagination", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:ada": {
-      createdBy: { id: "profile-ada", label: "Ada" },
+      createdActor: { type: "human", id: "profile-ada" },
       sessionId: "session-ada",
       updatedAt: 2,
     },
     "agent:main:bob": {
-      createdBy: { id: "profile-bob", label: "Bob" },
+      createdActor: { type: "human", id: "profile-bob" },
       sessionId: "session-bob",
       updatedAt: 1,
     },
@@ -30,6 +40,12 @@ it("returns the complete deterministic creator facet independently of pagination
     { id: "profile-ada", label: "Ada" },
     { id: "profile-bob", label: "Bob" },
   ]);
+  expect(result.sessions[0]?.createdActor).toEqual({
+    type: "human",
+    id: "profile-ada",
+    label: "Ada",
+  });
+  expect(getUserProfileListItem).toHaveBeenCalledTimes(2);
 
   const filtered = listSessionsFromStore({
     cfg: {} as OpenClawConfig,

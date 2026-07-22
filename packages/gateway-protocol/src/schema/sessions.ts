@@ -9,6 +9,12 @@ import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 
 export { SessionsCreateParamsSchema };
+export {
+  SessionCreatedActorSchema,
+  SessionRowSchema,
+  type SessionCreatedActor,
+  type SessionRow,
+} from "./sessions-row.js";
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
   "on-track",
@@ -19,13 +25,6 @@ export const SESSION_OBSERVER_HEALTH_VALUES = [
   "done",
   "failed",
 ] as const;
-
-/** Stable identity stamped on a session when an operator creates it. */
-export const SessionCreatorIdentitySchema = closedObject({
-  id: NonEmptyString,
-  label: Type.Optional(NonEmptyString),
-});
-export type SessionCreatorIdentity = Static<typeof SessionCreatorIdentitySchema>;
 
 /** Trajectory judgment produced for one observed agent session. */
 export const SessionObserverHealthSchema = Type.Union([
@@ -365,106 +364,6 @@ export const SessionsDescribeParamsSchema = closedObject({
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
-
-/** Stable Gateway session row fields; mutation envelopes may add null tombstones. */
-export const SessionRowSchema = Type.Object(
-  {
-    key: Type.String(),
-    sessionId: Type.Optional(Type.String()),
-    kind: Type.Union([
-      Type.Literal("direct"),
-      Type.Literal("group"),
-      Type.Literal("global"),
-      Type.Literal("unknown"),
-    ]),
-    label: Type.Optional(Type.String()),
-    displayName: Type.Optional(Type.String()),
-    derivedTitle: Type.Optional(Type.String()),
-    lastMessagePreview: Type.Optional(Type.String()),
-    channel: Type.Optional(Type.String()),
-    chatType: Type.Optional(
-      Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
-    ),
-    updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
-    archived: Type.Optional(Type.Boolean()),
-    archivedAt: Type.Optional(Type.Number()),
-    pinned: Type.Optional(Type.Boolean()),
-    pinnedAt: Type.Optional(Type.Number()),
-    icon: Type.Optional(Type.String()),
-    unread: Type.Optional(Type.Boolean()),
-    lastReadAt: Type.Optional(Type.Number()),
-    lastActivityAt: Type.Optional(Type.Number()),
-    lastInteractionAt: Type.Optional(Type.Number()),
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("running"),
-        Type.Literal("done"),
-        Type.Literal("failed"),
-        Type.Literal("killed"),
-        Type.Literal("timeout"),
-      ]),
-    ),
-    lastRunError: Type.Optional(Type.String()),
-    spawnedBy: Type.Optional(Type.String()),
-    parentSessionKey: Type.Optional(Type.String()),
-    controlOwnerSessionKey: Type.Optional(Type.String()),
-    childSessions: Type.Optional(Type.Array(Type.String())),
-    forkedFromParent: Type.Optional(Type.Boolean()),
-    spawnDepth: Type.Optional(Type.Number()),
-    subagentRole: Type.Optional(Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf")])),
-    subagentControlScope: Type.Optional(
-      Type.Union([Type.Literal("children"), Type.Literal("none")]),
-    ),
-    swarmGroupId: Type.Optional(Type.String()),
-    worktree: Type.Optional(
-      Type.Object({
-        id: Type.String(),
-        branch: Type.String(),
-        repoRoot: Type.String(),
-      }),
-    ),
-    execNode: Type.Optional(Type.String()),
-    execCwd: Type.Optional(Type.String()),
-    spawnedWorkspaceDir: Type.Optional(Type.String()),
-    spawnedCwd: Type.Optional(Type.String()),
-    createdVia: Type.Optional(
-      Type.Union([
-        Type.Literal("operator"),
-        Type.Literal("spawn"),
-        Type.Literal("channel"),
-        Type.Literal("cron"),
-        Type.Literal("talk"),
-        Type.Literal("run"),
-        Type.Literal("plugin"),
-        Type.Literal("internal"),
-      ]),
-    ),
-    createdActor: Type.Optional(
-      Type.Object({
-        type: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
-        id: Type.Optional(Type.String()),
-      }),
-    ),
-    createdAt: Type.Optional(Type.Number()),
-    forkSource: Type.Optional(
-      Type.Object({
-        sessionKey: Type.String(),
-        sessionId: Type.String(),
-        entryId: Type.Optional(Type.String()),
-      }),
-    ),
-    previousSessionId: Type.Optional(Type.String()),
-    inputTokens: Type.Optional(Type.Number()),
-    outputTokens: Type.Optional(Type.Number()),
-    totalTokens: Type.Optional(Type.Number()),
-    totalTokensFresh: Type.Optional(Type.Boolean()),
-    contextTokens: Type.Optional(Type.Number()),
-    estimatedCostUsd: Type.Optional(Type.Number()),
-    model: Type.Optional(Type.String()),
-    modelProvider: Type.Optional(Type.String()),
-  },
-  { additionalProperties: true },
-);
 
 /** Resolves a session by key, raw session id, label, or parent/agent scope. */
 export const SessionsResolveParamsSchema = closedObject({
@@ -848,7 +747,6 @@ export const SessionsUsageParamsSchema = closedObject({
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
-export type SessionRow = Static<typeof SessionRowSchema>;
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;

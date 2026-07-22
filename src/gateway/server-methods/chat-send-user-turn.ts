@@ -17,7 +17,6 @@ import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
-import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedChatSendAttachments = Extract<
@@ -180,9 +179,6 @@ function buildChatSendMessageContext(params: {
           body: commandBody,
         },
     MessageSid: params.clientRunId,
-    ...(gatewayClientSessionCreator(params.client)
-      ? { SessionCreator: gatewayClientSessionCreator(params.client) }
-      : {}),
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
     ...(!isOperatorUiClient(params.clientInfo)
       ? {

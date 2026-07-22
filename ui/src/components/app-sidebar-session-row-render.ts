@@ -207,7 +207,7 @@ export function renderRecentSession(params: {
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
         <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
-          host.sessionOwnershipVisible ? session.createdBy : undefined,
+          host.sessionOwnershipVisible ? session.createdActor : undefined,
           "row",
         )}
         <span class="sidebar-recent-session__text">

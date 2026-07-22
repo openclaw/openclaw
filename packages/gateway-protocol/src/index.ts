@@ -26,7 +26,7 @@ export type {
   WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
-export { SessionCreatorIdentitySchema, type SessionCreatorIdentity } from "./schema/sessions.js";
+export { SessionCreatedActorSchema, type SessionCreatedActor } from "./schema/sessions-row.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {

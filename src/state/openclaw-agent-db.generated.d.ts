@@ -186,7 +186,6 @@ export interface SessionConversations {
 }
 
 export interface SessionEntries {
-  created_by_json: string | null;
   entry_json: string;
   session_id: string;
   session_key: string;

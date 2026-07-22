@@ -28,7 +28,7 @@ export function buildGatewaySessionEventFields(params: {
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
-    createdBy: sessionRow.createdBy ?? null,
+    createdActor: sessionRow.createdActor ?? null,
     kind: sessionRow.kind,
     channel: sessionRow.channel,
     subject: sessionRow.subject,
@@ -56,7 +56,6 @@ export function buildGatewaySessionEventFields(params: {
     subagentRole: sessionRow.subagentRole,
     subagentControlScope: sessionRow.subagentControlScope,
     createdVia: sessionRow.createdVia,
-    createdActor: sessionRow.createdActor,
     createdAt: sessionRow.createdAt,
     forkSource: sessionRow.forkSource,
     previousSessionId: sessionRow.previousSessionId,

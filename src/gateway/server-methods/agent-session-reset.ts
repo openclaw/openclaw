@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
@@ -20,7 +19,6 @@ export async function runSessionResetFromAgent(params: {
   key: string;
   agentId?: string;
   reason: "new" | "reset";
-  createdBy?: SessionCreatorIdentity;
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
@@ -29,7 +27,6 @@ export async function runSessionResetFromAgent(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     reason: params.reason,
     commandSource: "gateway:agent",
-    createdBy: params.createdBy,
     assertCurrent: params.assertCurrent,
     onCommitted: params.onCommitted,
   });

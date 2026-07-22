@@ -492,7 +492,6 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
-  createdBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   spawnedBy?: string;
   controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
@@ -510,7 +509,7 @@ export type GatewaySessionRow = {
   subagentRole?: "orchestrator" | "leaf";
   subagentControlScope?: "children" | "none";
   createdVia?: "operator" | "spawn" | "channel" | "cron" | "talk" | "run" | "plugin" | "internal";
-  createdActor?: { type: "human" | "agent" | "system"; id?: string };
+  createdActor?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
   createdAt?: number;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   previousSessionId?: string;
