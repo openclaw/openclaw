@@ -125,6 +125,38 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBeNull();
   });
 
+  it("does not evict another run when finalizing an already-evicted run id", () => {
+    const assembler = new TuiStreamAssembler();
+    for (let index = 0; index < 200; index += 1) {
+      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+    }
+
+    assembler.ingestDelta("run-200", messageWithContent([text("Newest")]), false);
+
+    expect(assembler.finalize("run-0", messageWithContent([text("Late final")]), false)).toBe(
+      "Late final",
+    );
+    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe("Draft 1");
+  });
+
+  it("bounds orphaned run state while retaining recently active runs", () => {
+    const assembler = new TuiStreamAssembler();
+    for (let index = 0; index < 200; index += 1) {
+      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+    }
+
+    assembler.ingestDelta("run-0", messageWithContent([text("Recently active")]), false);
+    assembler.ingestDelta("run-200", messageWithContent([text("Newest")]), false);
+
+    expect(assembler.finalize("run-0", { role: "assistant", content: [] }, false)).toBe(
+      "Recently active",
+    );
+    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe(
+      "(no output)",
+    );
+    expect(assembler.finalize("run-200", { role: "assistant", content: [] }, false)).toBe("Newest");
+  });
+
   it("keeps streamed delta text when incoming tool boundary drops a block", () => {
     const assembler = new TuiStreamAssembler();
     const first = assembler.ingestDelta("run-delta-boundary", TEXT_ONLY_TWO_BLOCKS, false);
