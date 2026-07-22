@@ -2617,6 +2617,9 @@ function filterSessionEntries(params: {
       );
     })
     .filter(([, entry]) => {
+      if (opts.archived === "all") {
+        return true;
+      }
       const archived = entry?.archivedAt !== undefined;
       return opts.archived === true ? archived : !archived;
     })

@@ -3251,7 +3251,6 @@ class ChatPane extends OpenClawLightDomElement {
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
-    const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
     // Never flash "view-only" while metadata loads; after loading, anything short
     // of a continuable session (failed lookups too) explains the disabled composer.
     const catalogDisabledReason =
@@ -3371,13 +3370,15 @@ class ChatPane extends OpenClawLightDomElement {
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
-      disabledReason: catalogDisabledReason ?? disabledReason,
-      disabledActionLabel:
-        selectedSessionArchived && !catalogDisabledReason ? t("common.restore") : null,
-      onDisabledAction:
+      disabledReason: catalogDisabledReason,
+      disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
-          ? () => void this.restoreArchivedSession(state.sessionKey)
-          : null,
+          ? {
+              text: t("chat.archivedSessionDisabled"),
+              actionLabel: t("common.unarchive"),
+              onAction: () => void this.restoreArchivedSession(state.sessionKey),
+            }
+          : undefined,
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
       inlineApproval,
@@ -3507,7 +3508,7 @@ class ChatPane extends OpenClawLightDomElement {
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
         if (selectedSessionArchived) {
-          search.set("showArchived", "1");
+          search.set("status", "archived");
         }
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },

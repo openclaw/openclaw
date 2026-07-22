@@ -290,8 +290,11 @@ export const SessionsListParamsSchema = closedObject({
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
-  /** True lists archived sessions; false or omitted lists active sessions. */
-  archived: Type.Optional(Type.Boolean()),
+  /**
+   * True lists archived sessions; "all" lists archived and active;
+   * false or omitted lists active sessions.
+   */
+  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
 });
 
 /** Searches one agent's indexed session transcripts, optionally within selected sessions. */

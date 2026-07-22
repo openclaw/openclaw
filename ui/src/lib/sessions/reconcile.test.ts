@@ -290,4 +290,20 @@ describe("reconcileSessionChanged", () => {
 
     expect(next.row?.thinkingLevel).toBeUndefined();
   });
+
+  it("keeps archive-state changes in an all-status result", () => {
+    const key = "agent:main:thread";
+    const result = buildResult([{ key, kind: "direct", updatedAt: 1, sessionId: "s1" }]);
+
+    const next = reconcileSessionHistory(
+      result,
+      { key, kind: "direct", updatedAt: 2, sessionId: "s1", archived: true },
+      undefined,
+      { archivedFilter: "all" },
+    );
+
+    expect(next?.sessions).toEqual([
+      expect.objectContaining({ key, archived: true, updatedAt: 2 }),
+    ]);
+  });
 });

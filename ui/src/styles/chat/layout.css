@@ -2061,7 +2061,12 @@ openclaw-chat-page {
   line-height: 1.4;
 }
 
-.agent-chat__disabled-reason .btn {
+.agent-chat__disabled-banner {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.agent-chat__disabled-banner .btn {
   flex: 0 0 auto;
 }
 

@@ -1729,32 +1729,35 @@ html.openclaw-native-macos
   color: var(--text);
 }
 
-.sidebar-view-archived {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: -2px 10px 2px;
-  padding: 5px 0;
-  border: 0;
-  background: transparent;
+.sidebar-session-empty-hint {
+  display: block;
+  padding: 4px 10px 10px;
   color: var(--muted);
   font-size: 11px;
-  text-align: left;
 }
 
-.sidebar-view-archived:hover,
-.sidebar-view-archived:focus-visible {
-  color: var(--text);
+.sidebar-session--archived {
+  opacity: 0.62;
 }
 
-.sidebar-view-archived svg {
-  width: 12px;
-  height: 12px;
+.sidebar-session--archived:hover,
+.sidebar-session--archived.sidebar-recent-session--active,
+.sidebar-session--archived.sidebar-recent-session--selected {
+  opacity: 0.82;
+}
+
+.sidebar-session__archive-glyph {
+  display: inline-flex;
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.sidebar-session__archive-glyph svg {
+  width: 11px;
+  height: 11px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--dragging {

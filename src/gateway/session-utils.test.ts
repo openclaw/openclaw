@@ -388,6 +388,14 @@ describe("gateway session utils", () => {
     expect(archived.sessions).toMatchObject([
       { key: "archived", archived: true, archivedAt: 50, pinned: false },
     ]);
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { archived: "all" },
+    });
+    expect(all.sessions.map((session) => session.key)).toEqual(["pinned", "recent", "archived"]);
   });
 
   test("session lists page from an offset after filtering and sorting", () => {

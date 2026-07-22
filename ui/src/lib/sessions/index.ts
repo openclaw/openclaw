@@ -33,7 +33,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import { readSessionCustomGroupNames } from "./custom-groups.ts";
-import { scopedAgentListParamsForSession } from "./navigation.ts";
+import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
@@ -72,6 +72,8 @@ type SessionState = {
 
 type SessionGroupMutationResult = "completed" | "stale";
 
+export type { SessionArchivedFilter } from "./navigation.ts";
+
 export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
@@ -83,7 +85,7 @@ export type SessionListOptions = {
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
-  showArchived?: boolean;
+  archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
 
@@ -292,6 +294,7 @@ export {
   filterVisibleSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
+  sessionMatchesArchivedFilter,
   scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
@@ -356,11 +359,13 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
   }
-  if (options.showArchived === true) {
+  if (options.archivedFilter === "archived") {
     params.archived = true;
+  } else if (options.archivedFilter === "all") {
+    params.archived = "all";
   }
   const activeMinutes =
-    options.showArchived === true
+    options.archivedFilter === "archived" || options.archivedFilter === "all"
       ? 0
       : typeof options.activeMinutes === "number" && options.activeMinutes > 0
         ? Math.floor(options.activeMinutes)
@@ -1830,7 +1835,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
-        showArchived: lastListOptions.showArchived,
+        archivedFilter: lastListOptions.archivedFilter,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
       // Catalog mutations from other clients invalidate the per-connection

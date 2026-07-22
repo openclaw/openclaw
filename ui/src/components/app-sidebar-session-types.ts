@@ -62,6 +62,7 @@ export type SidebarRecentSession = {
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
+  archived?: boolean;
   icon?: string;
   category?: string;
   channel?: string;
@@ -134,6 +135,7 @@ export type SidebarSessionGroupMenuState = {
 };
 
 export type SidebarSessionSortMode = "created" | "updated";
+export type SidebarSessionStatusFilter = "active" | "archived" | "all";
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 export type SidebarSessionGroupDropTarget = {
   group: string;
@@ -171,6 +173,7 @@ export function sidebarSessionMetaId(key: string): string {
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
+const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 
@@ -207,6 +210,11 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
 
+export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
+  const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
+  return stored === "archived" || stored === "all" ? stored : "active";
+}
+
 export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
@@ -238,6 +246,10 @@ export function storeSidebarSessionsShowCron(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
 }
 
+export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+}
+
 export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
   getSafeLocalStorage()?.setItem(
     SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
@@ -252,6 +264,12 @@ export const SIDEBAR_SESSION_SORT_OPTIONS = [
   mode: SidebarSessionSortMode;
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
+
+export const SIDEBAR_SESSION_STATUS_OPTIONS = [
+  "active",
+  "archived",
+  "all",
+] as const satisfies readonly SidebarSessionStatusFilter[];
 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;

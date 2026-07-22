@@ -139,8 +139,7 @@ export type ChatProps = {
   composerHoldToRecord?: boolean;
   canSend: boolean;
   disabledReason: string | null;
-  disabledActionLabel?: string | null;
-  onDisabledAction?: (() => void) | null;
+  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
@@ -400,8 +399,7 @@ export function renderChat(props: ChatProps) {
     connected: props.connected,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
-    disabledActionLabel: props.disabledActionLabel,
-    onDisabledAction: props.onDisabledAction,
+    disabledBanner: props.disabledBanner,
     runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
