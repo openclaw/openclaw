@@ -296,11 +296,8 @@ describe("models-config", () => {
         }));
 
         try {
-          const {
-            ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip,
-            resetModelsJsonReadyCacheForTest: resetModelsJsonReadyCacheForSkip,
-          } = await import("./models-config.js");
-          resetModelsJsonReadyCacheForSkip();
+          const { ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip } =
+            await import("./models-config.js");
 
           const result = await ensureOpenClawModelsJsonForSkip(
             { models: { providers: {} } },
@@ -389,11 +386,8 @@ describe("models-config", () => {
         });
 
         try {
-          const {
-            ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip,
-            resetModelsJsonReadyCacheForTest: resetModelsJsonReadyCacheForSkip,
-          } = await import("./models-config.js");
-          resetModelsJsonReadyCacheForSkip();
+          const { ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip } =
+            await import("./models-config.js");
 
           const result = await ensureOpenClawModelsJsonForSkip(
             { models: { providers: {} } },
@@ -468,11 +462,8 @@ describe("models-config", () => {
         }));
 
         try {
-          const {
-            ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip,
-            resetModelsJsonReadyCacheForTest: resetModelsJsonReadyCacheForSkip,
-          } = await import("./models-config.js");
-          resetModelsJsonReadyCacheForSkip();
+          const { ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip } =
+            await import("./models-config.js");
 
           const first = await ensureOpenClawModelsJsonForSkip(
             { models: { providers: {} } },
