@@ -1,0 +1,17 @@
+{
+  "id": "ag-ui",
+  "name": "AG-UI",
+  "description": "OpenClaw AG-UI channel plugin — AG-UI protocol endpoint for AG-UI clients.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["ag-ui"],
+  "contracts": {
+    "tools": ["cron_report"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
