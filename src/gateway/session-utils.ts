@@ -1924,7 +1924,7 @@ export function resolveSessionDisplayModelIdentityRef(params: {
 }
 
 /** Adds the current human profile label without persisting rename-prone display data. */
-export function projectSessionCreatedActor(
+function projectSessionCreatedActor(
   actor: SessionEntry["createdActor"],
   userProfileLabelById: Map<string, string | undefined> = new Map(),
 ): SessionCreatedActor | undefined {
