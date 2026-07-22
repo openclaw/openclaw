@@ -32,9 +32,11 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
     if (moduleLoad) {
       return;
     }
-    return "requestIdleCallback" in window
-      ? window.requestIdleCallback(start, { timeout: 3000 })
-      : window.setTimeout(start, 1500);
+    if ("requestIdleCallback" in window) {
+      requestIdleCallback(start, { timeout: 3000 });
+    } else {
+      setTimeout(start, 1500);
+    }
   };
 
   const activate = (immediate: boolean) => {
