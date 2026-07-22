@@ -1,5 +1,5 @@
 import { isDirectRunUrl } from "./direct-run.mjs";
-import { classifyReleaseTrain, parseReleaseVersion } from "./npm-publish-plan.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs";
 
 const STABLE_ALIASES = Object.freeze({
   default: Object.freeze(["latest", "main"]),

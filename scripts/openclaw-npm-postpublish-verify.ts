@@ -30,12 +30,12 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
-import { classifyReleaseTrain } from "./lib/npm-publish-plan.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mjs";
+import { classifyReleaseTrain } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";

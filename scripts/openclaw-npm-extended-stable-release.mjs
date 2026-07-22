@@ -3,7 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { classifyReleaseTrain, parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
 
