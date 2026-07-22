@@ -59,7 +59,7 @@ type MatrixInboundDedupeSourceRoots = {
   jsonRoots: string[];
 };
 
-export type MatrixInboundDedupeSourceCensus =
+type MatrixInboundDedupeSourceCensus =
   | ({ status: "complete" } & MatrixInboundDedupeSourceRoots)
   | ({ status: "incomplete"; warnings: string[] } & MatrixInboundDedupeSourceRoots);
 
