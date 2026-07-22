@@ -651,35 +651,35 @@ extension GatewayEndpointStoreTests {
     }
 
     @Test func `persisting active first use pin keeps endpoint revision stable`() async throws {
-        try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
-            let host = "gateway-\(UUID().uuidString.lowercased()).example.invalid"
-            let url = try #require(URL(string: "wss://\(host)"))
-            let storeKey = GatewayTLSRoute.storeKey(for: url)
-            defer { GatewayTLSStore.clearFingerprint(stableID: storeKey) }
-            let source = self.source(
-                mode: .remote,
-                transport: .direct,
-                directURL: url)
-            let store = GatewayEndpointStore(deps: .init(
-                token: { nil },
-                password: { nil },
-                localPort: { 18789 },
-                remoteRouteIfRunning: { nil },
-                remoteRouteIsCurrent: { _ in true },
-                canStartRemoteTunnel: { true },
-                ensureRemoteTunnel: { throw CancellationError() },
-                routingGenerationIsCurrent: { _ in true },
-                sourceSnapshot: { source }))
+        try await withFakeGatewayTLSKeychain {
+            try await TestIsolation.withUserDefaultsValues([connectionModeKey: "unconfigured"]) {
+                let url = try #require(URL(string: "wss://gateway.example.invalid"))
+                let storeKey = GatewayTLSRoute.storeKey(for: url)
+                let source = self.source(
+                    mode: .remote,
+                    transport: .direct,
+                    directURL: url)
+                let store = GatewayEndpointStore(deps: .init(
+                    token: { nil },
+                    password: { nil },
+                    localPort: { 18789 },
+                    remoteRouteIfRunning: { nil },
+                    remoteRouteIsCurrent: { _ in true },
+                    canStartRemoteTunnel: { true },
+                    ensureRemoteTunnel: { throw CancellationError() },
+                    routingGenerationIsCurrent: { _ in true },
+                    sourceSnapshot: { source }))
 
-            let first = try await store.requireEndpoint()
-            let fingerprint = String(repeating: "a", count: 64)
-            _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
-            let second = try await store.requireEndpoint()
+                let first = try await store.requireEndpoint()
+                let fingerprint = String(repeating: "a", count: 64)
+                _ = GatewayTLSStore.claimFirstUseFingerprint(fingerprint, stableID: storeKey)
+                let second = try await store.requireEndpoint()
 
-            #expect(first.revision == second.revision)
-            #expect(second.tls?.params.allowTOFU == false)
-            #expect(second.tls?.params.expectedFingerprint == fingerprint)
-            #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
+                #expect(first.revision == second.revision)
+                #expect(second.tls?.params.allowTOFU == false)
+                #expect(second.tls?.params.expectedFingerprint == fingerprint)
+                #expect(GatewayTLSRoute.hasSameConnectionIdentity(first.tls, second.tls))
+            }
         }
     }
 
