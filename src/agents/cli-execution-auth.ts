@@ -15,6 +15,12 @@ type CliExecutionAuthProfileSelection = {
   authProfileIdSource?: "auto" | "user";
 };
 
+export type CliExecutionAuthProfileDeps = {
+  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
+};
+
+export class CliExecutionAuthProfileSelectionError extends Error {}
+
 export function cliBackendAcceptsAuthProfileForwarding(params: {
   provider: string;
   config: OpenClawConfig;
@@ -32,14 +38,18 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
  * Google API key. A user-locked profile must fail closed here because falling
  * through would silently run the request as another user.
  */
-export function resolveCliExecutionAuthProfileId(params: {
-  cliExecutionProvider: string;
-  authProfileProvider: string;
-  config: OpenClawConfig;
-  agentDir: string;
-  selected?: CliExecutionAuthProfileSelection;
-}): string | undefined {
-  const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+export function resolveCliExecutionAuthProfileId(
+  params: {
+    cliExecutionProvider: string;
+    authProfileProvider: string;
+    config: OpenClawConfig;
+    agentDir: string;
+    selected?: CliExecutionAuthProfileSelection;
+  },
+  deps: CliExecutionAuthProfileDeps = {},
+): string | undefined {
+  const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+  const store = loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
@@ -60,9 +70,11 @@ export function resolveCliExecutionAuthProfileId(params: {
     }
     if (params.selected?.authProfileIdSource !== "auto") {
       if (!credential) {
-        throw new Error(`No credentials found for profile "${selectedAuthProfileId}".`);
+        throw new CliExecutionAuthProfileSelectionError(
+          `No credentials found for profile "${selectedAuthProfileId}".`,
+        );
       }
-      throw new Error(
+      throw new CliExecutionAuthProfileSelectionError(
         `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${selectedAuthProfileId}" owned by "${credential.provider}".`,
       );
     }

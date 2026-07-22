@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
+  type CliExecutionAuthProfileDeps,
 } from "../agents/cli-execution-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -24,7 +25,7 @@ export type SystemAgentConfiguredRoute = {
     }
 );
 
-export type SystemAgentConfiguredRouteDeps = {
+export type SystemAgentConfiguredRouteDeps = CliExecutionAuthProfileDeps & {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
 };
 
@@ -92,6 +93,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
+  deps: SystemAgentConfiguredRouteDeps = {},
 ): Promise<SystemAgentConfiguredRoute | null> {
   const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
     await Promise.all([
@@ -131,20 +133,23 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       agentId: modelOwnerAgentId,
     });
   const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
-        cliExecutionProvider: executionProvider,
-        authProfileProvider: selection.provider,
-        config: runConfig,
-        agentDir: selection.agentDir,
-        ...(selection.profileId
-          ? {
-              selected: {
-                authProfileId: selection.profileId,
-                authProfileIdSource: "user",
-              },
-            }
-          : {}),
-      })
+    ? resolveCliExecutionAuthProfileId(
+        {
+          cliExecutionProvider: executionProvider,
+          authProfileProvider: selection.provider,
+          config: runConfig,
+          agentDir: selection.agentDir,
+          ...(selection.profileId
+            ? {
+                selected: {
+                  authProfileId: selection.profileId,
+                  authProfileIdSource: "user",
+                },
+              }
+            : {}),
+        },
+        deps,
+      )
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(runConfig, modelOwnerAgentId);
@@ -196,14 +201,16 @@ function projectRelevantModelMap(params: {
 /** Project every config input that can change the configured default-agent route. */
 export async function projectDefaultInferenceRoute(
   config: OpenClawConfig,
+  deps: SystemAgentConfiguredRouteDeps = {},
 ): Promise<DefaultInferenceRouteProjection> {
-  return await projectInferenceRoute(config);
+  return await projectInferenceRoute(config, undefined, deps);
 }
 
 /** Project every config input that can change one configured agent route. */
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
+  deps: SystemAgentConfiguredRouteDeps = {},
 ): Promise<DefaultInferenceRouteProjection> {
   const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
     import("../agents/agent-scope.js"),
@@ -211,7 +218,7 @@ export async function projectInferenceRoute(
   ]);
   const defaultAgentId = resolveDefaultAgentId(config);
   const routeAgentId = normalizeAgentId(requestedAgentId ?? defaultAgentId);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId);
+  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = config.agents?.list ?? [];
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
   const executionAgent = route?.runConfig.agents?.list?.find(

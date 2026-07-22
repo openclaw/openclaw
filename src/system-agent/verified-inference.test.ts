@@ -489,15 +489,21 @@ describe("verified OpenClaw inference binding", () => {
       },
       auth: { profiles: { [profileId]: { provider: "claude-cli", mode: "api_key" } } },
     } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
-      throw new Error("missing test CLI SecretRef route");
-    }
     const credential = {
       type: "api_key" as const,
       provider: "claude-cli",
       keyRef: { source: "file" as const, provider: "vault", id: "/claude/work" },
     };
+    const loadStore = vi.fn(() => ({
+      version: 1,
+      profiles: { [profileId]: credential },
+    })) as never;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig, undefined, {
+      loadAuthProfileStoreForRuntime: loadStore,
+    });
+    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
+      throw new Error("missing test CLI SecretRef route");
+    }
     let activeKey = "materialized-a";
     const ensureStore = vi.fn(() => ({
       version: 1,
@@ -524,6 +530,7 @@ describe("verified OpenClaw inference binding", () => {
       deps: {
         ...pluginArtifactDeps(),
         ...cliRuntimeArtifactDeps(),
+        loadAuthProfileStoreForRuntime: loadStore,
         ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
@@ -546,6 +553,7 @@ describe("verified OpenClaw inference binding", () => {
           valid: true,
           config: cliConfig,
         })) as never,
+        loadAuthProfileStoreForRuntime: loadStore,
         ...cliRuntimeArtifactDeps(),
         ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,

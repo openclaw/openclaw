@@ -188,6 +188,7 @@ function createCliBackendConfig(
 function setCliBackendForPrepareTest(
   params: {
     autoSelectAuthProfile?: boolean;
+    authEpochMode?: CliBackendPlugin["authEpochMode"];
     bundleMcp?: boolean;
     command?: string;
     id?: string;
@@ -215,6 +216,7 @@ function setCliBackendForPrepareTest(
         ...(params.autoSelectAuthProfile !== undefined
           ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
           : {}),
+        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
         ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
         config: {
           command: params.command ?? "claude",
