@@ -312,6 +312,13 @@ function successfulRun(provider: string, model: string, params?: SuccessfulRunPa
       : {
           ...successfulAgentHarnessBinding(params),
           authFingerprint: "test-credential-owner",
+          modelId: model,
+          modelApi:
+            provider === "anthropic"
+              ? "anthropic-messages"
+              : provider === "groq"
+                ? "openai-completions"
+                : "openai-responses",
           ...(params?.authProfileId ? { authProfileId: params.authProfileId } : {}),
         },
   );
@@ -733,7 +740,7 @@ describe("detectSetupInference", () => {
         kind: "existing-model",
         modelRef: "openai/gpt-5.5",
         label: "Current model",
-        detail: "already configured",
+        detail: "openai/gpt-5.5 — already configured",
         credentials: true,
       },
     ]);
@@ -1681,6 +1688,35 @@ describe("activateSetupInference", () => {
     });
   });
 
+  it("returns an auth failure when the verified owner drifts during persistence", async () => {
+    const configHarness = createConfigTransformHarness();
+    const result = await activateSetupInference({
+      kind: "openai-api-key",
+      surface: "gateway",
+      runtime,
+      deps: {
+        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        // The real revalidation throws when the current route owner no longer
+        // matches the probe credential (e.g. a Codex-imported OAuth profile
+        // outranking the probed env key). The ladder needs a failure result.
+        createSystemAgentVerifiedInferenceBinding: vi.fn(async () => {
+          throw new Error(
+            "The successful inference credential is no longer the active route owner.",
+          );
+        }) as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: expect.stringContaining("verified inference owner changed"),
+    });
+    expect(configHarness.current()).toEqual({});
+  });
+
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
     const configHarness = createConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
@@ -1754,28 +1790,36 @@ describe("activateSetupInference", () => {
       params.onSuccessfulAuthBinding?.({
         ...successfulAgentHarnessBinding(params),
         authFingerprint: initialAuthFingerprint,
+        modelId: "claude-opus-4-8",
+        modelApi: "anthropic-messages",
       });
       return successfulRun("anthropic", "claude-opus-4-8");
     });
 
-    await expect(
-      activateSetupInference({
-        kind: "anthropic-api-key",
-        surface: "gateway",
-        runtime,
-        deps: {
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          resolveApiKeyForProvider: vi.fn(async () => ({
-            apiKey: "rotated-env-key",
-            source: "env:ANTHROPIC_API_KEY",
-            mode: "api-key",
-          })) as never,
-          createSystemAgentVerifiedInferenceBinding,
-          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-          createTempDir: makeTempDir,
-        },
-      }),
-    ).rejects.toThrow("active route owner");
+    const result = await activateSetupInference({
+      kind: "anthropic-api-key",
+      surface: "gateway",
+      runtime,
+      deps: {
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        resolveApiKeyForProvider: vi.fn(async () => ({
+          apiKey: "rotated-env-key",
+          source: "env:ANTHROPIC_API_KEY",
+          mode: "api-key",
+        })) as never,
+        createSystemAgentVerifiedInferenceBinding,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    // Owner drift is a failure result, not a throw: the guided-onboarding
+    // ladder must be able to continue to its next candidate.
+    expect(result).toMatchObject({
+      ok: false,
+      status: "auth",
+      error: expect.stringContaining("active route owner"),
+    });
     expect(configHarness.transform).toHaveBeenCalledOnce();
     expect(configHarness.current()).toEqual({});
   });
@@ -2427,6 +2471,8 @@ describe("activateSetupInference", () => {
           authProfileId: "groq:fallback",
           ...successfulAgentHarnessBinding(params),
           authFingerprint: "fallback-owner",
+          modelId: "llama-3.3-70b-versatile",
+          modelApi: "openai-completions",
         });
         return successfulRun("groq", "llama-3.3-70b-versatile");
       },
@@ -2685,42 +2731,49 @@ describe("activateSetupInference", () => {
           authProfileId: profileId,
           ...successfulAgentHarnessBinding(params),
           authFingerprint,
+          modelId: "llama-3.3-70b-versatile",
+          modelApi: "openai-completions",
         });
         return successfulRun("groq", "llama-3.3-70b-versatile");
       },
     );
 
     try {
-      await expect(
-        activateSetupInference({
-          kind: "api-key",
-          authChoice: "groq-api-key",
-          apiKey: "submitted-key",
-          surface: "gateway",
-          runtime,
-          deps: {
-            readConfigFileSnapshot: vi.fn(async () => ({
-              exists: true,
-              valid: true,
-              config: initialConfig,
-              runtimeConfig: initialConfig,
-            })) as never,
-            resolvePluginProviders: () => [createGroqSetupProvider()],
-            resolveManifestProviderAuthChoice: groqSetupChoice,
-            runEmbeddedAgent: runEmbeddedAgent as never,
-            resolveApiKeyForProvider: vi.fn(async (params: { profileId?: string }) => ({
-              apiKey: "different-real-store-key",
-              profileId: params.profileId,
-              source: `profile:${params.profileId}`,
-              mode: "api-key",
-            })) as never,
-            createSystemAgentVerifiedInferenceBinding,
-            transformConfigWithPendingPluginInstalls: configHarness.transform as never,
-            createTempDir: makeTempDir,
-          },
-        }),
-      ).rejects.toThrow("active route owner");
+      const result = await activateSetupInference({
+        kind: "api-key",
+        authChoice: "groq-api-key",
+        apiKey: "submitted-key",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            config: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          resolvePluginProviders: () => [createGroqSetupProvider()],
+          resolveManifestProviderAuthChoice: groqSetupChoice,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          resolveApiKeyForProvider: vi.fn(async (params: { profileId?: string }) => ({
+            apiKey: "different-real-store-key",
+            profileId: params.profileId,
+            source: `profile:${params.profileId}`,
+            mode: "api-key",
+          })) as never,
+          createSystemAgentVerifiedInferenceBinding,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          createTempDir: makeTempDir,
+        },
+      });
 
+      // Owner drift resolves to an auth failure after rolling back the staged
+      // credential; a throw here used to crash the onboarding wizard.
+      expect(result).toMatchObject({
+        ok: false,
+        status: "auth",
+        error: expect.stringContaining("active route owner"),
+      });
       expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(initialConfig));
       expect(
         Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
@@ -5135,12 +5188,16 @@ describe("verifySetupInference", () => {
           authProfileId?: string;
           agentHarnessId?: string;
           authFingerprint?: string;
+          modelId?: string;
+          modelApi?: string;
         }) => void;
       }) => {
         params.onSuccessfulAuthBinding?.({
           authProfileId: "openai:p2",
           agentHarnessId: "openclaw",
           authFingerprint: verifiedAuthFingerprint,
+          modelId: "gpt-5.5",
+          modelApi: "openai-responses",
         });
         return successfulRun("openai", "gpt-5.5");
       },
@@ -5202,6 +5259,8 @@ describe("verifySetupInference", () => {
         authProfileId: profileId,
         ...successfulAgentHarnessBinding(params),
         authFingerprint,
+        modelId: "gpt-5.5",
+        modelApi: "openai-responses",
       });
       return successfulRun("openai", "gpt-5.5");
     });
@@ -5287,6 +5346,8 @@ describe("verifySetupInference", () => {
         authProfileId: profileId,
         ...successfulAgentHarnessBinding(params),
         authFingerprint,
+        modelId: "gpt-5.6-sol",
+        modelApi: "openai-responses",
       });
       return successfulRun("openai", "gpt-5.6-sol");
     });

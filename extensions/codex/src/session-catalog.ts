@@ -1218,9 +1218,10 @@ function toGenericCatalogHost(
       const canOpenTerminal =
         isInteractiveThreadSource(session.source) &&
         (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
+      const name = session.name ?? session.fallbackName;
       return {
         threadId: session.threadId,
-        ...(session.name != null ? { name: session.name } : {}),
+        ...(name ? { name } : {}),
         ...(session.cwd ? { cwd: session.cwd } : {}),
         status: session.status,
         ...(session.createdAt != null ? { createdAt: session.createdAt } : {}),

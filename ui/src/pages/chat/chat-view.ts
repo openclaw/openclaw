@@ -31,6 +31,7 @@ import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
+import { renderChatViewNotices } from "./chat-view-notices.ts";
 import {
   handleChatAttachmentDrop,
   isEditableDropTarget,
@@ -40,11 +41,7 @@ import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import {
-  isChatRunWorking,
-  renderChatComposer,
-  resetChatComposerState,
-} from "./components/chat-composer.ts";
+import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
   renderSessionWorkspaceRail,
@@ -64,10 +61,8 @@ import {
   renderChatPinnedMessages,
   renderChatSearchBar,
   renderChatThread,
-  resetChatThreadPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
-import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
@@ -77,6 +72,8 @@ import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
+
+export { resetChatViewState } from "./chat-view-state.ts";
 
 export type ChatProps = {
   transcript: ChatTranscriptController;
@@ -263,11 +260,6 @@ export type ChatProps = {
   onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
-
-export function resetChatViewState(paneId?: string, owner?: ParentNode) {
-  resetChatComposerState(paneId);
-  resetChatThreadPresentationState(paneId, owner);
-}
 
 export function renderChatResizableDivider(props: {
   className?: string;
@@ -551,47 +543,7 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${props.error
-        ? html`
-            <div class="chat-error" role="alert">
-              <span class="chat-error__dot" aria-hidden="true"></span>
-              <span class="chat-error__content">${props.error}</span>
-              ${props.onDismissError
-                ? html`
-                    <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
-                      <button
-                        class="chat-error__dismiss"
-                        type="button"
-                        @click=${props.onDismissError}
-                        aria-label=${t("chat.actions.dismissError")}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${renderWorkspaceConflictNotice({
-        conflict: props.workspaceConflict,
-        onDismiss: props.onDismissWorkspaceConflict,
-      })}
-      ${props.focusMode && props.onToggleFocusMode
-        ? html`
-            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
-              <button
-                class="chat-focus-exit"
-                type="button"
-                @click=${props.onToggleFocusMode}
-                aria-label=${t("chat.actions.exitFocusMode")}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${renderChatSearchBar(props.paneId, requestUpdate)}
+      ${renderChatViewNotices(props)} ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
           paneId: props.paneId,

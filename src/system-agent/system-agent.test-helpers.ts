@@ -187,6 +187,9 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
       ...(profileId ? { authProfileId: profileId } : {}),
       authFingerprint,
       agentHarnessId,
+      modelId: configuredRoute.model,
+      modelApi:
+        configuredRoute.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
       ...(agentHarnessId === "openclaw"
         ? {}
         : {
