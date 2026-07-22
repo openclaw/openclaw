@@ -12,7 +12,7 @@ import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 
 const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 
-export function heartbeatMonitorDeclarationKey(agentId: string): string {
+function heartbeatMonitorDeclarationKey(agentId: string): string {
   return `${HEARTBEAT_DECLARATION_PREFIX}${agentId}`;
 }
 

@@ -1,17 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
-import {
-  heartbeatMonitorDeclarationKey,
-  reconcileHeartbeatMonitorJobs,
-} from "./server-cron-heartbeat-jobs.js";
+import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 
 const logger = { warn: vi.fn() };
+
+type AddOptions = { matchesExisting?: (job: CronJob) => boolean };
 
 function monitorJob(agentId: string, id = `job-${agentId}`): CronJob {
   return {
     id,
-    declarationKey: heartbeatMonitorDeclarationKey(agentId),
+    declarationKey: `heartbeat:${agentId}`,
     name: `heartbeat-${agentId}`,
     enabled: true,
     createdAtMs: 1,
@@ -27,7 +26,9 @@ function monitorJob(agentId: string, id = `job-${agentId}`): CronJob {
 
 describe("reconcileHeartbeatMonitorJobs", () => {
   it("converges one monitor per heartbeat agent and prunes unconfigured ones", async () => {
-    const add = vi.fn(async (input: { declarationKey?: string }) => ({ job: input }));
+    const add = vi.fn(async (input: { declarationKey?: string }, _options?: AddOptions) => ({
+      job: input,
+    }));
     const remove = vi.fn(async () => ({ ok: true }));
     const list = vi.fn(async () => [
       monitorJob("stale-agent"),
@@ -60,7 +61,10 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     const declarationKeys = add.mock.calls.map(
       ([input]) => (input as { declarationKey?: string }).declarationKey,
     );
-    expect(declarationKeys.toSorted()).toEqual(["heartbeat:main", "heartbeat:ops"]);
+    expect(declarationKeys.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual([
+      "heartbeat:main",
+      "heartbeat:ops",
+    ]);
     for (const [input] of add.mock.calls) {
       const spec = input as {
         payload: { kind: string };
@@ -83,7 +87,10 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     // Declarative matching is scoped to real monitors so a colliding user job
     // is never adopted by the system upsert.
     for (const call of add.mock.calls) {
-      const opts = call[1] as { matchesExisting?: (job: CronJob) => boolean };
+      const opts = call[1];
+      if (!opts) {
+        throw new Error("expected system-owned add options");
+      }
       expect(opts.matchesExisting?.(monitorJob("x"))).toBe(true);
       expect(
         opts.matchesExisting?.({
