@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
@@ -86,42 +87,100 @@ type ModelRunImageFile = {
   data: string;
 };
 
+// Model run images are user-supplied CLI input files typically 0.1-10 MiB.
+// Cap at 100 MiB per file and 500 MiB total to prevent OOM on accidentally
+// large or malicious inputs. All size checks use descriptor-bound reads to
+// eliminate TOCTOU races between validation and file consumption.
+const MAX_MODEL_RUN_IMAGE_BYTES = 100 * 1024 * 1024;
+const MAX_TOTAL_MODEL_RUN_IMAGE_BYTES = 500 * 1024 * 1024;
+
+async function readModelRunImageFileSafely(
+  filePath: string,
+  budget: { remaining: number },
+): Promise<Buffer> {
+  const resolvedPath = path.resolve(filePath);
+  // Open with O_NONBLOCK on POSIX so a path substituted with a FIFO cannot
+  // block the CLI waiting for a writer. Descriptor-bound fstat rejects
+  // non-regular files and the bounded read pins the validated inode/size.
+  // Windows has no portable nonblocking open for regular files, so this
+  // availability guarantee is POSIX-only; Windows keeps ordinary open semantics.
+  const openFlags =
+    process.platform === "win32" ? "r" : nodeFs.constants.O_RDONLY | nodeFs.constants.O_NONBLOCK;
+  const handle = await fs.open(resolvedPath, openFlags);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`not a regular file: ${resolvedPath}`);
+    }
+    if (stat.size > MAX_MODEL_RUN_IMAGE_BYTES) {
+      throw new Error(
+        `--file too large: ${resolvedPath} is ${stat.size} bytes (max ${MAX_MODEL_RUN_IMAGE_BYTES})`,
+      );
+    }
+    if (stat.size > budget.remaining) {
+      throw new Error(
+        `--file too large: ${resolvedPath} is ${stat.size} bytes (max remaining total budget ${budget.remaining})`,
+      );
+    }
+    budget.remaining -= stat.size;
+    // Read at most the validated size through the already-opened descriptor
+    // so same-inode growth after stat() cannot bypass the per-file and
+    // aggregate budgets.
+    const buf = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < stat.size) {
+      const { bytesRead } = await handle.read(buf, offset, stat.size - offset, offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    return buf.subarray(0, offset);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
   if (!files || files.length === 0) {
     return [];
   }
-  return await Promise.all(
-    files.map(async (filePath) => {
-      const resolvedPath = path.resolve(filePath);
-      const buffer = await fs.readFile(resolvedPath);
-      const mimeType = normalizeMimeType(
-        await detectMime({
-          buffer,
-          filePath: resolvedPath,
-        }),
+  // Process files sequentially and track an aggregate byte budget so one
+  // command invocation cannot allocate more than MAX_TOTAL_MODEL_RUN_IMAGE_BYTES.
+  const budget = { remaining: MAX_TOTAL_MODEL_RUN_IMAGE_BYTES };
+  const result: ModelRunImageFile[] = [];
+  for (const filePath of files) {
+    const resolvedPath = path.resolve(filePath);
+    const buffer = await readModelRunImageFileSafely(resolvedPath, budget);
+    const mimeType = normalizeMimeType(
+      await detectMime({
+        buffer,
+        filePath: resolvedPath,
+      }),
+    );
+    if (!mimeType?.startsWith("image/")) {
+      throw new Error(
+        `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
       );
-      if (!mimeType?.startsWith("image/")) {
-        throw new Error(
-          `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
-        );
-      }
-      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
-        const converted = await convertHeicToJpeg(buffer);
-        return {
-          path: resolvedPath,
-          fileName: path.basename(resolvedPath),
-          mimeType: "image/jpeg",
-          data: converted.toString("base64"),
-        };
-      }
-      return {
+    }
+    if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
+      const converted = await convertHeicToJpeg(buffer);
+      result.push({
         path: resolvedPath,
         fileName: path.basename(resolvedPath),
-        mimeType,
-        data: buffer.toString("base64"),
-      };
-    }),
-  );
+        mimeType: "image/jpeg",
+        data: converted.toString("base64"),
+      });
+      continue;
+    }
+    result.push({
+      path: resolvedPath,
+      fileName: path.basename(resolvedPath),
+      mimeType,
+      data: buffer.toString("base64"),
+    });
+  }
+  return result;
 }
 
 function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
