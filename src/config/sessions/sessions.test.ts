@@ -69,6 +69,12 @@ describe("session path safety", () => {
     }
   });
 
+  it("throws a controlled error for non-string sessionId", () => {
+    for (const bad of [undefined, null, 123]) {
+      expect(() => validateSessionId(bad as unknown as string)).toThrow(/Invalid session ID/);
+    }
+  });
+
   it("resolves transcript path inside an explicit sessions dir", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
     const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");

@@ -64,6 +64,9 @@ export function resolveSessionFilePathOptions(params: {
 const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
+  if (typeof sessionId !== "string") {
+    throw new Error(`Invalid session ID: ${String(sessionId)}`);
+  }
   const trimmed = sessionId.trim();
   if (
     !SAFE_SESSION_ID_RE.test(trimmed) ||
