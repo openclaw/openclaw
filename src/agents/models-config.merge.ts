@@ -31,7 +31,7 @@ function resolvePreferredTokenLimit(params: {
   if (isPositiveFiniteTokenLimit(params.implicitValue)) {
     return params.implicitValue;
   }
-  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
+  return undefined;
 }
 
 function getProviderModelId(model: unknown): string {
@@ -91,17 +91,17 @@ export function mergeProviderModels(
     }
 
     const contextWindow = resolvePreferredTokenLimit({
-      explicitPresent: "contextWindow" in explicitModel,
+      explicitPresent: Object.hasOwn(explicitModel, "contextWindow"),
       explicitValue: explicitModel.contextWindow,
       implicitValue: implicitModel.contextWindow,
     });
     const contextTokens = resolvePreferredTokenLimit({
-      explicitPresent: "contextTokens" in explicitModel,
+      explicitPresent: Object.hasOwn(explicitModel, "contextTokens"),
       explicitValue: explicitModel.contextTokens,
       implicitValue: implicitModel.contextTokens,
     });
     const maxTokens = resolvePreferredTokenLimit({
-      explicitPresent: "maxTokens" in explicitModel,
+      explicitPresent: Object.hasOwn(explicitModel, "maxTokens"),
       explicitValue: explicitModel.maxTokens,
       implicitValue: implicitModel.maxTokens,
     });
@@ -123,8 +123,10 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input: "input" in explicitModel ? explicitModel.input : implicitModel.input,
-        reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
+        input: Object.hasOwn(explicitModel, "input") ? explicitModel.input : implicitModel.input,
+        reasoning: Object.hasOwn(explicitModel, "reasoning")
+          ? explicitModel.reasoning
+          : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
