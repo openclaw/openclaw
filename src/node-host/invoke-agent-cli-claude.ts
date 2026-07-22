@@ -261,9 +261,9 @@ export async function runClaudeCliNodeCommand(params: {
           truncated,
         });
       };
-      void writeSecretInputToChild(child, params.secretInput).catch((error: Error) => {
+      void writeSecretInputToChild(child, params.secretInput).catch((error: unknown) => {
         kill();
-        void finish(null, error);
+        void finish(null, error instanceof Error ? error : new Error(String(error)));
       });
       child.once("error", (error) => void finish(null, error));
       child.once("close", (code) => void finish(code));

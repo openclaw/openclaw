@@ -176,7 +176,7 @@ export async function handleClaudeCliNodeInvoke(params: {
     isCmdExeInvocation: params.deps.isCmdExeInvocation,
     sanitizeEnv: params.deps.sanitizeEnv,
     runCommand: async (approvalArgv, cwd, env, timeoutMs) => {
-      const childEnv = { ...(env ?? {}) };
+      const childEnv = { ...env };
       for (const key of request.clearEnv ?? []) {
         if (!Object.hasOwn(request.env ?? {}, key)) {
           delete childEnv[key];
