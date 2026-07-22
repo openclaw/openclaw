@@ -10,6 +10,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "../auto-reply/reply/reply-run-registry.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -61,6 +62,13 @@ function isActiveRunProgressStale(params: {
   sessionKey?: string;
   queueDepth?: number;
   staleAbortMs: number;
+  /**
+   * Fallback session age used when no diagnostic progress exists (e.g. a
+   * phantom reply operation that died before any progress event). Without
+   * this fallback, sessions with undefined lastProgressAgeMs are never
+   * reclaimed (#105712).
+   */
+  fallbackAgeMs?: number;
 }): boolean {
   if ((params.queueDepth ?? 0) <= 0) {
     return false;
@@ -70,7 +78,12 @@ function isActiveRunProgressStale(params: {
     sessionKey: params.sessionKey,
   });
   const lastProgressAgeMs = activity.lastProgressAgeMs;
-  return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
+  if (typeof lastProgressAgeMs === "number") {
+    return lastProgressAgeMs >= params.staleAbortMs;
+  }
+  // No diagnostic events recorded — fall back to the overall session age
+  // so a phantom with zero diagnostic activity can still be reclaimed.
+  return typeof params.fallbackAgeMs === "number" && params.fallbackAgeMs >= params.staleAbortMs;
 }
 
 function formatRecoveryContext(
@@ -169,6 +182,7 @@ export async function recoverStuckDiagnosticSession(
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
+          fallbackAgeMs: params.ageMs,
         });
       if (params.allowActiveAbort !== true && !reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
@@ -219,23 +233,55 @@ export async function recoverStuckDiagnosticSession(
         diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
         return outcome;
       }
-      const reclaimStaleReplyWork =
-        params.allowActiveAbort !== true &&
-        isActiveRunProgressStale({
+
+      // Terminal-phase reply operations (failed/aborted) hold their sessionKey
+      // in the reply-run registry but represent already-settled work, not
+      // evidence of active reply work. Without this guard the recovery loop
+      // unconditionally keeps the lane (active_reply_work → keep_lane), even
+      // though a terminal-phase operation will never produce further progress,
+      // permanently wedging the lane (#105712).
+      //
+      // On current main, complete() clears registry state immediately so
+      // "completed" operations are never reachable here. "failed" operations
+      // remain in the registry only when retainFailureUntilComplete is set
+      // (fail() → scheduleTerminalSettle). "aborted" operations from
+      // post-backend abortByUser also remain registered.
+      if (activeReplyPhase === "failed" || activeReplyPhase === "aborted") {
+        // Wait for the terminal settlement window before reclaiming so
+        // pending delivery/cleanup (retainFailureUntilComplete) can settle
+        // naturally. The diagnostic progress age approximates how long the
+        // operation has been terminal; when no progress exists fall back to
+        // the overall session age.
+        const terminalActivity = getDiagnosticSessionActivitySnapshot({
           sessionId: activeWorkSessionId,
           sessionKey: params.sessionKey,
-          queueDepth: params.queueDepth,
-          staleAbortMs: staleActiveProgressAbortMs,
         });
-      if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
-        if (reclaimStaleReplyWork) {
+        const terminalPhaseAgeMs =
+          typeof terminalActivity.lastProgressAgeMs === "number"
+            ? terminalActivity.lastProgressAgeMs
+            : params.ageMs;
+        if (terminalPhaseAgeMs < REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS) {
           diag.warn(
-            `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
-              params,
-              { activeSessionId: activeWorkSessionId },
-            )}`,
+            `stuck session recovery: terminal reply operation still within settle window sessionId=${activeWorkSessionId} phase=${activeReplyPhase} ageMs=${terminalPhaseAgeMs}`,
           );
+          const outcome: StuckSessionRecoveryOutcome = {
+            status: "skipped",
+            action: "keep_lane",
+            reason: "active_reply_work",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            activeSessionId: activeWorkSessionId,
+            activeWorkKind: "embedded_run",
+          };
+          diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+          return outcome;
         }
+        diag.warn(
+          `stuck session recovery reclaiming terminal reply operation: ${formatRecoveryContext(
+            params,
+            { activeSessionId: activeWorkSessionId },
+          )} phase=${activeReplyPhase}`,
+        );
         const result = await abortAndDrainEmbeddedAgentRun({
           sessionId: activeWorkSessionId,
           sessionKey: params.sessionKey,
@@ -248,17 +294,48 @@ export async function recoverStuckDiagnosticSession(
         forceCleared = result.forceCleared;
         activeSessionId = activeWorkSessionId;
       } else {
-        const outcome: StuckSessionRecoveryOutcome = {
-          status: "skipped",
-          action: "keep_lane",
-          reason: "active_reply_work",
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          activeSessionId: activeWorkSessionId,
-          activeWorkKind: "embedded_run",
-        };
-        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-        return outcome;
+        const reclaimStaleReplyWork =
+          params.allowActiveAbort !== true &&
+          isActiveRunProgressStale({
+            sessionId: activeWorkSessionId,
+            sessionKey: params.sessionKey,
+            queueDepth: params.queueDepth,
+            staleAbortMs: staleActiveProgressAbortMs,
+            fallbackAgeMs: params.ageMs,
+          });
+        if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
+          if (reclaimStaleReplyWork) {
+            diag.warn(
+              `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
+                params,
+                { activeSessionId: activeWorkSessionId },
+              )}`,
+            );
+          }
+          const result = await abortAndDrainEmbeddedAgentRun({
+            sessionId: activeWorkSessionId,
+            sessionKey: params.sessionKey,
+            settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+            forceClear: true,
+            reason: "stuck_recovery",
+          });
+          aborted = result.aborted;
+          drained = result.drained;
+          forceCleared = result.forceCleared;
+          activeSessionId = activeWorkSessionId;
+        } else {
+          const outcome: StuckSessionRecoveryOutcome = {
+            status: "skipped",
+            action: "keep_lane",
+            reason: "active_reply_work",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            activeSessionId: activeWorkSessionId,
+            activeWorkKind: "embedded_run",
+          };
+          diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+          return outcome;
+        }
       }
     }
 

@@ -405,6 +405,7 @@ describe("stuck session recovery", () => {
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
     mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
     mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("running");
 
     await recoverStuckDiagnosticSession({
       sessionId: "queued-reply-session",
@@ -419,6 +420,103 @@ describe("stuck session recovery", () => {
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run reason=active_reply_work",
     ]);
+  });
+
+  it.each(["failed", "aborted"])(
+    "reclaims terminal-phase reply operations (phase=%s, phantom embedded_run) instead of keeping the lane",
+    async (phase) => {
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("phantom-reply-session");
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+      mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+      mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+      mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue(phase);
+      mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+      mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+      mocks.getCommandLaneActiveTaskIds.mockReturnValue([]);
+      mocks.getCommandLaneSnapshot.mockReturnValue({
+        lane: "session:agent:main:main",
+        queuedCount: 0,
+        activeCount: 0,
+        maxConcurrent: 1,
+        draining: false,
+        generation: 0,
+      });
+      mocks.resetCommandLane.mockReturnValue(1);
+
+      await recoverStuckDiagnosticSession({
+        sessionId: "phantom-reply-session",
+        sessionKey: "agent:main:main",
+        ageMs: 180_000,
+        queueDepth: 1,
+      });
+
+      expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("phantom-reply-session");
+      expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+      expect(warnLogMessages()).toEqual([
+        `stuck session recovery reclaiming terminal reply operation: sessionId=phantom-reply-session sessionKey=agent:main:main age=180s queueDepth=1 activeSessionId=phantom-reply-session phase=${phase}`,
+        "stuck session recovery: sessionId=phantom-reply-session sessionKey=agent:main:main age=180s action=abort_embedded_run aborted=true drained=true released=1",
+        "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=phantom-reply-session sessionKey=agent:main:main activeSessionId=phantom-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=1",
+      ]);
+    },
+  );
+
+  it("keeps the lane when terminal-phase reply operation is still within the settle window", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("fresh-terminal-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("failed");
+    // lastProgressAgeMs = 30s — well within the 60s terminal settle window
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 30_000,
+    });
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "fresh-terminal-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages().some((m) => m.includes("still within settle window"))).toBe(true);
+  });
+
+  it("reclaims no-progress reply operations (phase=running, phantom without diagnostic activity)", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("phantom-running-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue("running");
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.getCommandLaneActiveTaskIds.mockReturnValue([]);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 0,
+      activeCount: 0,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.resetCommandLane.mockReturnValue(1);
+    // getDiagnosticSessionActivitySnapshot returns {} (default reset) → lastProgressAgeMs undefined
+    // fallbackAgeMs falls back to params.ageMs = 720s → >= staleActiveProgressAbortMs (5 min)
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "phantom-running-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("phantom-running-session");
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(warnLogMessages().some((m) => m.includes("reclaiming stale active reply work"))).toBe(
+      true,
+    );
   });
 
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
