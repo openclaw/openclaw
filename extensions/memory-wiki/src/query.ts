@@ -1278,26 +1278,26 @@ async function createSessionMemoryPathVisibilityChecker(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : (() => {
-              const resolvedKeys = resolveTranscriptStemToSessionKeys({
-                store: combinedSessionStore,
-                stem: identity.stem,
-                allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-                ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-              });
-              return resolvedKeys.length > 0 || !sameAgentLiveOwnerId
-                ? resolvedKeys
-                : [`agent:${sameAgentLiveOwnerId}:${identity.stem}`];
-            })(),
+      keys: resolvedKeys,
     });
+    if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      return Boolean(sameAgentLiveOwnerId && agentWideVisibility);
+    }
     if (!guard) {
-      return Boolean(scopedAgentId && keys.length > 0);
+      return Boolean(scopedAgentId);
     }
     return keys.some((key) => guard.check(key).allowed);
   };

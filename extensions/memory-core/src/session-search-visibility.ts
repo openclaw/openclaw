@@ -355,25 +355,25 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : (() => {
-              const resolvedKeys = resolveTranscriptStemToSessionKeys({
-                store: combinedSessionStore,
-                stem: identity.stem,
-                allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
-                ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-              });
-              return resolvedKeys.length > 0 || !sameAgentLiveOwnerId
-                ? resolvedKeys
-                : [`agent:${sameAgentLiveOwnerId}:${identity.stem}`];
-            })(),
+      keys: resolvedKeys,
     });
     if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      if (sameAgentLiveOwnerId && agentWideVisibility && !conversationRecall) {
+        next.push(hit);
+      }
       continue;
     }
     const allowed = areSessionKeysAllowed(keys);

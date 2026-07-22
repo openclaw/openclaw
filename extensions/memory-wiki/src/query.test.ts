@@ -119,6 +119,13 @@ function createSessionVisibilityAppConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createAgentSessionVisibilityAppConfig(): OpenClawConfig {
+  return {
+    agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+    tools: { sessions: { visibility: "agent" } },
+  } as OpenClawConfig;
+}
+
 function mockSessionTranscriptStore() {
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({
     storePath: "(test)",
@@ -1169,7 +1176,7 @@ describe("searchMemoryWiki", () => {
 
     const results = await searchMemoryWiki({
       config,
-      appConfig: createAppConfig(),
+      appConfig: createAgentSessionVisibilityAppConfig(),
       agentId: "secondary",
       query: "orphan",
     });
@@ -1208,6 +1215,35 @@ describe("searchMemoryWiki", () => {
       config,
       appConfig: createAppConfig(),
       agentId: "secondary",
+      query: "orphan",
+    });
+
+    expect(results).toStrictEqual([]);
+  });
+
+  it("does not treat an orphan filename as proven self-session lineage", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/main/main.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "unproven self orphan",
+          source: "sessions",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:main",
       query: "orphan",
     });
 
