@@ -1210,14 +1210,6 @@ function filterSessionKeysByScopedAgent(params: {
   });
 }
 
-function synthesizeLiveOwnerSessionKey(params: {
-  ownerAgentId: string | undefined;
-  stem: string;
-}): string[] {
-  const ownerAgentId = normalizeLowercaseStringOrEmpty(params.ownerAgentId);
-  return ownerAgentId ? [`agent:${ownerAgentId}:${params.stem}`] : [];
-}
-
 async function createSessionMemoryPathVisibilityChecker(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -1264,17 +1256,21 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     ) {
       return false;
     }
-    const ownerMatchesScope = Boolean(
-      identity.ownerAgentId &&
-      (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId),
-    );
-    const qmdArchivedOwnerMatchesScope = Boolean(
-      identity.archived && isQmdSessionPath && scopedAgentId,
-    );
-    const archivedOwnerAgentId =
-      identity.archived && (ownerMatchesScope || qmdArchivedOwnerMatchesScope)
-        ? (identity.ownerAgentId ?? scopedAgentId)
+    const sameAgentLiveOwnerId =
+      !identity.archived &&
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId === normalizedScopedAgentId
+        ? normalizedOwnerAgentId
         : undefined;
+    const archivedOwnerMatchesScope = Boolean(
+      identity.archived &&
+      ((identity.ownerAgentId &&
+        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
+        (isQmdSessionPath && scopedAgentId)),
+    );
+    const archivedOwnerAgentId = archivedOwnerMatchesScope
+      ? (identity.ownerAgentId ?? scopedAgentId)
+      : undefined;
     const liveKeys = identity.liveStem
       ? resolveTranscriptStemToSessionKeys({
           store: combinedSessionStore,
@@ -1295,12 +1291,9 @@ async function createSessionMemoryPathVisibilityChecker(params: {
                 allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
                 ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
               });
-              return resolvedKeys.length > 0 || identity.archived || !ownerMatchesScope
+              return resolvedKeys.length > 0 || !sameAgentLiveOwnerId
                 ? resolvedKeys
-                : synthesizeLiveOwnerSessionKey({
-                    ownerAgentId: identity.ownerAgentId,
-                    stem: identity.stem,
-                  });
+                : [`agent:${sameAgentLiveOwnerId}:${identity.stem}`];
             })(),
     });
     if (!guard) {
