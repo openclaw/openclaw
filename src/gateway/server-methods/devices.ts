@@ -341,6 +341,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
         // The temporary session itself is pairing-only. This one bounded
         // self-approval restores the scopes the legacy browser requested.
         callerScopes: migrationApprovalScopes ?? authz.callerScopes,
+        requireNoEffectiveOperator: authz.isDeviceAuthMigrationCaller,
       });
     } catch (error) {
       releaseMigrationClaim();

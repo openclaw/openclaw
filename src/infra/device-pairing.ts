@@ -122,6 +122,7 @@ type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
+  | "effective-operator-already-paired"
   | "bootstrap-role-not-allowed"
   | "bootstrap-scope-not-allowed";
 
@@ -168,6 +169,8 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
       return `missing scope: ${result.scope ?? "unknown"}`;
     case "scope-outside-requested-roles":
       return `invalid scope for requested roles: ${result.scope ?? "unknown"}`;
+    case "effective-operator-already-paired":
+      return "an effective operator device is already paired";
     case "bootstrap-role-not-allowed":
       return `bootstrap profile does not allow role: ${result.role ?? "unknown"}`;
     case "bootstrap-scope-not-allowed":
@@ -900,6 +903,8 @@ export async function approveDevicePairing(
      * auto-approval.
      */
     autoApproveNewDeviceScopes?: readonly string[];
+    /** Migration self-approval must still be the installation's first effective operator. */
+    requireNoEffectiveOperator?: boolean;
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -914,6 +919,7 @@ export async function approveDevicePairing(
           "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
         autoApproveNewDeviceScopes?: readonly string[];
+        requireNoEffectiveOperator?: boolean;
       }
     | string,
   maybeBaseDir?: string,
@@ -928,6 +934,14 @@ export async function approveDevicePairing(
     const pendingRecord = state.pendingById[requestId];
     if (!pendingRecord) {
       return null;
+    }
+    if (
+      options?.requireNoEffectiveOperator &&
+      Object.values(state.pairedByDeviceId).some((device) =>
+        hasEffectivePairedDeviceRole(device, OPERATOR_ROLE),
+      )
+    ) {
+      return { status: "forbidden", reason: "effective-operator-already-paired" };
     }
     const autoApproveScopes = options?.autoApproveNewDeviceScopes;
     const requestedRoles = resolveRequestedRoles(pendingRecord);

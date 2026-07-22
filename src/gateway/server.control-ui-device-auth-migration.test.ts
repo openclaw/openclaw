@@ -191,4 +191,78 @@ describe("Control UI device-auth upgrade migration", () => {
       await harness.close();
     }
   });
+
+  it("denies a stale migration session after another operator is paired", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const headers = {
+      origin: BROWSER_ORIGIN,
+      "x-forwarded-for": "203.0.113.50",
+    };
+    const migrationIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-device-auth-migration-stale-${randomUUID()}.sqlite`,
+    );
+    let migrationWs: WebSocket | undefined;
+    try {
+      migrationWs = await harness.openWs(headers);
+      const migration = await signedDevice(migrationWs, migrationIdentityPath);
+      const migrationConnect = await connectReq(migrationWs, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: migration.device,
+      });
+      expect(migrationConnect.ok).toBe(true);
+      expect(migrationConnect.payload).toMatchObject({
+        deviceAuthMigration: { pending: true },
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+      });
+
+      const { approveDevicePairing, listDevicePairing, requestDevicePairing } =
+        await import("../infra/device-pairing.js");
+      const ownerIdentityPath = path.join(
+        os.tmpdir(),
+        `openclaw-device-auth-migration-owner-${randomUUID()}.sqlite`,
+      );
+      const ownerIdentity = loadOrCreateDeviceIdentity({ path: ownerIdentityPath });
+      const ownerRequest = await requestDevicePairing({
+        deviceId: ownerIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
+        role: "operator",
+        scopes: SCOPES,
+      });
+      await expect(
+        approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
+      ).resolves.toMatchObject({ status: "approved" });
+
+      const migrationList = await rpcReq<{
+        pending: Array<{ requestId: string; deviceId: string }>;
+      }>(migrationWs, "device.pair.list", {});
+      const migrationPending = migrationList.payload?.pending[0];
+      expect(migrationPending?.deviceId).toBe(migration.identity.deviceId);
+      const migrationApproval = await rpcReq(migrationWs, "device.pair.approve", {
+        requestId: migrationPending?.requestId,
+      });
+      expect(migrationApproval.ok).toBe(false);
+
+      const paired = (await listDevicePairing()).paired;
+      expect(paired.some((device) => device.deviceId === ownerIdentity.deviceId)).toBe(true);
+      expect(paired.some((device) => device.deviceId === migration.identity.deviceId)).toBe(false);
+    } finally {
+      migrationWs?.close();
+      await harness.close();
+    }
+  });
 });
