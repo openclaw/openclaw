@@ -4860,6 +4860,34 @@ public struct SessionsObserverAskResult: Codable, Sendable {
     }
 }
 
+public struct SessionsObserverVisibilityParams: Codable, Sendable {
+    public let visible: Bool
+
+    public init(
+        visible: Bool)
+    {
+        self.visible = visible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case visible
+    }
+}
+
+public struct SessionsObserverVisibilityResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
 public struct LocalSessionPlacement: Codable, Sendable {
     public let state: String
     public let generation: Int
