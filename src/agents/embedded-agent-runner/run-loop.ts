@@ -49,7 +49,10 @@ import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.
 import { prepareEmbeddedRunTerminal } from "./run/terminal-preparation.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
-import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
+import {
+  resolveEmbeddedRunTerminalTimeout,
+  resolveEmbeddedRunToolExecutionTimeout,
+} from "./run/terminal-timeout.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -562,6 +565,28 @@ export async function runPreparedEmbeddedLoop(
       });
       if (terminalTimeoutResult) {
         return terminalTimeoutResult;
+      }
+
+      const toolExecutionTimeoutResult = resolveEmbeddedRunToolExecutionTimeout({
+        timedOutDuringToolExecution,
+        terminalTimedOut,
+        idleTimedOut,
+        timedOutDuringCompaction,
+        payloads,
+        allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent === true,
+        attempt,
+        terminalAborted,
+        resolveReplayInvalid: resolveReplayInvalidForAttempt,
+        setTerminalLifecycleMeta,
+        startedAtMs: started,
+        agentMeta,
+        finalAssistantVisibleText,
+        finalAssistantRawText,
+        attemptToolSummary,
+        failureSignal,
+      });
+      if (toolExecutionTimeoutResult) {
+        return toolExecutionTimeoutResult;
       }
 
       const terminalResolution = await resolveEmbeddedRunTerminal({

@@ -34,9 +34,12 @@ import {
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
   resolveToolUseTerminalContinuationInstruction,
+  resolveTurnBudgetTimeoutNotice,
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
+  IDLE_MODEL_TIMEOUT_NOTICE,
+  TURN_BUDGET_TIMEOUT_NOTICE,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -4381,6 +4384,169 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toBeUndefined();
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("planning");
+  });
+
+  it("delivers a turn-budget timeout notice when a tool-execution timeout leaves no visible reply", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const setTerminalLifecycleMeta = vi.fn();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringToolExecution: true,
+        setTerminalLifecycleMeta,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-notice",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("time budget");
+    expect(result.meta.livenessState).toBe("abandoned");
+    // The notice branch keeps hard-timeout attribution parity with the
+    // prompt-timeout path: wait/session consumers rely on timeoutPhase and
+    // providerStarted to classify the terminal timeout.
+    expect(result.meta.timeoutPhase).toBe("provider");
+    expect(result.meta.providerStarted).toBe(true);
+    expect(setTerminalLifecycleMeta).toHaveBeenCalledWith(
+      expect.objectContaining({
+        livenessState: "abandoned",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    );
+  });
+
+  it("stays silent on a timed-out turn in a silent-reply context (allowEmptyAssistantReplyAsSilent)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringToolExecution: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-silent-context",
+      allowEmptyAssistantReplyAsSilent: true,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
+  });
+
+  it("keeps a compaction timeout paused instead of emitting a turn-budget notice", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringCompaction: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-compaction-timeout-paused",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
+    expect(result.meta.livenessState).toBe("paused");
+  });
+});
+
+describe("resolveTurnBudgetTimeoutNotice", () => {
+  const silentTimeout = {
+    timedOut: true,
+    idleTimedOut: false,
+    timedOutDuringCompaction: false,
+    payloadCount: 0,
+    allowSilentReply: false,
+    hasMessagingDelivery: false,
+    hasDeterministicApprovalPrompt: false,
+    hasClientToolCalls: false,
+    yieldDetected: false,
+    hasSourceReplyDelivery: false,
+  };
+
+  it("returns the turn-budget notice when a real turn times out with no visible reply", () => {
+    expect(resolveTurnBudgetTimeoutNotice(silentTimeout)).toBe(TURN_BUDGET_TIMEOUT_NOTICE);
+  });
+
+  it("returns the idle-model notice when the timeout was an idle/no-output timeout", () => {
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, idleTimedOut: true })).toBe(
+      IDLE_MODEL_TIMEOUT_NOTICE,
+    );
+  });
+
+  it("returns null when the turn did not time out (e.g. a user cancel)", () => {
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, timedOut: false })).toBeNull();
+  });
+
+  it("returns null for a compaction timeout (paused/resumable, not abandoned)", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, timedOutDuringCompaction: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when a visible payload is already being returned", () => {
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, payloadCount: 1 })).toBeNull();
+  });
+
+  it("returns null in a silent-reply context (cron/heartbeat: allowSilentReply) even on timeout", () => {
+    // Gate on the RAW allowEmptyAssistantReplyAsSilent flag: the derived
+    // `emptyAssistantReplyIsSilent` is always false for timed-out attempts, so
+    // only the raw flag protects autonomous/silent contexts here.
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, allowSilentReply: true })).toBeNull();
+  });
+
+  it("returns null when a messaging tool already delivered a reply (no double-notify)", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasMessagingDelivery: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when a deterministic approval prompt was delivered out-of-band", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasDeterministicApprovalPrompt: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when the timed-out attempt has pending client tool calls (terminal state preserved)", () => {
+    // OpenAI-compatible callers continue tool rounds from the terminal path's
+    // stopReason/pendingToolCalls metadata — the notice must not replace it.
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasClientToolCalls: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when the timed-out attempt yielded (terminal state preserved)", () => {
+    // A yielded attempt terminates as paused with `yielded: true`; the notice
+    // would override that resumable state with an abandoned error payload.
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, yieldDetected: true })).toBeNull();
+  });
+
+  it("returns null when a message_tool_only source reply was already delivered (no double-reply)", () => {
+    // `didDeliverSourceReplyViaMessageTool` means the visible response already
+    // reached the channel via the message tool; payload building suppresses
+    // assistant artifacts even with no mirror payload (payloadCount stays 0), so
+    // the timeout notice must not fire and append a second, error-flagged reply.
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasSourceReplyDelivery: true }),
+    ).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

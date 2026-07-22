@@ -935,4 +935,84 @@ function isIncompleteTurnRecoverySupportedProviderModel(params: {
   const modelId = typeof params.modelId === "string" ? params.modelId : "";
   return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
 }
+
+// User-facing notice emitted when an agent turn exhausts its time budget
+// (`agents.defaults.timeoutSeconds`) or a run-level deadline and ends without
+// producing any visible reply. Without this the turn returns no payload and the
+// channel goes completely silent — indistinguishable from a hung process to the
+// user. Mirrors the prompt-level timeout copy already surfaced in
+// run/terminal-timeout.ts.
+export const TURN_BUDGET_TIMEOUT_NOTICE =
+  "⚠️ I hit my time budget on this request and stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `agents.defaults.timeoutSeconds` in your config.";
+
+// Variant for an idle (no-output) model timeout that ends the turn with no
+// visible reply, pointing at the provider-level timeout knob in addition to the
+// agent run ceiling.
+export const IDLE_MODEL_TIMEOUT_NOTICE =
+  "⚠️ The model didn't respond before its idle timeout, so I stopped before finishing. " +
+  "Ask me to try again, or use a faster model. " +
+  "For slow local or self-hosted providers, raise `models.providers.<id>.timeoutSeconds` " +
+  "(and `agents.defaults.timeoutSeconds` too if that ceiling is lower).";
+
+/**
+ * Decide whether a terminating agent turn should surface a user-visible
+ * turn-timeout notice. Returns the notice text when the turn timed out and is
+ * about to deliver nothing visible to a real (non-silent) conversation, or
+ * `null` when a notice would be wrong:
+ * - the turn did not time out (`timedOut` is false — e.g. a user cancel, which
+ *   is a distinct signal),
+ * - the timeout happened during compaction (`timedOutDuringCompaction`): that
+ *   turn is paused/resumable, not abandoned — emitting a notice would both
+ *   nag the user and override the `paused` liveness state the terminal path
+ *   otherwise preserves,
+ * - some visible payload is already being returned (`payloadCount > 0`),
+ * - an empty reply is acceptable here (cron/heartbeat contexts that set
+ *   `allowEmptyAssistantReplyAsSilent`). NOTE: gate on the raw flag, not the
+ *   derived `shouldTreatEmptyAssistantReplyAsSilent` result — that helper short-
+ *   circuits to `false` for any timed-out attempt (via `shouldSkipPlanningOnlyRetry`),
+ *   so it can never protect the very case handled here,
+ * - a messaging tool already delivered a reply out-of-band, or
+ * - a deterministic approval prompt was already delivered out-of-band (payload
+ *   building intentionally suppresses assistant artifacts in that case) — both
+ *   avoid a double / spurious notice,
+ * - the attempt reached a structured terminal state (`clientToolCalls` /
+ *   `yieldDetected`): the shared terminal path encodes those as `stopReason`,
+ *   `pendingToolCalls`, `yielded`, and `paused` metadata that OpenAI-compatible
+ *   callers use to continue tool rounds — replacing them with an error payload
+ *   would break that contract even when the attempt also timed out,
+ * - a `message_tool_only` source reply was already delivered
+ *   (`didDeliverSourceReplyViaMessageTool`): payload building treats that flag as
+ *   the delivered visible reply and suppresses assistant artifacts even when no
+ *   mirror payload made `payloadCount` nonzero, so appending a timeout notice
+ *   here would double-reply after the source reply already reached the channel.
+ */
+export function resolveTurnBudgetTimeoutNotice(params: {
+  timedOut: boolean;
+  idleTimedOut: boolean;
+  timedOutDuringCompaction: boolean;
+  payloadCount: number;
+  allowSilentReply: boolean;
+  hasMessagingDelivery: boolean;
+  hasDeterministicApprovalPrompt: boolean;
+  hasClientToolCalls: boolean;
+  yieldDetected: boolean;
+  hasSourceReplyDelivery: boolean;
+}): string | null {
+  if (
+    !params.timedOut ||
+    params.timedOutDuringCompaction ||
+    params.payloadCount > 0 ||
+    params.allowSilentReply ||
+    params.hasMessagingDelivery ||
+    params.hasDeterministicApprovalPrompt ||
+    params.hasClientToolCalls ||
+    params.yieldDetected ||
+    params.hasSourceReplyDelivery
+  ) {
+    return null;
+  }
+  return params.idleTimedOut ? IDLE_MODEL_TIMEOUT_NOTICE : TURN_BUDGET_TIMEOUT_NOTICE;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
