@@ -25,7 +25,7 @@ export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
   return `${branch}${commit}`;
 }
 
-export function formatBuildCardDetails(info: ControlUiBuildInfo, gatewayVersion: string | null) {
+function formatBuildCardDetails(info: ControlUiBuildInfo, gatewayVersion: string | null) {
   return {
     summary: [
       info.version ? `v${info.version}` : null,

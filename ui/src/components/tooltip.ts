@@ -185,7 +185,7 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private attachTrigger() {
-    const slot = this.renderRoot.querySelector("slot:not([name])");
+    const slot = this.renderRoot.querySelector<HTMLSlotElement>("slot:not([name])");
     const trigger = slot
       ?.assignedElements({ flatten: true })
       .find((element): element is HTMLElement => element instanceof HTMLElement);

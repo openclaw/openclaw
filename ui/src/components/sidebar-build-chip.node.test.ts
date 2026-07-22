@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { formatBuildCardDetails, formatBuildChipText } from "./sidebar-build-chip-format.ts";
+import { formatBuildChipText } from "./sidebar-build-chip-format.ts";
 
 const COMMIT = "e8cbc62f0123456789abcdef0123456789abcdef";
 const BUILT_AT = "2026-07-10T12:00:00.000Z";
@@ -66,15 +66,4 @@ describe("formatBuildChipText", () => {
       expect(formatBuildChipText(testCase.info)).toBe(testCase.expected);
     });
   }
-});
-
-describe("formatBuildCardDetails", () => {
-  it("formats the shared server card summary and a compact commit", () => {
-    expect(formatBuildCardDetails(buildInfo({ dirty: true }), "2026.7.9")).toEqual({
-      summary: "v2026.7.10 · main · dirty",
-      commit: COMMIT.slice(0, 12),
-      builtAt: BUILT_AT,
-      gatewayVersion: "2026.7.9",
-    });
-  });
 });
