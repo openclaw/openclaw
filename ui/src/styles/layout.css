@@ -595,12 +595,6 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   color: var(--muted);
 }
 
-.settings-sidebar__footer-status {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .settings-sidebar__footer-version {
   margin-left: auto;
   flex-shrink: 0;
@@ -2893,17 +2887,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   object-fit: cover;
 }
 
-.sidebar-agent-card__presence {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 10px;
-  height: 10px;
-  border-radius: var(--radius-full);
-  border: 2px solid var(--sidebar-bg);
-  background: var(--danger);
-}
-
 .sidebar-agent-card__text {
   display: flex;
   flex-direction: column;
@@ -3221,12 +3204,30 @@ openclaw-tooltip.sidebar-hover-tooltip {
   gap: 5px;
   flex: none;
   padding: 3px 7px;
+  border: none;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
+}
+
+.sidebar-footer-bar__status:hover {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.sidebar-footer-bar__status:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-footer-bar__status-detail {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.72;
 }
 
 .sidebar-footer-bar__status-dot {

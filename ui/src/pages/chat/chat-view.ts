@@ -136,6 +136,7 @@ export type ChatProps = {
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
   connected: boolean;
+  offline?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   canSend: boolean;
@@ -398,6 +399,7 @@ export function renderChat(props: ChatProps) {
     sessionKey: props.sessionKey,
     currentAgentId: props.currentAgentId,
     connected: props.connected,
+    offline: props.offline,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
     disabledBanner: props.disabledBanner,

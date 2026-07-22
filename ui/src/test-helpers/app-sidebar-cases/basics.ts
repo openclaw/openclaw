@@ -349,52 +349,40 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
 
-  it("shows connection exceptions only after a sustained disconnect", async () => {
-    vi.useFakeTimers();
+  it("renders the canonical offline retry button only for a stable disconnect", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const presence = () => sidebar.querySelector(".sidebar-agent-card__presence");
-    const offlinePill = () => sidebar.querySelector(".sidebar-footer-bar__status");
-    const expectQuiet = () => {
-      expect(presence()).toBeNull();
-      expect(offlinePill()).toBeNull();
-    };
+    const onRetryConnect = vi.fn();
+    sidebar.onRetryConnect = onRetryConnect;
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    expectQuiet();
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
-    ).toContain("Online");
+    ).not.toContain("Online");
 
     sidebar.connected = false;
+    sidebar.offline = true;
+    sidebar.lastError = "gateway unavailable?token=sidebar-secret";
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
+    expect(button?.textContent).toContain("Offline");
+    expect(button?.textContent).toContain("Reconnecting…");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now");
+    expect(button?.getAttribute("aria-live")).toBe("polite");
+    expect(button?.title).toBe("gateway unavailable?[redacted-credential]");
+    expect(button?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
-    await vi.advanceTimersByTimeAsync(1_999);
-    expectQuiet();
 
-    await vi.advanceTimersByTimeAsync(1);
-    await sidebar.updateComplete;
-    const pill = offlinePill();
-    expect(pill?.textContent?.trim()).toBe("Offline");
-    expect(pill?.getAttribute("aria-live")).toBe("polite");
-    expect(pill?.getAttribute("title")).toContain("Offline");
-    expect(pill?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
-    expect(presence()).not.toBeNull();
+    button?.click();
+    expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    sidebar.connected = true;
+    sidebar.offline = false;
     await sidebar.updateComplete;
-    expectQuiet();
-
-    sidebar.connected = false;
-    await sidebar.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    await vi.advanceTimersByTimeAsync(2_000);
-    expectQuiet();
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {

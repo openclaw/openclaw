@@ -2919,9 +2919,7 @@ export const en: TranslationMap = {
     eventStale: "Stale thread",
   },
   connection: {
-    lostTitle: "Gateway connection lost",
     reconnecting: "Reconnecting…",
-    offlineHint: "Live updates and actions are paused until the connection returns.",
     retryNow: "Retry now",
     access: {
       title: "Gateway Access",
@@ -3797,7 +3795,6 @@ export const en: TranslationMap = {
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Disabled during setup",
-    gatewayStatus: "Gateway status: {status}",
     commandPaletteTitle: "Search or jump to… (⌘K)",
     openCommandPalette: "Open command palette",
     docsOpensInNewTab: "{label} (opens in new tab)",
@@ -4084,6 +4081,7 @@ export const en: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
+      offlineHint: "Offline — messages will be queued and sent when the connection returns.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",

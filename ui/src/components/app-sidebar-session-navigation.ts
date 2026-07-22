@@ -486,9 +486,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected agentChipSubtitle(agentId: string): string {
-    if (!this.connected) {
-      return t("common.offline");
-    }
     const latest = this.latestAgentSessionRow(agentId);
     if (latest?.hasActiveRun) {
       return t("agentChip.working");

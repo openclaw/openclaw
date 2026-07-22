@@ -1,4 +1,4 @@
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -45,12 +45,11 @@ import {
   resolveLobsterRunOutcome,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
+import { redactLoginFailureError } from "./login-gate.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
-const OFFLINE_INDICATOR_DELAY_MS = 2_000;
-
 let lobsterPetModuleLoad: Promise<unknown> | null = null;
 let viewerFacepileModuleLoad: Promise<unknown> | null = null;
 
@@ -88,9 +87,6 @@ function scheduleSidebarChromeLoad() {
 
 class AppSidebar extends AppSidebarSessionListElement {
   @state() private logoVisit: LobsterLogoVisitDetail | null = null;
-  @state() private debouncedDisconnected = false;
-
-  private offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   constructor() {
     super();
@@ -131,42 +127,13 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.syncOfflineIndicator();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     scheduleSidebarChromeLoad();
   }
 
-  override disconnectedCallback() {
-    this.syncOfflineIndicator(false);
-    super.disconnectedCallback();
-  }
-
-  protected override willUpdate(changed: PropertyValues<this>) {
-    super.willUpdate(changed);
-    if (changed.has("connected")) {
-      this.syncOfflineIndicator();
-    }
-  }
-
   protected override firstUpdated() {
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
-  }
-
-  private syncOfflineIndicator(schedule = !this.connected) {
-    if (this.offlineIndicatorTimer !== null) {
-      globalThis.clearTimeout(this.offlineIndicatorTimer);
-      this.offlineIndicatorTimer = null;
-    }
-    this.debouncedDisconnected = false;
-    if (!schedule) {
-      return;
-    }
-    // Both sidebar signals share one grace window so brief transport blips stay quiet.
-    this.offlineIndicatorTimer = globalThis.setTimeout(() => {
-      this.offlineIndicatorTimer = null;
-      this.debouncedDisconnected = true;
-    }, OFFLINE_INDICATOR_DELAY_MS);
   }
 
   private readonly handleLogoVisit = (event: Event) => {
@@ -178,9 +145,6 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   private renderBrand() {
     const collapseLabel = t("nav.collapse");
-    const gatewayStatus = t("chat.gatewayStatus", {
-      status: this.connected ? t("common.online") : t("common.offline"),
-    });
     const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = this.activeChipAgent();
     const menuUnread = cardAgents.some((entry) => {
       const agentId = normalizeAgentId(entry.id);
@@ -199,8 +163,6 @@ class AppSidebar extends AppSidebarSessionListElement {
           .agentName=${cardName}
           .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
           .avatarText=${cardAvatarText}
-          .offline=${this.debouncedDisconnected}
-          .statusLabel=${gatewayStatus}
           .subtitle=${this.agentChipSubtitle(cardAgentId)}
           .menuOpen=${this.agentMenuPosition !== null}
           .menuUnread=${menuUnread}
@@ -328,9 +290,7 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   /** Zone 5: product chrome recedes to one slim footer bar. */
   private renderFooterBar() {
-    const gatewayStatus = t("chat.gatewayStatus", {
-      status: this.connected ? t("common.online") : t("common.offline"),
-    });
+    const reconnecting = t("connection.reconnecting");
     const selfUser = this.connected
       ? resolveCurrentSelfUser({
           snapshotUser: this.context?.gateway.snapshot.selfUser,
@@ -378,16 +338,19 @@ class AppSidebar extends AppSidebarSessionListElement {
           .gatewayVersion=${this.gatewayVersion}
           .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
         ></openclaw-sidebar-build-chip>
-        ${this.debouncedDisconnected
-          ? html`<span
+        ${this.offline
+          ? html`<button
+              type="button"
               class="sidebar-footer-bar__status"
-              role="status"
               aria-live="polite"
-              title=${gatewayStatus}
-              ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
+              title=${this.lastError ? redactLoginFailureError(this.lastError) : reconnecting}
+              @click=${() => this.onRetryConnect?.()}
+            >
+              <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
                 "common.offline",
-              )}</span
-            >`
+              )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
+            </button>`
           : nothing}
         <openclaw-tooltip .content=${t("nav.settings")}>
           <button
@@ -539,7 +502,7 @@ class AppSidebar extends AppSidebarSessionListElement {
             ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
-              .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
+              .mode=${resolveLobsterPetMode(!this.offline, this.sessionsResult?.sessions)}
               .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
               .visitsEnabled=${this.lobsterPetVisits}
               .soundsEnabled=${this.lobsterPetSounds}
