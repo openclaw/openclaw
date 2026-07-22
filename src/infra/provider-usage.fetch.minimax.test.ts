@@ -321,6 +321,81 @@ describe("fetchMinimaxUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it.each([
+    {
+      name: "recognizes general model_name with current_interval_remaining_percent (coding-plan shape)",
+      payload: {
+        model_remains: [
+          {
+            start_time: 1_784_386_800_000,
+            end_time: 1_784_404_800_000,
+            remains_time: 4878202,
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            model_name: "general",
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+            weekly_remains_time: 105678202,
+            current_interval_status: 1,
+            current_interval_remaining_percent: 97,
+            current_weekly_status: 1,
+            current_weekly_remaining_percent: 77,
+          },
+          {
+            start_time: 1_784_332_800_000,
+            end_time: 1_784_419_200_000,
+            remains_time: 19278202,
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            model_name: "video",
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+            weekly_remains_time: 105678202,
+            current_interval_status: 3,
+            current_interval_remaining_percent: 100,
+            current_weekly_status: 3,
+            current_weekly_remaining_percent: 100,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "5h", usedPercent: 3, resetAt: 1_784_404_800_000 }],
+      },
+    },
+    {
+      name: "uses current_weekly_remaining_percent when interval remaining percent is absent",
+      payload: {
+        model_remains: [
+          {
+            start_time: 1_784_386_800_000,
+            end_time: 1_784_404_800_000,
+            model_name: "general",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_status: 1,
+            current_weekly_status: 1,
+            current_weekly_remaining_percent: 55,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "5h", usedPercent: 45, resetAt: 1_784_404_800_000 }],
+      },
+    },
+  ])("$name", async ({ payload, expected }) => {
+    await expectMinimaxUsageResult({ payload, expected });
+  });
+
   it("handles repeated nested records while scanning usage candidates", async () => {
     const sharedUsage = {
       total: 100,

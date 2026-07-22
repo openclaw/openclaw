@@ -48,6 +48,8 @@ const RESET_KEYS = [
   "endTime",
   "window_end",
   "windowEnd",
+  "weekly_end_time",
+  "weeklyEndTime",
 ] as const;
 
 const PERCENT_KEYS = [
@@ -64,7 +66,16 @@ const PERCENT_KEYS = [
 // MiniMax's usage_percent / usagePercent fields report the remaining quota
 // as a percentage, not the consumed quota. Treat them as "remaining percent"
 // and invert to get usedPercent. Count-based fromCounts always takes priority.
-const REMAINING_PERCENT_KEYS = ["usage_percent", "usagePercent"] as const;
+//
+// The coding-plan endpoint also reports per-interval and weekly remaining
+// percentages (current_interval_remaining_percent / current_weekly_remaining_percent)
+// which should be treated the same way.
+const REMAINING_PERCENT_KEYS = [
+  "usage_percent",
+  "usagePercent",
+  "current_interval_remaining_percent",
+  "current_weekly_remaining_percent",
+] as const;
 
 const USED_KEYS = [
   "used",
@@ -339,16 +350,20 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
   return null;
 }
 
-// Prefer the entry whose model_name matches a chat/text model (e.g. "MiniMax-M*")
-// and that has a non-zero current_interval_total_count.  Models with total_count === 0
-// (speech, video, image) are not relevant to the coding-plan budget.
+// Prefer the entry whose model_name matches a chat/text model (e.g. "MiniMax-M*"
+// or "general") and that has billing activity.  Models with total_count === 0
+// (speech, video, image) are not relevant to the coding-plan budget, but the
+// coding-plan endpoint now reports total_count as 0 even for the active chat plan
+// (quota is reported via remaining_percent fields instead).  Use
+// current_interval_status === 1 as the activity signal when total_count is 0.
 function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> | undefined {
   const records = modelRemains.filter(isRecord);
   if (records.length === 0) {
     return undefined;
   }
 
-  const chatRecord = records.find((r) => {
+  // 1. Prefer MiniMax-M* chat models with total > 0 (legacy shape)
+  const legacyChatRecord = records.find((r) => {
     const name = typeof r.model_name === "string" ? r.model_name : "";
     const total = parseFiniteNumber(r.current_interval_total_count);
     return (
@@ -357,11 +372,21 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
       total > 0
     );
   });
-
-  if (chatRecord) {
-    return chatRecord;
+  if (legacyChatRecord) {
+    return legacyChatRecord;
   }
 
+  // 2. "general" model with active billing window (current_shape)
+  const generalRecord = records.find((r) => {
+    const name = typeof r.model_name === "string" ? r.model_name : "";
+    const status = parseFiniteNumber(r.current_interval_status);
+    return normalizeLowercaseStringOrEmpty(name) === "general" && status === 1;
+  });
+  if (generalRecord) {
+    return generalRecord;
+  }
+
+  // 3. Any record with total > 0 (fallback)
   return records.find((r) => {
     const total = parseFiniteNumber(r.current_interval_total_count);
     return total !== undefined && total > 0;
