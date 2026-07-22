@@ -121,8 +121,8 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
 COPY . .
 
 # The build stage also backs non-root live-test containers. Build contexts preserve
-# host modes, so normalize readability before Node resolves workspace packages.
-RUN chmod -R a+rX /app
+# host modes, so normalize copied source readability without re-walking installed deps.
+RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.

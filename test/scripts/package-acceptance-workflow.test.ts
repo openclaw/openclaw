@@ -1178,8 +1178,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
+    expect(workflow).toContain('fallback_version="$(npm view openclaw@latest version)"');
+    expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
-      "published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}",
+      "published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}",
@@ -1806,6 +1808,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
