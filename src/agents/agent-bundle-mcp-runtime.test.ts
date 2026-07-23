@@ -9,7 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  type SessionMcpSharedTask,
+  waitForSessionMcpSharedTask,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   createBundleMcpJsonSchemaValidator,
@@ -1800,7 +1803,9 @@ process.on("SIGINT", shutdown);`,
         await expect(catalogPromise).rejects.toThrow(
           "catalog waiter aborted before queued connections",
         );
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 500);
+        });
         for (const server of servers.slice(activeConnectionCount)) {
           await expect(fs.access(server.pidPath)).rejects.toThrow();
         }
@@ -3489,8 +3494,18 @@ describe("requester-scoped MCP connection resolution", () => {
         peekCatalog: () => currentCatalog,
         getCatalog: async (options) => {
           catalogLoadCount += 1;
+          const task: SessionMcpSharedTask<void> = {
+            controller: new AbortController(),
+            promise: catalogGate,
+            activeWaiters: 0,
+          };
           try {
-            await waitForSessionMcpRequest(catalogGate, options?.signal);
+            await waitForSessionMcpSharedTask({
+              task,
+              signal: options?.signal,
+              abandonIfCurrent: () => false,
+              abandonedReason: new Error("combined MCP test catalog wait abandoned"),
+            });
           } catch (error) {
             if (options?.signal?.aborted) {
               catalogAbortCount += 1;

@@ -37,10 +37,7 @@ function toMcpRequestError(reason: unknown, fallbackMessage: string): Error {
   return reason instanceof Error ? reason : new Error(fallbackMessage, { cause: reason });
 }
 
-export async function waitForSessionMcpRequest<T>(
-  promise: Promise<T>,
-  signal?: AbortSignal,
-): Promise<T> {
+async function waitForSessionMcpRequest<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) {
     return await promise;
   }
