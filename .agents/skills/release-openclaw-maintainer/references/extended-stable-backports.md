@@ -1,9 +1,10 @@
 # Extended-Stable Backport Preparation
 
-Prepare the next npm maintenance patch for the active `extended-stable` line.
-Discover the complete candidate set, obtain maintainer approval, and prepare
-the approved commits as one coordinated PR. Treat commits as canonical; use
-PRs, issues, ClawSweeper reports, and advisories as supporting context.
+Prepare the next Gateway patch for the active `extended-stable` line: the
+`openclaw` npm package, official npm plugins, and matching Docker Gateway
+images. Discover the complete candidate set, obtain approval, and prepare one
+coordinated PR. Commits are canonical; PRs, issues, ClawSweeper reports, and
+advisories provide context.
 
 Read `backport-discovery.md` first. Its evidence-driven inventory, detached
 baseline applicability probes, advisory reconciliation, and durable unreleased
@@ -15,15 +16,16 @@ extended-stable package and publication constraints.
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
   workflows from a pinned current `origin/main` before resolving the line.
-- Target npm `extended-stable` and the canonical
-  `extended-stable/YYYY.M.33` branch. The user-facing `extended-stable` update
-  channel resolves that selector; user-facing `stable` continues to resolve
-  npm `latest`.
+- Target npm and Docker `extended-stable` on
+  `extended-stable/YYYY.M.33`; user-facing `stable` remains npm `latest`.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
-- Exclude ClawHub publication, GitHub Releases, native apps, Docker images,
-  mobile artifacts, website downloads, and private-repository dist-tags.
+- Carry the complete current-main Docker release-channel change in the tagged
+  tree, including its workflow, promoter, policy, shared release-version
+  classifier, tests, and workflow validation changes.
+- Exclude ClawHub publication, GitHub Releases, the macOS app, Windows Hub,
+  mobile apps, website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
@@ -148,9 +150,10 @@ contracts.
 
 ## Filter by Publication Surface
 
-Include only fixes that affect the core package or an npm-publishable official
-plugin in the exact release inventory. Prove package inclusion rather than
-inferring it from the source path alone.
+Include only fixes that affect the core package, an npm-publishable official
+plugin in the exact release inventory, or the official Docker image/runtime
+path. Prove package or image inclusion rather than inferring it from the source
+path alone.
 
 - Do not exclude `extensions/**` by path. Determine whether the package appears
   in the canonical `all-publishable` inventory.
@@ -158,8 +161,8 @@ inferring it from the source path alone.
   at the same intended version and can verify its exact package and selector.
 - Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
   out of scope.
-- Treat native-only, Docker-only, mobile-only, website-only, and GitHub
-  Release-only fixes as `skip` for this npm-only line.
+- Treat macOS-app-only, Windows-Hub-only, mobile-only, website-only, and GitHub
+  Release-only fixes as `skip` for this Gateway extended-stable line.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 
@@ -281,5 +284,5 @@ exact package and `extended-stable` selector; and preserve the generated
 core `openclaw` selector-repair command. Repair missing or stale official-
 plugin selectors on already-published versions with the approved credential-
 isolated release tooling for manual tag repair; the OIDC source workflow cannot
-mutate those tags. Never republish an immutable version when only a selector
+mutate those tags. Never republish the same version when only a selector
 needs repair.

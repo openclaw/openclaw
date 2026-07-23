@@ -1766,19 +1766,37 @@ class OpenClawShell extends OpenClawLightDomElement {
             : ""}"
           .tabIndex=${-1}
         >
-          <openclaw-update-banner
-            .props=${{
-              statusBanner: overlaySnapshot.controlUiRefreshRequired
-                ? {
-                    tone: "info",
-                    text: "Server updated — refresh for full capabilities",
-                  }
-                : null,
-              action: overlaySnapshot.controlUiRefreshRequired
-                ? { label: t("common.refresh"), onClick: this.refreshControlUi }
-                : undefined,
-            }}
-          ></openclaw-update-banner>
+          ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
+            ? customElements.get("openclaw-device-auth-migration-banner")
+              ? html`<openclaw-device-auth-migration-banner
+                  .props=${{
+                    state: overlaySnapshot.deviceAuthMigration,
+                    onSecure: () => void context.overlays.secureThisBrowser(),
+                  }}
+                ></openclaw-device-auth-migration-banner>`
+              : html`<openclaw-update-banner
+                  .props=${{
+                    statusBanner: {
+                      tone: overlaySnapshot.deviceAuthMigration.error ? "danger" : "warn",
+                      text:
+                        overlaySnapshot.deviceAuthMigration.error ??
+                        t("login.deviceAuthMigration.banner"),
+                    },
+                  }}
+                ></openclaw-update-banner>`
+            : html`<openclaw-update-banner
+                .props=${{
+                  statusBanner: overlaySnapshot.controlUiRefreshRequired
+                    ? {
+                        tone: "info",
+                        text: "Server updated — refresh for full capabilities",
+                      }
+                    : null,
+                  action: overlaySnapshot.controlUiRefreshRequired
+                    ? { label: t("common.refresh"), onClick: this.refreshControlUi }
+                    : undefined,
+                }}
+              ></openclaw-update-banner>`}
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,

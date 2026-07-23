@@ -26,10 +26,12 @@ export {
   GroupPolicySchema,
   MarkdownConfigSchema,
   MentionPatternsPolicySchema,
+  MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   ReplyToModeSchema,
   ReplyRuntimeConfigSchemaShape,
   TextChunkModeSchema,
+  TtsConfigSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";

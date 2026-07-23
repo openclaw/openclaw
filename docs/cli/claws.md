@@ -197,7 +197,7 @@ This is not a reference count. Ordinary plugin, skill, and agent commands keep
 their existing behavior; Claws add provenance and guarded lifecycle operations
 on top.
 
-## Preview an update
+## Update an installed Claw
 
 By default, update uses the source recorded when the Claw was added. Use
 `--from` when that source moved or when testing another package directory:
@@ -218,8 +218,24 @@ warning are included. Removing a package declaration releases this Claw's edge
 without uninstalling the artifact during update. The eventual
 exact `planIntegrity` confirmation binds that disclosed set as well as ordinary
 content changes. Hosts may use the same records for a separate dialog or an
-aggregate multi-agent review. This stage is read-only: `claws update` requires
-`--dry-run` and does not apply the plan.
+aggregate multi-agent review. Apply the exact reviewed plan with explicit
+consent:
+
+```bash
+openclaw claws update incident-triage \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN>
+```
+
+OpenClaw rebuilds the plan and compare-and-swaps owned state before each
+mutation. Removed package declarations release dependency edges without
+uninstalling artifacts. Cron changes reread the live scheduler definition and
+stop on operator drift. Package installers, source-config writers, and the Gateway scheduler
+are not one transaction. If compensation cannot be proven after an external
+mutation, OpenClaw reports error code `update_partial` with structured
+`status: partial`, preserves uncertain provenance,
+and stops. Inspect `claws status`, the affected resource, and `openclaw doctor`;
+then preview again before retrying or removing anything.
 
 ## Remove an installed Claw
 
@@ -273,7 +289,7 @@ agents, credentials, sessions, and unowned local state are excluded.
 | `claws inspect <source>`            | Validate a package directory or JSON manifest.      |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
-| `claws update <claw-or-agent>`      | Preview changes from the recorded or given source.  |
+| `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
 | `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 

@@ -1,6 +1,9 @@
 import { z } from "zod";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
-import { requireAllowlistAllowFrom, requireOpenAllowFrom } from "./zod-schema.core.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
+} from "openclaw/plugin-sdk/channel-config-schema";
 
 type MSTeamsCloud = "Public" | "USGov" | "USGovDoD" | "China";
 

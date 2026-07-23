@@ -1377,7 +1377,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Create a grouped manifest
   - H2: Inspect and preview
   - H2: Inspect installed state
-  - H2: Preview an update
+  - H2: Update an installed Claw
   - H2: Remove an installed Claw
   - H2: Export an installed agent
   - H2: Command reference
@@ -8757,7 +8757,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Version naming
   - H2: Release cadence
-  - H2: Monthly npm-only extended-stable publication
+  - H2: Monthly Gateway extended-stable publication
   - H2: Regular release operator checklist
   - H2: Stable main closeout
   - H2: Release preflight

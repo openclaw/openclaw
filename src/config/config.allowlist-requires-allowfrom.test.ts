@@ -1,10 +1,6 @@
 // Regresses allowlist config requiring explicit allowFrom entries.
 import { describe, expect, it } from "vitest";
-import {
-  DiscordConfigSchema,
-  IMessageConfigSchema,
-  TelegramConfigSchema,
-} from "./zod-schema.providers-core.js";
+import { IMessageConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 function expectSchemaAllowlistIssue(
@@ -37,12 +33,6 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
       issuePath: "allowFrom",
     },
     {
-      name: "discord",
-      schema: DiscordConfigSchema,
-      config: { dmPolicy: "allowlist" },
-      issuePath: "allowFrom",
-    },
-    {
       name: "whatsapp",
       schema: WhatsAppConfigSchema,
       config: { dmPolicy: "allowlist" },
@@ -72,11 +62,6 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
       },
     },
     {
-      name: "discord",
-      schema: DiscordConfigSchema,
-      config: { allowFrom: ["123456789"], accounts: { work: { dmPolicy: "allowlist" } } },
-    },
-    {
       name: "whatsapp",
       schema: WhatsAppConfigSchema,
       config: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
@@ -99,33 +84,5 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
       { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
       "allowFrom",
     );
-  });
-});
-
-describe("Discord mentionAliases schema", () => {
-  it("accepts stable outbound mention aliases on top-level and account config", () => {
-    expect(
-      DiscordConfigSchema.safeParse({
-        mentionAliases: {
-          opslead: "123456789012345678",
-        },
-        accounts: {
-          work: {
-            mentionAliases: {
-              vladislava: "234567890123456789",
-            },
-          },
-        },
-      }).success,
-    ).toBe(true);
-  });
-
-  it("rejects non-snowflake mention alias targets", () => {
-    const result = DiscordConfigSchema.safeParse({
-      mentionAliases: {
-        opslead: "not-a-user-id",
-      },
-    });
-    expect(result.success).toBe(false);
   });
 });

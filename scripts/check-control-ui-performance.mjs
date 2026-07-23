@@ -12,10 +12,9 @@ const KIB = 1024;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // 315 KiB accompanies session creator attribution (2026-07): owner chips,
-  // the person filter, and their catalog strings live in the startup bundle,
-  // and main again sat within 0.1 KiB of the ceiling.
-  startupJsGzipBytes: 315 * KIB,
+  // 317 KiB preserves headroom after the device-auth upgrade hook and sidebar
+  // session-render extraction (2026-07); the migration UI itself remains lazy.
+  startupJsGzipBytes: 317 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,
