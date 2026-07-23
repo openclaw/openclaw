@@ -36,6 +36,8 @@ import {
   isSessionLifecycleMutationActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -579,6 +581,7 @@ beforeEach(() => {
     });
 });
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
@@ -1322,20 +1325,32 @@ describe("initSessionState RawBody", () => {
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:dashboard:created";
 
-    const result = await initSessionState({
-      ctx: {
-        RawBody: "hello",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        SessionCreation: {
-          via: "operator",
-          actor: { type: "human", id: "profile-ada" },
-        },
+    const result = await withEnvAsync(
+      { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      async () => {
+        const initialized = await initSessionState({
+          ctx: {
+            RawBody: "hello",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            SessionCreation: {
+              via: "operator",
+              actor: { type: "human", id: "profile-ada" },
+            },
+          },
+          cfg: { session: { store: storePath } } as OpenClawConfig,
+          commandAuthorized: true,
+        });
+        expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
+          expect.objectContaining({
+            kind: "created",
+            actorType: "human",
+            actorId: "profile-ada",
+          }),
+        );
+        return initialized;
       },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
-      commandAuthorized: true,
-    });
-
+    );
     expect(result.sessionEntry).toMatchObject({
       createdVia: "operator",
       createdActor: { type: "human", id: "profile-ada" },

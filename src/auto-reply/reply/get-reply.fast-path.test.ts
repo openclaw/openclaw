@@ -13,6 +13,8 @@ import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import { buildFastReplyCommandContext, initFastReplySessionState } from "./get-reply-fast-path.js";
@@ -200,6 +202,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     cliBackendsTesting.resetDepsForTest();
     vi.unstubAllEnvs();
   });
@@ -604,6 +607,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   it("handles native slash directives before workspace bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-slash-fast-"));
     const targetSessionKey = "agent:main:telegram:123";
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
     const cfg = markCompleteReplyConfig({
       agents: {
         defaults: {
@@ -628,6 +632,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         CommandAuthorized: true,
         SessionKey: "telegram:slash:123",
         CommandTargetSessionKey: targetSessionKey,
+        SessionCreation: {
+          via: "operator",
+          actor: { type: "human", id: "profile-native-slash" },
+        },
       }),
       undefined,
       cfg,
@@ -644,6 +652,13 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
     expect(mocks.handleCommands).toHaveBeenCalledOnce();
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(listSessionStateEventsSince(targetSessionKey, "main", 0, 20).events).toContainEqual(
+      expect.objectContaining({
+        kind: "created",
+        actorType: "human",
+        actorId: "profile-native-slash",
+      }),
+    );
     const directiveParams = requireDirectiveParams();
     expect(directiveParams.sessionKey).toBe(targetSessionKey);
     expect(directiveParams.workspaceDir).toBe("/tmp/workspace");

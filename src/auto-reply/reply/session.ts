@@ -79,6 +79,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
   classifySessionStateActor,
   registerMainSessionGroupWatch,
@@ -590,6 +591,7 @@ async function initSessionStateAttemptLocked(
     ctx,
   });
   const entry = initializationSnapshot.currentEntry;
+  const createdNewEntry = entry === undefined;
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
@@ -1100,6 +1102,9 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  if (createdNewEntry) {
+    recordSessionCreated({ sessionKey, agentId, entry: sessionEntry });
+  }
   if (
     !isSystemEvent &&
     classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
