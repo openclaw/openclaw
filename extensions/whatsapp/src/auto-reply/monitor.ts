@@ -1,6 +1,5 @@
 // Whatsapp plugin module implements monitor behavior.
 import type { WAMessageKey } from "baileys";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
@@ -49,6 +48,10 @@ import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runti
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
+import {
+  resolveExplicitWhatsAppDebounceOverride,
+  resolveWhatsAppConversationDebounceMs,
+} from "./monitor/debounce-policy.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
@@ -111,78 +114,6 @@ function normalizeReconnectAccountId(accountId?: string | null): string {
 
 function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
-}
-
-function resolveExplicitWhatsAppDebounceOverride(params: {
-  cfg: ReturnType<typeof getRuntimeConfig>;
-  sourceCfg?: ReturnType<typeof getRuntimeConfig> | null;
-  accountId: string;
-}): number | undefined {
-  const channel = params.sourceCfg?.channels?.whatsapp;
-  if (!channel) {
-    return undefined;
-  }
-
-  const accountId = normalizeReconnectAccountId(params.accountId);
-  const accountDebounce = resolveAccountEntry(channel.accounts, accountId)?.debounceMs;
-  if (accountDebounce !== undefined) {
-    return accountDebounce;
-  }
-  if (accountId !== "default") {
-    const defaultAccountDebounce = resolveAccountEntry(channel.accounts, "default")?.debounceMs;
-    if (defaultAccountDebounce !== undefined) {
-      return defaultAccountDebounce;
-    }
-  }
-
-  return channel.debounceMs;
-}
-
-type WhatsAppConversationDebounceEntry = {
-  debounceMs?: number;
-};
-
-function normalizeDebounceMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.trunc(value)
-    : undefined;
-}
-
-function resolveWhatsAppScopedDebounceMs(params: {
-  entries?: Record<string, WhatsAppConversationDebounceEntry | undefined>;
-  id?: string | null;
-}): number | undefined {
-  const specific = params.id
-    ? normalizeDebounceMs(params.entries?.[params.id]?.debounceMs)
-    : undefined;
-  if (specific !== undefined) {
-    return specific;
-  }
-  return normalizeDebounceMs(params.entries?.["*"]?.debounceMs);
-}
-
-function resolveWhatsAppConversationDebounceMs(params: {
-  cfg: ReturnType<typeof getRuntimeConfig>;
-  msg: WebInboundMessageInput;
-  defaultMs: number;
-}): number {
-  const normalized = normalizeWebInboundMessage(params.msg);
-  const admission = normalized.admission;
-  if (!admission || admission.ingress.decision !== "allow") {
-    return params.defaultMs;
-  }
-  const channel = params.cfg.channels?.whatsapp;
-  const scoped =
-    admission.conversation.kind === "group"
-      ? resolveWhatsAppScopedDebounceMs({
-          entries: channel?.groups,
-          id: admission.conversation.id,
-        })
-      : resolveWhatsAppScopedDebounceMs({
-          entries: channel?.direct,
-          id: admission.conversation.id,
-        });
-  return scoped ?? params.defaultMs;
 }
 
 function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
