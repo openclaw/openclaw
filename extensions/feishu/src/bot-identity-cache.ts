@@ -13,7 +13,7 @@ type FeishuBotIdentityCacheState = {
   fetchedAt: string;
 };
 
-export type CachedFeishuBotIdentity = {
+type CachedFeishuBotIdentity = {
   botOpenId: string;
   botName?: string;
   fetchedAt: string;

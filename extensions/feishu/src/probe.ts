@@ -43,7 +43,7 @@ type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
   }): Promise<FeishuBotInfoResponse | FeishuAiAgentRegistrationResponse>;
 };
 
-export type FeishuAiAgentRegistrationResult =
+type FeishuAiAgentRegistrationResult =
   | { ok: true }
   | {
       ok: false;
