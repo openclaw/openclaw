@@ -10,6 +10,7 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
@@ -25,6 +26,7 @@ type NostrOutboundAdapter = Pick<
   "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 
 const activeBuses = new Map<string, NostrBusHandle>();
@@ -196,12 +198,16 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
               if (!outboundText.trim()) {
                 return;
               }
+              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              if (!sanitizedText.trim()) {
+                return;
+              }
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
                 cfg: ctx.cfg,
                 channel: "nostr",
                 accountId: account.accountId,
               });
-              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+              await reply(runtime.channel.text.convertMarkdownTables(sanitizedText, tableMode));
             },
             onRecordError: (err) => {
               ctx.log?.error?.(
@@ -306,6 +312,7 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,

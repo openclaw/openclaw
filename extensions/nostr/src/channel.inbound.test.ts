@@ -226,4 +226,109 @@ describe("nostr inbound gateway path", () => {
 
     await cleanup.stop();
   });
+
+  it("strips internal tool-trace banners before inbound DM replies", async () => {
+    const toolTraceText = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text: toolTraceText });
+      },
+    );
+    const { cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
+      }),
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+    });
+
+    const options = mockCallArg(mocks.startNostrBus) as {
+      onMessage: (
+        senderPubkey: string,
+        text: string,
+        reply: (text: string) => Promise<void>,
+        meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
+      ) => Promise<void>;
+    };
+    const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-456",
+        createdAt: 1_710_000_001,
+      },
+      lifecycle,
+    );
+
+    expect(sendReply).toHaveBeenCalledWith("converted:Done.");
+    expect(mockCallArg(sendReply)).not.toContain("⚠️");
+
+    await cleanup.stop();
+  });
+
+  it("drops inbound DM replies that contain only internal tool-trace banners", async () => {
+    const toolTraceOnlyText = "⚠️ 🛠️ `search repos (agent)` failed";
+    mocks.dispatchInboundDirectDm.mockImplementationOnce(
+      async (params: Parameters<typeof DispatchInboundDirectDm>[0]) => {
+        await params.deliver({ text: toolTraceOnlyText });
+      },
+    );
+    const { cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
+      }),
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+    });
+
+    const options = mockCallArg(mocks.startNostrBus) as {
+      onMessage: (
+        senderPubkey: string,
+        text: string,
+        reply: (text: string) => Promise<void>,
+        meta: { eventId: string; createdAt: number },
+        lifecycle: NostrIngressLifecycle,
+      ) => Promise<void>;
+    };
+    const sendReply = vi.fn(async (_text: string) => {});
+    const lifecycle: NostrIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => {}),
+    };
+
+    await options.onMessage(
+      "sender-pubkey",
+      "hello from nostr",
+      sendReply,
+      {
+        eventId: "event-789",
+        createdAt: 1_710_000_002,
+      },
+      lifecycle,
+    );
+
+    expect(sendReply).not.toHaveBeenCalled();
+
+    await cleanup.stop();
+  });
 });
