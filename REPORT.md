@@ -152,7 +152,7 @@ All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c
 
 ## LOC summary
 
-`git diff --numstat origin/main...HEAD`, grouped by role and excluding generated/docs from production:
+Implementation diff before adding this report, grouped by role and excluding generated/docs from production:
 
 | Group                  |  Added | Deleted |
 | ---------------------- | -----: | ------: |
