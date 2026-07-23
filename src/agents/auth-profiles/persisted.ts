@@ -198,9 +198,11 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       normalized.expires = expires;
     }
     // Dead-refresh tombstones must survive reload or the external CLI re-seed
-    // gate closes again on the next auth store read.
-    const refreshDeadAt = normalizeExpiryField(entry.refreshDeadAt);
-    if (refreshDeadAt !== undefined) {
+    // gate closes again on the next auth store read. Strict normalization:
+    // normalizeExpiryField coerces invalid values to 0, which would wrongly
+    // flag a healthy grant dead — corrupt tombstones are dropped instead.
+    const refreshDeadAt = entry.refreshDeadAt;
+    if (typeof refreshDeadAt === "number" && Number.isFinite(refreshDeadAt) && refreshDeadAt > 0) {
       normalized.refreshDeadAt = refreshDeadAt;
     }
     return normalized;
