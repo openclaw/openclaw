@@ -229,6 +229,15 @@ import {
   WebLoginWaitParamsSchema,
 } from "./channels.js";
 import {
+  ClawDoctorFindingSchema,
+  ClawResourceStatusSchema,
+  ClawsDoctorParamsSchema,
+  ClawsDoctorResultSchema,
+  ClawStatusEntrySchema,
+  ClawsStatusParamsSchema,
+  ClawsStatusResultSchema,
+} from "./claws.js";
+import {
   CommandEntrySchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
@@ -599,6 +608,13 @@ import {
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
+  ClawResourceStatus: ClawResourceStatusSchema,
+  ClawStatusEntry: ClawStatusEntrySchema,
+  ClawsStatusParams: ClawsStatusParamsSchema,
+  ClawsStatusResult: ClawsStatusResultSchema,
+  ClawDoctorFinding: ClawDoctorFindingSchema,
+  ClawsDoctorParams: ClawsDoctorParamsSchema,
+  ClawsDoctorResult: ClawsDoctorResultSchema,
   BoardTab: BoardTabSchema,
   BoardWidget: BoardWidgetSchema,
   BoardWidgetDeclared: BoardWidgetDeclaredSchema,

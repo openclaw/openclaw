@@ -84,6 +84,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { isGatewayMethodAvailableForEnv } from "./experimental-methods.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
@@ -1028,6 +1029,7 @@ export async function startGatewayServer(
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
+        isGatewayMethodAvailableForEnv(method, process.env) &&
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );

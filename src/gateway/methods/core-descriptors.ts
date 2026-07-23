@@ -32,6 +32,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "doctor.memory.repairDreamingArtifacts", scope: "operator.write", since: "<=2026.7" },
   { name: "doctor.memory.dedupeDreamDiary", scope: "operator.write", since: "<=2026.7" },
   { name: "doctor.memory.remHarness", scope: "operator.read", since: "<=2026.7" },
+  { name: "claws.status", scope: "operator.read", since: "2026.7" },
+  { name: "claws.doctor", scope: "operator.read", since: "2026.7" },
   { name: "logs.tail", scope: "operator.read", since: "<=2026.7" },
   { name: "channels.status", scope: "operator.read", since: "<=2026.7" },
   { name: "channels.start", scope: "operator.admin", since: "<=2026.7" },
