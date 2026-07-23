@@ -537,6 +537,9 @@ async function loadExtensionSourceTransformModule(
       // reload observes edited source. Product modules stay native via nativeModules.
       tryNative: false,
       moduleCache: false,
+      // The explicit native fast path already declined this entry; retrying through jiti can
+      // overlap its ESM evaluation. Source-transform fallback must stay transform-only.
+      tryNative: false,
     });
   }
 

@@ -193,7 +193,7 @@ export default async function extension(api) {
     expect(jitiCalls.imports).toEqual([extensionPath]);
   });
 
-  it("keeps SDK-alias JavaScript extensions on one shared jiti loader", async () => {
+  it("uses one source-transform-only jiti loader for SDK-alias JavaScript extensions", async () => {
     // SDK aliases need jiti's virtual resolution, but one shared loader keeps
     // multi-extension imports consistent and cheap.
     const { loadExtensionsCached } = await import("./loader.js");
@@ -218,6 +218,7 @@ module.exports = async function(api) {
     expect(result.errors).toEqual([]);
     expect(result.extensions).toHaveLength(2);
     expect(jitiCalls.options).toHaveLength(1);
+    expect(jitiCalls.options[0]).toMatchObject({ tryNative: false });
     expect(jitiCalls.imports).toEqual([firstPath, secondPath]);
   });
 
