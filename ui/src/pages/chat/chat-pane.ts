@@ -33,7 +33,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   SessionMembersListResult,
@@ -674,6 +674,7 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionSuggestionsRequestVersion = 0;
   private sessionSuggestionTargetSignature = "";
   private sessionSuggestionAddOperation: symbol | undefined;
+  private sessionSuggestionEditOperation: symbol | undefined;
   private readonly typingActors = new Map<string, { label: string; expiresAt: number }>();
   private readonly typingTimers = new Map<string, number>();
   private sessionPullRequests: ControlUiSessionPullRequest[] = [];
@@ -790,6 +791,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.sessionSuggestionRole = undefined;
     this.sessionSuggestionBusyIds.clear();
     this.sessionSuggestionAddOperation = undefined;
+    this.sessionSuggestionEditOperation = undefined;
   }
 
   private async refreshSessionSuggestions(): Promise<void> {
@@ -947,11 +949,17 @@ class ChatPane extends OpenClawLightDomElement {
     if (
       !scope ||
       this.sessionSuggestionBusyIds.has(suggestion.id) ||
+      (resolution === "edit" && this.sessionSuggestionEditOperation !== undefined) ||
       !this.sessionSuggestionMatchesCurrentSession(suggestion)
     ) {
       return;
     }
     const sessionKey = scope.state.sessionKey;
+    const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
+    const editOperation = resolution === "edit" ? Symbol() : undefined;
+    if (editOperation) {
+      this.sessionSuggestionEditOperation = editOperation;
+    }
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text);
@@ -975,10 +983,21 @@ class ChatPane extends OpenClawLightDomElement {
       this.sessionSuggestions = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
     } catch (error) {
       if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+        if (
+          resolution === "edit" &&
+          error instanceof GatewayRequestError &&
+          previousEditDraft !== undefined &&
+          scope.state.chatMessage === suggestion.text
+        ) {
+          scope.state.handleChatDraftChange(previousEditDraft);
+        }
         scope.state.chatError = error instanceof Error ? error.message : String(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
+      if (this.sessionSuggestionEditOperation === editOperation) {
+        this.sessionSuggestionEditOperation = undefined;
+      }
       this.sessionSuggestionBusyIds.delete(suggestion.id);
       this.requestUpdate();
     }
@@ -3902,6 +3921,7 @@ class ChatPane extends OpenClawLightDomElement {
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
       multiIdentity &&
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       selectedSession?.visibility === "suggest" &&
       selectedSession.sharingRole === "viewer" &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.add") ===
@@ -3913,6 +3933,7 @@ class ChatPane extends OpenClawLightDomElement {
         : null;
     const typingEnabled =
       multiIdentity &&
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       !catalogKey &&
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.typing") === true &&
       hasSessionPresenceViewers(

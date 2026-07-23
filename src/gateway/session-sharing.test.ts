@@ -352,6 +352,14 @@ describe("session sharing policy", () => {
       expect(check("member", "session.typing")).toBe(true);
       expect(check("viewer", "session.typing")).toBe(false);
       expect(check("member", "session.message")).toBe(false);
+      expect(
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({}) as never,
+          sessionKeys: [sessionKey],
+          event: "session.typing",
+        }),
+      ).toBe(false);
     });
   });
 });

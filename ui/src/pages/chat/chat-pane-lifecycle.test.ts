@@ -8,7 +8,7 @@ import type {
   SessionSuggestion,
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import {
@@ -231,6 +231,86 @@ describe("chat pane session suggestion lifecycle", () => {
 
     expect(state.chatMessage).toBe("preserve this suggestion");
     expect(state.chatError).toBe("response lost");
+  });
+
+  it("restores an untouched owner draft after a definite edit rejection", async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "suggestion already resolved",
+        });
+      }),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const suggestion: SessionSuggestion = {
+      id: "edit-rejected",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text: "rejected suggestion",
+      createdAt: 1,
+      state: "pending",
+    };
+    state.handleChatDraftChange = (next) => {
+      state.chatMessage = next;
+    };
+    state.chatMessage = "owner draft";
+
+    await pane.resolveCurrentSessionSuggestion(suggestion, "edit");
+
+    expect(state.chatMessage).toBe("owner draft");
+    expect(state.chatError).toBe("suggestion already resolved");
+  });
+
+  it("serializes edit resolutions so rejected suggestions cannot snapshot each other", async () => {
+    const first = createDeferred<never>();
+    const second = createDeferred<never>();
+    const client = {
+      request: vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const suggestion = (id: string, text: string): SessionSuggestion => ({
+      id,
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text,
+      createdAt: 1,
+      state: "pending",
+    });
+    state.handleChatDraftChange = (next) => {
+      state.chatMessage = next;
+    };
+    state.chatMessage = "owner draft";
+
+    const firstPending = pane.resolveCurrentSessionSuggestion(suggestion("first", "first"), "edit");
+    await pane.resolveCurrentSessionSuggestion(suggestion("second", "second"), "edit");
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessage).toBe("first");
+
+    first.reject(
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "first was rejected" }),
+    );
+    await firstPending;
+    expect(state.chatMessage).toBe("owner draft");
+
+    const secondPending = pane.resolveCurrentSessionSuggestion(
+      suggestion("second", "second"),
+      "edit",
+    );
+    second.reject(
+      new GatewayRequestError({ code: "INVALID_REQUEST", message: "second was rejected" }),
+    );
+    await secondPending;
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(state.chatMessage).toBe("owner draft");
   });
 });
 
