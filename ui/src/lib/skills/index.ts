@@ -463,10 +463,11 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const agentScope = captureSkillsAgentScope(state);
-  if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
+  // Route data can retain a request-capable client while `connected` is transiently false.
+  if (!client || !reportHasLinkedClawHubSkills(report)) {
     state.clawhubVerdicts = {};
     state.clawhubVerdictsLoading = false;
     state.clawhubVerdictsError = null;
