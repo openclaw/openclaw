@@ -555,6 +555,17 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
   });
 
+  it("rejects DNS hostnames that start with private-octet prefixes (SSRF bypass guard)", () => {
+    // These are DNS hostnames, not IP literals — isIP returns 0 for them.
+    // Without the isIP guard, string-prefix checks (startsWith("127.") etc.)
+    // would incorrectly classify them as private/loopback.
+    expect(isPrivateOrLoopbackHost("127.evil.com")).toBe(false);
+    expect(isPrivateOrLoopbackHost("10.evil.com")).toBe(false);
+    expect(isPrivateOrLoopbackHost("192.168.evil.com")).toBe(false);
+    // A bare "172.16" prefix hostname — not a valid IP literal.
+    expect(isPrivateOrLoopbackHost("172.16.evil.com")).toBe(false);
+  });
+
   it("rejects empty/falsy input", () => {
     expect(isPrivateOrLoopbackHost("")).toBe(false);
   });
