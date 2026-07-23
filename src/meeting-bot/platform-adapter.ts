@@ -12,7 +12,6 @@ import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
 
 export type {
-  MeetingAgentConsultSurface,
   MeetingBrowserJoinSession,
   MeetingBrowserLeaveStep,
   MeetingBrowserPermissionPlan,
@@ -21,7 +20,6 @@ export type {
   MeetingBrowserStatusScriptParams,
   MeetingManualAction,
   MeetingManualActionCategory,
-  MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
 
 export interface MeetingPlatformAdapter<
