@@ -974,8 +974,8 @@ jobs:
                   jq '[.[] | select(
                     ((.name | startswith("Run QA Lab parity lane ("))
                       or .name == "Run QA Lab parity report"
-                      or (.name | startswith("Run QA Lab runtime parity tier ("))
-                      or .name == "Run QA Lab runtime parity lane"
+                      or (.name | startswith("Run QA Lab runtime-pair lane ("))
+                      or .name == "Verify QA Lab runtime-pair lanes"
                       or .name == "Run QA Lab live Discord lane"
                       or .name == "Run QA Lab live WhatsApp lane"
                       or .name == "Run QA Lab live Slack lane")

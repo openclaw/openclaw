@@ -10,10 +10,13 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -23,6 +26,7 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
@@ -70,6 +74,8 @@ internal data class ChatDraft(
   val text: String,
   val placement: ChatDraftPlacement,
   val owner: ChatComposerOwner? = null,
+  val expectedExistingText: String? = null,
+  val acceptsEmptyText: Boolean = false,
 )
 
 internal fun claimChatDraftForOwner(
@@ -486,6 +492,8 @@ class MainViewModel private constructor(
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
+  internal val systemAgentChatState: StateFlow<SystemAgentChatState> =
+    runtimeState(initial = SystemAgentChatState()) { it.systemAgentChatState }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -576,6 +584,7 @@ class MainViewModel private constructor(
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
+  val accessibilityControlEnabled: StateFlow<Boolean> = prefs.accessibilityControlEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val preferredCameraFacing: StateFlow<String> = prefs.preferredCameraFacing
   val preferredAudioInputDevice: StateFlow<String?> = prefs.preferredAudioInputDevice
@@ -617,6 +626,8 @@ class MainViewModel private constructor(
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionOwnerAgentId }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
+  val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
+    runtimeState(initial = null) { it.chatTranscriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHistoryLoading }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chatError }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
@@ -630,9 +641,13 @@ class MainViewModel private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val chatSessionBranches: StateFlow<List<SessionBranch>> = runtimeState(initial = emptyList()) { it.chatSessionBranches }
+  val chatSessionBranchesLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchesLoading }
+  val chatSessionBranchSwitching: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchSwitching }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
+  val chatOutboxPresentationRestored: StateFlow<Boolean> = runtimeState(initial = false) { it.chatOutboxPresentationRestored }
   internal val chatMessageSpeech: StateFlow<MessageSpeechState?> =
     runtimeState(initial = null) { it.messageSpeechState }
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
@@ -886,6 +901,10 @@ class MainViewModel private constructor(
     ensureRuntime().revokeInstalledAppsDisclosureConsent()
   }
 
+  fun setAccessibilityControlEnabled(value: Boolean) {
+    prefs.setAccessibilityControlEnabled(value)
+  }
+
   fun setNotificationForwardingEnabled(value: Boolean) {
     ensureRuntime().setNotificationForwardingEnabled(value)
   }
@@ -978,7 +997,7 @@ class MainViewModel private constructor(
       claimed
     }
 
-  private fun setChatDraft(value: ChatDraft?) {
+  internal fun setChatDraft(value: ChatDraft?) {
     synchronized(chatDraftLock) {
       chatDraftState.value = value
     }
@@ -1563,6 +1582,14 @@ class MainViewModel private constructor(
     ownerAgentId: String? = null,
   ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
 
+  suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
+
+  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = ensureRuntime().forkChatAtEntry(entryId)
+
+  suspend fun refreshChatSessionBranches(): Boolean = ensureRuntime().refreshChatSessionBranches()
+
+  suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = ensureRuntime().switchChatSessionBranch(leafEntryId)
+
   suspend fun listWorkspaceFiles(
     path: String?,
     offset: Int? = null,
@@ -1691,6 +1718,46 @@ class MainViewModel private constructor(
         throw err
       }
     }
+  }
+
+  internal fun refreshSystemAgentChat() {
+    ensureRuntime().refreshSystemAgentChat()
+  }
+
+  internal fun clearSystemAgentChatInput() {
+    ensureRuntime().clearSystemAgentChatInput()
+  }
+
+  internal fun setSystemAgentChatInput(value: String) {
+    ensureRuntime().setSystemAgentChatInput(value)
+  }
+
+  internal fun sendSystemAgentChatInput() {
+    ensureRuntime().sendSystemAgentChatInput()
+  }
+
+  internal fun answerSystemAgentQuestion(
+    messageId: String,
+    optionLabel: String,
+  ) {
+    ensureRuntime().answerSystemAgentQuestion(messageId, optionLabel)
+  }
+
+  internal fun skipSystemAgentQuestion(messageId: String) {
+    ensureRuntime().skipSystemAgentQuestion(messageId)
+  }
+
+  internal fun restartSystemAgentChat() {
+    ensureRuntime().restartSystemAgentChat()
+  }
+
+  internal fun openSystemAgentChatHandoff() {
+    val handoff = ensureRuntime().consumeSystemAgentChatHandoff() ?: return
+    handoff.agentId
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?.let(::selectChatAgent)
+    handleAssistantLaunch(AssistantLaunchRequest(source = "system-agent", prompt = null, autoSend = false))
   }
 
   fun selectChatAgent(agentId: String) {

@@ -30,6 +30,15 @@ const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
     "./internal/*": { import: "./dist/internal/*.mjs" },
   },
 });
+const LEGACY_AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
+  name: "@openclaw/ai",
+  version: "2026.7.2-beta.4",
+  exports: {
+    ".": { import: "./dist/index.mjs" },
+    "./providers": { import: "./dist/providers.mjs" },
+    "./internal/*": { import: "./dist/internal/*.mjs" },
+  },
+});
 
 function withTarball(
   inventory: string[],
@@ -699,6 +708,36 @@ describe("check-openclaw-package-tarball", () => {
       {
         packageJson: {
           dependencies: { "@openclaw/ai": "2026.6.11" },
+          bundleDependencies: ["@openclaw/ai"],
+        },
+      },
+    );
+  });
+
+  it("accepts frozen AI runtimes that predate an optional exported subpath", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "node_modules/@openclaw/ai/package.json": LEGACY_AI_RUNTIME_PACKAGE_JSON,
+        "node_modules/@openclaw/ai/dist/index.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/providers.mjs": "export {};\n",
+        "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync(
+          "node",
+          [CHECK_SCRIPT, "--require-bundled-workspace-deps", tarball],
+          { encoding: "utf8" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.7.2-beta.4",
+      {
+        packageJson: {
+          dependencies: { "@openclaw/ai": "2026.7.2-beta.4" },
           bundleDependencies: ["@openclaw/ai"],
         },
       },

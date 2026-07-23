@@ -13,7 +13,7 @@ import { ChannelDeliveryStreamingConfigSchema } from "./zod-schema.core.js";
 const WhatsAppGroupEntrySchema = buildGroupEntrySchema(
   { debounceMs: z.number().int().nonnegative().optional() },
   {
-  omit: ["skills", "enabled", "allowFrom"],
+    omit: ["skills", "enabled", "allowFrom"],
   },
 ).optional();
 
@@ -28,15 +28,6 @@ const WhatsAppDirectEntrySchema = z
   .optional();
 
 const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
-
-const WhatsAppAckReactionSchema = z
-  .object({
-    emoji: z.string().optional(),
-    direct: z.boolean().optional().default(true),
-    group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
-  })
-  .strict()
-  .optional();
 
 const WhatsAppPluginHooksSchema = z
   .object({
@@ -56,13 +47,11 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
       mediaMaxMb: z.number().int().positive().optional(),
     }),
     sendReadReceipts: ChannelSendReadReceiptsSchema,
-    messagePrefix: z.string().optional(),
     selfChatMode: z.boolean().optional(),
     groups: WhatsAppGroupsSchema,
     direct: WhatsAppDirectSchema,
     ...buildChannelReactionShape({
       reactionLevels: ["off", "ack", "minimal", "extensive"],
-      ackReaction: WhatsAppAckReactionSchema,
     }),
     debounceMs: params.useDefaults
       ? z.number().int().nonnegative().optional().default(0)

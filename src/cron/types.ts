@@ -31,6 +31,17 @@ export type CronSchedule =
       kind: "on-exit";
       command: string;
       cwd?: string;
+    }
+  | {
+      /** Event-driven source whose supervised argv emits payload-triggering lines. */
+      kind: "stream";
+      command: string[];
+      cwd?: string;
+      mode?: "line" | "match";
+      /** JavaScript regular-expression source, required when mode is "match". */
+      match?: string;
+      batchMs?: number;
+      maxBatchBytes?: number;
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
@@ -185,6 +196,11 @@ export type CronRunDiagnostics = {
   entries: CronRunDiagnostic[];
 };
 
+/** Explicit execution-error disposition used consistently by retry, history, and alerts. */
+export type CronRunErrorClassification =
+  | { kind: "reason"; reason: FailoverReason }
+  | { kind: "permanent" };
+
 /** Execution result persisted on cron state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
@@ -193,6 +209,7 @@ export type CronRunOutcome = {
   executionStarted?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
+  errorClassification?: CronRunErrorClassification;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -252,14 +269,20 @@ export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
   | (CronAgentTurnPayload & CronPayloadToolAllow)
   | (CronCommandPayload & CronPayloadToolAllow)
-  | (CronScriptPayload & CronPayloadToolAllow);
+  | (CronScriptPayload & CronPayloadToolAllow)
+  // System-owned heartbeat monitor: execution requests an interval heartbeat
+  // wake. Gateway-converged only; not accepted from client create/patch APIs.
+  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
   | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
   | (CronCommandPayloadPatch & CronPayloadToolAllowPatch)
-  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch);
+  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
+  // Representable so the service can reject it with a typed boundary error;
+  // transports and tools never accept it.
+  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
@@ -372,6 +395,19 @@ export type CronJobState = {
   lastTriggerFireAtMs?: number;
   /** JSON state returned by the last trigger script evaluation. */
   triggerState?: unknown;
+  /** Current gateway-owned stream source lifecycle state. */
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  // Identity of the logical stream source that owns this job's batches. It is
+  // stable across child-process restarts and rotates atomically when the source
+  // is disabled, removed, or replaced, closing same-schedule ABA admission.
+  streamSourceIdentity?: string;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
   lastDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error text when available. */
@@ -438,11 +474,13 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
+type CronJobStateInput = Partial<Omit<CronJobState, "streamSourceIdentity">>;
+
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
-  state?: Partial<CronJobState>;
+  state?: CronJobStateInput;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
@@ -467,5 +505,5 @@ export type CronJobPatch = Partial<
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   failureAlert?: CronFailureAlertPatch | false | null;
-  state?: Partial<CronJobState>;
+  state?: CronJobStateInput;
 };

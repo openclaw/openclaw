@@ -125,10 +125,6 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
-extensions/google-meet/index.ts
-extensions/google-meet/src/cli.test.ts
-extensions/google-meet/src/cli.ts
-extensions/google-meet/src/meet.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -364,7 +360,6 @@ packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
 packages/speech-core/src/tts.test.ts
-packages/speech-core/src/tts.ts
 packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
@@ -405,7 +400,6 @@ src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
-src/agents/cli-backends.test.ts
 src/agents/cli-output.test.ts
 src/agents/cli-output.ts
 src/agents/cli-runner.reliability.test.ts
@@ -504,7 +498,6 @@ src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
-src/agents/provider-attribution.ts
 src/agents/provider-local-service.ts
 src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
@@ -739,7 +732,6 @@ src/config/sessions/transcript.ts
 src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
-src/config/zod-schema.providers-core.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
@@ -871,7 +863,6 @@ src/gateway/session-utils.test.ts
 src/gateway/session-utils.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
-src/gateway/sessions-patch.ts
 src/gateway/talk-realtime-relay.test.ts
 src/gateway/talk-realtime-relay.ts
 src/gateway/test-helpers.server.ts
@@ -1049,7 +1040,6 @@ src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
 src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
-src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts
 src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts

@@ -717,27 +717,66 @@ pub fn quickchat_set_expanded(webview: Webview, expanded: bool) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn quickchat_hide(webview: Webview, generation: u64) -> Result<(), String> {
+pub async fn quickchat_activate(
+    webview: Webview,
+    state: State<'_, QuickChatState>,
+    session_id: String,
+    renderer_epoch: u64,
+    generation: u64,
+) -> Result<bool, String> {
+    require_quickchat_webview(&webview)?;
+    state
+        .widget_state()
+        .activate(
+            &webview.window(),
+            &session_id,
+            renderer_epoch,
+            generation,
+            &state.hide_requested,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn quickchat_hide(
+    webview: Webview,
+    session_id: String,
+    renderer_epoch: u64,
+    generation: u64,
+) -> Result<bool, String> {
     require_quickchat_webview(&webview)?;
     let window = webview.window();
     let app = window.app_handle();
     let state = app.state::<QuickChatState>();
-    state.hide_requested.store(true, Ordering::SeqCst);
-    state.widget_state().close(app, generation).await;
-    window
-        .hide()
-        .map_err(|error| format!("Could not hide Quick Chat: {error}"))?;
-    let _ = window.set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT));
-    Ok(())
+    state
+        .widget_state()
+        .hide(
+            app,
+            &window,
+            &session_id,
+            renderer_epoch,
+            generation,
+            &state.hide_requested,
+        )
+        .await
 }
 
 #[tauri::command]
-pub fn quickchat_ready(
+pub async fn quickchat_ready(
     webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
+    session_id: String,
+    renderer_epoch: u64,
 ) -> Result<bool, String> {
     require_quickchat_webview(&webview)?;
+    if !state
+        .widget_state()
+        .start_session(webview.app_handle(), &session_id, renderer_epoch)
+        .await?
+    {
+        return Ok(false);
+    }
     gateway.emit_current_state(&webview)?;
     Ok(!state.hide_requested.load(Ordering::SeqCst))
 }

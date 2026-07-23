@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -91,9 +91,11 @@ describe("Apple app i18n catalogs", () => {
     expect(keys).toEqual(
       expect.arrayContaining([
         "Browse ClawHub",
+        "Done in %@",
         "Enable debug tools",
         "Everyday OpenClaw app behavior.",
         "General",
+        "Shelling",
         "Voice Wake requires macOS 26 or newer",
       ]),
     );
@@ -462,7 +464,7 @@ describe("Apple app i18n catalogs", () => {
     ]);
   });
 
-  it("generates InfoPlist localizations for every shipped iOS target", async () => {
+  it("generates only localized usage descriptions for every shipped iOS target", async () => {
     const french = await readFile("apps/ios/Sources/fr.lproj/InfoPlist.strings", "utf8");
     const watchChinese = await readFile(
       "apps/ios/WatchApp/zh-Hans.lproj/InfoPlist.strings",
@@ -481,8 +483,28 @@ describe("Apple app i18n catalogs", () => {
     expect(french).toContain('"NSMicrophoneUsageDescription" = ');
     expect(french).toContain('"NSHealthUpdateUsageDescription" = ');
     expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
-    expect(shareGerman).toContain('"CFBundleDisplayName" = "OpenClaw Share";');
-    expect(activityJapanese).toContain('"CFBundleDisplayName" = "OpenClaw Activity";');
+    expect(shareGerman.trim()).toBe("");
+    expect(activityJapanese.trim()).toBe("");
+
+    for (const root of [
+      "apps/ios/Sources",
+      "apps/ios/WatchApp",
+      "apps/ios/ShareExtension",
+      "apps/ios/ActivityWidget",
+    ]) {
+      const localeDirs = (await readdir(root, { withFileTypes: true })).filter(
+        (entry) => entry.isDirectory() && entry.name.endsWith(".lproj"),
+      );
+      expect(localeDirs).toHaveLength(APPLE_I18N_LOCALES.length);
+      for (const localeDir of localeDirs) {
+        const localizedPlist = await readFile(
+          path.join(root, localeDir.name, "InfoPlist.strings"),
+          "utf8",
+        );
+        expect(localizedPlist).not.toContain("CFBundleDisplayName");
+        expect(localizedPlist).not.toMatch(/\$\([^)]*\)|\$\{[^}]*\}/u);
+      }
+    }
   });
 
   it("refreshes InfoPlist copy from translations for the current source", () => {

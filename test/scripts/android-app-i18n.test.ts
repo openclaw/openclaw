@@ -28,6 +28,24 @@ describe("Android app i18n resources", () => {
     expect(wearBase).toContain('<string name="current_session">Current session</string>');
   });
 
+  it("routes compact token suffixes through generated resources", async () => {
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
+      entries: Array<{ kind: string; path: string; source: string }>;
+    };
+    const sources = new Set(["${decimal(count / 1_000_000.0)}M", "${thousands}k"]);
+    const entries = inventory.entries
+      .filter(
+        (entry) => entry.path.endsWith("/ui/chat/ChatTurnRecap.kt") && sources.has(entry.source),
+      )
+      .map(({ kind, source }) => ({ kind, source }))
+      .toSorted((left, right) => left.source.localeCompare(right.source));
+
+    expect(entries).toEqual([
+      { kind: "ui-call", source: "${decimal(count / 1_000_000.0)}M" },
+      { kind: "ui-call", source: "${thousands}k" },
+    ]);
+  });
+
   it("builds complete Wear resources for every native locale", async () => {
     const catalog = await buildAndroidAppI18nCatalog();
     const wearResources = [...catalog.resources].filter(
@@ -45,8 +63,10 @@ describe("Android app i18n resources", () => {
 
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {
-      const keys = [...content.matchAll(/<string name="([^"]+)"/gu)]
-        .map((match) => match[1])
+      const stringTags = [...content.matchAll(/<string\b[^>]*>/gu)].map((match) => match[0]);
+      const keys = stringTags
+        .map((tag) => tag.match(/\bname="([^"]+)"/u)?.[1])
+        .filter((key): key is string => key !== undefined)
         .toSorted();
       const placeholders = [...content.matchAll(/%\d+\$[a-z]/giu)]
         .map((match) => match[0])
@@ -54,6 +74,12 @@ describe("Android app i18n resources", () => {
       expect(keys).toEqual(baseKeys);
       expect(placeholders).toEqual(basePlaceholders);
       expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
+      expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
+      for (const tag of stringTags) {
+        if (!tag.includes('translatable="false"')) {
+          expect(tag).toContain('tools:ignore="Typos,TypographyDashes,TypographyEllipsis"');
+        }
+      }
     }
   });
 

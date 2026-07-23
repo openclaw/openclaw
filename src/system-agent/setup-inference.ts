@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentEffectiveModelPrimary,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
@@ -13,6 +17,11 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import {
+  readCodexCliActiveApiKey,
+  type CodexCliApiKeyCredential,
+} from "../agents/cli-credentials.js";
+import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -90,6 +99,7 @@ import {
   type SetupInferenceAuthOption,
   type SetupInferenceManualProvider,
 } from "./setup-inference-auth-options.js";
+import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -121,6 +131,8 @@ export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferen
 
 export type SetupInferenceCandidate = {
   kind: SetupInferenceKind;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   detail: string;
   modelRef: string;
@@ -191,6 +203,15 @@ export class SetupInferenceActivationIndeterminateError extends Error {
 
 class SetupInferenceActivationUnavailableError extends Error {
   override name = "SetupInferenceActivationUnavailableError";
+}
+
+/**
+ * The live-tested owner no longer matches current config. Activation maps this
+ * to `{ ok: false, status: "auth" }` so the guided-onboarding ladder can move
+ * to its next candidate instead of crashing the CLI.
+ */
+class SetupInferenceOwnerDriftError extends Error {
+  override name = "SetupInferenceOwnerDriftError";
 }
 
 export type VerifySetupInferenceResult =
@@ -281,6 +302,7 @@ type SetupInferenceRunEmbeddedAgent = (
   params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
     onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
     authProfileStateMode?: "read-write" | "read-only";
+    preparedModelRuntimeMode?: "isolated-read-only";
   },
 ) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
 
@@ -304,6 +326,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
@@ -356,14 +379,17 @@ function invalidSetupConfigError(snapshot: {
 }
 
 function resolveCandidatePresentation(
-  kind: SetupInferenceKind,
+  candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
   authChoices: readonly ProviderAuthChoiceMetadata[],
-): Pick<SetupInferenceCandidate, "icon" | "website"> {
+): Pick<SetupInferenceCandidate, "brandId" | "icon" | "website"> {
   const choice = authChoices.find(
-    (candidate) =>
-      candidate.choiceId === kind || candidate.deprecatedChoiceIds?.includes(kind) === true,
+    (entry) =>
+      entry.choiceId === candidate.kind ||
+      entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
+  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
   return {
+    ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),
     ...(choice?.website ? { website: choice.website } : {}),
   };
@@ -499,7 +525,7 @@ export async function detectSetupInference(
     Object.assign(
       candidate,
       { recommended: false as const },
-      resolveCandidatePresentation(candidate.kind, authChoices),
+      resolveCandidatePresentation(candidate, authChoices),
     ),
   );
   const configuredModel = candidates.find(
@@ -563,6 +589,7 @@ export async function detectSetupInference(
           return Object.assign(
             {
               kind: toProviderAutoSetupKind(choice.choiceId),
+              brandId: choice.providerId,
               label: choice.choiceLabel,
               detail: candidate.detail?.trim() || "available locally",
               modelRef: candidate.modelRef,
@@ -804,7 +831,9 @@ function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: strin
       ]),
     );
   const defaultAgentId = resolveDefaultAgentId(config);
-  const agent = config.agents?.list?.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
+  const agent = listAgentEntries(config).find(
+    (entry) => normalizeAgentId(entry.id) === defaultAgentId,
+  );
   return {
     defaultAgentId,
     defaults: project(config.agents?.defaults?.models),
@@ -908,30 +937,27 @@ function copySelectedModelMetadata(params: {
   }
 
   const defaultAgentId = resolveDefaultAgentId(params.target);
-  const preparedAgent = params.prepared.agents?.list?.find((agent) => agent.id === defaultAgentId);
+  const preparedAgent = listAgentEntries(params.prepared).find(
+    (agent) => normalizeAgentId(agent.id) === defaultAgentId,
+  );
   if (!preparedAgent?.models || !Object.hasOwn(preparedAgent.models, params.modelRef)) {
     return;
   }
-  const targetAgents = params.target.agents?.list;
-  const targetAgentIndex = targetAgents?.findIndex((agent) => agent.id === defaultAgentId) ?? -1;
-  if (!targetAgents || targetAgentIndex < 0) {
-    return;
-  }
-  const nextAgents = structuredClone(targetAgents);
-  const targetAgent = expectDefined(
-    nextAgents[targetAgentIndex],
-    "next agents entry at target agent index",
+  const targetEntryKey = Object.keys(params.target.agents?.entries ?? {}).find(
+    (agentId) => normalizeAgentId(agentId) === defaultAgentId,
   );
-  if (!targetAgent) {
+  if (!targetEntryKey || !params.target.agents?.entries?.[targetEntryKey]) {
     return;
   }
+  const nextEntries = structuredClone(params.target.agents.entries);
+  const targetAgent = expectDefined(nextEntries[targetEntryKey], "target agent entry");
   targetAgent.models = {
     ...targetAgent.models,
     [params.modelRef]: structuredClone(
       expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
     ),
   };
-  params.target.agents = { ...params.target.agents, list: nextAgents };
+  params.target.agents = { ...params.target.agents, entries: nextEntries };
 }
 
 function findSelectedProviderConfigKey(
@@ -1049,8 +1075,9 @@ async function buildTestPlan(params: {
   isCancelled?: () => boolean;
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
+  codexCliApiKey?: CodexCliApiKeyCredential;
   deps: ActivateSetupInferenceDeps;
-}): Promise<SetupInferenceTestPlan | { error: string }> {
+}): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;
@@ -1195,7 +1222,17 @@ async function buildTestPlan(params: {
   }
   switch (kind) {
     case "existing-model": {
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId);
+      let route;
+      try {
+        route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId, {
+          loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime,
+        });
+      } catch (error) {
+        if (error instanceof CliExecutionAuthProfileError) {
+          return { error: error.message, status: "auth" as const };
+        }
+        throw error;
+      }
       if (!route) {
         return { error: "No configured default-agent inference route is available." };
       }
@@ -1265,6 +1302,40 @@ async function buildTestPlan(params: {
         return modelRef;
       }
       const ref = parseRef(modelRef);
+      if (params.codexCliApiKey) {
+        const preparedAuth = prepareManualAuthForActivation({
+          baseConfig: cfg,
+          preparedConfig: cfg,
+          profiles: [
+            {
+              profileId: "openai:codex-cli-api-key",
+              credential: params.codexCliApiKey,
+            },
+          ],
+          selectedProfileId: "openai:codex-cli-api-key",
+          modelRef,
+          providerId: ref.provider,
+        });
+        return {
+          runner: "embedded",
+          ...ref,
+          modelRef,
+          agentHarnessRuntimeOverride: "codex",
+          config: preparedAuth.config,
+          agentId: "openclaw",
+          routeAgentId: resolveDefaultAgentId(preparedAuth.config),
+          agentDir: params.agentDir,
+          cleanupBundleMcpOnRunEnd: true,
+          authProfileId: preparedAuth.selectedProfileId,
+          persistModelRef: modelRef,
+          manualAuth: {
+            profiles: preparedAuth.profiles,
+            runtimeConfigBase: cfg,
+            sourceConfigBase: params.sourceCfg,
+            configPatch: createMergePatch(cfg, preparedAuth.config),
+          },
+        };
+      }
       return {
         runner: "embedded",
         ...ref,
@@ -1585,28 +1656,34 @@ async function runProviderManualSecretMethod(params: {
 export async function activateSetupInference(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  const codexCliApiKey = resolveCodexCliSetupApiKey(params);
   try {
-    const result = await activateSetupInferenceUnredacted(params);
+    const result = await activateSetupInferenceUnredacted(params, codexCliApiKey ?? undefined);
     if (result.ok) {
       return {
         ...result,
         lines: await Promise.all(
-          result.lines.map((line) => redactSetupInferenceError(line, params.apiKey)),
+          result.lines.map((line) =>
+            redactSetupInferenceError(line, params.apiKey, codexCliApiKey?.key),
+          ),
         ),
       };
     }
     return {
       ...result,
-      error: await redactSetupInferenceError(result.error, params.apiKey),
+      error: await redactSetupInferenceError(result.error, params.apiKey, codexCliApiKey?.key),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redacted = await redactSetupInferenceError(message, params.apiKey);
+    const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
     if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
     if (error instanceof SetupInferenceActivationUnavailableError) {
       return { ok: false, status: "unavailable", error: redacted };
+    }
+    if (error instanceof SetupInferenceOwnerDriftError) {
+      return { ok: false, status: "auth", error: redacted };
     }
     if (error instanceof SetupInferenceActivationIndeterminateError) {
       throw new SetupInferenceActivationIndeterminateError(redacted);
@@ -1618,6 +1695,7 @@ export async function activateSetupInference(
 
 async function activateSetupInferenceUnredacted(
   params: ActivateSetupInferenceParams,
+  codexCliApiKey?: CodexCliApiKeyCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
   const readSnapshot =
@@ -1665,10 +1743,15 @@ async function activateSetupInferenceUnredacted(
       ...(params.kind === "provider-auth"
         ? { isRemoteProviderAuth: params.surface === "gateway" }
         : {}),
+      ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
     });
     if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+      return {
+        ok: false,
+        status: plan.status ?? "unavailable",
+        error: plan.error,
+      };
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
@@ -2014,23 +2097,12 @@ async function activateSetupInferenceUnredacted(
             "The default-agent inference route could not be resolved after its live test. Review the current model/auth/runtime settings and retry.",
         };
       }
-      try {
-        const binding = await revalidateSetupInferenceOwner({
-          route: latestResolvedRoute,
-          auth: test.auth,
-          deps,
-        });
-        if (!hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)) {
-          throw new Error("inference owner plugin runtime changed during its live test");
-        }
-      } catch {
-        return {
-          ok: false,
-          status: "auth",
-          error:
-            "The verified inference owner changed before activation completed. Retry the inference check.",
-        };
-      }
+      await revalidateStableSetupInferenceOwner({
+        route: latestResolvedRoute,
+        auth: test.auth,
+        stagedOwnerPluginArtifacts,
+        deps,
+      });
     }
     if (needsPersistence) {
       const { stripPendingPluginInstallRecords } =
@@ -2228,14 +2300,12 @@ async function activateSetupInferenceUnredacted(
                 "The source config no longer matches the verified candidate, so it was not saved. Review the current config and retry.",
               );
             }
-            const binding = await revalidateSetupInferenceOwner({
+            await revalidateStableSetupInferenceOwner({
               route: nextResolvedRoute,
               auth: test.auth,
+              stagedOwnerPluginArtifacts,
               deps,
             });
-            if (!hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)) {
-              throw new Error("inference owner plugin runtime changed during its live test");
-            }
             // Once this callback returns, the config writer owns the candidate.
             // Any later throw may be post-commit and needs reconciliation.
             throwIfSetupInferenceCancelled(params);
@@ -2385,9 +2455,24 @@ async function activateSetupInferenceUnredacted(
   }
 }
 
-async function redactSetupInferenceError(message: string, apiKey?: string): Promise<string> {
+function resolveCodexCliSetupApiKey(
+  params: ActivateSetupInferenceParams,
+): CodexCliApiKeyCredential | null {
+  if (params.kind !== "codex-cli") {
+    return null;
+  }
+  const reader = params.deps?.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey;
+  return reader({ allowKeychainPrompt: true });
+}
+
+async function redactSetupInferenceError(
+  message: string,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
   const secrets = new Set(
-    [apiKey, apiKey?.trim()].filter((value): value is string => Boolean(value)),
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
   );
   let redacted = message;
   for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
@@ -2405,6 +2490,41 @@ function hasSameOwnerPluginArtifacts(
     isDeepStrictEqual(binding.ownerPluginIds, snapshot.ownerPluginIds) &&
     isDeepStrictEqual(binding.ownerPluginArtifacts, snapshot.ownerPluginArtifacts)
   );
+}
+
+/**
+ * Revalidate the successful probe's owner against current config. Any drift
+ * throws SetupInferenceOwnerDriftError, which activation returns as an auth
+ * failure result — a throw that escapes here would crash the onboarding ladder.
+ */
+async function revalidateStableSetupInferenceOwner(params: {
+  route: SystemAgentConfiguredRoute;
+  auth: AgentExecutionAuthBinding;
+  stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
+  deps: ActivateSetupInferenceDeps;
+}): Promise<SystemAgentVerifiedInferenceBinding> {
+  let binding: SystemAgentVerifiedInferenceBinding;
+  try {
+    binding = await revalidateSetupInferenceOwner({
+      route: params.route,
+      auth: params.auth,
+      deps: params.deps,
+    });
+  } catch (error) {
+    throw new SetupInferenceOwnerDriftError(
+      `The verified inference owner changed before activation completed. Retry the inference check. (${formatErrorMessage(error)})`,
+      { cause: error },
+    );
+  }
+  if (
+    !params.stagedOwnerPluginArtifacts ||
+    !hasSameOwnerPluginArtifacts(binding, params.stagedOwnerPluginArtifacts)
+  ) {
+    throw new SetupInferenceOwnerDriftError(
+      "The verified inference owner changed before activation completed. Retry the inference check. (The owner plugin runtime changed during its live test.)",
+    );
+  }
+  return binding;
 }
 
 type VerifySetupInferenceParams = {
@@ -2621,7 +2741,11 @@ export async function verifySetupInferenceConfig(params: {
       deps,
     });
     if ("error" in builtPlan) {
-      return { ok: false, status: "unavailable", error: builtPlan.error };
+      return {
+        ok: false,
+        status: builtPlan.status ?? "unavailable",
+        error: builtPlan.error,
+      };
     }
     let plan: SetupInferenceTestPlan = builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
@@ -2783,17 +2907,12 @@ export async function verifySetupInferenceConfig(params: {
       }
       if (params.requireExecutionOwner || params.onVerifiedExecution) {
         try {
-          const binding = await revalidateSetupInferenceOwner({
+          const binding = await revalidateStableSetupInferenceOwner({
             route: configuredRoute!,
             auth: test.auth,
+            stagedOwnerPluginArtifacts,
             deps,
           });
-          if (
-            !stagedOwnerPluginArtifacts ||
-            !hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)
-          ) {
-            throw new Error("inference owner plugin runtime changed during its live test");
-          }
           params.onVerifiedExecution?.(test.auth, binding);
         } catch {
           return {
@@ -2880,7 +2999,11 @@ export async function completeSetupInferenceConfig(params: {
       deps,
     });
     if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+      return {
+        ok: false,
+        status: plan.status ?? "unavailable",
+        error: plan.error,
+      };
     }
     const result = await runSetupInferenceTest({
       plan,
@@ -3175,7 +3298,7 @@ function configReferencesManualAuthProfiles(
   if (modelSelectionReferencesProfile(config.agents?.defaults?.model, profileIds)) {
     return true;
   }
-  return (config.agents?.list ?? []).some((agent) =>
+  return listAgentEntries(config).some((agent) =>
     modelSelectionReferencesProfile(agent.model, profileIds),
   );
 }
@@ -3411,6 +3534,7 @@ async function runSetupInferenceTest(params: {
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
         authProfileStateMode,
+        preparedModelRuntimeMode: "isolated-read-only",
         ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(plan.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }

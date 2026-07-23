@@ -99,6 +99,20 @@ describe("Matrix QA Lab scenario flows", () => {
     }
   });
 
+  it("applies the portable thread override through Matrix flow preparation", () => {
+    expect(readQaScenarioById("thread-reply-override").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      timeoutMs: 60_000,
+      retryCount: 0,
+      config: {
+        matrixConfigOverrides: {
+          threadReplies: "always",
+        },
+      },
+    });
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");
@@ -124,10 +138,10 @@ describe("Matrix QA Lab scenario flows", () => {
     expect(readQaScenarioById("matrix-voice-preflight-mention").gatewayConfigPatch).toMatchObject({
       tools: {
         media: {
+          models: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
           audio: {
             echoTranscript: true,
             enabled: true,
-            models: [{ model: "gpt-4o-transcribe", provider: "openai" }],
             prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
           },
         },
@@ -141,10 +155,10 @@ describe("Matrix QA Lab scenario flows", () => {
     expect(readQaScenarioExecutionConfig("matrix-voice-preflight-mention")).toMatchObject({
       matrixRequireCanary: true,
       matrixConfigOverrides: {
+        mediaModels: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
         audio: {
           echoTranscript: true,
           enabled: true,
-          models: [{ model: "gpt-4o-transcribe", provider: "openai" }],
           prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
         },
         groupMentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],

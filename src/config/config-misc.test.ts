@@ -14,6 +14,16 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
   {
+    name: "gateway.controlUi.sessionObserver",
+    config: {
+      gateway: {
+        controlUi: {
+          sessionObserver: "yes",
+        },
+      },
+    },
+  },
+  {
     name: "gateway.controlUi.allowExternalEmbedUrls",
     config: {
       gateway: {
@@ -136,6 +146,28 @@ describe("model provider localService config", () => {
       expect(result.config.models?.providers?.[provider]?.models).toEqual([]);
       expect(result.config.models?.providers?.[provider]?.baseUrl).toBe("");
     }
+  });
+
+  it("revalidates materialized bundled provider overlays", () => {
+    const first = validateConfigObjectRaw({
+      models: {
+        providers: {
+          google: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error("expected bundled provider overlay to pass initial validation");
+    }
+    expect(first.config.models?.providers?.google?.baseUrl).toBe("");
+    expect(first.config.models?.providers?.google?.models).toEqual([]);
+
+    const second = validateConfigObjectRaw(first.config);
+    expect(second.ok).toBe(true);
   });
 
   it("rejects standalone timeout overlays for unknown model providers", () => {
@@ -401,45 +433,6 @@ describe("models.pricing", () => {
   });
 });
 
-describe("systemAgent.rescue", () => {
-  it("accepts documented rescue config", () => {
-    const result = OpenClawSchema.safeParse({
-      systemAgent: {
-        rescue: {
-          enabled: "auto",
-          ownerDmOnly: false,
-          pendingTtlMinutes: 5,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts boolean rescue enablement", () => {
-    const result = OpenClawSchema.safeParse({
-      systemAgent: {
-        rescue: {
-          enabled: true,
-          ownerDmOnly: true,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects unknown rescue keys", () => {
-    const result = OpenClawSchema.safeParse({
-      systemAgent: {
-        rescue: {
-          enabled: true,
-          shell: true,
-        },
-      },
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
 describe("diagnostics.otel.captureContent", () => {
   it("accepts supported OTEL log exporters and rejects unknown values", () => {
     for (const logsExporter of ["otlp", "stdout", "both"]) {
@@ -466,19 +459,7 @@ describe("diagnostics.otel.captureContent", () => {
   });
 
   it("accepts boolean and granular OTEL content capture config", () => {
-    for (const captureContent of [
-      true,
-      false,
-      {
-        enabled: true,
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: false,
-        toolDefinitions: true,
-      },
-    ]) {
+    for (const captureContent of [true, false]) {
       const result = OpenClawSchema.safeParse({
         diagnostics: {
           otel: {
@@ -575,27 +556,38 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("gateway.controlUi.chatMessageMaxWidth", () => {
+describe("gateway.controlUi.sessionObserver", () => {
+  it("accepts boolean values", () => {
+    for (const value of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { sessionObserver: value } },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+});
+
+describe("ui.prefs.chatMessageMaxWidth", () => {
   it("accepts constrained CSS width values", () => {
     for (const value of ["960px", "82%", "min(1280px, 82%)", "calc(100% - 2rem)"]) {
       const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
+        ui: {
+          prefs: {
             chatMessageMaxWidth: value,
           },
         },
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe(value);
+        expect(result.data.ui?.prefs?.chatMessageMaxWidth).toBe(value);
       }
     }
   });
 
   it("normalizes whitespace around the width value", () => {
     const result = OpenClawSchema.safeParse({
-      gateway: {
-        controlUi: {
+      ui: {
+        prefs: {
           chatMessageMaxWidth: "  min(1280px,   82%)  ",
         },
       },
@@ -603,15 +595,15 @@ describe("gateway.controlUi.chatMessageMaxWidth", () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.gateway?.controlUi?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+      expect(result.data.ui?.prefs?.chatMessageMaxWidth).toBe("min(1280px, 82%)");
     }
   });
 
   it("rejects arbitrary CSS injection", () => {
     for (const value of ["url(https://example.com/x)", "960px; color: red", "var(--x)"]) {
       const result = OpenClawSchema.safeParse({
-        gateway: {
-          controlUi: {
+        ui: {
+          prefs: {
             chatMessageMaxWidth: value,
           },
         },
@@ -933,9 +925,8 @@ describe("config identity/materialization regressions", () => {
   it("keeps explicit responsePrefix and group mention patterns", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha Sloth",
               theme: "space lobster",
@@ -943,16 +934,16 @@ describe("config identity/materialization regressions", () => {
             },
             groupChat: { mentionPatterns: ["@openclaw"] },
           },
-        ],
+        },
       },
-      messages: {
-        responsePrefix: "✅",
+      channels: {
+        whatsapp: { responsePrefix: "✅" },
       },
     });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.messages?.responsePrefix).toBe("✅");
+      expect(res.config.channels?.whatsapp?.responsePrefix).toBe("✅");
       expect(res.config.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
     }
   });
@@ -960,25 +951,24 @@ describe("config identity/materialization regressions", () => {
   it("preserves empty responsePrefix when identity is present", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha",
               theme: "helpful sloth",
               emoji: "🦥",
             },
           },
-        ],
+        },
       },
-      messages: {
-        responsePrefix: "",
+      channels: {
+        whatsapp: { responsePrefix: "" },
       },
     });
 
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.messages?.responsePrefix).toBe("");
+      expect(res.config.channels?.whatsapp?.responsePrefix).toBe("");
     }
   });
 
@@ -1042,7 +1032,7 @@ describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
       agents: {
-        list: [{ id: "alfred" }, { id: "baerbel" }],
+        entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {
         strategy: "parallel",
@@ -1089,7 +1079,6 @@ describe("model compat config schema", () => {
                     requiresToolResultName: true,
                     requiresAssistantAfterToolResult: false,
                     requiresThinkingAsText: false,
-                    requiresMistralToolIds: false,
                     requiresOpenAiAnthropicToolPayload: true,
                   },
                 },
@@ -1140,9 +1129,8 @@ describe("config strict validation", () => {
   it("accepts documented agents.list[].params overrides", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             model: "anthropic/claude-opus-4-6",
             params: {
               cacheRetention: "none",
@@ -1150,7 +1138,7 @@ describe("config strict validation", () => {
               maxTokens: 8192,
             },
           },
-        ],
+        },
       },
     });
 
@@ -1184,7 +1172,7 @@ describe("config strict validation", () => {
         fallback: "none",
         query: { maxResults: 7 },
       });
-      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toBeUndefined();
+      expect(snap.sourceConfig.memory?.search).toBeUndefined();
     });
   });
 
@@ -1234,26 +1222,24 @@ describe("config strict validation", () => {
     });
   });
 
-  it("reports legacy messages.tts provider keys without read-time auto-migration", () => {
+  it("reports legacy tts provider keys without read-time auto-migration", () => {
     const raw = {
-      messages: {
-        tts: {
-          provider: "elevenlabs",
-          elevenlabs: {
-            apiKey: "test-key",
-            voiceId: "voice-1",
-          },
+      tts: {
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: "test-key",
+          voiceId: "voice-1",
         },
       },
     };
     const issues = findLegacyConfigIssues(raw);
 
-    expect(issuePaths(issues)).toContain("messages.tts");
-    expect(raw.messages.tts.elevenlabs).toEqual({
+    expect(issuePaths(issues)).toContain("tts");
+    expect(raw.tts.elevenlabs).toEqual({
       apiKey: "test-key",
       voiceId: "voice-1",
     });
-    expect(raw.messages.tts).not.toHaveProperty("providers");
+    expect(raw.tts).not.toHaveProperty("providers");
   });
 
   it("reports retired plugin model refs without an agents section", () => {
@@ -1318,7 +1304,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents.list.0.sandbox");
+      expect(issuePaths(snap.issues)).toContain("agents");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });

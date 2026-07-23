@@ -119,6 +119,24 @@ data class QuestionListResult(
 )
 
 @Serializable
+data class SessionObserverPlanProgress(
+  val completed: Long,
+  val total: Long,
+)
+
+@Serializable
+data class SessionObserverDigest(
+  val sessionKey: String,
+  val runId: String? = null,
+  val revision: Long,
+  val updatedAt: Long,
+  val headline: String,
+  val assessment: String? = null,
+  val health: String,
+  val planProgress: SessionObserverPlanProgress? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -396,6 +414,9 @@ enum class GatewayMethod(
   TerminalInput("terminal.input"),
   TerminalResize("terminal.resize"),
   TerminalClose("terminal.close"),
+  ChannelsPairingList("channels.pairing.list"),
+  ChannelsPairingApprove("channels.pairing.approve"),
+  ChannelsPairingDismiss("channels.pairing.dismiss"),
   AssistantMediaGet("assistant.media.get"),
   SessionsGet("sessions.get"),
   SessionsResolve("sessions.resolve"),
@@ -462,6 +483,8 @@ enum class GatewayMethod(
   BoardPromptAuthorize("board.prompt.authorize"),
   BoardDataRead("board.data.read"),
   BoardAction("board.action"),
+  SessionsObserverAsk("sessions.observer.ask"),
+  SessionsObserverVisibility("sessions.observer.visibility"),
 }
 
 enum class GatewayEvent(
@@ -473,6 +496,7 @@ enum class GatewayEvent(
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
