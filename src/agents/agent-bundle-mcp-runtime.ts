@@ -579,7 +579,6 @@ export function createSessionMcpRuntime(params: {
     let connectTask = session.connectTask;
     if (!connectTask) {
       const connectController = new AbortController();
-      let createdTask: SessionMcpSharedTask<void>;
       const connectPromise = connectWithTimeout(
         session.serverName,
         session.client,
@@ -591,11 +590,11 @@ export function createSessionMcpRuntime(params: {
           session.connected = true;
         })
         .finally(() => {
-          if (session.connectTask === createdTask) {
+          if (session.connectTask?.promise === connectPromise) {
             session.connectTask = undefined;
           }
         });
-      createdTask = {
+      const createdTask: SessionMcpSharedTask<void> = {
         controller: connectController,
         promise: connectPromise,
         activeWaiters: 0,
