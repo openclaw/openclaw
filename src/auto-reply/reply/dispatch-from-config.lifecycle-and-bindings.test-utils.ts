@@ -1762,6 +1762,100 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("aborts plugin-owned binding delivery during route await via abort signal", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true, reply: { text: "should not send" } },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-abort-mid-route",
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/workspace/openclaw-app-server",
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/workspace/openclaw",
+        },
+      },
+    } satisfies SessionBindingRecord);
+    const abortController = new AbortController(); // NOT pre-aborted
+
+    // routeReply will be called inside deliverBindingPayload->routeReplyToOriginating
+    // if shouldRouteToOriginating is true (different originating vs surface channel).
+    // We abort synchronously inside the mock so the abort fires DURING the await,
+    // verifying the post-check prevents fallback delivery.
+    const originalRouteReply = mocks.routeReply.getMockImplementation();
+    mocks.routeReply.mockImplementation(async (_params: unknown) => {
+      abortController.abort();
+      return null as unknown as { ok: true; messageId: string };
+    });
+
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    // Use Provider/Surface different from OriginatingChannel so
+    // shouldRouteToOriginating is true (currentSurface != originatingChannel).
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:1481858418548412579",
+      To: "telegram:channel:1481858418548412579",
+      AccountId: "default",
+      SenderId: "user-9",
+      SenderUsername: "ada",
+      MessageThreadId: 77,
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "who are you",
+      RawBody: "who are you",
+      Body: "who are you",
+      MessageSid: "msg-claim-plugin-abort-mid-route",
+      SessionKey: "agent:main:telegram:channel:1481858418548412579",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver,
+    });
+
+    // The post-check after routeReply returns null should see the aborted
+    // signal and return false instead of falling through to sendFinalReply.
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalled();
+
+    // Restore default routeReply mock to avoid cross-test pollution
+    if (originalRouteReply) {
+      mocks.routeReply.mockImplementation(originalRouteReply);
+    } else {
+      mocks.routeReply.mockRestore();
+    }
+  });
+
   it("lets authorized gateway-style plugin commands escape plugin-owned bindings", async () => {
     setNoAbort();
     expect(
