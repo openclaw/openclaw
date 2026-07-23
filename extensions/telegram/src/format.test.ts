@@ -68,6 +68,25 @@ describe("markdownToTelegramHtml", () => {
     }
   });
 
+  it("keeps '&' raw in bare auto-link hrefs so multi-param URLs stay navigable (#102162)", () => {
+    // Telegram's Bot API HTML parser does not decode "&amp;" inside <a href>, so
+    // a bare auto-link's query "&" must stay raw in the href or every parameter
+    // after the first "&" is dropped at navigation time.
+    const bare = markdownToTelegramHtml("see https://example.com/p?post=100&action=edit now");
+    expect(bare).toContain('<a href="https://example.com/p?post=100&action=edit">');
+
+    // Labeled markdown links are unchanged: their visible text is the label (no
+    // URL "&"), and #102162 reports they already navigate correctly.
+    const labeled = markdownToTelegramHtml(
+      "see [edit](https://example.com/p?post=100&action=edit)",
+    );
+    expect(labeled).toBe('see <a href="https://example.com/p?post=100&amp;action=edit">edit</a>');
+
+    // Rich HTML mode must keep the bare auto-link href raw too.
+    const rich = markdownToTelegramRichHtml("see https://example.com/p?post=100&action=edit now");
+    expect(rich).toContain('<a href="https://example.com/p?post=100&action=edit">');
+  });
+
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
     const input = [
       "✉️ <b>Morning Email Rollup</b>",

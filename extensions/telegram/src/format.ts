@@ -34,6 +34,19 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+/**
+ * Escape a link href for a double-quoted Telegram HTML attribute without
+ * encoding "&". Telegram's Bot API HTML parser does not decode "&amp;" inside
+ * <a href> attributes, so a bare URL such as "?post=100&action=edit" must keep
+ * its "&" separator raw — otherwise Telegram's "Open link" prompt navigates to
+ * "...&amp;action=edit" and silently drops every parameter after the first "&".
+ * Only characters that could break out of the double-quoted attribute are
+ * escaped; a raw "&" is safe inline and keeps the URL navigable.
+ */
+function escapeTelegramLinkHref(href: string): string {
+  return href.replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function isTelegramRichLinkHref(href: string): boolean {
   return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
 }
@@ -71,7 +84,13 @@ function buildTelegramLink(
   if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
     return null;
   }
-  const safeHref = escapeHtmlAttr(href);
+  // Telegram does not decode "&amp;" inside <a href>, so a bare auto-link's
+  // query "&" must stay raw or every parameter after the first "&" is dropped at
+  // navigation time. Scope this to bare auto-links (label === href): labeled
+  // markdown links ([text](url)) keep the original escaped href, since #102162
+  // reports they already navigate correctly and their visible text has no URL "&".
+  const isBareAutoLink = label === href;
+  const safeHref = isBareAutoLink ? escapeTelegramLinkHref(href) : escapeHtmlAttr(href);
   return {
     start: link.start,
     end: link.end,
