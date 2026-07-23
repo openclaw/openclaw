@@ -287,6 +287,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -299,6 +300,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { ElevatedLevel } from "../thinking.js";
 
@@ -414,11 +416,43 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   };
 }
 
-function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
+const telegramModelBrowseTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "telegram",
+    label: "Telegram",
+    docsPath: "/channels/telegram",
+    capabilities: {
+      chatTypes: ["direct", "group", "channel", "thread"],
+      reactions: true,
+      threads: true,
+      media: true,
+      polls: true,
+      nativeCommands: true,
+      blockStreaming: true,
+    },
+  }),
+  commands: {
+    buildModelBrowseChannelData: () => ({
+      telegram: {
+        buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
+      },
+    }),
+  },
+};
+
+function setDirectiveTestProviders(
+  providers: ProviderPlugin[],
+  channels: ChannelPlugin[] = [],
+): void {
   const registry = createEmptyPluginRegistry();
   registry.providers = providers.map((provider) => ({
     pluginId: "test",
     provider,
+    source: "test",
+  }));
+  registry.channels = channels.map((plugin) => ({
+    pluginId: plugin.id,
+    plugin,
     source: "test",
   }));
   setActivePluginRegistry(registry);
@@ -649,6 +683,21 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Current:");
     expect(reply?.text).toContain("Browse: /models");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("preserves Telegram rich model browse channel data for /model summary", async () => {
+    setDirectiveTestProviders([], [telegramModelBrowseTestPlugin]);
+
+    const reply = await resolveModelInfoReply({
+      surface: "telegram",
+    });
+
+    expect(reply?.text).toContain("Tap below to browse models");
+    expect(reply?.channelData).toEqual({
+      telegram: {
+        buttons: [[{ text: "Browse providers", callback_data: "mdl_prov" }]],
+      },
+    });
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {
