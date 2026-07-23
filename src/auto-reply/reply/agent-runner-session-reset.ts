@@ -2,14 +2,13 @@ import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
-import {
-  appendSessionResetBoundary,
-  rollbackSessionResetBoundary,
-} from "../../agents/sessions/reset-boundary.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -110,18 +109,13 @@ export async function resetReplyRunSession(params: {
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile =
-    prevEntry.sessionFile ??
+    (parseSqliteSessionFileMarker(prevEntry.sessionFile) ? prevEntry.sessionFile : undefined) ??
     formatSqliteSessionFileMarker({
       agentId,
       sessionId: nextSessionId,
       storePath: params.storePath,
     });
   nextEntry.sessionFile = nextSessionFile;
-  const resetBoundary = appendSessionResetBoundary({
-    reason: "reset",
-    sessionFile: nextSessionFile,
-    sessionKey: params.sessionKey,
-  });
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
     await deps.persistSessionResetLifecycle({
@@ -133,9 +127,6 @@ export async function resetReplyRunSession(params: {
       storePath: params.storePath,
     });
   } catch (err) {
-    if (resetBoundary) {
-      rollbackSessionResetBoundary(resetBoundary);
-    }
     params.activeSessionStore[params.sessionKey] = prevEntry;
     deps.error(
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
@@ -143,7 +134,7 @@ export async function resetReplyRunSession(params: {
     throw err;
   }
   clearBootstrapSnapshotOnSessionBoundary({
-    boundaryAppended: resetBoundary !== undefined,
+    boundaryAppended: true,
     sessionKey: params.sessionKey,
   });
   params.followupRun.run.sessionId = nextSessionId;

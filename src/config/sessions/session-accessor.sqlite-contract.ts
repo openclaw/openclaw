@@ -260,6 +260,7 @@ export type ResetSessionEntryLifecycleParams = {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 };

@@ -10,11 +10,6 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
-import {
-  appendSessionResetBoundary,
-  rollbackSessionResetBoundary,
-  type AppendedSessionResetBoundary,
-} from "../../agents/sessions/reset-boundary.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -42,10 +37,6 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
@@ -1064,26 +1055,8 @@ async function initSessionStateAttemptLocked(
     previousSessionEndReason === "daily"
       ? previousSessionEndReason
       : "reset";
-  const resetSessionFile = previousSessionEntry?.sessionId
-    ? ((parseSqliteSessionFileMarker(previousSessionEntry.sessionFile)
-        ? previousSessionEntry.sessionFile
-        : undefined) ??
-      formatSqliteSessionFileMarker({
-        agentId,
-        sessionId: previousSessionEntry.sessionId,
-        storePath,
-      }))
-    : undefined;
-  const resetBoundary: AppendedSessionResetBoundary | undefined = resetSessionFile
-    ? appendSessionResetBoundary({
-        insideLifecycleMutation: true,
-        reason: resetReason,
-        sessionFile: resetSessionFile,
-        sessionKey,
-      })
-    : undefined;
-  const resetBoundaryAppended = resetBoundary !== undefined;
-  const committedPromise = commitReplySessionInitialization({
+  const resetBoundaryAppended = previousSessionEntry !== undefined;
+  const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
     archivePreviousTranscript: false,
@@ -1117,6 +1090,7 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
+    ...(previousSessionEntry ? { resetBoundaryReason: resetReason } : {}),
     beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;
@@ -1133,19 +1107,7 @@ async function initSessionStateAttemptLocked(
     snapshotEntry: initializationSnapshot.currentEntry,
     storePath,
   });
-  let committed: Awaited<ReturnType<typeof commitReplySessionInitialization>>;
-  try {
-    committed = await committedPromise;
-  } catch (error) {
-    if (resetBoundary) {
-      rollbackSessionResetBoundary(resetBoundary);
-    }
-    throw error;
-  }
   if (!committed.ok) {
-    if (resetBoundary) {
-      rollbackSessionResetBoundary(resetBoundary);
-    }
     if (!staleSnapshotRetried) {
       return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
     }

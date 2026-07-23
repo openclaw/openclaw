@@ -2,7 +2,6 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import { patchSessionEntry } from "./session-accessor.entry.js";
 import {
   appendSqliteTranscriptEvent,
-  appendSqliteTranscriptLifecycleEventSync,
   appendSqliteTranscriptEventSync,
   appendSqliteTranscriptMessage,
   appendSqliteTranscriptMessageSync,
@@ -71,14 +70,6 @@ export function appendTranscriptEventSync(
   event: TranscriptEvent,
 ): boolean {
   return appendSqliteTranscriptEventSync(scope, event);
-}
-
-/** Internal lifecycle-owner append that relies on the caller's authoritative row guard. */
-export function appendTranscriptLifecycleEventSync(
-  scope: SessionTranscriptAccessScope,
-  event: TranscriptEvent,
-): boolean {
-  return appendSqliteTranscriptLifecycleEventSync(scope, event);
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */

@@ -9,19 +9,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 
 const resetBoundaryMocks = vi.hoisted(() => ({
-  append: vi.fn(() => ({
-    boundaryEntryId: "reset-boundary",
-    keptEntryIds: [],
-    previousLeafId: "previous-leaf",
-    sessionFile: "sqlite:main:run-session-id:/tmp/sessions.json",
-  })),
-  rollback: vi.fn(),
   clearBootstrap: vi.fn(),
-}));
-
-vi.mock("../../agents/sessions/reset-boundary.js", () => ({
-  appendSessionResetBoundary: resetBoundaryMocks.append,
-  rollbackSessionResetBoundary: resetBoundaryMocks.rollback,
 }));
 
 vi.mock("../../agents/bootstrap-cache.js", () => ({
@@ -65,6 +53,7 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
   return vi.fn(
     async (params: {
       fallbackEntry: SessionEntry;
+      resetBoundaryReason?: "cron-stale";
       sessionKey: string;
       storePath: string;
       update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -76,8 +65,6 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
 
 describe("createPersistCronSessionEntry", () => {
   it("commits a pending reset boundary with the guarded session row", async () => {
-    resetBoundaryMocks.append.mockClear();
-    resetBoundaryMocks.rollback.mockClear();
     resetBoundaryMocks.clearBootstrap.mockClear();
     const cronSession = {
       ...makeCronSession(),
@@ -87,16 +74,18 @@ describe("createPersistCronSessionEntry", () => {
       },
     } as MutableCronSession;
     const store: Record<string, SessionEntry> = {};
+    const persistSessionEntry = makeGuardedPersistSessionEntry(store);
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
-      persistSessionEntry: makeGuardedPersistSessionEntry(store),
+      persistSessionEntry,
     });
 
     await persist();
 
-    expect(resetBoundaryMocks.append).toHaveBeenCalledOnce();
-    expect(resetBoundaryMocks.rollback).not.toHaveBeenCalled();
+    expect(persistSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ resetBoundaryReason: "cron-stale" }),
+    );
     expect(resetBoundaryMocks.clearBootstrap).toHaveBeenCalledWith({
       boundaryAppended: true,
       sessionKey: "agent:main:cron:job",
@@ -104,9 +93,7 @@ describe("createPersistCronSessionEntry", () => {
     expect(cronSession.resetBoundaryPending).toBeUndefined();
   });
 
-  it("rolls back a pending reset boundary when the guarded row commit fails", async () => {
-    resetBoundaryMocks.append.mockClear();
-    resetBoundaryMocks.rollback.mockClear();
+  it("keeps a pending reset boundary when the guarded row commit fails", async () => {
     const cronSession = {
       ...makeCronSession(),
       resetBoundaryPending: {
@@ -124,7 +111,6 @@ describe("createPersistCronSessionEntry", () => {
 
     await expect(persist()).rejects.toThrow("write failed");
 
-    expect(resetBoundaryMocks.rollback).toHaveBeenCalledOnce();
     expect(cronSession.resetBoundaryPending).toBeDefined();
   });
 

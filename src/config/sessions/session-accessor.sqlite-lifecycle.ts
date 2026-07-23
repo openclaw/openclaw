@@ -42,6 +42,7 @@ import {
   planSqliteSessionStateAfterEntryRemoval,
   readReferencedSqliteSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
+import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
   resolveSqliteReadScope,
@@ -50,10 +51,12 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
+import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -157,6 +160,13 @@ export async function resetSqliteSessionEntryLifecycle(
         currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
         primaryKey: params.target.canonicalKey,
       });
+      const resetBoundaryEvent =
+        params.resetBoundaryReason && current?.entry.sessionId
+          ? buildSessionResetBoundaryEvent({
+              events: loadSqliteTranscriptEventsFromDatabase(database, current.entry.sessionId),
+              reason: params.resetBoundaryReason,
+            })
+          : undefined;
       const mutation: ResetSessionEntryLifecycleMutation = {
         nextEntry: cloneSessionEntry(nextEntry),
         ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
@@ -165,6 +175,20 @@ export async function resetSqliteSessionEntryLifecycle(
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
         assertSqliteLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
+        if (resetBoundaryEvent && current?.entry.sessionId) {
+          const appended = appendTranscriptEventInTransaction(
+            transactionDb,
+            {
+              ...resolved,
+              sessionId: current.entry.sessionId,
+              sessionKey: current.key,
+            },
+            resetBoundaryEvent,
+          );
+          if (!appended) {
+            throw new Error(`Failed to append reset boundary for ${current.key}`);
+          }
+        }
         deleteSqliteLifecycleTargetRows(transactionDb, params.target);
         writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry);
         // Reset only advances the live entry and route. Historical rows stay searchable;

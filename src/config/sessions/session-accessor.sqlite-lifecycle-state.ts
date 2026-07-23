@@ -25,8 +25,10 @@ import type {
   SqliteSessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
+import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
 import type { SessionEntry } from "./types.js";
@@ -356,7 +358,19 @@ export async function projectSqliteSessionEntryLifecycleMutation(
     const cloned = cloneSessionEntry(entry);
     store[sessionKey] = cloned;
     changedSessionKeys.add(sessionKey);
-    upsertedEntries.push({ expectedEntry, sessionKey, entry: cloned });
+    const resetBoundaryEvent =
+      upsert.resetBoundaryReason && expectedEntry?.sessionId
+        ? buildSessionResetBoundaryEvent({
+            events: loadSqliteTranscriptEventsFromDatabase(database, expectedEntry.sessionId),
+            reason: upsert.resetBoundaryReason,
+          })
+        : undefined;
+    upsertedEntries.push({
+      expectedEntry,
+      sessionKey,
+      entry: cloned,
+      ...(resetBoundaryEvent ? { resetBoundaryEvent } : {}),
+    });
   }
   const referencedSessionIds = collectProjectedReferencedSqliteSessionIds({
     database,

@@ -3,10 +3,6 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
-import {
-  appendSessionResetBoundary,
-  rollbackSessionResetBoundary,
-} from "../../agents/sessions/reset-boundary.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -36,6 +32,7 @@ export type CronLiveSelection = LiveSessionModelSelection;
  */
 type PersistSessionEntry = (params: {
   fallbackEntry: SessionEntry;
+  resetBoundaryReason?: "cron-stale";
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -104,12 +101,7 @@ export function createPersistCronSessionEntry(params: {
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
-    const resetBoundary = params.cronSession.resetBoundaryPending
-      ? appendSessionResetBoundary({
-          ...params.cronSession.resetBoundaryPending,
-          sessionKey: params.agentSessionKey,
-        })
-      : undefined;
+    const resetBoundaryPending = params.cronSession.resetBoundaryPending !== undefined;
     const liveEntry = params.cronSession.sessionEntry;
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
@@ -123,6 +115,7 @@ export function createPersistCronSessionEntry(params: {
       storePath: params.cronSession.storePath,
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
+      ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
       update: (currentEntry) => {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({
@@ -174,16 +167,9 @@ export function createPersistCronSessionEntry(params: {
         return committedEntry;
       },
     });
-    try {
-      await persistPromise;
-    } catch (error) {
-      if (resetBoundary) {
-        rollbackSessionResetBoundary(resetBoundary);
-      }
-      throw error;
-    }
+    await persistPromise;
     clearBootstrapSnapshotOnSessionBoundary({
-      boundaryAppended: resetBoundary !== undefined,
+      boundaryAppended: resetBoundaryPending,
       sessionKey: params.agentSessionKey,
     });
     params.cronSession.resetBoundaryPending = undefined;

@@ -22,11 +22,6 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
-import {
-  appendSessionResetBoundary,
-  rollbackSessionResetBoundary,
-  type AppendedSessionResetBoundary,
-} from "../agents/sessions/reset-boundary.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -1202,19 +1197,11 @@ export async function performGatewaySessionReset(params: {
             storePath,
           }))
         : undefined;
-      const resetBoundary: AppendedSessionResetBoundary | undefined = resetSessionFile
-        ? appendSessionResetBoundary({
-            insideLifecycleMutation: true,
-            reason: params.reason,
-            sessionFile: resetSessionFile,
-            sessionKey: legacyKey ?? canonicalKey ?? params.key,
-          })
-        : undefined;
-      const resetBoundaryAppended = resetBoundary !== undefined;
-      let lifecycleCommitted = false;
+      const resetBoundaryAppended = boundaryEntry !== undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
+        resetBoundaryReason: boundaryEntry ? params.reason : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
@@ -1228,6 +1215,9 @@ export async function performGatewaySessionReset(params: {
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
           createdNewEntry = currentEntry === undefined;
+          if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
+            throw new Error(`Session ${params.key} changed before reset boundary commit.`);
+          }
           if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
             // A newer owner already replaced or removed the session while cleanup
             // targeted the old id. Preserve that newer state instead of resetting it.
@@ -1249,9 +1239,6 @@ export async function performGatewaySessionReset(params: {
               sessionId: nextSessionId,
               storePath,
             });
-          if (currentEntry && !resetBoundary) {
-            throw new Error("reset boundary was not prepared for the current session");
-          }
           const creationStamp = currentEntry
             ? {
                 createdVia: currentEntry.createdVia,
@@ -1367,7 +1354,6 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
-          lifecycleCommitted = true;
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,
             sessionKey: target.canonicalKey ?? params.key,
@@ -1429,14 +1415,7 @@ export async function performGatewaySessionReset(params: {
         },
       });
       let lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>>;
-      try {
-        lifecycle = await lifecyclePromise;
-      } catch (error) {
-        if (resetBoundary && !lifecycleCommitted) {
-          rollbackSessionResetBoundary(resetBoundary);
-        }
-        throw error;
-      }
+      lifecycle = await lifecyclePromise;
       handleSessionStateSessionReset(target.canonicalKey ?? params.key);
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);

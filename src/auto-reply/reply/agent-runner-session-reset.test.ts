@@ -368,7 +368,7 @@ describe("resetReplyRunSession", () => {
     ).toMatchObject({ reason: "reset", firstKeptEntryId: expect.any(String) });
   });
 
-  it("rejects reset when the previous transcript cannot accept a boundary", async () => {
+  it("migrates an unreadable legacy transcript target to the SQLite reset boundary", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const unreadableReplaySource = path.join(rootDir, "previous-transcript-dir");
@@ -382,27 +382,26 @@ describe("resetReplyRunSession", () => {
     await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     let activeSessionEntry: SessionEntry | undefined;
-    await expect(
-      resetReplyRunSession({
-        options: {
-          failureLabel: "role ordering conflict",
-          buildLogMessage: (next) => `reset ${next}`,
-        },
-        sessionKey,
-        queueKey: sessionKey,
-        activeSessionEntry: sessionEntry,
-        activeSessionStore: sessionStore,
-        storePath,
-        followupRun: createTestFollowupRun(),
-        onActiveSessionEntry: (entry) => {
-          activeSessionEntry = entry;
-        },
-        onNewSession: () => {},
-      }),
-    ).rejects.toThrow();
+    await resetReplyRunSession({
+      options: {
+        failureLabel: "role ordering conflict",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey,
+      queueKey: sessionKey,
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: (entry) => {
+        activeSessionEntry = entry;
+      },
+      onNewSession: () => {},
+    });
 
-    expect(activeSessionEntry).toBeUndefined();
-    expect(sessionStore[sessionKey]).toBe(sessionEntry);
+    expect(activeSessionEntry?.sessionFile).toBe(
+      formatSqliteSessionFileMarker({ agentId: "main", sessionId: "old-session", storePath }),
+    );
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -410,6 +409,6 @@ describe("resetReplyRunSession", () => {
         sessionKey,
         storePath,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: "reset" })]));
   });
 });

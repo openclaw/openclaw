@@ -48,7 +48,6 @@ export {
 export {
   appendSqliteExpectedSessionTranscriptTurn,
   appendSqliteTranscriptEvent,
-  appendSqliteTranscriptLifecycleEventSync,
   appendSqliteTranscriptEventSync,
   appendSqliteTranscriptMessage,
   appendSqliteTranscriptMessageSync,

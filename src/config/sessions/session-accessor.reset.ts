@@ -8,7 +8,6 @@ import {
 import {
   listSessionEntries,
   listSessionEntriesReadOnly,
-  replaceSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
@@ -47,10 +46,19 @@ export async function persistSessionResetLifecycle(params: {
   sessionKey: string;
   storePath: string;
 }): Promise<{ replayedMessages: number }> {
-  await replaceSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    params.nextEntry,
-  );
+  await applySessionEntryLifecycleMutation({
+    agentId: params.agentId,
+    activeSessionKey: params.sessionKey,
+    storePath: params.storePath,
+    upserts: [
+      {
+        sessionKey: params.sessionKey,
+        entry: params.nextEntry,
+        resetBoundaryReason: "reset",
+      },
+    ],
+    skipMaintenance: true,
+  });
   return { replayedMessages: 0 };
 }
 
@@ -101,6 +109,7 @@ export async function commitReplySessionInitialization(params: {
   prepareSessionEntry?: (
     context: ReplySessionInitializationCommitContext,
   ) => Promise<SessionEntry> | SessionEntry;
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -157,6 +166,7 @@ export async function commitReplySessionInitialization(params: {
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
+      ...(params.resetBoundaryReason ? { resetBoundaryReason: params.resetBoundaryReason } : {}),
       buildEntry: async ({ store: currentStore }) => {
         const commitResolved = resolveSessionEntryFromStore({
           store: currentStore,
