@@ -11,6 +11,10 @@ type SessionStorePathScope = {
 };
 
 export function resolveSessionStorePathForScope(scope: SessionStorePathScope): string {
+  // The incognito-* key segment is reserved: key shape wins over any supplied
+  // durable store path so stale keys can never fall through to disk. Legacy
+  // durable rows that collide are doctor-owned (`doctor-session-incognito-key-repair`);
+  // no runtime fallback by design.
   if (isIncognitoSessionKey(scope.sessionKey)) {
     return resolveIncognitoOpenClawAgentSqlitePath({
       agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
