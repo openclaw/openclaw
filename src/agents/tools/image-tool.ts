@@ -1057,7 +1057,7 @@ export function createImageTool(options?: {
           }
           // Resolve relative paths against workspaceDir so agents can reference
           // workspace-relative paths (e.g. "inbox/photo.png") without needing to
-          // know the absolute workspace location — matching the read tool behaviour.
+          // know the absolute workspace location — matching the read tool behavior.
           if (
             !isDataUrl &&
             !isFileUrl &&

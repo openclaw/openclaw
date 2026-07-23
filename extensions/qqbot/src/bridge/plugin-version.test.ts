@@ -2,7 +2,7 @@
  * Tests for `resolveQQBotPluginVersion`.
  *
  * These exercise the directory-walk lookup against controlled fixture
- * trees rather than the repo's real `package.json`, so the behaviour
+ * trees rather than the repo's real `package.json`, so the behavior
  * is deterministic regardless of where the test runs.
  */
 

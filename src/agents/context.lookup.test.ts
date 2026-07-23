@@ -600,7 +600,7 @@ describe("lookupContextTokens", () => {
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
     // When both "bedrock" and "amazon-bedrock" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
-    // not the first normalized hit — mirroring embedded-agent-runner/model.ts behaviour.
+    // not the first normalized hit — mirroring embedded-agent-runner/model.ts behavior.
     mockDiscoveryDeps([]);
 
     const cfg = {

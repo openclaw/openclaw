@@ -183,7 +183,7 @@ export interface GroupMessageEvent {
 import type { EngineAdapters } from "../adapter/index.js";
 
 /**
- * Group-chat behaviour options.
+ * Group-chat behavior options.
  *
  * Grouped under a dedicated sub-object on {@link CoreGatewayContext} so
  * future additions (admin lookup, proactive push, per-group toggles)
@@ -231,7 +231,7 @@ export interface CoreGatewayContext {
   /**
    * Invoked when a RESUMED event is received after reconnect.
    * Falls back to `onReady` when not provided so existing callers
-   * keep their current behaviour.
+   * keep their current behavior.
    */
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;

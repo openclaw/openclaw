@@ -525,7 +525,7 @@ function applyFalImageGeometry(params: {
     if (params.resolution && params.schema.referenceImages === "image_urls") {
       // Schemas may opt in to resolution validation by declaring `resolutions`.
       // - `resolutions: undefined` (default, e.g. Nano Banana 2): forward the
-      //   uppercase value unchanged, matching legacy behaviour.
+      //   uppercase value unchanged, matching legacy behavior.
       // - `resolutions: ["1K", "2K"]` with `resolutionCase: "lower"` (Grok
       //   Imagine): validate against the allowlist and lowercase before
       //   sending.

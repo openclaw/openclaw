@@ -2086,7 +2086,7 @@ describe("active-memory plugin", () => {
   });
 
   it("skips direct-chat sessions whose conversation id is not in allowedChatIds", async () => {
-    // Documents the cross-type narrowing behaviour: allowedChatIds, when
+    // Documents the cross-type narrowing behavior: allowedChatIds, when
     // non-empty, filters every allowed chat type at once, including direct
     // chats. An operator who wants 'all directs + only specific groups' must
     // either drop direct from allowedChatTypes or include the direct session
@@ -2116,7 +2116,7 @@ describe("active-memory plugin", () => {
   it("runs for direct-chat sessions whose conversation id is explicitly in allowedChatIds", async () => {
     // Companion to the previous test: the 'all directs + only specific groups'
     // pattern is still available by listing the direct session ids themselves
-    // in allowedChatIds. This makes the cross-type narrowing behaviour usable
+    // in allowedChatIds. This makes the cross-type narrowing behavior usable
     // rather than a hard wall.
     api.pluginConfig = {
       agents: ["main"],
