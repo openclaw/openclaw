@@ -24,7 +24,7 @@ import type {
   ChannelMessageToolSchemaContribution,
 } from "./types.public.js";
 
-export type PreparedMessageToolCatalogEntry = Readonly<{
+type PreparedMessageToolCatalogEntry = Readonly<{
   id: string;
   actions?: ChannelMessageActionAdapter;
   reconcilesUnknownSend: boolean;

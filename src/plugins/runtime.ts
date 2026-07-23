@@ -206,10 +206,12 @@ export function setActivePluginRegistry(
   state.activeRegistry = registry;
   markPluginRegistryActive(registry);
   state.activeVersion += 1;
-  settlePreparedMessageToolCatalog(registry, state.activeVersion);
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
-  settlePreparedMessageToolCatalog();
+  settlePreparedMessageToolCatalog(
+    registry,
+    state.channel.pinned ? state.activeVersion : state.channel.version,
+  );
   syncTrackedSurface(state.sessionExtension, registry, true);
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
@@ -237,10 +239,9 @@ export function requireActivePluginRegistry(): PluginRegistry {
     state.activeRegistry = createEmptyPluginRegistry();
     markPluginRegistryActive(state.activeRegistry);
     state.activeVersion += 1;
-    settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
-    settlePreparedMessageToolCatalog();
+    settlePreparedMessageToolCatalog(state.activeRegistry, state.channel.version);
     syncTrackedSurface(state.sessionExtension, state.activeRegistry);
   }
   return asPluginRegistry(state.activeRegistry)!;

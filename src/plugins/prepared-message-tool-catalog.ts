@@ -19,12 +19,12 @@ export const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG: PreparedMessageToolCatalog = O
 
 function listPreparedChannels(registry: PluginRegistry) {
   const byId = new Map<string, PluginRegistry["channels"][number]["plugin"]>();
-  for (const registration of registry.channels) {
+  (registry.channels ?? []).forEach((registration) => {
     const id = normalizeOptionalString(registration.plugin.id);
     if (id && !byId.has(id)) {
       byId.set(id, registration.plugin);
     }
-  }
+  });
   return [...byId.values()].toSorted((left, right) => {
     const leftId = normalizeOptionalString(left.id) ?? "";
     const rightId = normalizeOptionalString(right.id) ?? "";
