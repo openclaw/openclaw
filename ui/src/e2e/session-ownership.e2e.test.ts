@@ -60,22 +60,18 @@ function sessionsList(creators: [string, string]) {
 
 function draftSessionsList() {
   const result = sessionsList(["profile-ada", "profile-bob"]);
-  return {
-    ...result,
-    sessions: result.sessions.map((session) => ({
-      ...session,
-      visibility: "draft",
-      sharingRole: "admin",
-    })),
-  };
+  for (const session of result.sessions) {
+    Object.assign(session, { visibility: "draft", sharingRole: "admin" });
+  }
+  return result;
 }
 
-async function captureUiProof(page: Page, fileName: string) {
+async function captureUiProof(targetPage: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
   await mkdir(uiProofArtifactDir, { recursive: true });
-  await page.screenshot({
+  await targetPage.screenshot({
     animations: "disabled",
     fullPage: true,
     path: path.join(uiProofArtifactDir, fileName),
