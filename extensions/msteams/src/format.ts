@@ -10,7 +10,7 @@ import type { MarkdownTableMode } from "../runtime-api.js";
 
 const RAW_MARKDOWN_TABLE_RE =
   /^(?:[ \t]*>[ \t]?)*[^\n]*\|[^\n]*\r?\n(?:[ \t]*>[ \t]?)*[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*(?:\r?\n(?![ \t]*(?:>[ \t]*)*\r?$)[^\n]*)*/gmu;
-const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}\[\]()#+\-.!|>~]/gu;
+const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}[\]()#+\-.!|>~]/gu;
 const MARKDOWN_ENTITY_RE = /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/giu;
 const TOKEN_END = "\u{E002}";
 

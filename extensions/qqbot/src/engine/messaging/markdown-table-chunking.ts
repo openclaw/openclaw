@@ -362,7 +362,8 @@ function pushBaseChunks(
       continue;
     }
     const next = baseChunks[index + 1] ?? "";
-    const first = [...next][0] ?? "";
+    const firstCodePoint = next.codePointAt(0);
+    const first = firstCodePoint === undefined ? "" : String.fromCodePoint(firstCodePoint);
     if (first && utf8ByteLength(chunk + first) <= byteLimit) {
       baseChunks[index] = chunk + first;
       baseChunks[index + 1] = next.slice(first.length);
@@ -390,7 +391,7 @@ function splitByUtf8ByteLimit(text: string, byteLimit: number): string[] {
   const chunks: string[] = [];
   let current = "";
   let currentBytes = 0;
-  const chars = [...text];
+  const chars = Array.from(text);
   for (let index = 0; index < chars.length; index += 1) {
     const char = chars[index] ?? "";
     const escapedUnit = char === "\\" && chars[index + 1] ? `${char}${chars[index + 1]}` : "";

@@ -10,8 +10,8 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 
 const QQBOT_MARKDOWN_SAFE_CHUNK_BYTE_LIMIT = 3600;
-const QQBOT_MARKDOWN_ESCAPE_RE = /([\\`*_{}\[\]()#+\-.!|>~])/gu;
-const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}\[\]()#+\-.!|>~]/gu;
+const QQBOT_MARKDOWN_ESCAPE_RE = /([\\`*_{}[\]()#+\-.!|>~])/gu;
+const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}[\]()#+\-.!|>~]/gu;
 const MARKDOWN_ENTITY_RE = /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/giu;
 const PROTECTED_TOKEN_RANGES = [
   [0xe000, 0xf8ff],
@@ -67,7 +67,12 @@ const QQBOT_MARKERS = {
 
 function createProtectedTokenStore(source: string) {
   const normalized = markdownToIR(source, { autolink: false, linkify: false }).text;
-  const occupied = new Set([...source, ...normalized]);
+  const occupied = new Set<string>();
+  for (const text of [source, normalized]) {
+    for (const character of text) {
+      occupied.add(character);
+    }
+  }
   const values = new Map<string, string>();
   const reusable = new Map<string, string>();
   let rangeIndex = 0;
