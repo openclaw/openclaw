@@ -898,7 +898,6 @@ src/infra/net/fetch-guard.ssrf.test.ts
 src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
-src/infra/outbound/deliver.ts
 src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
 src/infra/outbound/message-action-runner.media.test.ts
