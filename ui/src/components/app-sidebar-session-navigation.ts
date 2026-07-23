@@ -236,6 +236,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
 
   protected readonly selectSession = (sessionKey: string) => {
     this.context?.gateway.setSessionKey(sessionKey);
+    // Sync the agent selection immediately so the sidebar chip label reflects
+    // the session's owning agent without waiting for chat-pane's async render
+    // cycle.  Fixes #112516.
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed?.agentId) {
+      this.context?.agentSelection.set(parsed.agentId);
+    }
     this.onNavigate?.("chat", {
       search: searchForSession(sessionKey),
     });
