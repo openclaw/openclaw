@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
@@ -428,6 +429,8 @@ describe("session suggestion handlers", () => {
 
   it("keeps an uncertain dispatch claimed until retry reconciliation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let now = 1_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
       await upsertSessionEntry(
         { agentId: "main", sessionKey },
         {
@@ -466,6 +469,21 @@ describe("session suggestion handlers", () => {
       );
       expect(alternate.responses[0]?.[0]).toBe(false);
       expect(alternate.responses[0]?.[2]?.message).toMatch(/already in progress/);
+
+      now += SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
+      const mismatchedRetry = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id, resolution: "queue" },
+        client("owner", "Owner"),
+      );
+      expect(mismatchedRetry.responses[0]?.[0]).toBe(false);
+      expect(mismatchedRetry.responses[0]?.[2]?.message).toMatch(/original send action/);
+      const reconciled = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id, resolution: "send" },
+        client("owner", "Owner"),
+      );
+      expect(reconciled.responses[0]?.[0]).toBe(true);
     });
   });
 

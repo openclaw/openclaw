@@ -19,6 +19,7 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
 
 export type StoredSessionSuggestionState = "pending" | "accepted" | "dismissed";
+export type StoredSessionSuggestionResolution = "send" | "queue" | "edit" | "dismiss";
 
 export type StoredSessionSuggestion = {
   id: string;
@@ -195,6 +196,7 @@ export function addSessionSuggestion(
         state: suggestion.state,
         dispatch_token: null,
         dispatch_started_at: null,
+        dispatch_resolution: null,
       }),
     );
   }, options);
@@ -226,6 +228,7 @@ export function listSessionSuggestions(
 
 export type SessionSuggestionDispatchClaim =
   | { kind: "busy" }
+  | { kind: "mismatch"; resolution: StoredSessionSuggestionResolution }
   | { kind: "claimed"; suggestion: StoredSessionSuggestion; token: string };
 
 export function claimSessionSuggestionDispatch(
@@ -233,6 +236,7 @@ export function claimSessionSuggestionDispatch(
   params: {
     id: string;
     expectedSessionId?: string;
+    resolution: StoredSessionSuggestionResolution;
     now?: number;
     claimTtlMs?: number;
   },
@@ -256,6 +260,7 @@ export function claimSessionSuggestionDispatch(
           "state",
           "dispatch_token",
           "dispatch_started_at",
+          "dispatch_resolution",
         ])
         .where("session_key", "=", sessionKey)
         .where("id", "=", params.id)
@@ -273,12 +278,22 @@ export function claimSessionSuggestionDispatch(
     ) {
       return { kind: "busy" };
     }
+    if (row.dispatch_resolution && row.dispatch_resolution !== params.resolution) {
+      return {
+        kind: "mismatch",
+        resolution: row.dispatch_resolution as StoredSessionSuggestionResolution,
+      };
+    }
     const token = randomUUID();
     executeSqliteQuerySync(
       database.db,
       db
         .updateTable("session_suggestions")
-        .set({ dispatch_token: token, dispatch_started_at: now })
+        .set({
+          dispatch_token: token,
+          dispatch_started_at: now,
+          dispatch_resolution: params.resolution,
+        })
         .where("session_key", "=", sessionKey)
         .where("id", "=", params.id)
         .where("state", "=", "pending"),
@@ -300,7 +315,7 @@ export function releaseSessionSuggestionDispatch(
       database.db,
       suggestionDb(database)
         .updateTable("session_suggestions")
-        .set({ dispatch_token: null, dispatch_started_at: null })
+        .set({ dispatch_token: null, dispatch_started_at: null, dispatch_resolution: null })
         .where("session_key", "=", sessionKey)
         .where("id", "=", params.id)
         .where("state", "=", "pending")
@@ -342,7 +357,12 @@ export function finalizeSessionSuggestionClaim(
       database.db,
       db
         .updateTable("session_suggestions")
-        .set({ state: params.state, dispatch_token: null, dispatch_started_at: null })
+        .set({
+          state: params.state,
+          dispatch_token: null,
+          dispatch_started_at: null,
+          dispatch_resolution: null,
+        })
         .where("session_key", "=", sessionKey)
         .where("id", "=", params.id)
         .where("state", "=", "pending")

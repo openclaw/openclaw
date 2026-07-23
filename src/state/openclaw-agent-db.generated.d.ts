@@ -196,6 +196,7 @@ export interface SessionSuggestions {
   author_id: string;
   author_label: string | null;
   created_at: number;
+  dispatch_resolution: string | null;
   dispatch_started_at: number | null;
   dispatch_token: string | null;
   id: string;

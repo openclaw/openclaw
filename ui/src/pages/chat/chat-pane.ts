@@ -827,6 +827,7 @@ class ChatPane extends OpenClawLightDomElement {
           this.sessionSuggestionRole = result.role;
           this.requestUpdate();
         }
+        void this.refreshSessionSuggestions();
         return;
       }
       this.sessionSuggestions = result.suggestions;

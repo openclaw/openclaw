@@ -456,6 +456,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const dispatching = resolution === "send" || resolution === "queue";
     const claim = claimSessionSuggestionDispatch(scope, {
       id: params.id,
+      resolution,
       expectedSessionId: target.entry.sessionId,
     });
     if (!claim) {
@@ -474,6 +475,17 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           retryable: true,
           retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
         }),
+      );
+      return;
+    }
+    if (claim.kind === "mismatch") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `suggestion dispatch recovery must retry the original ${claim.resolution} action`,
+        ),
       );
       return;
     }

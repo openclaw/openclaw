@@ -156,7 +156,7 @@ describe("session suggestion store", () => {
     });
   });
 
-  it("durably claims dispatch and permits stale-claim recovery", async () => {
+  it("durably claims dispatch and permits only same-action stale recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-suggestions-claim-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
@@ -170,6 +170,7 @@ describe("session suggestion store", () => {
 
       const first = claimSessionSuggestionDispatch(scope, {
         id: "claimed",
+        resolution: "send",
         expectedSessionId: "session-a",
         now: 1_000,
       });
@@ -177,6 +178,7 @@ describe("session suggestion store", () => {
       expect(
         claimSessionSuggestionDispatch(scope, {
           id: "claimed",
+          resolution: "send",
           expectedSessionId: "session-a",
           now: 1_001,
         }),
@@ -189,8 +191,17 @@ describe("session suggestion store", () => {
         }),
       ).toBeNull();
 
+      expect(
+        claimSessionSuggestionDispatch(scope, {
+          id: "claimed",
+          resolution: "queue",
+          expectedSessionId: "session-a",
+          now: 1_000 + SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+        }),
+      ).toEqual({ kind: "mismatch", resolution: "send" });
       const recovered = claimSessionSuggestionDispatch(scope, {
         id: "claimed",
+        resolution: "send",
         expectedSessionId: "session-a",
         now: 1_000 + SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
       });

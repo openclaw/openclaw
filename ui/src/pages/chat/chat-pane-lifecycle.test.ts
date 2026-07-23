@@ -86,10 +86,14 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(state.chatError).toContain("Remove attachments");
   });
 
-  it("does not let a stale list response erase a newer suggestion event", async () => {
-    const listed = createDeferred<SessionSuggestionsListResult>();
+  it("retries a list invalidated by an event without hiding existing suggestions", async () => {
+    const firstList = createDeferred<SessionSuggestionsListResult>();
+    const secondList = createDeferred<SessionSuggestionsListResult>();
     const client = {
-      request: vi.fn(() => listed.promise),
+      request: vi
+        .fn()
+        .mockReturnValueOnce(firstList.promise)
+        .mockReturnValueOnce(secondList.promise),
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
@@ -120,12 +124,22 @@ describe("chat pane session suggestion lifecycle", () => {
       createdAt: 1,
       state: "pending",
     };
+    const existingSuggestion: SessionSuggestion = {
+      ...eventSuggestion,
+      id: "existing",
+      text: "already queued",
+      createdAt: 0,
+    };
 
     const pending = pane.refreshSessionSuggestions();
     pane.handleSessionSuggestionEvent({ action: "added", suggestion: eventSuggestion });
-    listed.resolve({ suggestions: [], role: "viewer" });
+    firstList.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
     await pending;
-    expect(pane.sessionSuggestions).toEqual([eventSuggestion]);
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
+    secondList.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
+    await vi.waitFor(() =>
+      expect(pane.sessionSuggestions).toEqual([existingSuggestion, eventSuggestion]),
+    );
     expect(pane.sessionSuggestionRole).toBe("viewer");
   });
 
