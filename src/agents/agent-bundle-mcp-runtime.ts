@@ -717,9 +717,16 @@ export function createSessionMcpRuntime(params: {
               refreshController.signal.throwIfAborted();
 
               let session = sessions.get(serverName);
-              while (session && !session.retiring && !session.connected && !session.connectTask) {
+              while (
+                session &&
+                !session.retiring &&
+                !session.connected &&
+                (!session.connectTask || session.connectTask.controller.signal.aborted)
+              ) {
                 refreshController.signal.throwIfAborted();
-                // A closed SDK client cannot reconnect cleanly on the same transport.
+                // A closed or abandoned SDK client cannot reconnect cleanly on
+                // the same transport. Retire it before a new generation can
+                // adopt an already-aborted shared connection task.
                 await retireSessionIfCurrent(serverName, session);
                 refreshController.signal.throwIfAborted();
                 // Retirement yields while closing. Preserve any replacement that a
