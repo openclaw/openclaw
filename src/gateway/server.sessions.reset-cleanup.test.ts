@@ -19,6 +19,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -967,12 +968,41 @@ test("sessions.reset does not emit lifecycle events when key does not exist", as
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: { sessionId: string };
-  }>("sessions.reset", {
-    key: "agent:main:subagent:missing",
-  });
+    entry: {
+      sessionId: string;
+      createdVia?: string;
+      createdActor?: { type: string; id?: string };
+      createdAt?: number;
+    };
+  }>(
+    "sessions.reset",
+    {
+      key: "agent:main:subagent:missing",
+    },
+    {
+      client: {
+        authenticatedUserProfile: {
+          profileId: "profile-reset-creator",
+        },
+      } as never,
+    },
+  );
 
   expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject({
+    createdVia: "operator",
+    createdActor: { type: "human", id: "profile-reset-creator" },
+    createdAt: expect.any(Number),
+  });
+  expect(
+    listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20).events,
+  ).toContainEqual(
+    expect.objectContaining({
+      kind: "created",
+      actorType: "human",
+      actorId: "profile-reset-creator",
+    }),
+  );
   expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
   expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
 });

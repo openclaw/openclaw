@@ -543,6 +543,7 @@ export async function createGatewaySession(params: {
           : {}),
         reason: "new",
         commandSource: params.commandSource,
+        ...(params.creation ? { creation: params.creation } : {}),
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.worktree ? { worktree: params.worktree } : {}),
         ...(params.execNode ? { execNode: params.execNode } : {}),
