@@ -16,6 +16,7 @@ describe("create-as-draft availability", () => {
         identityCount: 2,
       }),
     ).toBe(false);
+    expect(canStartSessionAsDraft({ identityCount: 2 })).toBe(false);
   });
 
   it("stays dormant when the gateway has fewer than two identities", () => {

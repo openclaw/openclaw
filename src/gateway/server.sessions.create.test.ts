@@ -568,6 +568,29 @@ test("sessions.create persists draft visibility in the initial session entry", a
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility).toBe(
     "draft",
   );
+  const listed = await directSessionReq<{
+    sessions?: Array<{ key: string; visibility?: string }>;
+  }>("sessions.list", {});
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("draft");
+});
+
+test("sessions.create keeps omitted visibility on the prior shared default", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const created = await directSessionReq<{
+    key: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main" });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry.visibility).toBeUndefined();
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility,
+  ).toBeUndefined();
+  const listed = await directSessionReq<{
+    sessions?: Array<{ key: string; visibility?: string }>;
+  }>("sessions.list", {});
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("shared");
 });
 
 test("sessions.create rejects draft visibility when policy disables drafts", async () => {

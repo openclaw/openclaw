@@ -284,6 +284,7 @@ describeControlUiE2e("Control UI session ownership", () => {
       sessionKey: "agent:main:ada",
       visibility: "shared",
     });
+    expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
   });
 
   it("keeps create-as-draft dormant for one creator", async () => {
