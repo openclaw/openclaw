@@ -1053,6 +1053,19 @@ openclaw-chat-page {
   border-radius: var(--radius-md);
   object-fit: contain;
   transition: transform 150ms ease-out;
+  /* Reserve the full rendered space before the image loads so messages
+     below stay anchored.  The explicit 3:2 ratio matches the max-width /
+     max-height constraint (300 / 200) and gives the browser a default
+     size proportional to the final display area.  Using "auto" as the
+     first component lets the loaded image's natural dimensions override
+     the fallback once the bytes arrive, so portrait, square, and other
+     non-3:2 images recover their intrinsic aspect ratio.  Without "auto",
+     per the CSS Sizing spec, the explicit ratio remains the preferred
+     box ratio even for a replaced element with natural dimensions —
+     leaving non-3:2 images permanently inside a 3:2 outer box with
+     visible letterboxing from object-fit: contain. */
+  aspect-ratio: auto 3 / 2;
+  background: var(--bg-muted);
 }
 
 .chat-message-image-button:hover .chat-message-image {
