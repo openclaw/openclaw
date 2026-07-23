@@ -10,7 +10,6 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
-import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { authorizeIMessageResourceReference } from "./message-resource.js";
 import {
   resolveIMessageMessageId as resolveIMessageMessageIdImpl,
@@ -337,6 +336,7 @@ export const imessageActionsRuntime = {
     // asterisks. This mirrors the same extraction the rpc-send path does;
     // any caller that hits the bridge via `imsg send-rich` benefits without
     // needing to pre-format the text themselves.
+    const { extractMarkdownFormatRuns } = await import("./markdown-format.runtime.js");
     const formatted = extractMarkdownFormatRuns(params.text);
     const buildArgs = (filePath?: string): string[] => [
       "send-rich",
