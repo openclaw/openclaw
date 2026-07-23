@@ -97,6 +97,7 @@ import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
+  buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import {
   createShouldEmitToolOutput,
@@ -3044,6 +3045,26 @@ export async function runReplyAgent(params: {
     if (knownFailurePayload) {
       replyOperation.fail("run_failed", error);
       return returnWithQueuedFollowupDrain(knownFailurePayload);
+    }
+    if (blockReplyPipeline) {
+      try {
+        await blockReplyPipeline.flush({ force: true });
+      } catch (flushError) {
+        logVerbose(
+          `failed to flush streamed reply blocks before surfacing run failure: ${String(
+            flushError,
+          )}`,
+        );
+      }
+    }
+    if (!isHeartbeat && blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted()) {
+      replyOperation.fail("run_failed", error);
+      return returnWithQueuedFollowupDrain(
+        buildTerminalAgentRunFailureReplyPayload({
+          sessionCtx,
+          cfg,
+        }),
+      );
     }
     replyOperation.fail("run_failed", error);
     // Keep the followup queue moving even when an unexpected exception escapes

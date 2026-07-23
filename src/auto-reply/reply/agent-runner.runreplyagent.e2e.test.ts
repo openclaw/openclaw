@@ -1070,6 +1070,41 @@ describe("runReplyAgent heartbeat followup guard", () => {
       persistSpy.mockRestore();
     }
   });
+
+  it("returns a failure payload instead of rethrowing after block streaming reached the user", async () => {
+    const accounting = await import("./session-run-accounting.js");
+    const persistSpy = vi
+      .spyOn(accounting, "persistRunSessionUsage")
+      .mockRejectedValueOnce(new Error("persist exploded"));
+    const onBlockReply = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "partial answer" });
+      return {
+        payloads: [{ text: "final answer" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
+
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: true,
+        opts: { onBlockReply },
+      });
+      const result = await run();
+      const payload = Array.isArray(result) ? result[0] : result;
+
+      expect(onBlockReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "partial answer" }),
+        expect.any(Object),
+      );
+      expect(payload).toMatchObject({
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        isError: true,
+      });
+    } finally {
+      persistSpy.mockRestore();
+    }
+  });
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
