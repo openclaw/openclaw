@@ -35,17 +35,19 @@ describe("iOS release shell wrapper arguments", () => {
   const missingValueCases: readonly WrapperCase[] = [
     ["scripts/ios-release-upload.sh", ["--build-number", "--bogus"], "--build-number"],
     ["scripts/ios-release-upload.sh", ["--version", "--bogus"], "--version"],
+    ["scripts/ios-release-upload.sh", ["--revision", "--bogus"], "--revision"],
     ["scripts/ios-release-archive.sh", ["--build-number", "--bogus"], "--build-number"],
     ["scripts/ios-release-archive.sh", ["--version", "--bogus"], "--version"],
+    ["scripts/ios-release-archive.sh", ["--revision", "--bogus"], "--revision"],
     ["scripts/ios-release-prepare.sh", ["--build-number", "--team-id"], "--build-number"],
     [
       "scripts/ios-release-prepare.sh",
-      ["--build-number", "7", "--version", "--bogus"],
+      ["--build-number", "3", "--version", "--bogus"],
       "--version",
     ],
     [
       "scripts/ios-release-prepare.sh",
-      ["--version", "2026.6.11", "--build-number", "7", "--team-id", "--bogus"],
+      ["--version", "2026.7.2", "--revision", "1", "--build-number", "3", "--team-id", "--bogus"],
       "--team-id",
     ],
   ];
@@ -67,8 +69,8 @@ describe("iOS release shell wrapper arguments", () => {
     "scripts/ios-release-upload.sh",
     "scripts/ios-release-archive.sh",
     "scripts/ios-release-prepare.sh",
-  ])("requires an explicit release version before release work in %s", (scriptPath) => {
-    const args = scriptPath.endsWith("prepare.sh") ? ["--build-number", "7"] : [];
+  ])("requires an explicit gateway version before release work in %s", (scriptPath) => {
+    const args = scriptPath.endsWith("prepare.sh") ? ["--build-number", "3"] : [];
     const result = runScript(path.join(process.cwd(), scriptPath), args, {
       IOS_RELEASE_VERSION: "2026.6.10",
     });
@@ -76,6 +78,23 @@ describe("iOS release shell wrapper arguments", () => {
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("Missing required --version.");
     expect(result.stderr).not.toContain("No such file or directory");
+    expect(result.stderr).not.toContain("fastlane");
+    expect(result.stdout).toBe("");
+  });
+
+  it.each([
+    "scripts/ios-release-upload.sh",
+    "scripts/ios-release-archive.sh",
+    "scripts/ios-release-prepare.sh",
+  ])("requires an explicit App Store revision before release work in %s", (scriptPath) => {
+    const args = ["--version", "2026.7.2"];
+    if (scriptPath.endsWith("prepare.sh")) {
+      args.push("--build-number", "3");
+    }
+    const result = runScript(path.join(process.cwd(), scriptPath), args);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Missing required --revision.");
     expect(result.stderr).not.toContain("fastlane");
     expect(result.stdout).toBe("");
   });
@@ -93,7 +112,7 @@ describe("iOS release shell wrapper arguments", () => {
   it("rejects App Store release relay URL overrides before release work", () => {
     const result = runScript(
       path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
-      ["--version", "2026.6.11", "--build-number", "7"],
+      ["--version", "2026.7.2", "--revision", "1", "--build-number", "3"],
       {
         IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
         OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",

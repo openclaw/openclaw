@@ -81,11 +81,11 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     );
   };
 
-  @state() protected sessionCreatorFilterId: string | null = null;
+  @state() sessionCreatorFilterId: string | null = null;
 
-  protected sessionCreatorOptions: readonly SessionCreatorOption[] = [];
+  sessionCreatorOptions: readonly SessionCreatorOption[] = [];
   protected activeSessionCreatorId: string | null = null;
-  protected sessionCreatorFilterActive = false;
+  sessionCreatorFilterActive = false;
   sessionOwnershipVisible = false;
 
   @state() selectedSessionKeys: ReadonlySet<string> = new Set();

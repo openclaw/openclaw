@@ -2489,6 +2489,7 @@ class ChatPane extends OpenClawLightDomElement {
           pageState.chatMessages = snapshot.messages;
           pageState.chatHistoryPagination = snapshot.pagination;
           pageState.currentSessionId = snapshot.sessionId;
+          pageState.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
         }
         admitInitialUserMessageHandoff(pageState.initialUserMessage, pageState, initialSessionKey);
       }

@@ -54,6 +54,7 @@ export type SidebarRecentSession = {
   key: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
+  archivedBy?: SessionCreatedActor;
   label: string;
   meta: string;
   /** Compact repo/branch/node line for work sessions. */
@@ -68,6 +69,7 @@ export type SidebarRecentSession = {
   pinned: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
+  draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
   channel?: string;

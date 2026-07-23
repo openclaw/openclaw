@@ -1409,6 +1409,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-sort {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1422,6 +1423,18 @@ html.openclaw-native-macos
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+.sidebar-session-sort--filtered::after {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--bg);
+  content: "";
 }
 
 .sidebar-session-sort:hover,

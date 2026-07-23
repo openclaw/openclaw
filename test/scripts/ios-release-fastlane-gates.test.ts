@@ -74,7 +74,9 @@ describe("iOS Fastlane release upload gates", () => {
 
     expect(script).toContain("OPENCLAW_IOS_RELEASE_WRAPPER=1");
     expect(script).toContain("Missing required --version.");
+    expect(script).toContain("Missing required --revision.");
     expect(script).toContain('"release_version:${RELEASE_VERSION}"');
+    expect(script).toContain('"app_store_revision:${APP_STORE_REVISION}"');
     expect(script).toContain('"build_number:${BUILD_NUMBER}"');
     expect(script).toContain("DELIVER_NUMBER_OF_THREADS=1");
     expect(script).toContain("FL_MAX_NUMBER_OF_THREADS=1");
@@ -99,14 +101,50 @@ describe("iOS Fastlane release upload gates", () => {
     expect(releaseUpload).toContain('ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"');
     expect(releaseUpload).toContain("Use `pnpm ios:release:upload`");
     expect(prepareContext).toContain("options[:release_version]");
+    expect(prepareContext).toContain("options[:app_store_revision]");
     expect(prepareContext).toContain("options[:build_number]");
-    expect(prepareContext).toContain("Missing iOS release version");
-    expect(releaseUpload).toContain("metadata(release_version: context[:short_version])");
+    expect(prepareContext).toContain("Missing iOS gateway version");
+    expect(prepareContext).toContain("Missing iOS App Store revision");
+    expect(releaseUpload).toContain("app_store_revision: context[:app_store_revision]");
     expect(laneBody(fastfile, "metadata")).toContain("options[:release_version]");
-    expect(laneBody(fastfile, "metadata")).toContain("Missing iOS release version");
+    expect(laneBody(fastfile, "metadata")).toContain("Missing iOS gateway version");
+    expect(laneBody(fastfile, "metadata")).toContain("Missing iOS App Store revision");
     expect(releaseUpload.indexOf("UI.user_error!")).toBeLessThan(
       releaseUpload.indexOf("prepare_app_store_context"),
     );
+  });
+
+  it("preflights the exact App Store version before screenshots and archive work", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+    const preflight = functionBody(fastfile, "preflight_app_store_version!");
+
+    expect(preflight).toContain("EDITABLE_APP_STORE_VERSION_STATES");
+    expect(preflight).toContain("RELEASED_APP_STORE_VERSION_STATES");
+    expect(fastfile).toContain('"READY_FOR_SALE"');
+    expect(fastfile).toContain('"REMOVED_FROM_SALE"');
+    expect(fastfile).toContain('"DEVELOPER_REMOVED_FROM_SALE"');
+    expect(fastfile).not.toMatch(
+      /EDITABLE_APP_STORE_VERSION_STATES = \[[\s\S]*?"WAITING_FOR_REVIEW"[\s\S]*?\]\.freeze/,
+    );
+    expect(preflight).toContain("Revisions are never reused");
+    expect(preflight).toContain("higher version");
+    expect(releaseUpload).toContain("preflight_app_store_version!");
+    expect(releaseUpload.indexOf("preflight_app_store_version!")).toBeLessThan(
+      releaseUpload.indexOf("screenshots("),
+    );
+    expect(releaseUpload.indexOf("preflight_app_store_version!")).toBeLessThan(
+      releaseUpload.indexOf("build = build_app_store_release(context)"),
+    );
+  });
+
+  it("validates explicit build numbers against the exact App Store version", () => {
+    const resolver = functionBody(readFastfile(), "resolve_release_build_number");
+
+    expect(resolver).toContain("version: short_version");
+    expect(resolver).toContain("expected #{next_build}");
+    expect(resolver).toContain("explicit.to_i != next_build");
+    expect(resolver).toContain("api_key.nil?");
   });
 
   it("validates the exported IPA before the sole TestFlight upload call", () => {
@@ -122,11 +160,11 @@ describe("iOS Fastlane release upload gates", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
     const screenshots = releaseUpload.indexOf(
-      "screenshots(release_version: context[:version], build_number: context[:build_number])",
+      "screenshots(\n          release_version: context[:version]",
     );
     const sourceCheck = releaseUpload.indexOf("verify_apple_release_source!(release_sha)");
     const build = releaseUpload.indexOf("build = build_app_store_release(context)");
-    const metadata = releaseUpload.indexOf("metadata(release_version: context[:short_version])");
+    const metadata = releaseUpload.indexOf("metadata(\n      release_version: context[:version]");
 
     expect(screenshots).toBeGreaterThanOrEqual(0);
     expect(sourceCheck).toBeGreaterThan(screenshots);
@@ -277,20 +315,18 @@ describe("iOS Fastlane release upload gates", () => {
     expect(releaseUpload).toContain("release_sha = context[:git_commit]");
     expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
     expect(releaseUpload).toContain("record_mobile_release_ref!");
-    expect(releaseUpload).toContain(
-      "screenshots(release_version: context[:version], build_number: context[:build_number])",
-    );
+    expect(releaseUpload).toContain("screenshots(\n          release_version: context[:version]");
     expect(fastfile).toContain("def without_xcode_xcconfig_file");
     expect(releaseUpload).toContain("without_xcode_xcconfig_file do");
     expect(releaseUpload.match(/sha: release_sha/g)).toHaveLength(2);
     expect(releaseUpload.indexOf("prepare_app_store_context")).toBeLessThan(
-      releaseUpload.indexOf("screenshots(release_version: context[:version]"),
+      releaseUpload.indexOf("screenshots(\n          release_version: context[:version]"),
     );
     expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
-      releaseUpload.indexOf("screenshots(release_version: context[:version]"),
+      releaseUpload.indexOf("screenshots(\n          release_version: context[:version]"),
     );
     expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
-      releaseUpload.indexOf("\n    metadata(release_version: context[:short_version])\n"),
+      releaseUpload.indexOf("\n    metadata(\n      release_version: context[:version]"),
     );
     expect(releaseUpload.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
       releaseUpload.indexOf("upload_to_testflight("),

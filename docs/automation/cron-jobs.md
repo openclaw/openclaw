@@ -166,7 +166,7 @@ Every job carries exactly one payload kind, chosen by flag:
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `cron list --all` but cannot be created or edited through the CLI or API — its cadence follows `agents.*.heartbeat` config.
+One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `cron list --all` but cannot be created or edited through the CLI or API. Heartbeat config is written through to the persisted monitor schedule at startup, on config reload, or by `openclaw doctor --fix`. When cron is disabled, the monitor does not tick and no fallback heartbeat timer runs.
 
 ### Agent-turn options
 

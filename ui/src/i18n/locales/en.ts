@@ -568,6 +568,7 @@ export const en: TranslationMap = {
     worktreeNameInvalid: "Worktree names use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
     incognitoDescription: "Keep this thread only until the Gateway restarts",
+    startAsDraft: "Start as draft",
     messagePlaceholder: "What should this thread work on?",
     readingAttachment: "Reading attachment",
     start: "Start thread",
@@ -589,7 +590,8 @@ export const en: TranslationMap = {
     limit: "Limit",
     filters: "Filters",
     createdBy: "Created by {name}",
-    filterByCreator: "Filter by creator",
+    archivedBy: "Archived by {name}",
+    people: "People",
     allCreators: "All people",
     filterControls: "Thread filters",
     sourceFilters: "Thread source filters",
@@ -3753,6 +3755,9 @@ export const en: TranslationMap = {
   },
   chat: {
     disconnected: "Disconnected from gateway.",
+    sendErrors: {
+      activeLeafChanged: "The thread switched branches — review and resend.",
+    },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
@@ -3770,6 +3775,7 @@ export const en: TranslationMap = {
       readOnly: "Read-only",
       suggest: "Suggest",
       draft: "Draft",
+      publishDraft: "Publish draft",
       members: "Members",
       selected: "Member",
       noPeople: "No paired people found.",

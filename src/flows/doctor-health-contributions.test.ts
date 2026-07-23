@@ -106,6 +106,8 @@ const mocks = vi.hoisted(() => ({
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
+  collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
+  maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
@@ -405,6 +407,11 @@ vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
   maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
 }));
 
+vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
+  collectHeartbeatCadenceMigrationFindings: mocks.collectHeartbeatCadenceMigrationFindings,
+  maybeMigrateHeartbeatCadenceToCron: mocks.maybeMigrateHeartbeatCadenceToCron,
+}));
+
 vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
   collectHeartbeatScratchMigrationFindings: mocks.collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
@@ -675,6 +682,10 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
     mocks.maybeRepairHeartbeatTemplate.mockReset();
     mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
+    mocks.collectHeartbeatCadenceMigrationFindings.mockReset();
+    mocks.collectHeartbeatCadenceMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateHeartbeatCadenceToCron.mockReset();
+    mocks.maybeMigrateHeartbeatCadenceToCron.mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectHeartbeatScratchMigrationFindings.mockReset();
     mocks.collectHeartbeatScratchMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatFilesToScratch.mockReset();
@@ -1323,6 +1334,49 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeLessThan(
       ids.indexOf("doctor:write-config"),
     );
+  });
+
+  it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+    const cadenceIndex = ids.indexOf("doctor:heartbeat-cadence-migration");
+    const scratchIndex = ids.indexOf("doctor:heartbeat-scratch-migration");
+
+    expect(cadenceIndex).toBeGreaterThan(-1);
+    expect(cadenceIndex).toBeLessThan(scratchIndex);
+    expect(scratchIndex).toBeLessThan(ids.indexOf("doctor:write-config"));
+
+    const contribution = requireDoctorContribution("doctor:heartbeat-cadence-migration");
+    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+    await contribution.run({
+      cfg,
+      prompter: buildDoctorPrompter(true),
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    } as unknown as DoctorContributionRunContext);
+
+    expect(mocks.maybeMigrateHeartbeatCadenceToCron).toHaveBeenCalledWith({
+      cfg,
+      shouldRepair: true,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+  });
+
+  it("forwards the health-check environment to heartbeat cadence detection", async () => {
+    const checks = await resolveDoctorContributionHealthChecks();
+    const check = checks.find(
+      (candidate) => candidate.id === "core/doctor/heartbeat-cadence-migration",
+    );
+    expect(check).toBeDefined();
+    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-detector-state" };
+
+    await check!.detect({
+      mode: "lint",
+      cfg,
+      env,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(mocks.collectHeartbeatCadenceMigrationFindings).toHaveBeenCalledWith(cfg, env);
   });
 
   it("keeps heartbeat template lint opt-in for default lint selection", async () => {

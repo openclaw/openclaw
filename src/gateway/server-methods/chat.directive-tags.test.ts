@@ -31,6 +31,7 @@ import { getAgentRunContext } from "../../infra/agent-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -782,14 +783,7 @@ function createChatContext(): Pick<
   | "agentRunSeq"
   | "chatAbortControllers"
   | "chatQueuedTurns"
-  | "chatRunBuffers"
-  | "chatDeltaSentAt"
-  | "chatDeltaLastBroadcastLen"
-  | "chatDeltaLastBroadcastText"
-  | "agentDeltaSentAt"
-  | "bufferedAgentEvents"
-  | "chatAbortedRuns"
-  | "clearChatRunState"
+  | "chatRunState"
   | "addChatRun"
   | "removeChatRun"
   | "dedupe"
@@ -806,14 +800,7 @@ function createChatContext(): Pick<
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
@@ -974,6 +961,90 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.beforeMessageWriteContent = null;
     mockState.beforeMessageWriteCalls = [];
     mockState.dispatchBlockedByBeforeAgentRun = false;
+  });
+
+  it.each([
+    ["stale", "previous-leaf"],
+    ["empty", null],
+  ])("rejects a %s expected active leaf before starting or writing", async (name, expectedLeaf) => {
+    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-${name}-leaf-`);
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "user", content: "existing" },
+      now: 1,
+      parentId: null,
+    });
+    const before = loadTranscriptEventsSync(transcriptScope());
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: `idem-${name}-leaf`,
+      requestParams: { expectedLeafEntryId: expectedLeaf },
+      waitFor: "none",
+    });
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
+  });
+
+  it("allows an expected empty leaf when the transcript is still empty", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-matching-empty-leaf-");
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-matching-empty-leaf",
+      requestParams: { expectedLeafEntryId: null },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["matching", { expectedLeafEntryId: "current-leaf" }],
+    ["absent", {}],
+  ])("allows a %s expected active leaf", async (_name, requestParams) => {
+    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-${_name}-leaf-`);
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "user", content: "existing" },
+      now: 1,
+      parentId: null,
+    });
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: `idem-${_name}-leaf`,
+      requestParams,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
   });
 
   it("broadcasts session metadata changes reported by chat command dispatch", async () => {
@@ -1553,6 +1624,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
       rawKey: "agent:work:main",
       opts: { agentId: "work" },
+    });
+  });
+
+  it("returns the rendered history branch leaf in session info", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-history-active-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "history-active-leaf",
+      message: { role: "user", content: "render this branch" },
+      now: 1,
+      parentId: null,
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      chatHandlers["chat.history"],
+      'chatHandlers["chat.history"] test invariant',
+    )({
+      params: { sessionKey: "main" },
+      respond: respond as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: createChatContext() as GatewayRequestContext,
+    });
+
+    expect(lastRespondCall(respond)?.[1]).toMatchObject({
+      sessionInfo: { activeLeafEntryId: "history-active-leaf" },
     });
   });
 
@@ -5254,8 +5352,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         "/tmp/chat-send-image-b.jpg",
       ]);
       expect(userTurnInput.MediaTypes).toEqual(["image/png", "image/jpeg"]);
-      expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
-      expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.media).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
     });
   });
@@ -5683,11 +5780,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/tmp/1.png",
+        contentType: "image/png",
+        workspaceDir: "/tmp",
+      },
+    ]);
     expect(mockState.savedMediaCalls).toEqual([
       {
         contentType: "image/png",
@@ -5859,11 +5958,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/tmp/1.png",
+        contentType: "image/png",
+        workspaceDir: "/tmp",
+      },
+    ]);
     expect(mockState.savedMediaCalls).toEqual([
       {
         contentType: "image/png",
@@ -5873,7 +5974,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("routes non-image offloaded refs into ctx.MediaPaths + MediaTypes for chat.send", async () => {
+  it("routes non-image offloaded refs into media facts for chat.send", async () => {
     await createTranscriptFixture("openclaw-chat-send-non-image-ctx-media-paths-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -5913,14 +6014,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/report.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/report.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
     // Non-image offloads retain their claim-check line while the staged path
     // also travels structurally for media tools and transcript persistence.
     expect(mockState.lastDispatchCtx?.Body).toContain(
@@ -5930,9 +6030,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "[media attached: media://inbound/saved-media]",
     );
     expect(mockState.lastDispatchImages).toBeUndefined();
-    // Marker replaces the implicit "relative-path no-op" coupling in
-    // get-reply.ts with an explicit skip contract.
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    // The fact workspace is the explicit skip contract for later staging.
   });
 
   it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {
@@ -5982,18 +6080,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         size: mockState.savedMediaCalls[0]?.size ?? 0,
       },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/fake.zip",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/fake.zip",
+        contentType: "application/zip",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchCtx?.Body).toContain(
       "[media attached: media://inbound/saved-media]",
     );
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
-  it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {
+  it("preserves sandbox-relative fact paths and workspace context for media-understanding", async () => {
     await createTranscriptFixture("openclaw-chat-send-non-image-absolutize-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -6035,10 +6135,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
   });
 
   it("preserves staged non-image paths when plugin-bound sessions also carry inline images", async () => {
@@ -6108,12 +6211,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(mockState.lastDispatchImages).toHaveLength(1);
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
   });
 
   it("wraps stageSandboxMedia infrastructure errors as 5xx UNAVAILABLE for non-fallback refs and cleans up media-store files", async () => {
@@ -6366,16 +6470,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     // Reaches dispatch with the managed media path; not staged into the sandbox,
     // so no workspace dir, and the media-store entry is kept (not cleaned up).
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/huge.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/huge.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/huge.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
@@ -6427,15 +6528,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     // Falls back to the absolute managed path; nothing staged (so no workspace
     // dir) and the media-store entry is preserved for host-side extraction.
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/report.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/report.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
@@ -6462,7 +6561,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    // No stagedRelativePaths → staged map is empty and ctx.MediaPaths keeps the
+    // No stagedRelativePaths → staged map is empty and the fact keeps the
     // absolute path, mirroring stageSandboxMedia silently skipping the file.
     const respond = vi.fn();
     const context = createChatContext();
@@ -6481,15 +6580,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/report.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/report.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/sandbox/workspace",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 

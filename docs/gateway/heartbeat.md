@@ -15,7 +15,9 @@ Heartbeat runs **periodic agent turns** in the main session so the model can sur
 
 Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated cron jobs).
 
-Under the hood, heartbeat cadence is owned by the cron scheduler: the gateway maintains one system-owned cron job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Each tick requests a heartbeat wake; the heartbeat runner still applies its own cooldown, active-hours, and busy guards, so a tick outside the configured window is skipped, not delivered. These monitor jobs are converged from your heartbeat config at startup and on config reload — edit `agents.*.heartbeat`, not the cron job.
+Under the hood, heartbeat cadence is owned by the cron scheduler: the gateway maintains one system-owned cron job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Heartbeat config remains the desired-state input, while the persisted monitor schedule owns the actual tick and the runner's later cooldown. The gateway writes config changes through at startup and on config reload; `openclaw doctor --fix` can materialize missing or stale monitor rows before the next gateway start. Edit `agents.*.heartbeat`, not the cron job.
+
+Scheduled heartbeats require cron. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the gateway logs a startup warning and does not run scheduled heartbeats; manual and event-driven heartbeat wakes remain available. There is no separate heartbeat fallback timer.
 
 Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 
@@ -65,6 +67,7 @@ Example config:
 - Timeout: unset heartbeat turns use `agents.defaults.timeoutSeconds` when set. Otherwise, they use the heartbeat cadence capped at 600 seconds. Set `agents.defaults.heartbeat.timeoutSeconds` or per-agent `agents.entries.*.heartbeat.timeoutSeconds` for longer heartbeat work.
 - The heartbeat prompt is sent **verbatim** as the user message. The system prompt includes a "Heartbeats" section when heartbeats are enabled for the default agent, and the run is flagged internally.
 - When heartbeats are disabled with `0m`, the monitor cron job stays but is disabled, and its scratch is retained for when you re-enable the cadence.
+- When cron itself is disabled, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Heartbeats automatically defer while cron work is active or queued, or while that agent's session-keyed subagent or nested command lanes are busy. Sibling agents do not pause each other.
 
@@ -379,7 +382,7 @@ Writes are compare-and-swap guarded: pass `--expected-revision <n>` to fail inst
 The agent can also update its own scratch: during a heartbeat turn, `heartbeat_respond` accepts an optional `scratch` string that fully replaces the monitor's scratch for future heartbeats.
 
 <Note>
-**Migrating from HEARTBEAT.md?** Run `openclaw doctor --fix`. Doctor imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, archives the original under the state directory (`backups/heartbeat-migration/`), and then removes the file. For one stable upgrade window, an unmigrated legacy file remains a read-only fallback when no scratch revision exists, with a Gateway warning directing you to Doctor; new workspaces and completed migrations use database scratch only.
+**Migrating from HEARTBEAT.md or config-only cadence?** Run `openclaw doctor --fix`. Doctor first creates or updates the system-owned monitor rows from `agents.*.heartbeat`, then imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, archives the original under the state directory (`backups/heartbeat-migration/`), and removes the file. For one stable upgrade window, an unmigrated legacy file remains a read-only fallback when no scratch revision exists, with a Gateway warning directing you to Doctor; new workspaces and completed migrations use database scratch only.
 </Note>
 
 If scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If no scratch exists, the heartbeat still runs and the model decides what to do.

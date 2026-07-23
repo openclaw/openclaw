@@ -67,7 +67,12 @@ describe("heartbeat payload execution", () => {
       const result = await cron.run(job.id, "force");
       expect(result.ok).toBe(true);
       expect(requestHeartbeat).toHaveBeenCalledWith(
-        expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "main" }),
+        expect.objectContaining({
+          source: "interval",
+          intent: "scheduled",
+          agentId: "main",
+          scheduledEveryMs: 60_000,
+        }),
       );
       // The monitor never fabricates a system event; the wake is the whole run.
       expect(enqueueSystemEvent).not.toHaveBeenCalled();

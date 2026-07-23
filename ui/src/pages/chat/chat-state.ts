@@ -376,6 +376,9 @@ function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
     state,
     { sessionKey },
     {
+      ...(state.chatDisplayedLeafEntryId !== undefined
+        ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
+        : {}),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination ?? { hasMore: false },
       sessionId: state.currentSessionId ?? null,
@@ -541,6 +544,7 @@ export function resetChatStateForRouteSession(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
     ) === true;
   state.currentSessionId = snapshot.sessionId;
+  state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
   state.reconnectResumeSessionId = null;
   state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
@@ -1282,6 +1286,7 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatDisplayedLeafEntryId: undefined as string | null | undefined,
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,

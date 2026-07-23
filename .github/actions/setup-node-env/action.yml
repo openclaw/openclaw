@@ -387,6 +387,12 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
         append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+        if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&
+          [ "$sticky_snapshot_matches" != "true" ]; then
+          # A mounted stale tree can make a normal frozen install report "Already up to date".
+          # Only the canonical writer may rebuild the shared modules directory in place.
+          install_args+=(--force)
+        fi
         run_pnpm_install() {
           if [ "$STICKY_DISK" = "true" ]; then
             # Pnpm can keep retrying optional platform tarballs after the

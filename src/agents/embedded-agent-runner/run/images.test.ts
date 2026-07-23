@@ -381,8 +381,7 @@ describe("detectAndLoadPromptImages", () => {
       const result = await detectAndLoadPromptImages({
         prompt: `[media attached: ${imagePath} (image/png)]`,
         media: buildInboundMediaNoteProjection({
-          MediaPath: imagePath,
-          MediaType: "image/png",
+          media: [{ path: imagePath, contentType: "image/png" }],
           MediaUnderstanding: [
             {
               kind: "image.description",

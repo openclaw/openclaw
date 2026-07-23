@@ -35,6 +35,7 @@ import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
+import type { SessionCreatorOption } from "./session-owner-chip.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -59,6 +60,10 @@ interface SidebarMenusRenderHost extends ReactiveControllerHost, SessionOrganize
     Pick<SessionDataController, "approvalBadgeSnapshot" | "sessionsLoading">;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
+  readonly sessionCreatorFilterActive: boolean;
+  sessionCreatorFilterId: string | null;
+  readonly sessionCreatorOptions: readonly SessionCreatorOption[];
+  readonly sessionOwnershipVisible: boolean;
   readonly sidebarEntries: readonly string[];
   sessionSortMode: SidebarSessionSortMode;
   readonly themeMode: ThemeMode;
@@ -370,6 +375,8 @@ export function renderSidebarSessionSortMenuForController(
     sortMode: host.sessionSortMode,
     statusFilter: host.sessionsStatusFilter,
     showCron: host.sessionsShowCron,
+    creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
+    creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -380,6 +387,11 @@ export function renderSidebarSessionSortMenuForController(
     },
     onStatusFilterChange: (statusFilter) => {
       host.sessionOrganizer.setSessionsStatusFilter(statusFilter);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
+    onCreatorFilterChange: (creatorId) => {
+      host.sessionCreatorFilterId = creatorId;
+      void host.sessionDataContext?.sessions.setCreatorFilter(creatorId);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {

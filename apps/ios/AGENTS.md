@@ -29,10 +29,11 @@ Root rules still apply. This file adds the iOS release guardrails.
 ## App Store Releases
 
 - Agent-driven App Store uploads must use only `pnpm ios:release:upload`.
-- App Store uploads must include explicit release intent: `pnpm ios:release:upload -- --version <YYYY.M.D>` and `--build-number <n>` when a specific build has been chosen.
-- Release version selection is deterministic. If the user supplies a version, use it. Otherwise resolve the current gateway version with `node --import tsx scripts/ios-version.ts --field canonicalVersion` and pass that value explicitly to `pnpm ios:release:upload`.
-- Never derive a release version from the current date, `## Unreleased`, existing mobile-release refs, or App Store Connect builds.
-- Existing builds for the current gateway version mean upload the next build to that same release train. Start a different release train only when the user explicitly supplies its version.
+- App Store uploads must include explicit release intent: `pnpm ios:release:upload -- --version <YYYY.M.D> --revision <0-99>` and `--build-number <n>` when a specific build has been chosen.
+- `--version` is the gateway version. `--revision` is the public iOS release ordinal encoded into `CFBundleShortVersionString`; never pass the encoded App Store version through `--version`.
+- Release selection is deterministic. If the user does not supply a gateway version, resolve it with `node --import tsx scripts/ios-version.ts --field canonicalVersion`. The user must explicitly supply the App Store revision; do not infer it.
+- Never derive a gateway version or App Store revision from the current date, `## Unreleased`, mobile-release refs, App Store Connect builds, or existing version records.
+- Existing builds for the same gateway version and App Store revision mean upload the next build to that exact App Store version. Start a different App Store revision only when the user explicitly supplies it.
 - If `pnpm ios:release:upload` exits non-zero, stop immediately and report the failing step.
 - After a failed `pnpm ios:release:upload`, do not continue with `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, `asc review submit`, direct Fastlane lanes, or any manual App Store Connect mutation command.
 - Do not submit an iOS App Store version for App Review. App Review submission stays manual unless the user explicitly asks to submit a specific already-prepared version after the failed state has been reported.

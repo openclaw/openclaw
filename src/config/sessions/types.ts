@@ -270,6 +270,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     // codex plugin seam when exchanging thread metadata.
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
+    /** Actor that archived the session; cleared when the session is restored. */
+    archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */

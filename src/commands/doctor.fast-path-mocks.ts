@@ -153,6 +153,11 @@ vi.mock("./doctor-heartbeat-template-repair.js", () => ({
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-heartbeat-cadence-migration.js", () => ({
+  collectHeartbeatCadenceMigrationFindings: vi.fn().mockResolvedValue([]),
+  maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
+}));
+
 vi.mock("./doctor-heartbeat-scratch-migration.js", () => ({
   collectHeartbeatScratchMigrationFindings: vi.fn().mockResolvedValue([]),
   maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),

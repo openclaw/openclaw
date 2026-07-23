@@ -4906,6 +4906,7 @@ public struct SessionRow: Codable, Sendable {
     public let updatedat: AnyCodable?
     public let archived: Bool?
     public let archivedat: Double?
+    public let archivedby: SessionCreatedActor?
     public let pinned: Bool?
     public let pinnedat: Double?
     public let icon: String?
@@ -4915,6 +4916,7 @@ public struct SessionRow: Codable, Sendable {
     public let lastinteractionat: Double?
     public let status: AnyCodable?
     public let lastrunerror: String?
+    public let activeleafentryid: AnyCodable?
     public let spawnedby: String?
     public let parentsessionkey: String?
     public let controlownersessionkey: String?
@@ -4959,6 +4961,7 @@ public struct SessionRow: Codable, Sendable {
         updatedat: AnyCodable? = nil,
         archived: Bool? = nil,
         archivedat: Double? = nil,
+        archivedby: SessionCreatedActor? = nil,
         pinned: Bool? = nil,
         pinnedat: Double? = nil,
         icon: String? = nil,
@@ -4968,6 +4971,7 @@ public struct SessionRow: Codable, Sendable {
         lastinteractionat: Double? = nil,
         status: AnyCodable? = nil,
         lastrunerror: String? = nil,
+        activeleafentryid: AnyCodable? = nil,
         spawnedby: String? = nil,
         parentsessionkey: String? = nil,
         controlownersessionkey: String? = nil,
@@ -5011,6 +5015,7 @@ public struct SessionRow: Codable, Sendable {
         self.updatedat = updatedat
         self.archived = archived
         self.archivedat = archivedat
+        self.archivedby = archivedby
         self.pinned = pinned
         self.pinnedat = pinnedat
         self.icon = icon
@@ -5020,6 +5025,7 @@ public struct SessionRow: Codable, Sendable {
         self.lastinteractionat = lastinteractionat
         self.status = status
         self.lastrunerror = lastrunerror
+        self.activeleafentryid = activeleafentryid
         self.spawnedby = spawnedby
         self.parentsessionkey = parentsessionkey
         self.controlownersessionkey = controlownersessionkey
@@ -5065,6 +5071,7 @@ public struct SessionRow: Codable, Sendable {
         case updatedat = "updatedAt"
         case archived
         case archivedat = "archivedAt"
+        case archivedby = "archivedBy"
         case pinned
         case pinnedat = "pinnedAt"
         case icon
@@ -5074,6 +5081,7 @@ public struct SessionRow: Codable, Sendable {
         case lastinteractionat = "lastInteractionAt"
         case status
         case lastrunerror = "lastRunError"
+        case activeleafentryid = "activeLeafEntryId"
         case spawnedby = "spawnedBy"
         case parentsessionkey = "parentSessionKey"
         case controlownersessionkey = "controlOwnerSessionKey"
@@ -6887,6 +6895,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let model: String?
     public let thinkinglevel: String?
     public let incognito: Bool?
+    public let visibility: SessionVisibility?
     public let catalogid: String?
     public let parentsessionkey: String?
     public let spawndepth: Int?
@@ -6909,6 +6918,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         model: String? = nil,
         thinkinglevel: String? = nil,
         incognito: Bool? = nil,
+        visibility: SessionVisibility? = nil,
         catalogid: String? = nil,
         parentsessionkey: String? = nil,
         spawndepth: Int? = nil,
@@ -6930,6 +6940,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.model = model
         self.thinkinglevel = thinkinglevel
         self.incognito = incognito
+        self.visibility = visibility
         self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
         self.spawndepth = spawndepth
@@ -6953,6 +6964,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case model
         case thinkinglevel = "thinkingLevel"
         case incognito
+        case visibility
         case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"
         case spawndepth = "spawnDepth"
@@ -16328,6 +16340,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
     public let suppresscommandinterpretation: Bool?
+    public let expectedleafentryid: AnyCodable?
     public let expectedsessionroutingcontract: String?
     public let idempotencykey: String
 
@@ -16352,6 +16365,7 @@ public struct ChatSendParams: Codable, Sendable {
         systeminputprovenance: [String: AnyCodable]? = nil,
         systemprovenancereceipt: String? = nil,
         suppresscommandinterpretation: Bool? = nil,
+        expectedleafentryid: AnyCodable? = nil,
         expectedsessionroutingcontract: String? = nil,
         idempotencykey: String)
     {
@@ -16375,6 +16389,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
         self.suppresscommandinterpretation = suppresscommandinterpretation
+        self.expectedleafentryid = expectedleafentryid
         self.expectedsessionroutingcontract = expectedsessionroutingcontract
         self.idempotencykey = idempotencykey
     }
@@ -16399,6 +16414,7 @@ public struct ChatSendParams: Codable, Sendable {
         systeminputprovenance: [String: AnyCodable]? = nil,
         systemprovenancereceipt: String? = nil,
         suppresscommandinterpretation: Bool? = nil,
+        expectedleafentryid: AnyCodable? = nil,
         expectedsessionroutingcontract: String? = nil,
         idempotencykey: String)
     {
@@ -16423,6 +16439,7 @@ public struct ChatSendParams: Codable, Sendable {
             systeminputprovenance: systeminputprovenance,
             systemprovenancereceipt: systemprovenancereceipt,
             suppresscommandinterpretation: suppresscommandinterpretation,
+            expectedleafentryid: expectedleafentryid,
             expectedsessionroutingcontract: expectedsessionroutingcontract,
             idempotencykey: idempotencykey)
     }
@@ -16448,6 +16465,7 @@ public struct ChatSendParams: Codable, Sendable {
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
         case suppresscommandinterpretation = "suppressCommandInterpretation"
+        case expectedleafentryid = "expectedLeafEntryId"
         case expectedsessionroutingcontract = "expectedSessionRoutingContract"
         case idempotencykey = "idempotencyKey"
     }
