@@ -389,7 +389,9 @@ private struct ChatMessageBody: View {
             }
 
             if attachmentPresentation.omittedImageCount > 0 {
-                Text("Additional images hidden: \(attachmentPresentation.omittedImageCount)")
+                Text(String(
+                    format: String(localized: "Additional images hidden: %lld"),
+                    Int64(attachmentPresentation.omittedImageCount)))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(textColor.opacity(0.72))
             }
