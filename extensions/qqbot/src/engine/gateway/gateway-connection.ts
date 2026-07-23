@@ -30,6 +30,7 @@ import {
 } from "./ingress.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
+import { SeqWatermark } from "./seq-watermark.js";
 import type {
   GatewayAccount,
   EngineLogger,
@@ -60,7 +61,11 @@ export class GatewayConnection {
   private currentWs: WebSocket | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private sessionId: string | null = null;
-  private lastSeq: number | null = null;
+  // Resumable seq lives behind a watermark: message frames commit only after
+  // their queued handler settles, so RESUME replays anything still in flight.
+  private readonly seqWatermark = new SeqWatermark();
+  // Turn-event seqs registered in frame order, settled in the same order.
+  private pendingTurnSeqs: number[] = [];
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldRefreshToken = false;
@@ -81,11 +86,32 @@ export class GatewayConnection {
       accountId: ctx.account.accountId,
       log: ctx.log,
       isAborted: () => this.isAborted,
+      onMessageSettled: (msg) => this.settleMessage(msg),
     });
     this.ingressEffectOnce = createQQBotIngressEffectOnce({
       accountId: ctx.account.accountId,
       log: ctx.log,
     });
+  }
+
+  private get lastSeq(): number | null {
+    return this.seqWatermark.value();
+  }
+
+  /**
+   * Commit a message's seq once its handler finished or the message was
+   * intentionally dropped. Merged group turns settle every source seq.
+   */
+  private settleMessage(_msg: QueuedMessage): void {
+    // Turn-event seqs are registered in frame order (handleSocketMessage)
+    // and settled in the same order (ingress processes FIFO, queue drains
+    // sequentially). Dequeue the next unsettled seq and commit it so the
+    // RESUME watermark advances past this message.
+    const seq = this.pendingTurnSeqs.shift();
+    if (seq !== undefined) {
+      this.seqWatermark.settle(seq);
+    }
+    this.saveCurrentSession();
   }
 
   async start(): Promise<void> {
@@ -127,7 +153,7 @@ export class GatewayConnection {
     const saved = loadSession(account.accountId, account.appId);
     if (saved) {
       this.sessionId = saved.sessionId;
-      this.lastSeq = saved.lastSeq;
+      this.seqWatermark.reset(saved.lastSeq);
       log?.info(`Restored session: sessionId=${this.sessionId}, lastSeq=${this.lastSeq}`);
     }
   }
@@ -223,6 +249,11 @@ export class GatewayConnection {
       effectOnce: this.ingressEffectOnce,
     });
     if (result === "handled") {
+      // Directly handled slash command — the seq was registered in
+      // handleSocketMessage but the message never enters the queue,
+      // so settleMessage is never called from the queue callback.
+      // Settle it here so RESUME advances past this command.
+      this.settleMessage(msg);
       return { kind: "completed" };
     }
     if (this.isAborted || lifecycle.abortSignal.aborted) {
@@ -387,11 +418,21 @@ export class GatewayConnection {
 
       case GatewayOp.DISPATCH: {
         this.ctx.log?.debug?.(`Dispatch event: t=${t}, d=${JSON.stringify(d)}`);
+        let dispatchedAsTurn = false;
         if (isQQBotTurnEventType(t)) {
           if (!this.ingress) {
             throw new Error("QQBot ingress monitor is unavailable.");
           }
-          // Resume sequence advances only after the raw turn is durable.
+          // Register the seq so RESUME stays below it until the queued
+          // handler settles; committing at receipt would replay-skip
+          // in-flight messages after a restart or handler failure.
+          // Push to pendingTurnSeqs so settleMessage can dequeue in FIFO
+          // order — the ingress and queue both process sequentially.
+          if (typeof s === "number") {
+            this.seqWatermark.register(s);
+            this.pendingTurnSeqs.push(s);
+            dispatchedAsTurn = true;
+          }
           await this.ingress.receive(rawData);
         } else {
           const result = dispatchEvent(t ?? "", d, this.ctx.account.accountId, this.ctx.log);
@@ -426,7 +467,7 @@ export class GatewayConnection {
         });
         if (!canResume) {
           this.sessionId = null;
-          this.lastSeq = null;
+          this.seqWatermark.reset(null);
           clearSession(this.ctx.account.accountId);
           this.shouldRefreshToken = true;
         }
@@ -437,7 +478,12 @@ export class GatewayConnection {
     }
 
     if (typeof s === "number") {
-      this.lastSeq = s;
+      const dispatchedAsTurn = op === GatewayOp.DISPATCH && isQQBotTurnEventType(t ?? "");
+      // Turn-event seqs are registered during dispatch above (pending
+      // handler settlement); every other frame commits immediately.
+      if (!dispatchedAsTurn) {
+        this.seqWatermark.observe(s);
+      }
       saveAfterDispatch = true;
     }
     if (saveAfterDispatch) {
@@ -478,7 +524,11 @@ export class GatewayConnection {
     }
     this.heartbeatInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.lastSeq }));
+        // Heartbeats report the latest received frame seq (receive cursor);
+        // only RESUME and persistence use the settlement watermark. Sending
+        // the watermark here would look like the client fell behind while a
+        // handler is still running and provoke reconnect/replay churn.
+        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.seqWatermark.latest() }));
       }
     }, interval);
   }
@@ -489,7 +539,7 @@ export class GatewayConnection {
 
     if (action.clearSession) {
       this.sessionId = null;
-      this.lastSeq = null;
+      this.seqWatermark.reset(null);
       clearSession(account.accountId);
     }
     if (action.refreshToken) {

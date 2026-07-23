@@ -87,6 +87,7 @@ interface MessageQueueContext {
   peerQueueSize?: number;
   globalQueueSize?: number;
   maxConcurrentUsers?: number;
+  onMessageSettled?: (msg: QueuedMessage) => void;
 }
 
 interface QueueSnapshot {
@@ -262,6 +263,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const processOne = async (msg: QueuedMessage, peerId: string, label: string): Promise<void> => {
     if (msg.turnAdoptionLifecycle?.abortSignal.aborted) {
       await trackIngressSettlement(msg, "abandoned");
+      ctx.onMessageSettled?.(msg);
       return;
     }
     try {
@@ -272,6 +274,11 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
       // tombstone here because releasing them would replay a turn that cannot succeed.
       await trackIngressSettlement(msg, permanentFailure ? "completed" : "abandoned");
       log?.error(`${label} error for ${peerId}: ${formatErrorMessage(err)}`);
+    } finally {
+      // Settle the watermark so reconnect RESUME advances past this message.
+      // Terminal failures commit too — they were already handled and replaying
+      // them would just repeat the error.
+      ctx.onMessageSettled?.(msg);
     }
   };
 
