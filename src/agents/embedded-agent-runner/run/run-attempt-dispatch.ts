@@ -46,6 +46,7 @@ type AttemptRuntime = {
   agentHarnessId: string;
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   runtimePlan: AgentRuntimePlan;
+  forceToolCallIdSanitization: boolean;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
   authProfileId?: string;
@@ -260,6 +261,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : {}),
     runtimePlan: runtime.runtimePlan,
     observeToolTerminal,
+    forceToolCallIdSanitization: runtime.forceToolCallIdSanitization,
     model: applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(runtime.model, runtime.apiKeyInfo),
       runtime.runtimeAuthActive ? null : runtime.apiKeyInfo,

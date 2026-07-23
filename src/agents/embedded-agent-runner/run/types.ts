@@ -134,6 +134,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   runtimePlan?: AgentRuntimePlan;
   /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
   observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
+  /** Force replay-safe tool call IDs after a provider rejects the prior transcript format. */
+  forceToolCallIdSanitization?: boolean;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */
