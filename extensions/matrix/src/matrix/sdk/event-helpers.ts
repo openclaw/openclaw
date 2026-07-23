@@ -26,6 +26,10 @@ export function matrixEventToRaw(
     content: normalizedContent,
     unsigned: event.getUnsigned(),
   };
+  const redacts = event.event?.redacts;
+  if (typeof redacts === "string" && redacts.length > 0) {
+    raw.redacts = redacts;
+  }
   const stateKey = event.getStateKey() ?? event.getWireStateKey();
   if (typeof stateKey === "string") {
     raw.state_key = stateKey;
