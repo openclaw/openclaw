@@ -88,6 +88,7 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
 function createParams(sessionFile: string, workspaceDir: string) {
   const params = createRunAttemptParams(sessionFile, workspaceDir);
   params.disableTools = false;
+  params.config = undefined;
   return params;
 }
 
