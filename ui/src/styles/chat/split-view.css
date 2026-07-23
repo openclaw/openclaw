@@ -298,6 +298,28 @@ openclaw-chat-pane {
   margin-left: auto;
 }
 
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
+}
+
 @media (max-width: 480px) {
   .chat-pane__workspace-chip {
     width: 28px;

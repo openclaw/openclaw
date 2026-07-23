@@ -67,6 +67,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { canReceiveSessionEvent } from "./session-sharing.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -174,7 +175,12 @@ export async function createGatewayRuntimeState(params: {
     const clients = new Set<GatewayWsClient>();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
     const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
-    const gatewayBroadcaster = createGatewayBroadcaster({ clients, sessionMessageSubscribers });
+    const gatewayBroadcaster = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers,
+      canReceiveSessionEvent: (client, sessionKeys, agentId) =>
+        canReceiveSessionEvent({ cfg: loadRuntimeConfig(), client, sessionKeys, agentId }),
+    });
 
     let loadedHooksRequestHandler: HooksRequestHandler | null = null;
     const handleHooksRequest: HooksRequestHandler = async (req, res) => {

@@ -99,7 +99,7 @@ COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modu
 # cycle through the link.
 RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && chmod +x /app/openclaw.mjs \
- && node /app/scripts/postinstall-bundled-plugins.mjs \
+ && node --input-type=module -e "import { runBundledPluginPostinstall } from '/app/scripts/postinstall-bundled-plugins.mjs'; runBundledPluginPostinstall();" \
  && ln -sfn /app /app/node_modules/openclaw \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \

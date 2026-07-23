@@ -28,7 +28,11 @@ import type {
   ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionMembersListResult,
+  SessionVisibility,
+} from "../../api/types.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import {
   applicationContext,
@@ -159,6 +163,7 @@ import {
   applySelectedSessionProjection,
   dismissChatError,
   resolveAssistantAttachmentAuthToken,
+  SessionParticipationTracker,
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
@@ -211,6 +216,10 @@ import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
+import {
+  renderChatSessionSharing,
+  type ChatSessionSharingState,
+} from "./components/chat-session-sharing.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -447,6 +456,8 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private headerPlatform: string | null = null;
   @litState() private headerCopiedAction: ChatPaneHeaderAction | null = null;
   @litState() private presencePayload: PresencePayload | undefined;
+  @litState() private sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  private readonly sessionParticipationTracker = new SessionParticipationTracker();
   @litState() private boardCommandDock: {
     sessionKey: string;
     tabId: string;
@@ -489,6 +500,113 @@ class ChatPane extends OpenClawLightDomElement {
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
   private headerCopiedTimer: number | null = null;
+
+  private setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
+    this.sessionSharingStates = new Map(this.sessionSharingStates).set(cacheKey, state);
+  }
+
+  private sessionSharingAgentId(sessionKey: string): string | undefined {
+    if (sessionKey !== "global") {
+      return parseAgentSessionKey(sessionKey)?.agentId;
+    }
+    return this.state ? resolveChatAgentId(this.state) : undefined;
+  }
+
+  private sessionSharingCacheKey(sessionKey: string): string {
+    return `${this.sessionSharingAgentId(sessionKey) ?? ""}\0${sessionKey}`;
+  }
+
+  private async loadSessionSharing(row: GatewaySessionRow, force = false): Promise<void> {
+    const state = this.state;
+    if (!state?.connected || !state.client) {
+      return;
+    }
+    const cacheKey = this.sessionSharingCacheKey(row.key);
+    const current = this.sessionSharingStates.get(cacheKey);
+    if (current?.loading && !force) {
+      return;
+    }
+    // Sharing data (membership + paired identities) is connection-scoped. A
+    // gateway/account change bumps the generation and clears this cache, so a
+    // request that resolves after the switch must be dropped rather than
+    // overwrite the new connection's menu with the previous account's data.
+    const generation = this.connectionGeneration;
+    this.setSessionSharingState(cacheKey, { ...current, loading: true, error: undefined });
+    try {
+      const result = await state.client.request<SessionMembersListResult>("session.members.list", {
+        sessionKey: row.key,
+        ...(this.sessionSharingAgentId(row.key)
+          ? { agentId: this.sessionSharingAgentId(row.key) }
+          : {}),
+      });
+      if (this.connectionGeneration !== generation) {
+        return;
+      }
+      this.setSessionSharingState(cacheKey, { loading: false, result });
+    } catch (error) {
+      if (this.connectionGeneration !== generation) {
+        return;
+      }
+      this.setSessionSharingState(cacheKey, { loading: false, error: String(error) });
+    }
+  }
+
+  private async setSessionVisibility(
+    row: GatewaySessionRow,
+    visibility: SessionVisibility,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state?.connected || !state.client || visibility === row.visibility) {
+      return;
+    }
+    try {
+      await state.client.request("session.visibility.set", {
+        sessionKey: row.key,
+        visibility,
+        ...(this.sessionSharingAgentId(row.key)
+          ? { agentId: this.sessionSharingAgentId(row.key) }
+          : {}),
+      });
+      await this.context.sessions.refreshReplacement(this.sessionSharingAgentId(row.key));
+      await this.loadSessionSharing(row, true);
+    } catch (error) {
+      const cacheKey = this.sessionSharingCacheKey(row.key);
+      this.setSessionSharingState(cacheKey, {
+        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+        loading: false,
+        error: String(error),
+      });
+    }
+  }
+
+  private async setSessionMember(
+    row: GatewaySessionRow,
+    identityId: string,
+    member: boolean,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state?.connected || !state.client) {
+      return;
+    }
+    try {
+      await state.client.request(member ? "session.members.add" : "session.members.remove", {
+        sessionKey: row.key,
+        identityId,
+        ...(this.sessionSharingAgentId(row.key)
+          ? { agentId: this.sessionSharingAgentId(row.key) }
+          : {}),
+      });
+      await this.loadSessionSharing(row, true);
+      await this.context.sessions.refreshReplacement(this.sessionSharingAgentId(row.key));
+    } catch (error) {
+      const cacheKey = this.sessionSharingCacheKey(row.key);
+      this.setSessionSharingState(cacheKey, {
+        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+        loading: false,
+        error: String(error),
+      });
+    }
+  }
 
   constructor() {
     super();
@@ -2636,6 +2754,11 @@ class ChatPane extends OpenClawLightDomElement {
       this.taskSuggestionOperations.clear();
       this.sessionDiscussionStates.clear();
       this.sessionDiscussionOpenUrls.clear();
+      this.sessionParticipationTracker.reset();
+      // A new gateway/account owns its own membership + identity data; drop the
+      // previous connection's sharing cache so a stale loading entry cannot
+      // suppress the fresh load or leak the prior account's identities.
+      this.sessionSharingStates = new Map();
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
@@ -3258,6 +3381,20 @@ class ChatPane extends OpenClawLightDomElement {
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
         this.persistBoardSessionView({ face });
       }),
+      sharingControl:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.visibility.set") === true
+          ? renderChatSessionSharing({
+              session: row,
+              state: row
+                ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
+                : undefined,
+              onOpen: () => row && void this.loadSessionSharing(row),
+              onVisibilityChange: (visibility) =>
+                row && void this.setSessionVisibility(row, visibility),
+              onMemberChange: (identityId, member) =>
+                row && void this.setSessionMember(row, identityId, member),
+            })
+          : nothing,
       boardDockAction: renderBoardDockMenu(
         board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
         board.face,
@@ -3361,6 +3498,15 @@ class ChatPane extends OpenClawLightDomElement {
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
+    const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
+      catalog: catalogKey !== null,
+      listLoading: state.sessionsLoading,
+      sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
+      session: selectedSession,
+    });
+    const disabledReason = sessionParticipationBlocked
+      ? t("chat.sessionSharing.readOnlyNotice")
+      : null;
     // Never flash "view-only" while metadata loads; after loading, anything short
     // of a continuable session (failed lookups too) explains the disabled composer.
     const catalogDisabledReason =
@@ -3425,7 +3571,7 @@ class ChatPane extends OpenClawLightDomElement {
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending: state.chatSending,
-      canAbort: hasAbortableSessionRun(state),
+      canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
       waitingApproval: state.waitingApprovalStatuses.size > 0,
@@ -3441,7 +3587,7 @@ class ChatPane extends OpenClawLightDomElement {
       // Unconditional: catalog chats never render the HUD (observerHudReady is
       // forced false), and a hide/show from any surface must reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
-      gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
+      gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
         this.requestUpdate();
@@ -3484,8 +3630,10 @@ class ChatPane extends OpenClawLightDomElement {
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
-      canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
-      disabledReason: catalogDisabledReason,
+      canSend: catalogKey
+        ? this.catalogSession?.canContinue === true
+        : !selectedSessionArchived && !sessionParticipationBlocked,
+      disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
           ? {
@@ -3496,13 +3644,14 @@ class ChatPane extends OpenClawLightDomElement {
           : undefined,
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
-      inlineApproval,
+      inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,
       approvalErrors: approvalSnapshot?.approvalErrors,
       approvalNowMs: approvalSnapshot?.approvalNowMs,
-      onApprovalDecision: overlays
-        ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
-        : undefined,
+      onApprovalDecision:
+        overlays && !sessionParticipationBlocked
+          ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
+          : undefined,
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
@@ -3643,10 +3792,14 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatError = message;
         state.requestUpdate?.();
       },
-      onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
+      onAbort: sessionParticipationBlocked
+        ? undefined
+        : () => void state.handleAbortChat({ preserveDraft: true }),
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
-      onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+      onQueueSteer: sessionParticipationBlocked
+        ? undefined
+        : (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
       onSideQuestion: (command, displayQuestion, onSendRejected) =>
         void state.handleSendChat(command, {

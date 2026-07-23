@@ -428,6 +428,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         agentId: target.agentId,
         reason: "delete",
       });
+      emitSessionsChanged(context, { reason: "delete" });
     }
   },
 };
