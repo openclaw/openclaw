@@ -567,7 +567,6 @@ src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner-payloads.test.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
-src/auto-reply/reply/agent-runner.ts
 src/auto-reply/reply/commands-acp.test.ts
 src/auto-reply/reply/commands-approve.test.ts
 src/auto-reply/reply/commands-models.ts
