@@ -93,7 +93,7 @@ type MockTurn = {
 
 async function mockComplete(turns: MockTurn[], turn: number): Promise<MockTurn> {
   await sleep(120); // simulate latency
-  return turns[Math.min(turn - 1, turns.length - 1)];
+  return turns[Math.min(turn - 1, turns.length - 1)]!;
 }
 
 // ─── Scenario runner ─────────────────────────────────────────────────────────
