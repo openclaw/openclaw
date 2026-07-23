@@ -245,6 +245,8 @@ describe("config footprint guardrails", () => {
     // channel-config-schema is the canonical internal module; the primitives
     // and bundled shells stay export-compatible for plugins only.
     const allowedShellImporters = new Set([
+      // The facade's focused regression test is its only internal consumer.
+      "src/plugin-sdk/bundled-channel-config-schema.test.ts",
       // This guardrail file embeds facade specifiers in shell-shape assertions.
       "src/plugins/contracts/config-footprint-guardrails.test.ts",
     ]);
