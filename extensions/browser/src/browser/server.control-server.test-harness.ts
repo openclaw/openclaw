@@ -215,7 +215,10 @@ const pwMocks = vi.hoisted(() => {
     highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-    navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
+    navigateViaPlaywright: vi.fn(async (opts?: { targetId?: string }) => ({
+      url: "https://example.com",
+      targetId: opts?.targetId,
+    })),
     pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
     pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     responseBodyViaPlaywright: vi.fn(async () => ({
@@ -247,7 +250,9 @@ const pwMocks = vi.hoisted(() => {
       path: "/tmp/report.pdf",
     })),
     waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-    executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
+    executeActViaPlaywright: vi.fn(async (opts?: ExecuteActMockOptions) => ({
+      targetId: opts?.targetId,
+    })),
   };
 });
 
@@ -315,7 +320,7 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
 pwMocks.executeActViaPlaywright.mockImplementation(
   async (opts: ExecuteActMockOptions | undefined) => {
     if (!opts) {
-      return {};
+      return { targetId: undefined };
     }
     const { cdpUrl, action, targetId, ssrfPolicy, browserProxyMode, evaluateEnabled, signal } =
       opts;
@@ -334,7 +339,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           includeSignal: spec.includeSignal,
         }),
       );
-      return {};
+      return { targetId };
     }
 
     switch (action.kind) {
@@ -352,7 +357,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           timeoutMs: action.timeoutMs,
           signal,
         });
-        return { result };
+        return { result, targetId };
       }
       case "batch": {
         const result = await pwMocks.batchViaPlaywright({
@@ -365,10 +370,10 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           browserProxyMode,
           signal,
         });
-        return { results: result.results };
+        return { results: result.results, targetId };
       }
       default:
-        return {};
+        return { targetId };
     }
   },
 );

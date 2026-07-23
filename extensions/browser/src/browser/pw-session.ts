@@ -1408,7 +1408,7 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
       continue;
     }
     ensurePageState(page);
-    const targetId = await pageTargetId(page).catch(() => null);
+    const targetId = await readPageTargetId(page).catch(() => null);
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
     if (!targetId) {
@@ -1429,7 +1429,8 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
   return { accessible, blockedCount };
 }
 
-async function pageTargetId(page: Page): Promise<string | null> {
+/** Reads the CDP raw target id for a Playwright page (operation-owned identity). */
+export async function readPageTargetId(page: Page): Promise<string | null> {
   const session = await page.context().newCDPSession(page);
   try {
     const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
@@ -1549,7 +1550,7 @@ export async function quarantineBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   markPageRefBlocked(opts.cdpUrl, opts.page);
-  const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
+  const resolvedTargetId = await readPageTargetId(opts.page).catch(() => null);
   const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
   const targetIdToBlock = resolvedTargetId || fallbackTargetId;
   if (targetIdToBlock) {
@@ -2231,7 +2232,7 @@ async function readPagesViaPlaywright(
         }
         let tid: string | null;
         try {
-          tid = await pageTargetId(page);
+          tid = await readPageTargetId(page);
         } catch (err) {
           if (isRecoverablePlaywrightDisconnectError(err)) {
             throw err;
@@ -2340,7 +2341,7 @@ export async function createPageViaPlaywright(
   const page = await context.newPage();
   ensurePageState(page);
   clearBlockedPageRef(opts.cdpUrl, page);
-  const createdTargetId = await pageTargetId(page).catch(() => null);
+  const createdTargetId = await readPageTargetId(page).catch(() => null);
   clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
   // Navigate to the URL
@@ -2393,7 +2394,7 @@ export async function createPageViaPlaywright(
   }
 
   // Get the targetId for this page
-  const tid = createdTargetId || (await pageTargetId(page).catch(() => null));
+  const tid = createdTargetId || (await readPageTargetId(page).catch(() => null));
   if (!tid) {
     throw new Error("Failed to get targetId for new page");
   }

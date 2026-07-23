@@ -50,7 +50,10 @@ import {
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  readChromeMcpOperationTargetId,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -468,15 +471,17 @@ export function registerBrowserAgentActRoutes(
         );
         const jsonOk = async (
           extra?: Record<string, unknown>,
-          options?: { resolveCurrentTarget?: boolean },
+          options?: { resolveCurrentTarget?: boolean; operationTargetId?: string | null },
         ) => {
           const shouldResolveCurrentTarget =
-            options?.resolveCurrentTarget && (!isExistingSession || hasNavigationResultPolicy);
+            options?.resolveCurrentTarget &&
+            (!isExistingSession ||
+              hasNavigationResultPolicy ||
+              options.operationTargetId !== undefined);
           const responseTargetId = shouldResolveCurrentTarget
-            ? await resolveTargetIdAfterNavigate({
-                oldTargetId: tab.targetId,
-                navigatedUrl: tab.url,
-                listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
+            ? resolveOperationTargetOutcome({
+                actedOnTargetId: tab.targetId,
+                operationTargetId: options?.operationTargetId,
               })
             : tab.targetId;
           const url =
@@ -515,6 +520,14 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             ...existingSessionCallOptions,
           };
+          const listExistingSessionTabs = () => profileCtx.listTabs(existingSessionCallOptions);
+          const existingSessionActTargetOptions = async () => ({
+            resolveCurrentTarget: true as const,
+            operationTargetId: await readChromeMcpOperationTargetId({
+              listTabs: listExistingSessionTabs,
+              actedOnTargetId: tab.targetId,
+            }),
+          });
           const initialTabTargetIds = hasNavigationResultPolicy
             ? new Set(
                 (await profileCtx.listTabs(existingSessionCallOptions)).map(
@@ -528,6 +541,7 @@ export function registerBrowserAgentActRoutes(
             listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
             initialTabTargetIds,
           };
+          // Chrome MCP reports operation-owned target ids via tab-list membership.
           const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
           if (unsupportedMessage) {
             return jsonActError(
@@ -548,7 +562,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "clickCoords":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -562,7 +576,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "type":
               await runExistingSessionActionWithNavigationGuard({
                 execute: async () => {
@@ -580,7 +594,7 @@ export function registerBrowserAgentActRoutes(
                 },
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "press":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -590,7 +604,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "hover":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -600,7 +614,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "scrollIntoView":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -611,7 +625,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "drag":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -622,7 +636,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "select":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -633,7 +647,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "fill":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -646,14 +660,14 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "resize":
               await resizeChromeMcpPage({
                 ...existingSessionTarget,
                 width: action.width,
                 height: action.height,
               });
-              return await jsonOk();
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "wait":
               await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -670,7 +684,7 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk();
+              return await jsonOk(undefined, await existingSessionActTargetOptions());
             case "evaluate": {
               const result = await runExistingSessionActionWithNavigationGuard({
                 execute: () =>
@@ -684,14 +698,17 @@ export function registerBrowserAgentActRoutes(
                   }),
                 guard: existingSessionNavigationGuard,
               });
-              return await jsonOk({ result }, { resolveCurrentTarget: true });
+              return await jsonOk({ result }, await existingSessionActTargetOptions());
             }
             case "close":
               await profileCtx.closeTab(tab.targetId, {
                 ...existingSessionCallOptions,
                 exactTargetId: true,
               });
-              return await jsonOk();
+              return await jsonOk(undefined, {
+                resolveCurrentTarget: true,
+                operationTargetId: null,
+              });
             case "batch":
               return jsonActError(
                 res,
@@ -714,35 +731,38 @@ export function registerBrowserAgentActRoutes(
           ...navigationPolicy,
           signal,
         });
+        const actTargetOptions = {
+          resolveCurrentTarget: true as const,
+          operationTargetId: result.targetId,
+        };
         if (result.blockedByDialog) {
-          return await jsonOk({
-            blockedByDialog: true,
-            browserState: result.browserState,
-          });
+          return await jsonOk(
+            {
+              blockedByDialog: true,
+              browserState: result.browserState,
+            },
+            actTargetOptions,
+          );
         }
         const downloads = result.downloads;
         switch (action.kind) {
           case "batch":
             return await jsonOk(
               { results: result.results ?? [], ...(downloads ? { downloads } : {}) },
-              { resolveCurrentTarget: true },
+              actTargetOptions,
             );
           case "evaluate":
             return await jsonOk(
               { result: result.result, ...(downloads ? { downloads } : {}) },
-              { resolveCurrentTarget: true },
+              actTargetOptions,
             );
           case "click":
           case "clickCoords":
-            return await jsonOk(downloads ? { downloads } : undefined, {
-              resolveCurrentTarget: true,
-            });
+            return await jsonOk(downloads ? { downloads } : undefined, actTargetOptions);
           case "resize":
             return await jsonOk(downloads ? { downloads } : undefined);
           default:
-            return await jsonOk(downloads ? { downloads } : undefined, {
-              resolveCurrentTarget: true,
-            });
+            return await jsonOk(downloads ? { downloads } : undefined, actTargetOptions);
         }
       },
     });

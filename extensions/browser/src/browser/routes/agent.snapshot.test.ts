@@ -1,116 +1,101 @@
 // Browser tests cover agent.snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  readChromeMcpOperationTargetId,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 
-type Tab = { targetId: string; url: string };
-
-function staticListTabs(tabs: Tab[]): () => Promise<Tab[]> {
-  return async () => tabs;
-}
-
-describe("resolveTargetIdAfterNavigate", () => {
-  it("returns original targetId when old target still exists (no swap)", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([
-        { targetId: "old-123", url: "https://example.com" },
-        { targetId: "other-456", url: "https://other.com" },
-      ]),
-    });
-    expect(result).toBe("old-123");
+describe("resolveOperationTargetOutcome", () => {
+  it("returns the acted-on target when the backend reports no operation-owned id", () => {
+    expect(
+      resolveOperationTargetOutcome({
+        actedOnTargetId: "old-123",
+        operationTargetId: null,
+      }),
+    ).toBe("old-123");
   });
 
-  it("resolves new targetId when old target is gone (renderer swap)", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      listTabs: staticListTabs([{ targetId: "new-456", url: "https://example.com" }]),
-    });
-    expect(result).toBe("new-456");
+  it("returns the acted-on target when the backend reports an empty operation-owned id", () => {
+    expect(
+      resolveOperationTargetOutcome({
+        actedOnTargetId: "old-123",
+        operationTargetId: "   ",
+      }),
+    ).toBe("old-123");
   });
 
-  it("prefers non-stale targetId when multiple tabs share the URL", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      retryDelayMs: 0,
-      listTabs: staticListTabs([
-        { targetId: "preexisting-000", url: "https://example.com" },
-        { targetId: "fresh-777", url: "https://example.com" },
-      ]),
-    });
-    // Ambiguous replacement; prefer staying on the old target rather than guessing wrong.
-    expect(result).toBe("old-123");
+  it("returns the backend operation-owned target when provided", () => {
+    expect(
+      resolveOperationTargetOutcome({
+        actedOnTargetId: "old-123",
+        operationTargetId: "fresh-456",
+      }),
+    ).toBe("fresh-456");
   });
 
-  it("retries and resolves targetId when first listTabs has no URL match", async () => {
-    let calls = 0;
-
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://delayed.com",
-      retryDelayMs: 0,
-      listTabs: async () => {
-        calls++;
-        if (calls === 1) {
-          return [{ targetId: "unrelated-1", url: "https://unrelated.com" }];
-        }
-        return [{ targetId: "delayed-999", url: "https://delayed.com" }];
-      },
-    });
-
-    expect(result).toBe("delayed-999");
-    expect(calls).toBe(2);
+  it("never adopts a tab from list inference; stale acted-on id is kept when page closes", () => {
+    // Regression for #103785: after an action closes the acted-on page, route
+    // code must not infer a replacement from tab lists or unrelated survivors.
+    expect(
+      resolveOperationTargetOutcome({
+        actedOnTargetId: "acted-on-a",
+        operationTargetId: undefined,
+      }),
+    ).toBe("acted-on-a");
   });
 
-  it("falls back to original targetId when no match found after retry", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://no-match.com",
-      retryDelayMs: 0,
-      listTabs: staticListTabs([
-        { targetId: "unrelated-1", url: "https://unrelated.com" },
-        { targetId: "unrelated-2", url: "https://unrelated2.com" },
-      ]),
-    });
+  it("preserves renderer-swap continuity via backend page identity", () => {
+    expect(
+      resolveOperationTargetOutcome({
+        actedOnTargetId: "old-renderer",
+        operationTargetId: "reattached-renderer",
+      }),
+    ).toBe("reattached-renderer");
+  });
+});
 
-    expect(result).toBe("old-123");
+describe("readChromeMcpOperationTargetId", () => {
+  it("returns the acted-on target when it is still present in the tab list", async () => {
+    await expect(
+      readChromeMcpOperationTargetId({
+        actedOnTargetId: "tab-a",
+        listTabs: async () => [{ targetId: "tab-a" }, { targetId: "tab-b" }],
+      }),
+    ).resolves.toBe("tab-a");
   });
 
-  it("falls back to single remaining tab when no URL match after retry", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://single-tab.com",
-      retryDelayMs: 0,
-      listTabs: staticListTabs([{ targetId: "only-tab", url: "https://some-other.com" }]),
-    });
-
-    expect(result).toBe("only-tab");
+  it("returns null when the acted-on target is gone from the tab list", async () => {
+    await expect(
+      readChromeMcpOperationTargetId({
+        actedOnTargetId: "tab-a",
+        listTabs: async () => [{ targetId: "tab-b" }],
+      }),
+    ).resolves.toBeNull();
   });
 
-  it("falls back to original targetId when listTabs throws", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://error.com",
-      listTabs: async () => {
-        throw new Error("CDP connection lost");
-      },
+  it("does not adopt a different tab when the acted-on target is gone", async () => {
+    const outcome = resolveOperationTargetOutcome({
+      actedOnTargetId: "tab-a",
+      operationTargetId: await readChromeMcpOperationTargetId({
+        actedOnTargetId: "tab-a",
+        listTabs: async () => [{ targetId: "tab-b" }],
+      }),
     });
-    expect(result).toBe("old-123");
+    expect(outcome).toBe("tab-a");
   });
 
-  it("keeps the old target when multiple replacement candidates still match after retry", async () => {
-    const result = await resolveTargetIdAfterNavigate({
-      oldTargetId: "old-123",
-      navigatedUrl: "https://example.com",
-      retryDelayMs: 0,
-      listTabs: staticListTabs([
-        { targetId: "preexisting-000", url: "https://example.com" },
-        { targetId: "fresh-777", url: "https://example.com" },
-      ]),
+  it("does not adopt a sole unrelated survivor when the acted-on target is gone", async () => {
+    const soleSurvivorTabs = [{ targetId: "unrelated-b" }];
+    const operationTargetId = await readChromeMcpOperationTargetId({
+      actedOnTargetId: "acted-on-a",
+      listTabs: async () => soleSurvivorTabs,
     });
-
-    expect(result).toBe("old-123");
+    expect(operationTargetId).toBeNull();
+    expect(
+      resolveOperationTargetOutcome({
+        actedOnTargetId: "acted-on-a",
+        operationTargetId,
+      }),
+    ).toBe("acted-on-a");
   });
 });

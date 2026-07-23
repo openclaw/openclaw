@@ -33,6 +33,7 @@ import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  readPageTargetId,
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
   markObservedDialogsHandledRemotelyForPage,
@@ -1957,12 +1958,24 @@ export async function executeActViaPlaywright(
   blockedByDialog?: boolean;
   browserState?: unknown;
   downloads?: BrowserDownloadResult[];
+  /** Backend-owned raw target id after the operation, when the page survives. */
+  targetId?: string;
 }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
+  });
+  const readOwnedTargetId = async (): Promise<string | undefined> => {
+    const owned = await readPageTargetId(page).catch(() => null);
+    return owned ?? opts.targetId;
+  };
+  const withOwnedTarget = async <T extends Record<string, unknown>>(
+    payload: T,
+  ): Promise<T & { targetId?: string }> => ({
+    ...payload,
+    targetId: await readOwnedTargetId(),
   });
   // Any DOM action can synchronously trigger a download. Capturing all actions
   // keeps reporting and final-URL policy aligned with the actual file write.
@@ -2002,10 +2015,10 @@ export async function executeActViaPlaywright(
         signal: dialogAbort.signal,
       });
       const newDownloads = await drainDownloads();
-      return {
+      return await withOwnedTarget({
         results: batch.results,
         ...(newDownloads ? { downloads: newDownloads } : {}),
-      };
+      });
     }
     const result = await executeSingleAction(
       opts.action,
@@ -2018,9 +2031,12 @@ export async function executeActViaPlaywright(
     );
     const newDownloads = await drainDownloads();
     if (opts.action.kind === "evaluate") {
-      return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
+      return await withOwnedTarget({
+        result,
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      });
     }
-    return newDownloads ? { downloads: newDownloads } : {};
+    return await withOwnedTarget(newDownloads ? { downloads: newDownloads } : {});
   } catch (err) {
     let failure = err;
     try {
@@ -2035,7 +2051,10 @@ export async function executeActViaPlaywright(
       failure = downloadErr;
     }
     if (isBrowserObservedDialogBlockedError(failure)) {
-      return { blockedByDialog: true, browserState: failure.browserState };
+      return await withOwnedTarget({
+        blockedByDialog: true,
+        browserState: failure.browserState,
+      });
     }
     if (
       isPolicyDenyNavigationError(failure) &&
