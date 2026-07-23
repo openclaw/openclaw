@@ -67,6 +67,13 @@ function findGitPaths(cwd: string): GitPaths | null {
 }
 
 /** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
+
+// `git symbolic-ref` reads a single ref file and exits quickly on healthy
+// repos, but on NFS/CIFS mounts or with a stuck kernel filesystem driver it
+// can block indefinitely. Bound it so the session footer falls back to the
+// HEAD-read path instead of hanging UI rendering.
+const GIT_BRANCH_RESOLVE_TIMEOUT_MS = 2_000;
+
 function resolveBranchWithGitSync(repoDir: string): string | null {
   const result = spawnSync(
     "git",
@@ -75,6 +82,7 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_BRANCH_RESOLVE_TIMEOUT_MS,
     },
   );
   const branch = result.status === 0 ? result.stdout.trim() : "";
