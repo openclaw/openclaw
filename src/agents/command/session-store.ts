@@ -101,7 +101,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
-  const contextTokens =
+  // Resolve the model context budget (needed for deriveSessionTotalTokens).
+  const contextTokenBudget =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
       : ((await getContextModule()).resolveContextTokensForModel({
@@ -112,6 +113,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
           fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);
+  // Only persist the context budget to the session entry when actual
+  // runtime usage data is available. Without usage, the raw model context
+  // window produces misleading "full" indicators on status surfaces.
+  const persistContextTokens = hasNonzeroUsage(usage) ? contextTokenBudget : undefined;
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
@@ -130,9 +135,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
-      : {
-          contextTokens,
-        }),
+      : persistContextTokens !== undefined
+        ? { contextTokens: persistContextTokens }
+        : {}),
   };
   if (entry.sessionId !== sessionId) {
     next.sessionFile =
@@ -214,7 +219,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const output = usage.output ?? 0;
     const totalTokens = deriveSessionTotalTokens({
       lastCallUsage,
-      contextTokens,
+      contextTokens: contextTokenBudget,
       promptTokens,
     });
     const runEstimatedCostUsd = resolveNonNegativeNumber(
