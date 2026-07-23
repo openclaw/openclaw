@@ -139,10 +139,10 @@ export function createMeetingOutputLoopbackVerifier(options: {
   let generationVerified = false;
   let outputGeneration = 0;
   let verifiedOutputGeneration: number | undefined;
-  let inputPcm = Buffer.alloc(0);
+  let inputPcm: Buffer = Buffer.alloc(0);
   let nextInputStartSample = 0;
   let outputFingerprint: OutputFingerprint | undefined;
-  let pendingOutputPcm = Buffer.alloc(0);
+  let pendingOutputPcm: Buffer = Buffer.alloc(0);
   let outputObservationDeadlineMs = Number.NEGATIVE_INFINITY;
   let outputLoopbackSignalBytes = 0;
   let lastOutputLoopbackAt: string | undefined;
