@@ -31,10 +31,12 @@ OpenClaw runs (for example cron) still suppress project-doc loading.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. Skill catalogs and tool-routed
-`MEMORY.md` pointers are projected as turn-scoped collaboration developer
-instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
-and full `MEMORY.md` fall back to plain turn input context instead.
+active agent workspace profile files. OpenClaw skill catalogs are projected as
+turn-scoped collaboration developer instructions for native Codex. Root
+`MEMORY.md` uses bounded turn input reference context when present, even when
+memory tools are available; Codex should use memory tools for deeper durable
+recall beyond that sparse bootstrap context. Active `BOOTSTRAP.md` content also
+uses turn input reference context.
 
 Most OpenClaw dynamic tools use the searchable `openclaw` namespace. Tools
 marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
