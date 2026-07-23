@@ -71,7 +71,6 @@ interface SidebarMenusRenderHost extends ReactiveControllerHost, SessionOrganize
   };
   agentUnreadCount(agentId: string): number;
   askAgentCapabilities(agentId: string): void;
-  knownSessionGroups(): readonly string[];
   onUpdateSidebarEntries?(entries: readonly string[]): void;
   reconciledSidebarZone(): {
     entries: readonly SidebarZoneEntry[];
