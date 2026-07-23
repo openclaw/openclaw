@@ -98,6 +98,11 @@ type HookCronRunCall = {
   job?: {
     agentId?: string;
     createdAtMs?: number;
+    delivery?: {
+      mode?: string;
+      channel?: string;
+      to?: string;
+    };
     payload?: {
       externalContentSource?: string;
       allowUnsafeExternalContent?: boolean;
@@ -212,6 +217,7 @@ describe("gateway server hooks", () => {
       expect(agentEvents.join("\n")).toContain("Hook Email: done");
       const firstCall = cronRunCall();
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
+      expect(firstCall?.job?.delivery?.mode).toBe("none");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
@@ -378,6 +384,102 @@ describe("gateway server hooks", () => {
       expect(targetEvents.join("\n")).toContain("Hook Email: done");
       expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+    });
+  });
+
+  test("preserves hook delivery intent for explicit channels with or without recipients", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const implicit = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Implicit",
+      });
+      expect(implicit.status).toBe(200);
+      await waitForSystemEvent();
+      const implicitCall = cronRunCall();
+      expect(implicitCall?.job?.delivery).toEqual({ mode: "none" });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const channelOnly = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Channel only",
+        channel: "telegram",
+      });
+      expect(channelOnly.status).toBe(200);
+      await waitForSystemEvent();
+      const channelOnlyCall = cronRunCall();
+      expect(channelOnlyCall?.job?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: undefined,
+      });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const explicit = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Explicit",
+        channel: "telegram",
+        to: "123456",
+      });
+      expect(explicit.status).toBe(200);
+      await waitForSystemEvent();
+      const explicitCall = cronRunCall();
+      expect(explicitCall?.job?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: "123456",
+      });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const bareRecipientOnly = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Bare recipient only",
+        to: "123456",
+      });
+      expect(bareRecipientOnly.status).toBe(200);
+      await waitForSystemEvent();
+      const bareRecipientOnlyCall = cronRunCall();
+      expect(bareRecipientOnlyCall?.job?.delivery).toEqual({ mode: "none" });
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("preserves mapped hook delivery intent for an explicit channel without a recipient", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-channel-only" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          deliver: true,
+          channel: "telegram",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/mapped-channel-only", {
+        subject: "Do it",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+
+      expect(cronRunCall()?.job?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: undefined,
+      });
+      drainSystemEvents(resolveMainKey());
     });
   });
 

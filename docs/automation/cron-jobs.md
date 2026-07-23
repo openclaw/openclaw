@@ -520,6 +520,8 @@ Query-string tokens are rejected.
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
 
+    Hook agent runs do not inherit the main session's last chat recipient for fallback delivery. To deliver the final run output directly to chat, set both `channel` and `to` explicitly. Without an explicit target, the isolated hook run disables cron fallback delivery and uses the hook completion event path instead.
+
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms.

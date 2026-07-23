@@ -348,6 +348,28 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBe("room-denied");
   });
 
+  it("rejects an explicit Telegram channel without a recipient", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-sensitive-recipient",
+      lastChannel: "telegram",
+      lastTo: "sensitive-recipient",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: undefined,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBeUndefined();
+    if (result.ok) {
+      throw new Error("expected missing target error");
+    }
+    expect(result.error.message).toContain("Refusing implicit isolated cron delivery");
+    expect(result.error.message).not.toContain("sensitive-recipient");
+  });
+
   it("does not use pairing-store entries as implicit automation recipients", async () => {
     setMainSessionEntry(undefined);
 
