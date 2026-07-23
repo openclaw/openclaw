@@ -910,7 +910,7 @@ $0 \\"$1\\"" touch {marker}`,
       requiresExecApproval({
         ask: "on-miss",
         security: "allowlist",
-        analysisOk: result.analysisOk,
+        analysisOk: analysis.ok,
         allowlistSatisfied: result.allowlistSatisfied,
       }),
     ).toBe(true);
