@@ -1192,6 +1192,141 @@ describe("buildCachedChatItems", () => {
     });
   });
 
+  it("coalesces a native tool result that sorts before its call", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-native",
+              name: "example_tool",
+              arguments: { query: "example" },
+            },
+          ],
+          timestamp: 2000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-native",
+          toolName: "example_tool",
+          content: [{ type: "text", text: "Native result" }],
+          timestamp: 1000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "native-reversed");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      callId: "call-native",
+      args: { query: "example" },
+      outputText: "Native result",
+    });
+  });
+
+  it("pairs earlier-sorted same-name tool results by call id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-a",
+          toolName: "read",
+          content: [{ type: "text", text: "contents of a" }],
+          timestamp: 1000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-b",
+          toolName: "read",
+          content: [{ type: "text", text: "contents of b" }],
+          timestamp: 1001,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call-b", name: "read", arguments: { path: "b.ts" } },
+            { type: "toolCall", id: "call-a", name: "read", arguments: { path: "a.ts" } },
+          ],
+          timestamp: 1002,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
+      extractToolCards(entry.message, `native-same-name-${index}`),
+    );
+    expect(cards).toHaveLength(2);
+    expect(cards.find((card) => card.callId === "call-a")).toMatchObject({
+      args: { path: "a.ts" },
+      outputText: "contents of a",
+    });
+    expect(cards.find((card) => card.callId === "call-b")).toMatchObject({
+      args: { path: "b.ts" },
+      outputText: "contents of b",
+    });
+  });
+
+  it("pairs an earlier bundled result message with later calls", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "call-a", content: "contents of a" },
+            { type: "tool_result", tool_use_id: "call-b", content: "contents of b" },
+          ],
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } },
+            { type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } },
+          ],
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "bundled-reversed");
+    expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
+      ["call-a", { path: "a.ts" }, "contents of a"],
+      ["call-b", { path: "b.ts" }, "contents of b"],
+    ]);
+  });
+
+  it("preserves mixed content in an earlier bundled result message", () => {
+    const mixedContent = [
+      { type: "text", text: "Keep this explanation" },
+      { type: "tool_result", tool_use_id: "call-a", content: "contents of a" },
+      { type: "tool_result", tool_use_id: "call-b", content: "contents of b" },
+    ];
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: mixedContent, timestamp: 1000 },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "call-a", name: "read", input: { path: "a.ts" } },
+            { type: "tool_use", id: "call-b", name: "read", input: { path: "b.ts" } },
+          ],
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(firstMessageContent(groupAt(groups, 0))).toEqual(mixedContent);
+  });
+
   it("coalesces interleaved parallel call/result pairs by call id", () => {
     const groups = messageGroups({
       messages: [
@@ -1435,6 +1570,29 @@ describe("buildCachedChatItems", () => {
     });
 
     // Call and late result stay separate items around the user turn.
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.role)).toEqual(["tool", "user", "tool"]);
+  });
+
+  it("does not pair an earlier result across a user message boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-x",
+          toolName: "read",
+          content: [{ type: "toolResult", text: "early result" }],
+          timestamp: 1000,
+        },
+        { role: "user", content: "start a new turn", timestamp: 1001 },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call-x", name: "read", input: { path: "x.ts" } }],
+          timestamp: 1002,
+        },
+      ],
+    });
+
     expect(groups).toHaveLength(3);
     expect(groups.map((group) => group.role)).toEqual(["tool", "user", "tool"]);
   });

@@ -763,9 +763,21 @@ function refreshOpenCallIds(
 
 function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
+  // Backward pairing can replace several earlier result slots with one
+  // multi-call item. Defer removal so all call-id indexes stay stable.
+  const suppressedIndexes = new Set<number>();
   // Parallel calls can outnumber any fixed lookback window, so each unresolved
   // call id owns its current transcript item until a non-tool boundary.
   const openCallIndexes = new Map<string, number>();
+  // Timestamp ordering can place a persisted result before its call. Keep the
+  // orphan's slot by call id so a later call can restore the complete card.
+  const openResultIndexes = new Map<string, number>();
+  const registerOrphanResult = (resultItem: ChatItem, index: number) => {
+    const callId = resolveToolResultCallId(resultItem);
+    if (callId && !openResultIndexes.has(callId)) {
+      openResultIndexes.set(callId, index);
+    }
+  };
   for (const item of items) {
     const resultItems = splitBundledToolResultItems(item);
     const unmatchedResultItems: ChatItem[] = [];
@@ -787,11 +799,45 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     if (mergedResult) {
       for (const unmatched of unmatchedResultItems) {
         coalesced.push(unmatched);
+        registerOrphanResult(unmatched, coalesced.length - 1);
+      }
+      continue;
+    }
+    if (resultItems.length > 1) {
+      // Keep bundled orphan results addressable by their individual call ids;
+      // the later calls may arrive together or as separate messages.
+      for (const resultItem of resultItems) {
+        coalesced.push(resultItem);
+        registerOrphanResult(resultItem, coalesced.length - 1);
       }
       continue;
     }
 
     const unresolvedCallIds = unresolvedToolCallIds(item);
+    let backwardMerged = item;
+    const matchedResultIndexes: number[] = [];
+    for (const callId of unresolvedCallIds) {
+      const resultIndex = openResultIndexes.get(callId);
+      const orphanResult = resultIndex === undefined ? undefined : coalesced[resultIndex];
+      const merged = orphanResult ? mergeToolCallResultPair(backwardMerged, orphanResult) : null;
+      if (!merged || resultIndex === undefined) {
+        continue;
+      }
+      backwardMerged = merged;
+      matchedResultIndexes.push(resultIndex);
+      openResultIndexes.delete(callId);
+    }
+    if (matchedResultIndexes.length > 0) {
+      const resultIndex = Math.min(...matchedResultIndexes);
+      coalesced[resultIndex] = backwardMerged;
+      for (const matchedIndex of matchedResultIndexes) {
+        if (matchedIndex !== resultIndex) {
+          suppressedIndexes.add(matchedIndex);
+        }
+      }
+      refreshOpenCallIds(openCallIndexes, coalesced, resultIndex);
+      continue;
+    }
     if (unresolvedCallIds.size === 1) {
       const callId = unresolvedCallIds.values().next().value;
       const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
@@ -813,12 +859,14 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     }
     if (isToolTimelineItem(item)) {
       // Orphan results keep the window open for later siblings.
+      registerOrphanResult(item, coalesced.length - 1);
       continue;
     }
     // Any other content (user text, assistant reply, dividers) closes the run.
     openCallIndexes.clear();
+    openResultIndexes.clear();
   }
-  return coalesced;
+  return coalesced.filter((_, index) => !suppressedIndexes.has(index));
 }
 
 function assistantGroupHasReplyText(group: MessageGroup): boolean {
