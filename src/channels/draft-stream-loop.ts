@@ -70,7 +70,7 @@ export function createDraftStreamLoop(params: {
         throw err;
       }
       if (sent === false) {
-        pendingText = text;
+        pendingText ||= text;
         return;
       }
       lastSentAt = Date.now();

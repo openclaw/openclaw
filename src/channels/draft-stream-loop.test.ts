@@ -259,4 +259,39 @@ describe("createDraftStreamLoop", () => {
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(1, "hello");
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "hello");
   });
+
+  it("preserves concurrent update text when sendOrEditStreamMessage returns false", async () => {
+    let deliver!: (() => void) | undefined;
+    const deliverPromise = new Promise<void>((resolve) => {
+      deliver = resolve;
+    });
+    const capturedArgs: string[] = [];
+
+    const sendOrEditStreamMessage = vi
+      .fn<(text: string) => Promise<boolean>>()
+      .mockImplementationOnce(async (text: string) => {
+        capturedArgs.push(text);
+        await deliverPromise;
+        return false;
+      })
+      .mockImplementationOnce(async (text: string) => {
+        capturedArgs.push(text);
+        return true;
+      });
+
+    const loop = createDraftStreamLoop({
+      throttleMs: 0,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("initial");
+    await flushMicrotasks();
+
+    loop.update("concurrent");
+    deliver!();
+    await loop.flush();
+
+    expect(capturedArgs[1]).toBe("concurrent");
+  });
 });
