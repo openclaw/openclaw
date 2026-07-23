@@ -31,6 +31,7 @@ import {
   testState,
   withGatewayServer,
 } from "./test-helpers.js";
+import { createPostHandlerGate, waitForRootWorkCount } from "./test-helpers.root-work.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -103,40 +104,6 @@ function parseSseDataLines(text: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line.startsWith("data: "))
     .map((line) => line.slice("data: ".length));
-}
-
-/**
- * Holds mocked agent work until the streaming HTTP handler has returned.
- * SSE headers reach the client before the handler unwinds, so one extra
- * macrotask turn guarantees the request's root-work lease was released.
- */
-function createPostHandlerGate() {
-  let open = () => {};
-  const opened = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return {
-    opened,
-    openAfterHandlerReturned: async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      open();
-    },
-  };
-}
-
-async function waitForRootWorkCount(expected: number): Promise<number> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const active = getActiveGatewayRootWorkCount();
-    if (active === expected) {
-      return active;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  return getActiveGatewayRootWorkCount();
 }
 
 type FirstAgentCommandOptions = {
