@@ -669,11 +669,13 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
+        let mediaLoader = self.activeGatewayConnectConfig.map { IOSAssistantMediaLoader(config: $0) }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
-            outboxGatewayID: outboxGatewayID)
+            outboxGatewayID: outboxGatewayID,
+            mediaLoader: mediaLoader)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active

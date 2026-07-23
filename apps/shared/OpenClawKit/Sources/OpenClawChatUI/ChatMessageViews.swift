@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import OpenClawKit
 import SwiftUI
 
@@ -219,6 +220,8 @@ struct ChatMessageBubble: View {
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    let mediaResolverReady: Bool
+    let mediaResolver: @MainActor @Sendable (String) async throws -> Data?
 
     var body: some View {
         if self.isUser {
@@ -261,7 +264,9 @@ struct ChatMessageBubble: View {
             userMessageExpanded: self.userMessageExpanded,
             onToggleUserMessageExpanded: self.onToggleUserMessageExpanded,
             inlineWidgetResolverReady: self.inlineWidgetResolverReady,
-            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver)
+            inlineWidgetResourceResolver: self.inlineWidgetResourceResolver,
+            mediaResolverReady: self.mediaResolverReady,
+            mediaResolver: self.mediaResolver)
     }
 }
 
@@ -314,6 +319,8 @@ private struct ChatMessageBody: View {
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    let mediaResolverReady: Bool
+    let mediaResolver: @MainActor @Sendable (String) async throws -> Data?
 
     var body: some View {
         let text = self.primaryText
@@ -356,7 +363,8 @@ private struct ChatMessageBody: View {
     }
 
     private func messageContent(text: String, textColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let attachmentPresentation = ChatMessageAttachmentDisplayPolicy.partition(self.inlineAttachments)
+        return VStack(alignment: .leading, spacing: 10) {
             if self.isUser {
                 self.userMessageText(text: text, textColor: textColor)
             } else {
@@ -370,10 +378,20 @@ private struct ChatMessageBody: View {
                 ChatLinkPreview(url: previewURL)
             }
 
-            if !self.inlineAttachments.isEmpty {
-                ForEach(self.inlineAttachments.indices, id: \.self) { idx in
-                    AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
+            if !attachmentPresentation.visible.isEmpty {
+                ForEach(attachmentPresentation.visible.indices, id: \.self) { idx in
+                    AttachmentRow(
+                        att: attachmentPresentation.visible[idx],
+                        isUser: self.isUser,
+                        resolverReady: self.mediaResolverReady,
+                        loadMedia: self.mediaResolver)
                 }
+            }
+
+            if attachmentPresentation.omittedImageCount > 0 {
+                Text("Additional images hidden: \(attachmentPresentation.omittedImageCount)")
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(textColor.opacity(0.72))
             }
 
             ForEach(self.inlineWidgets.indices, id: \.self) { idx in
@@ -625,11 +643,56 @@ private struct ChatMessageBody: View {
     }
 }
 
+enum ChatMessageAttachmentDisplayPolicy {
+    static let maximumInlineImages = 4
+
+    static func partition(_ attachments: [OpenClawChatMessageContent])
+        -> (visible: [OpenClawChatMessageContent], omittedImageCount: Int)
+    {
+        var visible: [OpenClawChatMessageContent] = []
+        var imageCount = 0
+        var omittedImageCount = 0
+
+        for attachment in attachments {
+            let isImage = attachment.mimeType?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .hasPrefix("image/") == true
+            guard isImage else {
+                visible.append(attachment)
+                continue
+            }
+            guard imageCount < self.maximumInlineImages else {
+                omittedImageCount += 1
+                continue
+            }
+            imageCount += 1
+            visible.append(attachment)
+        }
+        return (visible, omittedImageCount)
+    }
+}
+
 private struct AttachmentRow: View {
     let att: OpenClawChatMessageContent
     let isUser: Bool
+    let resolverReady: Bool
+    let loadMedia: @MainActor @Sendable (String) async throws -> Data?
 
     var body: some View {
+        if self.isImage, let mediaPath = self.normalizedMediaPath {
+            ChatMediaImageAttachment(
+                fileName: self.att.fileName,
+                mediaPath: mediaPath,
+                isUser: self.isUser,
+                resolverReady: self.resolverReady,
+                loadMedia: self.loadMedia)
+        } else {
+            self.fallbackRow
+        }
+    }
+
+    private var fallbackRow: some View {
         HStack(spacing: 8) {
             Image(systemName: self.isAudio ? "waveform" : "paperclip")
             Text(self.isAudio ? "Voice note" : (self.att.fileName ?? "Attachment"))
@@ -653,6 +716,136 @@ private struct AttachmentRow: View {
 
     private var isAudio: Bool {
         self.att.mimeType?.hasPrefix("audio/") == true
+    }
+
+    private var isImage: Bool {
+        self.att.mimeType?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("image/") == true
+    }
+
+    private var normalizedMediaPath: String? {
+        guard let path = self.att.mediaPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else { return nil }
+        return path
+    }
+}
+
+@MainActor
+private struct ChatMediaImageAttachment: View {
+    private enum LoadState {
+        case loading
+        case loaded(CGImage)
+        case unavailable
+    }
+
+    let fileName: String?
+    let mediaPath: String
+    let isUser: Bool
+    let resolverReady: Bool
+    let loadMedia: @MainActor @Sendable (String) async throws -> Data?
+
+    @State private var state: LoadState = .loading
+
+    var body: some View {
+        Group {
+            switch self.state {
+            case let .loaded(image):
+                VStack(alignment: .leading, spacing: 6) {
+                    Image(decorative: image, scale: 1)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 420, maxHeight: 320)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .accessibilityLabel(self.fileName ?? "Image attachment")
+
+                    if let fileName, !fileName.isEmpty {
+                        Text(fileName)
+                            .font(OpenClawChatTypography.footnote)
+                            .foregroundStyle(self.textColor.opacity(0.72))
+                            .lineLimit(1)
+                    }
+                }
+            case .loading:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(self.fileName ?? "Loading image")
+                        .font(OpenClawChatTypography.footnote)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .foregroundStyle(self.textColor)
+                .padding(10)
+                .background(self.rowBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            case .unavailable:
+                HStack(spacing: 8) {
+                    Image(systemName: "photo")
+                    Text(self.fileName ?? "Image attachment")
+                        .font(OpenClawChatTypography.footnote)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .foregroundStyle(self.textColor)
+                .padding(10)
+                .background(self.rowBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .task(id: "\(self.mediaPath)#\(self.resolverReady)") {
+            await self.load()
+        }
+    }
+
+    private var textColor: Color {
+        self.isUser ? OpenClawChatTheme.userText : OpenClawChatTheme.assistantText
+    }
+
+    private var rowBackground: Color {
+        self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04)
+    }
+
+    private func load() async {
+        guard self.resolverReady else {
+            self.state = .unavailable
+            return
+        }
+        self.state = .loading
+        do {
+            guard let data = try await self.loadMedia(self.mediaPath),
+                  !Task.isCancelled,
+                  let image = await Task.detached(priority: .userInitiated, operation: {
+                      ChatMediaImageDecoder.decode(data)
+                  }).value,
+                  !Task.isCancelled
+            else {
+                self.state = .unavailable
+                return
+            }
+            self.state = .loaded(image)
+        } catch is CancellationError {
+            return
+        } catch {
+            self.state = .unavailable
+        }
+    }
+}
+
+enum ChatMediaImageDecoder {
+    private static let maximumPixelSize = 2048
+
+    static func decode(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: self.maximumPixelSize,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 }
 

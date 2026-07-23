@@ -272,7 +272,9 @@ struct SwiftUIRenderSmokeTests {
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaResolverReady: false,
+                mediaResolver: { _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
@@ -340,11 +342,59 @@ struct SwiftUIRenderSmokeTests {
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil })
+                inlineWidgetResourceResolver: { _, _ in nil },
+                mediaResolverReady: false,
+                mediaResolver: { _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))
         }
+    }
+
+    @Test @MainActor func `assistant image attachment builds after asynchronous load`() async throws {
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "text",
+                    text: "Generated image",
+                    mimeType: nil,
+                    fileName: nil,
+                    content: nil),
+                OpenClawChatMessageContent(
+                    type: "file",
+                    text: nil,
+                    mimeType: "image/png",
+                    fileName: "result.png",
+                    mediaPath: "media/outbound/result.png",
+                    content: nil),
+            ],
+            timestamp: nil)
+
+        let root = ChatMessageBubble(
+            message: message,
+            style: .standard,
+            markdownVariant: .standard,
+            userAccent: nil,
+            displayOptions: [],
+            assistantName: "OpenClaw",
+            assistantAvatarText: "OC",
+            assistantAvatarTint: nil,
+            showsAssistantAvatar: true,
+            isClean: false,
+            contextWindowTokens: nil,
+            userMessageExpanded: false,
+            onToggleUserMessageExpanded: {},
+            inlineWidgetResolverReady: true,
+            inlineWidgetResourceResolver: { _, _ in nil },
+            mediaResolverReady: true,
+            mediaResolver: { _ in png })
+
+        let window = Self.host(root, size: CGSize(width: 393, height: 420))
+        try await Task.sleep(for: .milliseconds(100))
+        window.rootViewController?.view.layoutIfNeeded()
     }
 
     @Test @MainActor func `root tabs builds device orientation shell matrix`() {

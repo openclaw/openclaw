@@ -81,6 +81,10 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
     }
 }
 
+public enum GatewayBoundedDataError: Error, Equatable, Sendable {
+    case responseTooLarge(maximumBytes: Int)
+}
+
 protocol GatewayTLSFailureProviding: AnyObject {
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
@@ -591,18 +595,27 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
     @unchecked Sendable
 {
     private let params: GatewayTLSParams
+    private let configuration: URLSessionConfiguration
     private let failureLock = NSLock()
     private var lastTLSFailure: GatewayTLSValidationFailure?
     private var pinningState: GatewayTLSPinningState
     private var expectedAuthority: GatewayTLSAuthority?
     private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = self.configuration
         config.waitsForConnectivity = true
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
     public init(params: GatewayTLSParams) {
         self.params = params
+        self.configuration = .default
+        self.pinningState = GatewayTLSPinningState(expectedFingerprint: params.expectedFingerprint)
+        super.init()
+    }
+
+    init(params: GatewayTLSParams, configuration: URLSessionConfiguration) {
+        self.params = params
+        self.configuration = configuration
         self.pinningState = GatewayTLSPinningState(expectedFingerprint: params.expectedFingerprint)
         super.init()
     }
@@ -676,6 +689,43 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let task = self.session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
+    }
+
+    public func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        self.registerExpectedAuthority(url: request.url)
+        return try await self.session.data(for: request)
+    }
+
+    public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
+        self.registerExpectedAuthority(url: request.url)
+        guard maximumBytes >= 0 else {
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        let (bytes, response) = try await self.session.bytes(for: request)
+        let expectedLength = response.expectedContentLength
+        guard expectedLength < 0 || expectedLength <= Int64(maximumBytes) else {
+            bytes.task.cancel()
+            throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+        }
+
+        var data = Data()
+        if expectedLength > 0 {
+            data.reserveCapacity(Int(expectedLength))
+        }
+        do {
+            for try await byte in bytes {
+                guard data.count < maximumBytes else {
+                    bytes.task.cancel()
+                    throw GatewayBoundedDataError.responseTooLarge(maximumBytes: maximumBytes)
+                }
+                data.append(byte)
+            }
+        } catch {
+            bytes.task.cancel()
+            throw error
+        }
+        return (data, response)
     }
 
     public func urlSession(

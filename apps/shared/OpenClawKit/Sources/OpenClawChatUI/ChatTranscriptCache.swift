@@ -1405,6 +1405,7 @@ extension OpenClawChatSQLiteTranscriptCache {
                         thinkingSignature: nil,
                         mimeType: item.mimeType,
                         fileName: item.fileName,
+                        mediaPath: item.mediaPath,
                         durationSeconds: item.durationSeconds,
                         content: nil,
                         id: item.id,
