@@ -3645,6 +3645,31 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 
+  it("treats only read-only shell inspection tool metas as replay-safe (#101890)", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [
+          { toolName: "exec", replaySafe: true },
+          { toolName: "bash", replaySafe: true },
+        ],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("still treats unmarked shell tool metas as replay-unsafe (#101890 fail-closed)", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "exec" }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
   it("treats committed messaging media as replay-invalid side effect metadata", () => {
     expect(
       buildAttemptReplayMetadata({

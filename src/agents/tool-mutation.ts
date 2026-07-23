@@ -398,7 +398,10 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
   switch (normalized) {
     case "exec":
     case "bash":
-      return false;
+      // Reuse the same command-content analysis as mutation classification so
+      // proven read-only shell inspection can participate in strict-agentic
+      // non-visible retry. Ambiguous/mutating commands stay fail-closed.
+      return isPlainReadOnlyShellCommand(readShellCommand(record));
     case "process":
       return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
     case "message":

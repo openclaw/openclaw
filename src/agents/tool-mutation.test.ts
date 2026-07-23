@@ -49,7 +49,9 @@ describe("tool mutation helpers", () => {
     ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
+    expect(isReplaySafeToolCall(toolName, { command })).toBe(true);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
+    expect(buildToolMutationState(toolName, { command }).replaySafe).toBe(true);
     expect(
       buildToolMutationState(toolName, { command }, command).actionFingerprint,
     ).toBeUndefined();
@@ -103,7 +105,9 @@ describe("tool mutation helpers", () => {
     ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);
+    expect(isReplaySafeToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }, command).mutatingAction).toBe(true);
+    expect(buildToolMutationState(toolName, { command }, command).replaySafe).toBe(false);
     expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBe(
       `tool=${toolName}|meta=${command.toLowerCase().replace(/\s+/g, " ")}`,
     );
@@ -275,7 +279,12 @@ describe("tool mutation helpers", () => {
     expect(isReplaySafeToolCall("nodes", { action: "describe" })).toBe(true);
     expect(isReplaySafeToolCall("nodes", { action: "pending" })).toBe(true);
     expect(isReplaySafeToolCall("nodes", { action: "approve" })).toBe(false);
-    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(false);
+    expect(isReplaySafeToolCall("exec", { command: "rg TODO src" })).toBe(true);
+    expect(isReplaySafeToolCall("bash", { command: "ls -la" })).toBe(true);
+    expect(isReplaySafeToolCall("exec", { command: "cat package.json" })).toBe(true);
+    expect(isReplaySafeToolCall("exec", { command: "rm -rf /tmp/x" })).toBe(false);
+    expect(isReplaySafeToolCall("bash", { command: "npm install" })).toBe(false);
+    expect(isReplaySafeToolCall("exec", { command: "" })).toBe(false);
     expect(isReplaySafeToolCall("process", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "log", sessionId: "run-1" })).toBe(true);
     expect(isReplaySafeToolCall("process", { action: "poll", sessionId: "run-1" })).toBe(false);
