@@ -21,6 +21,7 @@ const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
 ]);
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
+const LEGACY_UTTERANCE_STAGE_BATCH_SIZE = 256;
 
 export type LegacyMeetingTranscriptSnapshot = {
   sourceDir: string;
@@ -208,9 +209,27 @@ async function stageUtterances(params: {
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let lineNumber = 0;
   let sequence = 0;
+  let pending: string[] = [];
   const insert = params.stageDatabase.prepare(
     "INSERT INTO staged_utterances (stage_key, sequence, utterance_json) VALUES (?, ?, ?)",
   );
+  const flush = () => {
+    if (pending.length === 0) {
+      return;
+    }
+    params.stageDatabase.exec("BEGIN IMMEDIATE");
+    try {
+      for (const utteranceJson of pending) {
+        insert.run(params.stageKey, sequence, utteranceJson);
+        sequence += 1;
+      }
+      params.stageDatabase.exec("COMMIT");
+      pending = [];
+    } catch (error) {
+      params.stageDatabase.exec("ROLLBACK");
+      throw error;
+    }
+  };
   try {
     for await (const line of lines) {
       lineNumber += 1;
@@ -218,9 +237,12 @@ async function stageUtterances(params: {
         continue;
       }
       const utterance = parseUtterance(JSON.parse(line) as unknown, filePath, lineNumber);
-      insert.run(params.stageKey, sequence, JSON.stringify(utterance));
-      sequence += 1;
+      pending.push(JSON.stringify(utterance));
+      if (pending.length >= LEGACY_UTTERANCE_STAGE_BATCH_SIZE) {
+        flush();
+      }
     }
+    flush();
   } finally {
     lines.close();
     stream.destroy();

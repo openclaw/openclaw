@@ -455,7 +455,7 @@ describe("meeting transcript Doctor migration", () => {
     await seedLegacySession({
       stateDir,
       sessionId: "long-meeting",
-      utteranceCount: 130,
+      utteranceCount: 530,
     });
     const detected = detectLegacyMeetingTranscripts({
       stateDir,
@@ -474,9 +474,9 @@ describe("meeting transcript Doctor migration", () => {
     });
     const session = await store.readSession("long-meeting");
     const utterances = await store.readUtterancesForSession(session!);
-    expect(utterances).toHaveLength(130);
+    expect(utterances).toHaveLength(530);
     expect(utterances[0]).toMatchObject({ id: "u-1", text: "First line" });
-    expect(utterances.at(-1)).toMatchObject({ id: "u-130", text: "Line 130" });
+    expect(utterances.at(-1)).toMatchObject({ id: "u-530", text: "Line 530" });
   });
 
   it("preserves an existing empty markdown summary", async () => {
