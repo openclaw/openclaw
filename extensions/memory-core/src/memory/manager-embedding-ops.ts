@@ -40,6 +40,7 @@ import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
+  isRateLimitMemoryEmbeddingError,
   isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingTransportError,
   resolveMemoryEmbeddingRetryDelay,
@@ -63,6 +64,9 @@ const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+/** Longer initial delay for rate-limit (429) errors — reset window is typically 60s. */
+const EMBEDDING_RETRY_RATE_LIMIT_BASE_DELAY_MS = 30_000;
+const EMBEDDING_RETRY_RATE_LIMIT_MAX_DELAY_MS = 120_000;
 const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
@@ -432,11 +436,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying");
+        waitForRetry: async (delayMs, _maxDelayMs, err) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying", err);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        rateLimitBaseDelayMs: EMBEDDING_RETRY_RATE_LIMIT_BASE_DELAY_MS,
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
             `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
@@ -484,11 +489,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingTransportError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+        waitForRetry: async (delayMs, _maxDelayMs, err) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch", err);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        rateLimitBaseDelayMs: EMBEDDING_RETRY_RATE_LIMIT_BASE_DELAY_MS,
         onSplit: ({ itemCount, splitAt }) => {
           log.warn(
             `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
@@ -505,12 +511,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  private async waitForEmbeddingRetry(delayMs: number, action: string): Promise<void> {
-    const waitMs = resolveMemoryEmbeddingRetryDelay(
-      delayMs,
-      Math.random(),
-      EMBEDDING_RETRY_MAX_DELAY_MS,
-    );
+  private async waitForEmbeddingRetry(
+    delayMs: number,
+    action: string,
+    err?: unknown,
+  ): Promise<void> {
+    // When the error is a rate-limit (429 / resource exhausted), use a longer
+    // max delay since the reset window is typically 60s.
+    const maxDelayMs =
+      err && isRateLimitMemoryEmbeddingError(formatErrorMessage(err))
+        ? EMBEDDING_RETRY_RATE_LIMIT_MAX_DELAY_MS
+        : EMBEDDING_RETRY_MAX_DELAY_MS;
+    const waitMs = resolveMemoryEmbeddingRetryDelay(delayMs, Math.random(), maxDelayMs);
     log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => {
       setTimeout(resolve, waitMs);
@@ -546,11 +558,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         signal,
         isRetryable: isRetryableMemoryEmbeddingError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying query");
+        waitForRetry: async (delayMs, _maxDelayMs, err) => {
+          await this.waitForEmbeddingRetry(delayMs, "retrying query", err);
         },
         maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
         baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+        rateLimitBaseDelayMs: EMBEDDING_RETRY_RATE_LIMIT_BASE_DELAY_MS,
       });
     } catch (err) {
       this.markLocalEmbeddingProviderDegraded(err);
