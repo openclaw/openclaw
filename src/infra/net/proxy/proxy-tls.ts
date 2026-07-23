@@ -1,13 +1,18 @@
+import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 // Managed proxy TLS helpers resolve and load CA trust only for HTTPS forward
 // proxies that OpenClaw owns or inherited from a parent process.
-import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
+import { readSecretFileSync } from "../../../infra/secret-file.js";
 
 /** TLS trust material passed to proxy clients for OpenClaw-managed HTTPS proxies. */
 export type ManagedProxyTlsOptions = Readonly<{
   ca?: string;
 }>;
+
+// A managed proxy CA file is a PEM trust bundle. Bound the read so a misconfigured
+// or oversized caFile path (config / --proxy-ca-file / proxy CA env override) cannot
+// trigger an unbounded allocation at proxy-startup time. 256 KiB comfortably fits a
+// realistic multi-certificate trust bundle while still rejecting pathological inputs.
+const MANAGED_PROXY_CA_FILE_MAX_BYTES = 256 * 1024;
 
 function normalizeOptionalPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -63,7 +68,7 @@ export async function loadManagedProxyTlsOptions(
     return undefined;
   }
   try {
-    return { ca: await readFile(caFile, "utf8") };
+    return { ca: readProxyCaFileSync(caFile) };
   } catch (err) {
     throw new Error(`proxy CA file could not be read (${caFile}): ${formatReadError(err)}`, {
       cause: err,
@@ -79,10 +84,17 @@ export function loadManagedProxyTlsOptionsSync(
     return undefined;
   }
   try {
-    return { ca: readFileSync(caFile, "utf8") };
+    return { ca: readProxyCaFileSync(caFile) };
   } catch (err) {
     throw new Error(`proxy CA file could not be read (${caFile}): ${formatReadError(err)}`, {
       cause: err,
     });
   }
+}
+
+function readProxyCaFileSync(caFile: string): string {
+  return readSecretFileSync(caFile, "Managed proxy CA file", {
+    maxBytes: MANAGED_PROXY_CA_FILE_MAX_BYTES,
+    rejectHardlinks: false,
+  });
 }
