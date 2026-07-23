@@ -7,13 +7,13 @@ function readTokenCount(record: JsonObject, key: string): number | undefined {
   return value !== undefined && Number.isSafeInteger(value) ? value : undefined;
 }
 
-export function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
+function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
   return last ? normalizeCodexThreadTokenUsage(last) : undefined;
 }
 
-export function readCodexThreadContextSnapshot(params: JsonObject): {
+function readCodexThreadContextSnapshot(params: JsonObject): {
   modelContextWindow?: number;
   promptTokens?: number;
 } {
