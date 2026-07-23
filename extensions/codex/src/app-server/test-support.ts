@@ -141,13 +141,14 @@ export function withPersistentCodexTestToolPolicy(
 ): EmbeddedRunAttemptParams {
   const modelCompat =
     params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
+  const model = {
+    ...params.model,
+    compat: { ...modelCompat, supportsTools: false },
+  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
   return {
     ...params,
     disableTools: false,
-    model: {
-      ...params.model,
-      compat: { ...modelCompat, supportsTools: false },
-    },
+    model,
     config: {
       ...params.config,
       tools: {
