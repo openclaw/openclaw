@@ -925,17 +925,22 @@ async function resolveHeartbeatPreflight(params: {
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
   let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
+  let scratchReadOk = false;
   try {
     monitorScratch = readHeartbeatMonitorScratch(
       resolveCronJobsStorePathFromConfig(params.cfg),
       params.agentId,
     );
+    scratchReadOk = true;
   } catch (error) {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
   let heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   if (
     !shouldBypassFileGates &&
+    // The legacy fallback needs a proven revision-0 state: a failed database
+    // read must not resurrect retired file instructions past a tombstone.
+    scratchReadOk &&
     heartbeatScratchContent === undefined &&
     (monitorScratch?.state.currentRevision ?? 0) === 0
   ) {

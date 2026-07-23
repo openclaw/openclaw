@@ -248,10 +248,20 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
       };
       // A holder of an already-open descriptor can still mutate the claimed
       // inode; re-verify the bytes so release never deletes an unseen edit.
+      // The claim may itself be a contained symlink (renaming a symlink keeps
+      // it a symlink), so resolve and containment-check it like the claim did.
       let finalContent: string;
       try {
+        const workspaceRealPath = await fs.realpath(path.dirname(source.path));
+        const claimRealPath = await fs.realpath(claimPath);
+        if (
+          claimRealPath !== workspaceRealPath &&
+          !isPathInside(workspaceRealPath, claimRealPath)
+        ) {
+          throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
+        }
         const finalBytes = await readRegularFile({
-          filePath: claimPath,
+          filePath: claimRealPath,
           maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
         });
         finalContent = utf8Decoder.decode(finalBytes.buffer);

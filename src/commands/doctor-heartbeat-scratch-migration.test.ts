@@ -300,6 +300,28 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(workspaceEntries.filter((entry) => entry.includes(".doctor-importing-"))).toEqual([]);
   });
 
+  it("migrates a contained symlinked HEARTBEAT.md and removes the link", async () => {
+    const fixture = await createFixture();
+    const targetPath = path.join(fixture.workspace, "real-heartbeat.md");
+    await fs.writeFile(targetPath, "linked checklist\n", "utf8");
+    await fs.symlink("real-heartbeat.md", fixture.heartbeatPath);
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    const { monitor, storePath } = await loadMonitor();
+    expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(
+      "linked checklist\n",
+    );
+    // The symlink is removed; the contained target file itself is untouched.
+    await expect(fs.lstat(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("linked checklist\n");
+  });
+
   it("rejects external symlink targets without importing or removing them", async () => {
     const fixture = await createFixture();
     const external = path.join(fixture.root, "outside.md");
