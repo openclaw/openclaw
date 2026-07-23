@@ -178,7 +178,12 @@ function summarizeChannelAccounts(accounts: ChannelAccountSnapshot[]) {
       account.probe && typeof account.probe === "object" && "ok" in account.probe
         ? Boolean((account.probe as { ok?: unknown }).ok)
         : false;
-    const isConnected = account.connected === true || account.running === true || probeOk;
+    const hasRuntimeStatus =
+      typeof account.connected === "boolean" || typeof account.running === "boolean";
+    // A successful probe proves API reachability, not a live transport. Preserve it only
+    // as a fallback for passive channels that do not publish runtime status.
+    const isConnected =
+      account.connected === true || account.running === true || (!hasRuntimeStatus && probeOk);
     if (isConnected) {
       connected += 1;
     }
