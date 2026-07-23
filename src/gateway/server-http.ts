@@ -37,6 +37,11 @@ import {
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import {
+  isGatewayShuttingDown,
+  noteShuttingDownProbeResponse,
+  resetShuttingDownProbeResponseLogForTest,
+} from "./gateway-shutdown-state.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { resolveRequestClientIp } from "./net.js";
@@ -63,6 +68,32 @@ import {
   type GatewayWsClient,
 } from "./server/ws-types.js";
 import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
+
+// Re-export for source compatibility; backing impl now lives in
+// `gateway-shutdown-state.ts` so the per-cycle reset happens at the
+// state-transition site (markGatewayShuttingDown / resetGatewayShuttingDownState).
+// Per ClawSweeper review P3 on #88908.
+export const resetGatewayHealthzShuttingDownLogForTest = resetShuttingDownProbeResponseLogForTest;
+
+// Strict-mode live probe: only the supervised lock-recovery preflight uses
+// `?strict=1` to opt into shutdown-aware 503 responses. Public probes (external
+// monitors, service managers) hit /health or /healthz without the marker and
+// keep receiving 200 even during shutdown, preserving the legacy contract.
+function isStrictLiveProbeRequest(req: IncomingMessage): boolean {
+  const url = req.url ?? "";
+  const queryStart = url.indexOf("?");
+  if (queryStart < 0) {
+    return false;
+  }
+  const search = url.slice(queryStart + 1);
+  for (const pair of search.split("&")) {
+    const [rawKey, rawValue] = pair.split("=", 2);
+    if (rawKey === "strict" && (rawValue === "1" || rawValue === "true")) {
+      return true;
+    }
+  }
+  return false;
+}
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -276,6 +307,7 @@ async function handleGatewayProbeRequest(
   trustedProxies: string[],
   allowRealIpFallback: boolean,
   getReadiness?: ReadinessChecker,
+  getShuttingDown: () => boolean = isGatewayShuttingDown,
 ): Promise<boolean> {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
   if (!status) {
@@ -296,7 +328,22 @@ async function handleGatewayProbeRequest(
 
   let statusCode: number;
   let body: string;
-  if (status === "ready" && getReadiness) {
+  // Live probes flip to 503 the moment shutdown starts so supervised lock
+  // recovery distinguishes a healthy gateway from a zombie that still holds
+  // the HTTP listener. The flag is owned by `server-close` and is set before
+  // any close-handler await.
+  //
+  // To preserve the public live-probe contract (external monitors and service
+  // managers expect 200 on /health and /healthz during normal shutdown),
+  // shutdown-aware 503 is gated on an explicit ?strict=1 query parameter that
+  // the supervised lock-recovery preflight sets. Public callers without the
+  // strict marker continue to receive 200. Per ClawSweeper review on #88908.
+  const isStrictLiveProbe = isStrictLiveProbeRequest(req);
+  if (status === "live" && isStrictLiveProbe && getShuttingDown()) {
+    noteShuttingDownProbeResponse(requestPath);
+    statusCode = 503;
+    body = JSON.stringify({ live: false, phase: "shutting_down" });
+  } else if (status === "ready" && getReadiness) {
     const includeDetails = await canRevealReadinessDetails({
       req,
       resolvedAuth,
@@ -496,6 +543,10 @@ export function createGatewayHttpServer(opts: {
   getReadiness?: ReadinessChecker;
   getRuntimeConfig?: () => OpenClawConfig;
   isTerminalEnabled?: () => boolean;
+  // Test seam: injected so tests can drive the shutting-down flag without
+  // touching the module-level state. Production callers leave it undefined so
+  // the canonical `isGatewayShuttingDown` from server-close is used.
+  getShuttingDown?: () => boolean;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -516,6 +567,7 @@ export function createGatewayHttpServer(opts: {
     rateLimiter,
     getReadiness,
   } = opts;
+  const getShuttingDown = opts.getShuttingDown ?? isGatewayShuttingDown;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
@@ -558,6 +610,7 @@ export function createGatewayHttpServer(opts: {
           [],
           false,
           getReadiness,
+          getShuttingDown,
         );
         return;
       }
@@ -604,6 +657,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               getReadiness,
+              getShuttingDown,
             ),
         },
         {

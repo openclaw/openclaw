@@ -534,6 +534,10 @@ export type GatewayCloseOptions = {
   reason?: string;
   restartExpectedMs?: number | null;
   drainTimeoutMs?: number | null;
+  // Forced-exit status if the post-shutdown watchdog has to kill a wedged
+  // process. Defaults to 0; startup-failure cleanup passes nonzero so a
+  // failure-only supervisor still relaunches.
+  postShutdownExitCode?: number;
 };
 
 export type GatewayServer = {
@@ -595,6 +599,13 @@ export type GatewayServerOptions = {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
+  /**
+   * Arms the post-shutdown force-exit watchdog on close. Only the terminal
+   * gateway CLI/daemon path sets this; embedded starts (onboarding session
+   * gateway, harnesses) stay process-neutral so a handled startup failure or
+   * wizard-end close can never kill the host process.
+   */
+  postShutdownExitWatchdog?: boolean;
 };
 
 export async function startGatewayServer(
@@ -602,6 +613,14 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  // Reset the shutting-down flag before any startup work so in-process restart
+  // (close handler already ran in the prior cycle, then we re-enter startup
+  // without process exit) starts answering /healthz as 200 again. Pull from
+  // the lightweight `gateway-shutdown-state` module instead of the close
+  // runtime so startup does not load shutdown-only agent/channel/plugin
+  // cleanup code. Per ClawSweeper review P2 on #88908.
+  const { resetGatewayShuttingDownState } = await import("./gateway-shutdown-state.js");
+  resetGatewayShuttingDownState();
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -1632,6 +1651,7 @@ export async function startGatewayServer(
     const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
       await loadGatewayCloseModule();
     await createGatewayCloseHandler({
+      postShutdownExitWatchdogEnabled: opts.postShutdownExitWatchdog === true,
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       releasePluginRouteRegistry,
@@ -1701,7 +1721,10 @@ export async function startGatewayServer(
       await stopRegisteredGatewayLifetimeSidecars();
       await stopRegisteredPostReadySidecars();
       await runClosePrelude();
-      await createCloseHandler()({ reason: "gateway startup failed" });
+      // Nonzero forced-exit status: if this failed-startup cleanup wedges and
+      // the watchdog must kill the process, a failure-only supervisor still
+      // relaunches instead of reading exit 0 as an intentional clean stop.
+      await createCloseHandler()({ reason: "gateway startup failed", postShutdownExitCode: 1 });
     } finally {
       clearFallbackGatewayContextForServer();
     }

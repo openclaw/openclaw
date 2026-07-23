@@ -1,6 +1,10 @@
 // Gateway supervised lock tests cover single-runner locking for supervised gateway starts.
-import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { createServer, type Server } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetGatewayRestartTraceForTest,
+  startGatewayRestartTrace,
+} from "../../gateway/restart-trace.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { testing } from "./run.test-support.js";
 
@@ -240,5 +244,100 @@ describe("supervised gateway lock recovery", () => {
     expect(testing.normalizeGatewayHealthProbeHost("0.0.0.0")).toBe("127.0.0.1");
     expect(testing.normalizeGatewayHealthProbeHost("::")).toBe("127.0.0.1");
     expect(testing.normalizeGatewayHealthProbeHost("127.0.0.1")).toBe("127.0.0.1");
+  });
+
+  it("logs the preflight zombie-detected signal when probe returns unhealthy", async () => {
+    const originalRestartTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+    try {
+      startGatewayRestartTrace("test.preflight.start");
+      let now = 0;
+      const startLoop = vi.fn(async () => {
+        throw new GatewayLockError("gateway already running");
+      });
+      const sleep = vi.fn(async (ms: number) => {
+        now += ms;
+      });
+      const log = createLogger();
+
+      await expect(
+        testing.runGatewayLoopWithSupervisedLockRecovery({
+          startLoop,
+          supervisor: "launchd",
+          port: 18789,
+          healthHost: "127.0.0.1",
+          log,
+          probeHealth: vi.fn(async () => false),
+          now: () => now,
+          sleep,
+          retryMs: 5,
+          timeoutMs: 6,
+        }),
+      ).rejects.toThrow();
+
+      const warnMessages = log.warn.mock.calls.map(([msg]) => String(msg));
+      expect(
+        warnMessages.some((msg) =>
+          msg.includes("gateway.preflight.zombie_detected supervisor=launchd port=18789"),
+        ),
+      ).toBe(true);
+
+      // ClawSweeper #88908 review P3: emit the zombie_detected trace + warn
+      // once per recovery cycle, not on every retry tick. Multiple retries
+      // against the same draining gateway should not inflate telemetry.
+      const zombieWarnCount = warnMessages.filter((msg) =>
+        msg.includes("gateway.preflight.zombie_detected"),
+      ).length;
+      expect(zombieWarnCount).toBe(1);
+    } finally {
+      resetGatewayRestartTraceForTest();
+      if (originalRestartTraceEnv === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+      } else {
+        process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalRestartTraceEnv;
+      }
+    }
+  });
+});
+
+describe("probeGatewayHealthz", () => {
+  let server: Server;
+  let port: number;
+  let nextStatus = 200;
+
+  beforeEach(async () => {
+    nextStatus = 200;
+    server = createServer((_req, res) => {
+      res.statusCode = nextStatus;
+      res.end(JSON.stringify({ ok: nextStatus === 200, status: "live" }));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = server.address();
+    if (!addr || typeof addr === "string") {
+      throw new Error("server did not bind");
+    }
+    port = addr.port;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  it("treats a 200 response as healthy", async () => {
+    nextStatus = 200;
+    await expect(
+      testing.probeGatewayHealthz({ host: "127.0.0.1", port, timeoutMs: 2_000 }),
+    ).resolves.toBe(true);
+  });
+
+  it("treats a 503 shutting-down response as unhealthy", async () => {
+    nextStatus = 503;
+    await expect(
+      testing.probeGatewayHealthz({ host: "127.0.0.1", port, timeoutMs: 2_000 }),
+    ).resolves.toBe(false);
   });
 });

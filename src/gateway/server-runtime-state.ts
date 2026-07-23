@@ -127,6 +127,7 @@ export async function createGatewayRuntimeState(params: {
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   workerIngressEnabled?: boolean;
+  getShuttingDown?: () => boolean;
 }): Promise<{
   releasePluginRouteRegistry: () => void;
   httpServer: HttpServer;
@@ -323,6 +324,7 @@ export async function createGatewayRuntimeState(params: {
         getReadiness: params.getReadiness,
         getRuntimeConfig: loadRuntimeConfig,
         isTerminalEnabled: params.isTerminalEnabled,
+        getShuttingDown: params.getShuttingDown,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
       // Attach upgrade handler BEFORE listening to prevent race condition

@@ -1,7 +1,7 @@
 // Server HTTP probe tests cover readiness, health, disabled compat routes, and
 // auth handling through the in-memory HTTP harness.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
@@ -12,6 +12,8 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ChannelManager } from "./server-channels.js";
+import { markGatewayShuttingDown, resetGatewayShuttingDownForTest } from "./server-close.js";
+import { resetGatewayHealthzShuttingDownLogForTest } from "./server-http.js";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -32,6 +34,11 @@ async function sendGatewayRequest(server: GatewayServerHarness, options: Gateway
   await dispatchRequest(server, req, res);
   return { res, getBody };
 }
+
+afterEach(() => {
+  resetGatewayShuttingDownForTest();
+  resetGatewayHealthzShuttingDownLogForTest();
+});
 
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   it("returns 404 when compat endpoints are disabled", async () => {
@@ -503,6 +510,139 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(503);
         expect(getBody()).toBe("");
+      },
+    });
+  });
+
+  it("returns 503 on /healthz?strict=1 when the gateway is shutting down", async () => {
+    await withGatewayServer({
+      prefix: "probe-healthz-shutting-down",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getShuttingDown: () => true },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz?strict=1" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(getBody())).toEqual({ live: false, phase: "shutting_down" });
+      },
+    });
+  });
+
+  it("returns 503 on /health?strict=1 when the gateway is shutting down", async () => {
+    await withGatewayServer({
+      prefix: "probe-health-shutting-down",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getShuttingDown: () => true },
+      run: async (server) => {
+        const req = createRequest({ path: "/health?strict=1" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(getBody())).toEqual({ live: false, phase: "shutting_down" });
+      },
+    });
+  });
+
+  it("respects the module-level shutting-down flag without an injected getter", async () => {
+    await withGatewayServer({
+      prefix: "probe-healthz-module-flag",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        markGatewayShuttingDown();
+        const req = createRequest({ path: "/healthz?strict=1" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(503);
+        expect(JSON.parse(getBody())).toEqual({ live: false, phase: "shutting_down" });
+      },
+    });
+  });
+
+  it("returns shutting-down HEAD /healthz?strict=1 without a body but with 503", async () => {
+    await withGatewayServer({
+      prefix: "probe-healthz-head-shutting-down",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getShuttingDown: () => true },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz?strict=1", method: "HEAD" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(503);
+        expect(getBody()).toBe("");
+      },
+    });
+  });
+
+  // ClawSweeper #88908 review P1: narrowing the live-probe 503 contract to
+  // strict-mode preserves backwards compat for external monitors and service
+  // managers hitting the plain /healthz path. These tests pin that contract.
+  it("returns 200 on plain /healthz even when shutting down (public probe contract)", async () => {
+    await withGatewayServer({
+      prefix: "probe-healthz-shutting-down-no-strict",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getShuttingDown: () => true },
+      run: async (server) => {
+        const req = createRequest({ path: "/healthz" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "live" });
+      },
+    });
+  });
+
+  it("returns 200 on plain /health even when shutting down (public probe contract)", async () => {
+    await withGatewayServer({
+      prefix: "probe-health-shutting-down-no-strict",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getShuttingDown: () => true },
+      run: async (server) => {
+        const req = createRequest({ path: "/health" });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "live" });
+      },
+    });
+  });
+
+  // ClawSweeper #88908 review P3: each new shutdown cycle must emit the
+  // gateway.healthz.shutting_down_response signal at least once. The log
+  // dedupe was previously latched across the process lifetime and reset only
+  // by tests, so the second in-process restart's shutdown was silent. Now
+  // markGatewayShuttingDown resets the dedupe via gateway-shutdown-state.
+  it("resets the shutting-down probe log dedupe on each shutdown cycle", async () => {
+    await withGatewayServer({
+      prefix: "probe-healthz-strict-dedupe-cycles",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        // First shutdown cycle.
+        markGatewayShuttingDown();
+        const req1 = createRequest({ path: "/healthz?strict=1" });
+        const { res: res1 } = createResponse();
+        await dispatchRequest(server, req1, res1);
+        expect(res1.statusCode).toBe(503);
+
+        // Second probe in the SAME shutdown cycle should not emit again (dedupe).
+        const req1b = createRequest({ path: "/healthz?strict=1" });
+        const { res: res1b } = createResponse();
+        await dispatchRequest(server, req1b, res1b);
+        expect(res1b.statusCode).toBe(503);
+
+        // Simulate startup completing a new cycle, then a fresh shutdown.
+        resetGatewayShuttingDownForTest();
+        markGatewayShuttingDown();
+        const req2 = createRequest({ path: "/healthz?strict=1" });
+        const { res: res2 } = createResponse();
+        await dispatchRequest(server, req2, res2);
+        expect(res2.statusCode).toBe(503);
       },
     });
   });
