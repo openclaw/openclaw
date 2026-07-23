@@ -80,12 +80,19 @@ export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParam
   let account = normalizeSignalAccountInput(resolvedAccount.config.account) ?? undefined;
   let transport: SignalTransportConfig;
   if (kind === "managed-native") {
+    let cliPath = params.credentialValues[signalSetupStateKeys.cliPath] ?? "signal-cli";
+    if (
+      params.options?.allowSignalInstall &&
+      params.credentialValues[signalSetupStateKeys.installRequested] === "true"
+    ) {
+      cliPath = await installRequestedSignalCli(params, cliPath);
+    }
     const configPath = params.credentialValues[signalSetupStateKeys.cliConfigPath];
     transport = prepareSignalManagedNativeTransport({
       cfg,
       accountId: params.accountId,
       overrides: {
-        cliPath: params.credentialValues[signalSetupStateKeys.cliPath] ?? "signal-cli",
+        cliPath,
         ...(configPath ? { configPath } : {}),
       },
     });
@@ -182,37 +189,53 @@ async function promptSignalAccount(prompter: WizardPrompter) {
   return account;
 }
 
+async function installRequestedSignalCli(params: SignalFinalizeParams, initialCliPath: string) {
+  await params.options?.beforePersistentEffect?.();
+
+  let cliPath = initialCliPath;
+  try {
+    const result = await installSignalCli(params.runtime);
+    if (result.ok && result.cliPath) {
+      cliPath = result.cliPath;
+      await params.prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
+    } else {
+      await params.prompter.note(result.error ?? "signal-cli install failed.", "Signal");
+    }
+  } catch (error) {
+    await params.prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
+  }
+
+  if (await detectBinary(cliPath)) {
+    return cliPath;
+  }
+  return (
+    normalizeOptionalString(
+      await params.prompter.text({
+        message: "signal-cli path",
+        initialValue: cliPath,
+        validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
+      }),
+    ) ?? cliPath
+  );
+}
+
 async function prepareManagedNativeSetup(
   params: SignalPrepareParams,
   resolvedTransport: ResolvedSignalTransport,
 ) {
   let cliPath =
     resolvedTransport.kind === "managed-native" ? resolvedTransport.cliPath : "signal-cli";
-  let cliDetected = await detectBinary(cliPath);
+  const cliDetected = await detectBinary(cliPath);
+  let installRequested = false;
 
   if (params.options?.allowSignalInstall) {
-    const wantsInstall = await params.prompter.confirm({
+    installRequested = await params.prompter.confirm({
       message: cliDetected ? "Reinstall signal-cli?" : "Install signal-cli?",
       initialValue: !cliDetected,
     });
-    if (wantsInstall) {
-      await params.options.beforePersistentEffect?.();
-      try {
-        const result = await installSignalCli(params.runtime);
-        if (result.ok && result.cliPath) {
-          cliPath = result.cliPath;
-          await params.prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
-        } else {
-          await params.prompter.note(result.error ?? "signal-cli install failed.", "Signal");
-        }
-      } catch (error) {
-        await params.prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
-      }
-      cliDetected = await detectBinary(cliPath);
-    }
   }
 
-  if (!cliDetected) {
+  if (!cliDetected && !installRequested) {
     cliPath =
       normalizeOptionalString(
         await params.prompter.text({
@@ -245,6 +268,7 @@ async function prepareManagedNativeSetup(
       [signalSetupStateKeys.transportKind]: "managed-native",
       [signalSetupStateKeys.cliPath]: cliPath,
       ...(configPath ? { [signalSetupStateKeys.cliConfigPath]: configPath } : {}),
+      ...(installRequested ? { [signalSetupStateKeys.installRequested]: "true" } : {}),
     },
   };
 }

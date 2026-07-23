@@ -74,7 +74,7 @@ describe("signalSetupWizard", () => {
     mocks.probeSignalTransport.mockResolvedValue({ ok: true, status: 200 });
   });
 
-  it("defaults an unconfigured account to local setup and installs after the boundary", async () => {
+  it("keeps account entry reversible until immediately before signal-cli installation", async () => {
     mocks.detectBinary.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const beforePersistentEffect = vi.fn(async () => undefined);
     const queued = createQueuedWizardPrompter({
@@ -92,6 +92,14 @@ describe("signalSetupWizard", () => {
       options: { allowSignalInstall: true, beforePersistentEffect },
     });
 
+    expect(beforePersistentEffect).not.toHaveBeenCalled();
+    expect(mocks.installSignalCli).not.toHaveBeenCalled();
+    expect(prepared?.credentialValues).toEqual({
+      signalTransportKind: "managed-native",
+      signalCliPath: "signal-cli",
+      signalCliConfigPath: "/var/lib/signal-cli",
+      signalInstallRequested: "true",
+    });
     expect(queued.select).toHaveBeenCalledWith(
       expect.objectContaining({
         initialValue: "local",
@@ -104,18 +112,35 @@ describe("signalSetupWizard", () => {
         ]),
       }),
     );
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              work: {
+                account: "+15555550123",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      credentialValues: prepared?.credentialValues,
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+      options: { allowSignalInstall: true, beforePersistentEffect },
+    });
+
     expect(beforePersistentEffect).toHaveBeenCalledOnce();
     expect(mocks.installSignalCli).toHaveBeenCalledOnce();
     expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.installSignalCli.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(prepared).toEqual({
-      credentialValues: {
-        signalTransportKind: "managed-native",
-        signalCliPath: "/opt/openclaw/signal-cli",
-        signalCliConfigPath: "/var/lib/signal-cli",
-      },
-    });
+    expect(finalized?.cfg?.channels?.signal?.accounts?.work?.transport).toEqual(
+      expect.objectContaining({ kind: "managed-native" }),
+    );
   });
 
   it("defaults a configured existing server account to existing server setup", async () => {
