@@ -7533,7 +7533,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Native approval delivery
   - H3: Narrower approval runtime subpaths
   - H3: Setup subpaths
-  - H3: Status contracts
   - H3: Other narrow channel subpaths
   - H2: Inbound mention policy
   - H2: Walkthrough
@@ -7570,7 +7569,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
   - H2: How to migrate
-  - H2: Channel status type migration
   - H2: Import path reference
   - H2: Removed compatibility surfaces
   - H3: Process-global API-provider publication

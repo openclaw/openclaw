@@ -492,9 +492,6 @@ status adapter, and channel secret target metadata needed for those
 summaries. Do not start clients, listeners, or transport runtimes from the
 setup entry.
 
-Status output uses `ChannelAccountStatus`; contributions use
-`ChannelAccountSnapshotInput` (`ChannelAccountSnapshot` is its deprecated alias).
-
 Keep the main channel entry import path narrow too. Discovery can evaluate
 the entry and the channel plugin module to register capabilities without
 activating the channel. Files such as `channel-plugin-api.ts` should export
