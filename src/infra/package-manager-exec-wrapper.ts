@@ -15,6 +15,17 @@ const NPM_EXEC_OPTIONS_WITH_VALUE = new Set([
   "-w",
 ]);
 
+const NPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE = new Set([
+  "--cache",
+  "--package",
+  "--prefix",
+  "--script-shell",
+  "--userconfig",
+  "--workspace",
+  "-p",
+  "-w",
+]);
+
 const NPM_EXEC_FLAG_OPTIONS = new Set([
   "--no",
   "--quiet",
@@ -292,7 +303,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
       if (
         hasLeadingContextOption(argv, 1, {
           ...leadingOptions,
-          contextOptionsWithValue: new Set(["--prefix", "--workspace", "-w"]),
+          contextOptionsWithValue: NPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
           contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
           contextFlagOptions: new Set(["--ws", "--workspaces"]),
         })
@@ -305,7 +316,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
             optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
             caseSensitiveOptionsWithValue: new Set(["-C"]),
             flagOptions: NPM_EXEC_FLAG_OPTIONS,
-            contextOptionsWithValue: new Set(["--package", "--prefix", "--workspace", "-p", "-w"]),
+            contextOptionsWithValue: NPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
             contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
             contextFlagOptions: new Set(["--ws", "--workspaces"]),
           })
@@ -317,7 +328,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
         optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
         caseSensitiveOptionsWithValue: new Set(["-C"]),
         flagOptions: NPM_EXEC_FLAG_OPTIONS,
-        contextOptionsWithValue: new Set(["--package", "--prefix", "--workspace", "-p", "-w"]),
+        contextOptionsWithValue: NPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
         contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
         contextFlagOptions: new Set(["--ws", "--workspaces"]),
       });

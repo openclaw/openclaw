@@ -113,7 +113,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     },
   );
 
-  it.each(["--workspace=a", "--workspace a", "--workspaces"])(
+  it.each(["--package=tsx", "--package tsx", "--workspace=a", "--workspace a", "--workspaces"])(
     "keeps npm workspace exec approvals one-shot: %s",
     async (workspaceOption) => {
       const dir = makeTempDir();
