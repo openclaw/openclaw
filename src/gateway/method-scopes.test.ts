@@ -342,6 +342,26 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
+  it("requires admin for incognito session creation and inheritance", () => {
+    for (const params of [
+      { agentId: "main", incognito: true },
+      { parentSessionKey: "agent:main:dashboard:incognito-parent" },
+    ]) {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
+        "operator.admin",
+      ]);
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
+      ).toEqual({ allowed: false, missingScope: "operator.admin" });
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),
+      ).toEqual({ allowed: true });
+    }
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", { incognito: false }),
+    ).toEqual(["operator.write"]);
+  });
+
   it("keeps keyed sessions.create model selection at write scope for handler-state checks", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {

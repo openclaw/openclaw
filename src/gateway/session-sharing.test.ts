@@ -122,6 +122,65 @@ describe("session sharing policy", () => {
     expect(filterDraftSessionsForClient({ client: viewer, store: { main: entry } })).toEqual({});
   });
 
+  it("keeps incognito owner-only regardless of its nominal shared visibility", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:dashboard:incognito-private";
+      const entry = {
+        sessionId: "session-incognito",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        incognito: true as const,
+        createdActor: { type: "human" as const, id: "owner@example.com" },
+      };
+      await upsertSessionEntry({ agentId: "main", sessionKey }, entry);
+      const owner = client({ user: "owner@example.com" });
+      const viewer = client({ user: "viewer@example.com" });
+      const admin = client({ user: "admin@example.com", scopes: ["operator.admin"] });
+      const solo = client({});
+      const cfg = {};
+      const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
+
+      for (const visibleClient of [owner, admin, solo]) {
+        expect(
+          filterDraftSessionsForClient({ client: visibleClient, store: { [sessionKey]: entry } }),
+        ).toHaveProperty(sessionKey);
+        expect(
+          canReceiveSessionEvent({
+            cfg,
+            client: visibleClient as never,
+            sessionKeys: [sessionKey],
+          }),
+        ).toBe(true);
+        expect(
+          resolveSessionMutationAuthorization({
+            client: visibleClient,
+            method: "chat.send",
+            requestParams: { sessionKey },
+            context,
+          }).error,
+        ).toBeNull();
+      }
+
+      expect(
+        filterDraftSessionsForClient({ client: viewer, store: { [sessionKey]: entry } }),
+      ).toEqual({});
+      expect(
+        canReceiveSessionEvent({ cfg, client: viewer as never, sessionKeys: [sessionKey] }),
+      ).toBe(false);
+      expect(
+        resolveSessionMutationAuthorization({
+          client: viewer,
+          method: "chat.send",
+          requestParams: { sessionKey },
+          context,
+        }).error,
+      ).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: `Incognito session "${sessionKey}" was not found.`,
+      });
+    });
+  });
+
   it("defaults legacy entries and omitted policy flags to enabled", () => {
     expect(resolveSessionVisibility({})).toBe("shared");
     expect(allowedSessionVisibilities({})).toEqual(["shared", "read-only", "suggest", "draft"]);

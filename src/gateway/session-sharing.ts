@@ -13,6 +13,7 @@ import {
 } from "../config/sessions.js";
 import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type {
@@ -39,6 +40,7 @@ type SessionSharingTarget = {
 
 type SessionSharingSnapshot = {
   creatorId?: string;
+  incognito: boolean;
   visibility: SessionVisibility;
 };
 
@@ -172,6 +174,28 @@ function canMutateSession(params: {
   return params.visibility === "shared" || params.role !== "viewer";
 }
 
+function incognitoSessionNotFound(sessionKey: string): ErrorShape {
+  return errorShape(ErrorCodes.INVALID_REQUEST, `Incognito session "${sessionKey}" was not found.`);
+}
+
+function authorizeIncognitoSessionTarget(params: {
+  client: GatewayClient | null;
+  sessionKey: string;
+  target: SessionSharingTarget | null;
+}): ErrorShape | null {
+  const incognito = params.target
+    ? params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey)
+    : isIncognitoSessionKey(params.sessionKey);
+  if (!incognito) {
+    return null;
+  }
+  const identity = gatewayClientSessionCreator(params.client);
+  if (!identity || params.target?.entry.createdActor?.id === identity.id) {
+    return null;
+  }
+  return incognitoSessionNotFound(params.sessionKey);
+}
+
 export function authorizeResolvedSessionMutation(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
@@ -182,6 +206,14 @@ export function authorizeResolvedSessionMutation(params: {
     return null;
   }
   const target = resolveSessionSharingTarget(params);
+  const incognitoError = authorizeIncognitoSessionTarget({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    target,
+  });
+  if (incognitoError) {
+    return incognitoError;
+  }
   if (!target) {
     return null;
   }
@@ -203,6 +235,29 @@ function authorizeSessionSharingTarget(params: {
           visibility,
         },
       });
+}
+
+function resolveDirectIncognitoTargets(method: string, params: unknown): SessionMutationTarget[] {
+  if (method === "sessions.create" || method === "sessions.list") {
+    return [];
+  }
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return [];
+  }
+  const record = params as Record<string, unknown>;
+  const candidates = [record.key, record.sessionKey];
+  if (Array.isArray(record.keys)) {
+    candidates.push(...record.keys);
+  }
+  if (Array.isArray(record.sessionKeys)) {
+    candidates.push(...record.sessionKeys);
+  }
+  const agentId = normalizeOptionalString(record.agentId);
+  return candidates.flatMap((candidate): SessionMutationTarget[] =>
+    typeof candidate === "string" && isIncognitoSessionKey(candidate)
+      ? [{ sessionKey: candidate, ...(agentId ? { agentId } : {}) }]
+      : [],
+  );
 }
 
 function readStringParam(params: unknown, key: string): string | undefined {
@@ -398,6 +453,23 @@ export function resolveSessionMutationAuthorization(params: {
   // config change cannot split target discovery from authorization.
   let cachedCfg: OpenClawConfig | undefined;
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
+  // Incognito direct reads and writes share this central participation choke point;
+  // hidden keys use the stale-session refusal instead of revealing existence.
+  for (const targetRef of resolveDirectIncognitoTargets(params.method, params.requestParams)) {
+    const target = resolveSessionSharingTarget({
+      cfg: getCfg(),
+      sessionKey: targetRef.sessionKey,
+      agentId: targetRef.agentId,
+    });
+    const error = authorizeIncognitoSessionTarget({
+      client: params.client,
+      sessionKey: targetRef.sessionKey,
+      target,
+    });
+    if (error) {
+      return { error };
+    }
+  }
   const targetRefs = resolveSessionMutationTargets({
     method: params.method,
     requestParams: params.requestParams,
@@ -588,6 +660,9 @@ function loadSharingSnapshot(
     // Missing rows occur after deletion. Fail closed here; the delete path also
     // emits an unscoped catalog invalidation so identified readers still refresh.
     visibility: target ? resolveSessionVisibility(target.entry) : "draft",
+    incognito: target
+      ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
+      : isIncognitoSessionKey(sessionKey),
     ...(target ? { creatorId: target.entry.createdActor?.id } : {}),
   } satisfies SessionSharingSnapshot;
   rememberSharingSnapshot(canonicalKey, snapshot);
@@ -610,7 +685,9 @@ export function canReceiveSessionEvent(params: {
   }
   return params.sessionKeys.every((sessionKey) => {
     const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
-    return snapshot.visibility !== "draft" || snapshot.creatorId === identity.id;
+    return (
+      (!snapshot.incognito && snapshot.visibility !== "draft") || snapshot.creatorId === identity.id
+    );
   });
 }
 
@@ -623,8 +700,10 @@ export function filterDraftSessionsForClient(params: {
     return params.store;
   }
   return Object.fromEntries(
-    Object.entries(params.store).filter(([, entry]) => {
-      return resolveSessionVisibility(entry) !== "draft" || entry.createdActor?.id === identity.id;
+    Object.entries(params.store).filter(([sessionKey, entry]) => {
+      const owner = entry.createdActor?.id === identity.id;
+      const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
+      return owner || (!incognito && resolveSessionVisibility(entry) !== "draft");
     }),
   );
 }

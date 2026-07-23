@@ -40,6 +40,7 @@ import {
   agentDiscoveryMock,
   dispatchInboundMessageMock,
   embeddedRunMock,
+  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
@@ -390,6 +391,81 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
     ).toBeUndefined();
   } finally {
     ws.close();
+    closeOpenClawAgentDatabasesForTest();
+  }
+});
+
+test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
+  const { dir } = await createSessionStoreDir();
+  const admin = await openClient({
+    scopes: ["operator.admin"],
+    deviceIdentityPath: path.join(dir, "admin-device.json"),
+  });
+  const reader = await openClient({
+    scopes: ["operator.read"],
+    deviceIdentityPath: path.join(dir, "reader-device.json"),
+  });
+  const writer = await openClient({
+    scopes: ["operator.write"],
+    deviceIdentityPath: path.join(dir, "writer-device.json"),
+  });
+  try {
+    const created = await rpcReq<{ key?: string; sessionId?: string }>(
+      admin.ws,
+      "sessions.create",
+      { agentId: "main", incognito: true },
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "admin incognito key");
+
+    const adminList = await rpcReq<{ sessions?: Array<{ key?: string }> }>(
+      admin.ws,
+      "sessions.list",
+      {},
+    );
+    expect(adminList.payload?.sessions?.some((session) => session.key === sessionKey)).toBe(true);
+
+    for (const ws of [admin.ws, reader.ws, writer.ws]) {
+      await expect(rpcReq(ws, "sessions.subscribe", {})).resolves.toMatchObject({ ok: true });
+    }
+    for (const ws of [reader.ws, writer.ws]) {
+      const listed = await rpcReq<{ sessions?: Array<{ key?: string }> }>(ws, "sessions.list", {});
+      expect(listed.ok).toBe(true);
+      expect(listed.payload?.sessions?.some((session) => session.key === sessionKey)).toBe(true);
+    }
+
+    const deniedCreate = await rpcReq(writer.ws, "sessions.create", {
+      agentId: "main",
+      incognito: true,
+    });
+    expect(deniedCreate).toMatchObject({
+      ok: false,
+      error: { message: "missing scope: operator.admin" },
+    });
+
+    await expect(rpcReq(reader.ws, "sessions.get", { key: sessionKey })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    const changedEvent = (ws: typeof admin.ws) =>
+      onceMessage(
+        ws,
+        (message) =>
+          message.type === "event" &&
+          message.event === "sessions.changed" &&
+          (message.payload as { sessionKey?: unknown } | undefined)?.sessionKey === sessionKey,
+      );
+    const changedEvents = [admin.ws, reader.ws, writer.ws].map(changedEvent);
+    const patched = await rpcReq(admin.ws, "sessions.patch", {
+      key: sessionKey,
+      label: "admin-only",
+    });
+    expect(patched.ok, JSON.stringify(patched.error)).toBe(true);
+    await Promise.all(changedEvents);
+  } finally {
+    admin.ws.close();
+    reader.ws.close();
+    writer.ws.close();
     closeOpenClawAgentDatabasesForTest();
   }
 });

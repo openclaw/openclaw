@@ -360,7 +360,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const visibleSessions = canSeeDrafts
           ? sessions
           : sessions.filter(
-              (session) => session.visibility !== "draft" || session.sharingRole === "owner",
+              (session) =>
+                (!session.incognito && session.visibility !== "draft") ||
+                session.sharingRole === "owner",
             );
         return {
           ...result,

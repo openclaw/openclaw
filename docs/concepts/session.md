@@ -76,6 +76,8 @@ The `incognito-` segment is reserved for dashboard, subagent, and hidden interna
 
 Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send, diagnostic logging remains unchanged, and OpenClaw still records content-free audit metadata such as HMAC references.
 
+On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
+
 ## Remember across conversations
 
 Separate transcripts control each conversation's local history. For a personal

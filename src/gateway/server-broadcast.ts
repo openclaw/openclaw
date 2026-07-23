@@ -137,11 +137,12 @@ function hasEventScope(
   if (client.connectionKind === "worker") {
     return false;
   }
+  const role = client.connect.role ?? "operator";
+  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (explicitPluginScope) {
-    if ((client.connect.role ?? "operator") !== "operator") {
+    if (role !== "operator") {
       return false;
     }
-    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
     if (scopes.includes(ADMIN_SCOPE)) {
       return true;
     }
@@ -154,11 +155,9 @@ function hasEventScope(
   // for operator.write and operator.admin scopes. Explicit plugin.* entries
   // in EVENT_SCOPE_GUARDS take precedence (e.g., plugin.approval.*).
   if (!required && event.startsWith("plugin.")) {
-    const role = client.connect.role ?? "operator";
     if (role !== "operator") {
       return false;
     }
-    const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
     return scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE);
   }
   if (!required) {
@@ -167,11 +166,9 @@ function hasEventScope(
   if (required.length === 0) {
     return true;
   }
-  const role = client.connect.role ?? "operator";
   if (role !== "operator") {
     return false;
   }
-  const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
   }
