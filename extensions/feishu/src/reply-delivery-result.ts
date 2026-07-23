@@ -25,7 +25,7 @@ export type FeishuReplyDeliveryResultWithFinalization = FeishuReplyDeliveryResul
 
 const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
 
-export type FeishuPartialReplyDeliveryError = Error & {
+type FeishuPartialReplyDeliveryError = Error & {
   code: typeof CHANNEL_PARTIAL_DELIVERY_ERROR_CODE;
   deliveryResult: FeishuReplyDeliveryResult & { visibleReplySent: true };
 };
