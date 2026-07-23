@@ -42,6 +42,18 @@ async function putUrbitChannel(
 
 const TLON_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
+async function releaseUrbitGuardedResponse(
+  response: Response,
+  release: () => Promise<void>,
+): Promise<void> {
+  // Status-only / error-throw paths leave bodies unread. release() tears down the
+  // SSRF dispatcher only — cancel unread streams so undici releases the socket.
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+  await release();
+}
+
 export async function pokeUrbitChannel(
   deps: UrbitChannelDeps,
   params: { app: string; mark: string; json: unknown; auditContext: string },
@@ -74,7 +86,7 @@ export async function pokeUrbitChannel(
     }
     return pokeId;
   } finally {
-    await release();
+    await releaseUrbitGuardedResponse(response, release);
   }
 }
 
@@ -108,7 +120,7 @@ export async function scryUrbitPath(
     // Keep the shared JSON ceiling while retaining the path needed to identify the endpoint.
     return await readProviderJsonResponse(response, `Tlon scry response for path ${params.path}`);
   } finally {
-    await release();
+    await releaseUrbitGuardedResponse(response, release);
   }
 }
 
@@ -123,7 +135,7 @@ async function createUrbitChannel(
       throw new UrbitHttpError({ operation: "Channel creation", status: response.status });
     }
   } finally {
-    await release();
+    await releaseUrbitGuardedResponse(response, release);
   }
 }
 
@@ -147,7 +159,7 @@ async function wakeUrbitChannel(deps: UrbitChannelDeps): Promise<void> {
       throw new UrbitHttpError({ operation: "Channel activation", status: response.status });
     }
   } finally {
-    await release();
+    await releaseUrbitGuardedResponse(response, release);
   }
 }
 
