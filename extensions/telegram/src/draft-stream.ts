@@ -234,6 +234,7 @@ export function createTelegramDraftStream(params: {
   replyToMessageId?: number;
   replyToMode?: ReplyToMode;
   richMessages?: boolean;
+  linkPreview?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -410,6 +411,10 @@ export function createTelegramDraftStream(params: {
     page: PlannedTelegramDraftPage,
     sendGeneration: number,
   ): Promise<boolean> => {
+    const linkPreviewOptions =
+      params.linkPreview === false
+        ? { link_preview_options: { is_disabled: true } as const }
+        : undefined;
     const targetMessageId = streamMessageId;
     if (typeof targetMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
@@ -436,23 +441,34 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, fallbackPlan.plainText);
+          await params.api.editMessageText(
+            chatId,
+            targetMessageId,
+            fallbackPlan.plainText,
+            linkPreviewOptions,
+          );
           acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
         }
       } else if (page.sourceTextMode === "html") {
         try {
           await params.api.editMessageText(chatId, targetMessageId, page.sourceText, {
             parse_mode: "HTML" as const,
+            ...linkPreviewOptions,
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, page.text);
+          await params.api.editMessageText(chatId, targetMessageId, page.text, linkPreviewOptions);
           acceptedSnapshot = fallbackSnapshot(page.text);
         }
       } else {
-        await params.api.editMessageText(chatId, targetMessageId, page.sourceText);
+        await params.api.editMessageText(
+          chatId,
+          targetMessageId,
+          page.sourceText,
+          linkPreviewOptions,
+        );
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;
@@ -461,9 +477,12 @@ export function createTelegramDraftStream(params: {
     }
     messageSendAttempted = true;
     const sendMessageParams = reserveReplyTargetForSend(sendGeneration);
+    const finalSendMessageParams = linkPreviewOptions
+      ? { ...sendMessageParams, ...linkPreviewOptions }
+      : sendMessageParams;
     let sent: Awaited<ReturnType<typeof sendPlannedMessage>>;
     try {
-      sent = await sendPlannedMessage(page, sendMessageParams);
+      sent = await sendPlannedMessage(page, finalSendMessageParams);
     } catch (err) {
       const definitelyRejected = isSafeToRetrySendError(err) || isTelegramClientRejection(err);
       if (sendGeneration === generation && definitelyRejected) {

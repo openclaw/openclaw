@@ -102,11 +102,7 @@ function expectPreviewEdit(
   text: string,
   params?: Record<string, unknown>,
 ) {
-  if (params) {
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, text, params);
-    return;
-  }
-  expect(api.editMessageText).toHaveBeenCalledWith(123, 17, text);
+  expect(api.editMessageText).toHaveBeenCalledWith(123, 17, text, params);
 }
 
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
@@ -321,7 +317,7 @@ describe("createTelegramDraftStream", () => {
 
     expect(messageId).toBe(17);
     // The window message is EDITED into the bar, never deleted (no focus-jump).
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "🛠️ 1 tool call · ⏱️ 1s");
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "🛠️ 1 tool call · ⏱️ 1s", undefined);
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
@@ -933,7 +929,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.editMessageText).toHaveBeenCalledTimes(2);
-    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more");
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more", undefined);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -956,7 +952,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.editMessageText).toHaveBeenCalledTimes(2);
-    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello again");
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello again", undefined);
     expect(stream.lastDeliveredText?.()).toBe("Hello again");
   });
 
@@ -984,7 +980,7 @@ describe("createTelegramDraftStream", () => {
       await stream.flush();
 
       expect(api.editMessageText).toHaveBeenCalledTimes(2);
-      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more");
+      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more", undefined);
     } finally {
       vi.useRealTimers();
     }
@@ -1017,7 +1013,7 @@ describe("createTelegramDraftStream", () => {
       await stopPromise;
 
       expect(api.editMessageText).toHaveBeenCalledTimes(2);
-      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello final");
+      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello final", undefined);
     } finally {
       vi.useRealTimers();
     }
@@ -1163,7 +1159,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "<b>Done &lt;&amp;&gt;</b>", {
       parse_mode: "HTML",
     });
-    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Done <&>");
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Done <&>", undefined);
     expect(stream.currentMessageSnapshot?.()).toEqual({
       text: "Done <&>",
       sourceText: "Done &lt;&amp;&gt;",
@@ -1870,6 +1866,175 @@ describe("createTelegramDraftStream", () => {
     expect(requireSendMessageCallText(api, 0).length).toBeLessThanOrEqual(100);
     expect(api.editMessageText).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("sends link_preview_options when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { linkPreview: false });
+
+    stream.update("Hello https://example.com");
+    await stream.flush();
+
+    expectPreviewSend(api, "Hello https://example.com", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("edits with link_preview_options when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { linkPreview: false });
+
+    stream.update("First https://example.com");
+    await stream.flush();
+    stream.update("Second https://example.org");
+    await stream.flush();
+
+    expectPreviewEdit(api, "Second https://example.org", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("omits link_preview_options from sendMessage when linkPreview is not set", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.update("Hello https://example.com");
+    await stream.flush();
+
+    const call = api.sendMessage.mock.calls[0]!;
+    expect(call[2]).not.toHaveProperty("link_preview_options");
+  });
+
+  it("omits link_preview_options from sendMessage when linkPreview is true", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { linkPreview: true });
+
+    stream.update("Hello https://example.com");
+    await stream.flush();
+
+    const call = api.sendMessage.mock.calls[0]!;
+    expect(call[2]).not.toHaveProperty("link_preview_options");
+  });
+
+  it("includes link_preview_options in HTML send and edit params when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      renderText: (text) => ({ text: `<b>${text}</b>`, parseMode: "HTML" }),
+    });
+
+    stream.update("Hello https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Hello https://example.com</b>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+
+    stream.update("Again https://example.org");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<b>Again https://example.org</b>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("includes link_preview_options in rich send params when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true, linkPreview: false });
+
+    stream.update("## Hello https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    const call = api.raw.sendRichMessage.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call?.link_preview_options).toEqual({ is_disabled: true });
+  });
+
+  it("includes link_preview_options in HTML plain fallback send when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce({ message_id: 17 });
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      renderText: (text) => ({ text: `<b>${text}</b>`, parseMode: "HTML" }),
+    });
+
+    stream.update("Hello https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "<b>Hello https://example.com</b>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Hello https://example.com", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("includes link_preview_options in HTML plain fallback edit when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      renderText: (text) => ({ text: `<b>${text}</b>`, parseMode: "HTML" }),
+    });
+
+    stream.update("First https://example.com");
+    await stream.flush();
+
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce(true);
+    stream.update("Again https://example.org");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenNthCalledWith(
+      1,
+      123,
+      17,
+      "<b>Again https://example.org</b>",
+      { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
+    );
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Again https://example.org", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("includes link_preview_options in rich plain fallback send when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    api.raw.sendRichMessage.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+    );
+    const stream = createDraftStream(api, { richMessages: true, linkPreview: false });
+
+    stream.update("## Hello https://example.com");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, expect.any(String), {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("includes link_preview_options in rich plain fallback edit when linkPreview is false", async () => {
+    const api = createMockDraftApi();
+    api.raw.editMessageText.mockRejectedValueOnce(
+      new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
+    );
+    const stream = createDraftStream(api, { richMessages: true, linkPreview: false });
+
+    stream.update("## First https://example.com");
+    await stream.flush();
+
+    stream.update("## Again https://example.org");
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, expect.any(String), {
+      link_preview_options: { is_disabled: true },
+    });
   });
 });
 
