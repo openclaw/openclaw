@@ -193,22 +193,35 @@ export function writeCronJobScratch(params: {
   );
 }
 
-/** Deletes scratch when its owning job is removed. Orphans remain harmless on partial failure. */
+/**
+ * Deletes scratch when its owning job is removed, or — with expectedRevision —
+ * atomically reverts a migration write back to the no-row state. Orphans remain
+ * harmless on partial failure. Returns false when the guarded revision moved.
+ */
 export function deleteCronJobScratch(
   storePath: string,
   jobId: string,
   options: OpenClawStateDatabaseOptions = {},
-): void {
-  runOpenClawStateWriteTransaction(
+  guard?: { expectedRevision: number },
+): boolean {
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const storeKey = cronStoreKey(storePath);
+      if (guard) {
+        const { currentRevision } = readScratchStateFromDatabase(db, storeKey, jobId);
+        if (currentRevision !== guard.expectedRevision) {
+          return false;
+        }
+      }
       const cronDb = getCronStoreKysely(db);
       executeSqliteQuerySync(
         db,
         cronDb
           .deleteFrom("cron_job_scratch")
-          .where("store_key", "=", cronStoreKey(storePath))
+          .where("store_key", "=", storeKey)
           .where("job_id", "=", jobId),
       );
+      return true;
     },
     options,
     { operationLabel: "cron.scratch.delete" },

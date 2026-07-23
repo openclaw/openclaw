@@ -250,6 +250,19 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
         await restore(error);
         throw error;
       }
+      // An editor atomic-save can recreate the original path while the claim
+      // is held. That recreation is the newest instruction set; treat it like
+      // a changed claim so the import rolls back instead of shadowing it.
+      const recreated = await fs
+        .lstat(source.path)
+        .then(() => true)
+        .catch(() => false);
+      if (recreated) {
+        const error = new Error("HEARTBEAT.md was recreated while the migration claim was held");
+        error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
+        await restore(error).catch(() => undefined);
+        throw error;
+      }
       await fs.unlink(claimPath);
     },
   };
@@ -505,15 +518,26 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // or the runner's legacy fallback and future migrations stay suppressed.
     const rollbackCommitted = () => {
       for (const commit of committedThisRun.toReversed()) {
-        const state = readCronJobScratchState(storePath, commit.monitor.id, { env });
-        if (state.currentRevision !== commit.newRevision) {
-          warnings.push(
-            `Agent "${commit.agentId}" scratch changed before the migration rollback; leaving current scratch in place.`,
-          );
-          continue;
-        }
         if (!commit.previous) {
-          deleteCronJobScratch(storePath, commit.monitor.id, { env });
+          // Revision-guarded atomic delete restores the pre-migration no-row
+          // state so the runner's legacy fallback stays available. Accepted
+          // tradeoff: this resets the revision counter to 0, so a writer still
+          // holding a pre-migration expectedRevision:0 token could CAS through
+          // after the rollback; that requires a third concurrent writer racing
+          // doctor and is preferred over permanently disabling the fallback.
+          const deleted = deleteCronJobScratch(
+            storePath,
+            commit.monitor.id,
+            { env },
+            {
+              expectedRevision: commit.newRevision,
+            },
+          );
+          if (!deleted) {
+            warnings.push(
+              `Agent "${commit.agentId}" scratch changed before the migration rollback; leaving current scratch in place.`,
+            );
+          }
           continue;
         }
         const revert = writeCronJobScratch({
