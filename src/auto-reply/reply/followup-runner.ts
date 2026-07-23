@@ -612,12 +612,17 @@ export function createFollowupRunner(params: {
         if (replySessionKey && sessionStore) {
           sessionStore[replySessionKey] = updatedEntry;
         }
-        run = {
+        const updatedRun = {
           ...run,
           sessionId: updatedEntry.sessionId,
-          ...(updatedEntry.sessionFile ? { sessionFile: updatedEntry.sessionFile } : {}),
           modelSelectionLocked: updatedEntry.modelSelectionLocked === true,
         };
+        if (updatedEntry.sessionFile?.trim()) {
+          updatedRun.sessionFile = updatedEntry.sessionFile;
+        } else {
+          updatedRun.sessionFile = "";
+        }
+        run = updatedRun;
         effectiveQueued = { ...effectiveQueued, run };
         replyOperation?.updateSessionId(updatedEntry.sessionId);
         const queueKey = run.sessionKey ?? sessionKey;
@@ -749,9 +754,7 @@ export function createFollowupRunner(params: {
         // snapshot may predate catalog adoption, but a replacement session must not inherit it.
         run = {
           ...run,
-          ...(admittedSessionEntry.sessionFile
-            ? { sessionFile: admittedSessionEntry.sessionFile }
-            : {}),
+          sessionFile: admittedSessionEntry.sessionFile ?? "",
           modelSelectionLocked: admittedSessionEntry.modelSelectionLocked === true,
         };
         effectiveQueued = { ...effectiveQueued, run };
@@ -794,6 +797,7 @@ export function createFollowupRunner(params: {
       let autoCompactionCount = 0;
       let followupResetCommitted = false;
       let followupResetPreviousSessionId: string | undefined;
+      let lastAttemptResetCommitted = false;
       let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
@@ -1125,6 +1129,7 @@ export function createFollowupRunner(params: {
               pinnedCliRuntime !== undefined ||
               (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider, runtimeConfig));
             let attemptCompactionCount = 0;
+            let attemptResetCommitted = false;
             const userTurnTranscriptRecorder =
               effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
             const notifyUserMessagePersisted = () => {
@@ -1517,8 +1522,11 @@ export function createFollowupRunner(params: {
                   }
                 },
                 onSessionResetCommitted: (commit) => {
+                  attemptResetCommitted = true;
                   followupResetCommitted = true;
-                  followupResetPreviousSessionId = run.sessionId;
+                  const previousSessionId = run.sessionId;
+                  followupResetPreviousSessionId = previousSessionId;
+                  autoCompactionCount = 0;
                   opts?.onSessionMetadataChanges?.([
                     {
                       sessionKey: commit.key,
@@ -1526,6 +1534,7 @@ export function createFollowupRunner(params: {
                       reason: commit.reason,
                     },
                   ]);
+                  refreshFollowupSessionState(previousSessionId);
                 },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
@@ -1577,7 +1586,10 @@ export function createFollowupRunner(params: {
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
               return result;
             } finally {
-              autoCompactionCount += attemptCompactionCount;
+              lastAttemptResetCommitted = attemptResetCommitted;
+              if (!attemptResetCommitted) {
+                autoCompactionCount += attemptCompactionCount;
+              }
             }
           },
         });
@@ -1837,7 +1849,7 @@ export function createFollowupRunner(params: {
         }
         return true;
       };
-      if (storePath && replySessionKey && !followupResetCommitted) {
+      if (storePath && replySessionKey && !lastAttemptResetCommitted) {
         await persistRunSessionUsage({
           storePath,
           sessionKey: replySessionKey,
@@ -2015,36 +2027,33 @@ export function createFollowupRunner(params: {
       }
       if (autoCompactionCount > 0) {
         const previousSessionId = run.sessionId;
-        let count: number | undefined;
         if (followupResetCommitted) {
           refreshFollowupSessionState(followupResetPreviousSessionId ?? previousSessionId);
-          count = activeSessionEntry?.compactionCount;
-        } else {
-          count = await incrementRunCompactionCount({
-            cfg: runtimeConfig,
-            sessionEntry: activeSessionEntry,
-            sessionStore,
-            sessionKey: replySessionKey,
-            storePath,
-            amount: autoCompactionCount,
-            compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-            lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-            contextTokensUsed,
-            newSessionId: runResult.meta?.agentMeta?.sessionId,
-            newSessionFile: runResult.meta?.agentMeta?.sessionFile,
-          });
-          const refreshedSessionEntry =
-            replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
-          if (refreshedSessionEntry) {
-            const queueKey = run.sessionKey ?? sessionKey;
-            if (queueKey) {
-              refreshQueuedFollowupSession({
-                key: queueKey,
-                previousSessionId,
-                nextSessionId: refreshedSessionEntry.sessionId,
-                nextSessionFile: refreshedSessionEntry.sessionFile,
-              });
-            }
+        }
+        const count = await incrementRunCompactionCount({
+          cfg: runtimeConfig,
+          sessionEntry: activeSessionEntry,
+          sessionStore,
+          sessionKey: replySessionKey,
+          storePath,
+          amount: autoCompactionCount,
+          compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
+          lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+          contextTokensUsed,
+          newSessionId: runResult.meta?.agentMeta?.sessionId,
+          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
+        });
+        const refreshedSessionEntry =
+          replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
+        if (refreshedSessionEntry) {
+          const queueKey = run.sessionKey ?? sessionKey;
+          if (queueKey) {
+            refreshQueuedFollowupSession({
+              key: queueKey,
+              previousSessionId,
+              nextSessionId: refreshedSessionEntry.sessionId,
+              nextSessionFile: refreshedSessionEntry.sessionFile,
+            });
           }
         }
         if (shouldEmitVerboseProgress()) {

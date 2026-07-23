@@ -17,7 +17,7 @@ type DeferredEmbeddedHookSessionResetRequest = {
 };
 export type DeferEmbeddedHookSessionReset = (
   request: DeferredEmbeddedHookSessionResetRequest,
-) => void;
+) => void | Promise<void>;
 type HookResetSessionFunction = EmbeddedHookApi["resetSession"];
 
 export function withEmbeddedHookSessionResetAssertion(
@@ -50,7 +50,7 @@ export function buildEmbeddedHookApi(params?: {
     if (!params?.deferResetSession) {
       throw new Error("resetSession is unavailable without a deferred lifecycle owner");
     }
-    params.deferResetSession({
+    await params.deferResetSession({
       key: sessionKey,
       ...(params?.agentId ? { agentId: params.agentId } : {}),
       reason,
@@ -65,17 +65,14 @@ export function buildEmbeddedHookApi(params?: {
 
 export function createEmbeddedHookSessionResetQueue() {
   const pending = new Map<string, DeferredEmbeddedHookSessionResetRequest>();
-  return {
-    deferResetSession(request: DeferredEmbeddedHookSessionResetRequest): void {
-      pending.set(request.key, request);
-    },
-    async flush(): Promise<void> {
+  let drainStarted = false;
+  let drainPromise: Promise<void> | null = null;
+
+  const drainPending = async (): Promise<void> => {
+    const { performGatewaySessionReset } = await import("../../gateway/session-reset-service.js");
+    while (pending.size > 0) {
       const requests = Array.from(pending.values());
       pending.clear();
-      if (requests.length === 0) {
-        return;
-      }
-      const { performGatewaySessionReset } = await import("../../gateway/session-reset-service.js");
       for (const request of requests) {
         try {
           const result = await performGatewaySessionReset(request);
@@ -92,6 +89,30 @@ export function createEmbeddedHookSessionResetQueue() {
           });
         }
       }
+    }
+  };
+
+  const ensureDrain = async (): Promise<void> => {
+    while (pending.size > 0 || drainPromise) {
+      const currentDrain =
+        drainPromise ??
+        (drainPromise = drainPending().finally(() => {
+          drainPromise = null;
+        }));
+      await currentDrain;
+    }
+  };
+
+  return {
+    async deferResetSession(request: DeferredEmbeddedHookSessionResetRequest): Promise<void> {
+      pending.set(request.key, request);
+      if (drainStarted) {
+        await ensureDrain();
+      }
+    },
+    async flush(): Promise<void> {
+      drainStarted = true;
+      await ensureDrain();
     },
   };
 }

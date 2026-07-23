@@ -1211,15 +1211,15 @@ async function finalizeCronRun(params: {
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
   let telemetry: CronRunTelemetry | undefined;
-  const sessionResetCommitted = Boolean(execution.sessionResetCommitted);
+  const suppressFinalAttemptMetadata = Boolean(execution.finalAttemptSessionResetCommitted);
 
   // Late aborted results may still contain billable usage. Recheck before each
   // metadata mutation because lazy runtime loads below can yield to the timeout.
   if (!params.isAborted()) {
-    if (!sessionResetCommitted && finalRunResult.meta?.systemPromptReport) {
+    if (!suppressFinalAttemptMetadata && finalRunResult.meta?.systemPromptReport) {
       prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
     }
-    if (!sessionResetCommitted) {
+    if (!suppressFinalAttemptMetadata) {
       adoptCronRunSessionMetadata({
         entry: prepared.cronSession.sessionEntry,
         sessionKey: prepared.agentSessionKey,
@@ -1246,7 +1246,7 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  if (!params.isAborted() && !sessionResetCommitted) {
+  if (!params.isAborted() && !suppressFinalAttemptMetadata) {
     setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
       provider: providerUsed,
       model: modelUsed,
@@ -1297,7 +1297,7 @@ async function finalizeCronRun(params: {
         }),
       }),
     );
-    if (!sessionResetCommitted) {
+    if (!suppressFinalAttemptMetadata) {
       prepared.cronSession.sessionEntry.inputTokens = input;
       prepared.cronSession.sessionEntry.outputTokens = output;
     }
@@ -1315,7 +1315,7 @@ async function finalizeCronRun(params: {
     if (aggregateTotalTokens > 0) {
       telemetryUsage.total_tokens = aggregateTotalTokens;
     }
-    if (!sessionResetCommitted) {
+    if (!suppressFinalAttemptMetadata) {
       if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
         prepared.cronSession.sessionEntry.totalTokens = totalTokens;
         prepared.cronSession.sessionEntry.totalTokensFresh = true;
@@ -1329,7 +1329,7 @@ async function finalizeCronRun(params: {
     // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
     // cumulative run usage, so assign directly instead of accumulating).
     // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
-    if (!sessionResetCommitted && runEstimatedCostUsd !== undefined) {
+    if (!suppressFinalAttemptMetadata && runEstimatedCostUsd !== undefined) {
       prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
     }
     telemetry = {

@@ -594,8 +594,49 @@ describe("handleCompactCommand", () => {
     ]);
   });
 
+  it("flushes accepted after-compaction reset requests for incomplete terminal compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
+      input.deferEmbeddedHookSessionReset?.({
+        key: "agent:main:whatsapp:direct:12345",
+        agentId: "main",
+        reason: "reset",
+        commandSource: "embedded-agent:hook",
+      });
+      return {
+        ok: true,
+        compacted: false,
+        reason: "already compact",
+      };
+    });
+
+    const params = {
+      ...buildCompactParams("/compact", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      sessionEntry: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    } as HandleCommandsParams;
+
+    await handleCompactCommand(params, true);
+
+    expect(vi.mocked(performGatewaySessionReset)).toHaveBeenCalledWith({
+      key: "agent:main:whatsapp:direct:12345",
+      agentId: "main",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
+      assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
+    });
+  });
+
   it("guards delayed after-compaction resets against replaced sessions", async () => {
-    const sessionStore = {
+    const sessionStore: Record<
+      string,
+      { sessionId: string; lifecycleRevision?: string; updatedAt: number }
+    > = {
       "agent:main:main": {
         sessionId: "target-session",
         lifecycleRevision: "target-revision",
@@ -610,8 +651,7 @@ describe("handleCompactCommand", () => {
         commandSource: "embedded-agent:hook",
       });
       sessionStore["agent:main:main"] = {
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement-revision",
+        sessionId: "target-session",
         updatedAt: Date.now(),
       };
       return {
@@ -627,7 +667,7 @@ describe("handleCompactCommand", () => {
     });
     vi.mocked(performGatewaySessionReset).mockImplementationOnce(async (request) => {
       expect(request.assertCurrent).toEqual(expect.any(Function));
-      expect(() => request.assertCurrent?.()).toThrow("is no longer target-session");
+      expect(() => request.assertCurrent?.()).toThrow("lifecycle changed");
       return { ok: true } as never;
     });
 

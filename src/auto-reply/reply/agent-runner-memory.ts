@@ -353,8 +353,7 @@ function assertCompactionHookResetTargetCurrent(params: {
     );
   }
   if (
-    params.expectedLifecycleRevision &&
-    currentEntry.lifecycleRevision &&
+    params.expectedLifecycleRevision !== undefined &&
     currentEntry.lifecycleRevision !== params.expectedLifecycleRevision
   ) {
     throw new Error(
@@ -978,6 +977,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     terminalCompactionNoticeSent = true;
     await notifyCompaction(phase);
   };
+  let hookSessionResetQueue: ReturnType<typeof createEmbeddedHookSessionResetQueue> | undefined;
   try {
     await notifyStartCompaction();
     const sessionFile = resolveSessionLogPath(
@@ -990,7 +990,8 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
-    const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
+    hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
+    const activeHookSessionResetQueue = hookSessionResetQueue;
     let hookResetExpectedSessionId = entry.sessionId;
     let hookResetExpectedLifecycleRevision = entry.lifecycleRevision;
     const loadCurrentHookResetEntry = () =>
@@ -1052,7 +1053,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
       deferEmbeddedHookSessionReset: (request) =>
-        hookSessionResetQueue.deferResetSession(
+        activeHookSessionResetQueue.deferResetSession(
           withEmbeddedHookSessionResetAssertion(
             {
               ...request,
@@ -1117,7 +1118,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       followupRun: params.followupRun,
     });
     await notifyTerminalCompaction("end");
-    await hookSessionResetQueue.flush();
+    await activeHookSessionResetQueue.flush();
     entry = loadCurrentHookResetEntry() ?? entry;
     if (params.sessionStore?.[sessionKey] && entry) {
       params.sessionStore[sessionKey] = entry;
@@ -1145,6 +1146,8 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyCompaction("incomplete");
     }
     throw err;
+  } finally {
+    await hookSessionResetQueue?.flush();
   }
 }
 
@@ -1438,8 +1441,7 @@ export async function runMemoryFlushIfNeeded(params: {
       verboseLevel: params.resolvedVerboseLevel,
     });
   }
-  let memoryCompactionCompleted = false;
-  let memoryFlushResetCommitted = false;
+  let compactionCompletedSinceLastReset = false;
   let memoryFlushResetPreviousSessionId: string | undefined;
   let outcome: MemoryFlushOutcome = "completed";
   let visibleErrorPayloads: ReplyPayload[] = [];
@@ -1501,6 +1503,9 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionOverride: { kind: "preserve" },
       abortSignal: params.replyOperation.abortSignal,
       runCandidate: async (provider, model, runOptions) => {
+        let attemptCompactionCompleted = false;
+        let attemptResetCommitted = false;
+        let attemptResetPreviousSessionId: string | undefined;
         const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
           provider,
           entry: activeSessionEntry,
@@ -1529,48 +1534,57 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
         });
-        const result = await memoryDeps.runEmbeddedAgent({
-          ...embeddedContext,
-          ...senderContext,
-          ...runBaseParams,
-          agentHarnessId: sessionRuntimeOverride,
-          agentHarnessRuntimeOverride: sessionRuntimeOverride,
-          sandboxSessionKey: params.runtimePolicySessionKey,
-          allowGatewaySubagentBinding: true,
-          silentExpected: true,
-          trigger: "memory",
-          memoryFlushWritePath,
-          prompt: activeMemoryFlushPlan.prompt,
-          transcriptPrompt: "",
-          extraSystemPrompt: flushSystemPrompt,
-          isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
-          bootstrapPromptWarningSignaturesSeen,
-          bootstrapPromptWarningSignature:
-            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
-          abortSignal: params.replyOperation.abortSignal,
-          replyOperation: params.replyOperation,
-          onSessionResetCommitted: (commit) => {
-            memoryFlushResetCommitted = true;
-            const previousSessionId = params.followupRun.run.sessionId;
-            memoryFlushResetPreviousSessionId = previousSessionId;
-            params.opts?.onSessionMetadataChanges?.([
-              {
-                sessionKey: commit.key,
-                ...(commit.agentId ? { agentId: commit.agentId } : {}),
-                reason: commit.reason,
-              },
-            ]);
-            refreshMemoryFlushSessionState(previousSessionId);
-          },
-          onAgentEvent: (evt) => {
-            if (evt.stream === "compaction") {
-              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-              if (phase === "end") {
-                memoryCompactionCompleted = true;
+        const result = await memoryDeps
+          .runEmbeddedAgent({
+            ...embeddedContext,
+            ...senderContext,
+            ...runBaseParams,
+            agentHarnessId: sessionRuntimeOverride,
+            agentHarnessRuntimeOverride: sessionRuntimeOverride,
+            sandboxSessionKey: params.runtimePolicySessionKey,
+            allowGatewaySubagentBinding: true,
+            silentExpected: true,
+            trigger: "memory",
+            memoryFlushWritePath,
+            prompt: activeMemoryFlushPlan.prompt,
+            transcriptPrompt: "",
+            extraSystemPrompt: flushSystemPrompt,
+            isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature:
+              bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            abortSignal: params.replyOperation.abortSignal,
+            replyOperation: params.replyOperation,
+            onSessionResetCommitted: (commit) => {
+              const previousSessionId = params.followupRun.run.sessionId;
+              attemptResetCommitted = true;
+              attemptResetPreviousSessionId = previousSessionId;
+              params.opts?.onSessionMetadataChanges?.([
+                {
+                  sessionKey: commit.key,
+                  ...(commit.agentId ? { agentId: commit.agentId } : {}),
+                  reason: commit.reason,
+                },
+              ]);
+              refreshMemoryFlushSessionState(previousSessionId);
+            },
+            onAgentEvent: (evt) => {
+              if (evt.stream === "compaction") {
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "end") {
+                  attemptCompactionCompleted = true;
+                }
               }
+            },
+          })
+          .finally(() => {
+            memoryFlushResetPreviousSessionId = attemptResetPreviousSessionId;
+            if (attemptResetCommitted) {
+              compactionCompletedSinceLastReset = false;
+            } else if (attemptCompactionCompleted) {
+              compactionCompletedSinceLastReset = true;
             }
-          },
-        });
+          });
         visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
@@ -1584,22 +1598,18 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    if (memoryCompactionCompleted) {
+    if (compactionCompletedSinceLastReset) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      if (memoryFlushResetCommitted) {
-        refreshMemoryFlushSessionState(memoryFlushResetPreviousSessionId ?? previousSessionId);
-      } else {
-        await memoryDeps.incrementCompactionCount({
-          cfg: params.cfg,
-          sessionEntry: activeSessionEntry,
-          sessionStore: activeSessionStore,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          newSessionId: postCompactionSessionId,
-          newSessionFile: postCompactionSessionFile,
-        });
-        refreshMemoryFlushSessionState(previousSessionId);
-      }
+      await memoryDeps.incrementCompactionCount({
+        cfg: params.cfg,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        newSessionId: postCompactionSessionId,
+        newSessionFile: postCompactionSessionFile,
+      });
+      refreshMemoryFlushSessionState(memoryFlushResetPreviousSessionId ?? previousSessionId);
     }
     const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??

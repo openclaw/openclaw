@@ -121,6 +121,28 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
+  it("clears stale transcript paths when retargeting to a session without one", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const queuedRun: FollowupRun = {
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+    };
+    queue.items.push(queuedRun);
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      previousSessionId: "session-1",
+      nextSessionId: "session-2",
+      nextSessionFile: undefined,
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      sessionId: "session-2",
+      sessionFile: "",
+    });
+  });
+
   it("clamps queued Sol Ultra work to Codex Luna Max", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({

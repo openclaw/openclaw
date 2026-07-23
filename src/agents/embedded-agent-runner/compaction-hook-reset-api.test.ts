@@ -1,5 +1,5 @@
 // Verifies deferred after-compaction reset queue behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildEmbeddedHookApi,
   createEmbeddedHookSessionResetQueue,
@@ -14,6 +14,10 @@ vi.mock("../../gateway/session-reset-service.js", () => ({
 }));
 
 describe("createEmbeddedHookSessionResetQueue", () => {
+  beforeEach(() => {
+    resetMocks.performGatewaySessionReset.mockReset().mockResolvedValue({ ok: true });
+  });
+
   it("accepts reason-only reset calls for the current hook session", async () => {
     const deferResetSession = vi.fn();
     const api = buildEmbeddedHookApi({
@@ -94,6 +98,73 @@ describe("createEmbeddedHookSessionResetQueue", () => {
       commandSource: "embedded-agent:hook",
       assertCurrent,
       onCommitted,
+    });
+  });
+
+  it("drains reset requests that arrive while a flush is in progress", async () => {
+    let releaseFirstReset!: () => void;
+    resetMocks.performGatewaySessionReset.mockImplementation(async () => {
+      if (resetMocks.performGatewaySessionReset.mock.calls.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstReset = resolve;
+        });
+      }
+      return { ok: true };
+    });
+    const queue = createEmbeddedHookSessionResetQueue();
+
+    await queue.deferResetSession({
+      key: "agent:main:session-1",
+      agentId: "main",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
+    });
+    const flushing = queue.flush();
+
+    await vi.waitFor(() => {
+      expect(resetMocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    });
+    const secondDefer = queue.deferResetSession({
+      key: "agent:main:session-2",
+      agentId: "main",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+
+    releaseFirstReset();
+    await Promise.all([secondDefer, flushing]);
+
+    expect(resetMocks.performGatewaySessionReset).toHaveBeenCalledTimes(2);
+    expect(resetMocks.performGatewaySessionReset).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        key: "agent:main:session-1",
+      }),
+    );
+    expect(resetMocks.performGatewaySessionReset).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        key: "agent:main:session-2",
+      }),
+    );
+  });
+
+  it("drains reset requests that arrive after the lifecycle flush completed", async () => {
+    const queue = createEmbeddedHookSessionResetQueue();
+
+    await queue.flush();
+    await queue.deferResetSession({
+      key: "agent:main:session-1",
+      agentId: "main",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
+    });
+
+    expect(resetMocks.performGatewaySessionReset).toHaveBeenCalledWith({
+      key: "agent:main:session-1",
+      agentId: "main",
+      reason: "reset",
+      commandSource: "embedded-agent:hook",
     });
   });
 });

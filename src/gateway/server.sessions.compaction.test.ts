@@ -1108,7 +1108,10 @@ test("sessions.compact hook reset guard accepts persisted compaction successor s
   });
 
   const { ws } = await openClient();
-  const response = await rpcReq(ws, "sessions.compact", { key: "main" });
+  const response = await rpcReq<{
+    compacted: boolean;
+    result?: { sessionId?: string };
+  }>(ws, "sessions.compact", { key: "main" });
 
   expect(response.ok, JSON.stringify(response)).toBe(true);
   expect(response.payload?.compacted).toBe(true);
@@ -1117,6 +1120,53 @@ test("sessions.compact hook reset guard accepts persisted compaction successor s
   expect(resetEntry?.sessionId).toBeTruthy();
   expect(resetEntry?.sessionId).not.toBe("sess-compact-old");
   expect(resetEntry?.sessionId).not.toBe("sess-compacted-successor");
+  expect(response.payload?.result?.sessionId).toBe(resetEntry?.sessionId);
+  ws.close();
+});
+
+test("sessions.compact drains hook reset requests after incomplete terminal compaction", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await seedSessionEntry({
+    entry: sessionStoreEntry("sess-compact-incomplete"),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: "sess-compact-incomplete",
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 3,
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+    const call = params as {
+      deferEmbeddedHookSessionReset?: (request: {
+        key: string;
+        agentId?: string;
+        reason: "new" | "reset";
+        commandSource: string;
+      }) => void | Promise<void>;
+    };
+    await call.deferEmbeddedHookSessionReset?.({
+      key: "agent:main:main",
+      agentId: "main",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+    return {
+      ok: true,
+      compacted: false,
+      reason: "already compact",
+    };
+  });
+
+  const { ws } = await openClient();
+  const response = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+  expect(response.ok, JSON.stringify(response)).toBe(true);
+  expect(response.payload?.compacted).toBe(false);
+  const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+  expect(resetEntry?.sessionId).toBeTruthy();
+  expect(resetEntry?.sessionId).not.toBe("sess-compact-incomplete");
   ws.close();
 });
 

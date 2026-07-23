@@ -196,6 +196,7 @@ export type CronExecutionResult = {
   runEndedAt: number;
   liveSelection: CronLiveSelection;
   sessionResetCommitted?: CronSessionResetCommit;
+  finalAttemptSessionResetCommitted?: CronSessionResetCommit;
 };
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
@@ -306,6 +307,7 @@ function createCronPromptExecutor(params: {
     | undefined;
   let attemptMediaTaskIds: ReadonlySet<string> = new Set();
   let sessionResetCommitted: CronSessionResetCommit | undefined;
+  let finalAttemptSessionResetCommitted: CronSessionResetCommit | undefined;
   const currentAttemptCommittedMedia = () =>
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
   const refreshCronSessionStateAfterResetCommit = (commit: CronSessionResetCommit) => {
@@ -329,24 +331,27 @@ function createCronPromptExecutor(params: {
   };
 
   const runPrompt = async (promptText: string) => {
-    const userTurnTranscriptRecorder =
-      pendingUserTurn?.promptText === promptText
-        ? pendingUserTurn.recorder
-        : createUserTurnTranscriptRecorder({
-            input: { text: promptText },
-            target: {
-              sessionId: params.cronSession.sessionEntry.sessionId,
-              agentId: params.agentId,
-              sessionKey: params.runSessionKey,
-              sessionEntry: params.cronSession.sessionEntry,
-              storePath: params.cronSession.storePath,
-              cwd: params.workspaceDir,
-              config: params.cfgWithAgentDefaults,
-            },
-            beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-            errorContext: "cron user turn transcript",
-          });
-    pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
+    const resolveUserTurnTranscriptRecorder = () => {
+      const recorder =
+        pendingUserTurn?.promptText === promptText
+          ? pendingUserTurn.recorder
+          : createUserTurnTranscriptRecorder({
+              input: { text: promptText },
+              target: {
+                sessionId: params.cronSession.sessionEntry.sessionId,
+                agentId: params.agentId,
+                sessionKey: params.runSessionKey,
+                sessionEntry: params.cronSession.sessionEntry,
+                storePath: params.cronSession.storePath,
+                cwd: params.workspaceDir,
+                config: params.cfgWithAgentDefaults,
+              },
+              beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+              errorContext: "cron user turn transcript",
+            });
+      pendingUserTurn = { promptText, recorder };
+      return recorder;
+    };
     const modelPrompt = deliveryTargetRuntimeContext
       ? `${promptText}\n\n${deliveryTargetRuntimeContext}`.trim()
       : promptText;
@@ -390,234 +395,244 @@ function createCronPromptExecutor(params: {
       canFallbackAfterError: () => !currentAttemptCommittedMedia(),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
+        let attemptSessionResetCommitted: CronSessionResetCommit | undefined;
+        const onAttemptSessionResetCommitted = (commit: CronSessionResetCommit) => {
+          attemptSessionResetCommitted = { ...commit };
+          refreshCronSessionStateAfterResetCommit(commit);
+        };
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
-        if (params.abortSignal?.aborted) {
-          throw new Error(params.abortReason());
-        }
-        // The candidate that admits detached work owns its continuation even
-        // if the provider throws before returning result metadata.
-        params.cronSession.sessionEntry.modelProvider = providerOverride;
-        params.cronSession.sessionEntry.model = modelOverride;
-        await params.persistRunContinuationSession?.();
-        const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
-          provider: providerOverride,
-          entry: params.cronSession.sessionEntry,
-          cfg: params.cfgWithAgentDefaults,
-        });
-        const candidateThinkLevel = resolveCandidateThinkingLevel({
-          cfg: params.cfgWithAgentDefaults,
-          provider: providerOverride,
-          modelId: modelOverride,
-          level: params.thinkLevel,
-          catalog: params.thinkingCatalog,
-          agentId: params.agentId,
-          sessionKey: params.runSessionKey,
-          sessionEntry: params.cronSession.sessionEntry,
-        });
-        const executionProvider =
-          (sessionRuntimeOverride &&
-          isCliProvider(sessionRuntimeOverride, params.cfgWithAgentDefaults)
-            ? sessionRuntimeOverride
-            : undefined) ??
-          (sessionRuntimeOverride
-            ? providerOverride
-            : (resolveCliRuntimeExecutionProvider({
-                provider: providerOverride,
-                cfg: params.cfgWithAgentDefaults,
-                agentId: params.agentId,
-                modelId: modelOverride,
-              }) ?? providerOverride));
-        const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
-        await params.setRunContinuationCliExecutionProvider?.(
-          cliExecution ? executionProvider : undefined,
-        );
-        const bootstrapPromptWarningSignature =
-          bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-        // CLI providers can resume provider-native sessions; embedded providers
-        // use OpenClaw's transcript/session file plus prompt-cache affinity.
-        if (cliExecution) {
-          const cliSessionBinding = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-          const guardedCliSessionBinding =
-            cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
-              ? cliSessionBinding
-              : undefined;
-          // Cron intentionally reuses its durable session id as the run id; turn
-          // claims stay unique via per-claim ids and the worker gate handles this
-          // via credential rotation (see worker-environments/service.ts fences).
-          const runId = params.cronSession.sessionEntry.sessionId;
-          const result = await withLocalSessionPlacementTurnAdmission(
-            {
-              sessionId: params.cronSession.sessionEntry.sessionId,
-              sessionKey: params.runSessionKey,
-              agentId: params.agentId,
-              runId,
-            },
-            () =>
-              runCliAgent({
+        try {
+          if (params.abortSignal?.aborted) {
+            throw new Error(params.abortReason());
+          }
+          const userTurnTranscriptRecorder = resolveUserTurnTranscriptRecorder();
+          // The candidate that admits detached work owns its continuation even
+          // if the provider throws before returning result metadata.
+          params.cronSession.sessionEntry.modelProvider = providerOverride;
+          params.cronSession.sessionEntry.model = modelOverride;
+          await params.persistRunContinuationSession?.();
+          const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+            provider: providerOverride,
+            entry: params.cronSession.sessionEntry,
+            cfg: params.cfgWithAgentDefaults,
+          });
+          const candidateThinkLevel = resolveCandidateThinkingLevel({
+            cfg: params.cfgWithAgentDefaults,
+            provider: providerOverride,
+            modelId: modelOverride,
+            level: params.thinkLevel,
+            catalog: params.thinkingCatalog,
+            agentId: params.agentId,
+            sessionKey: params.runSessionKey,
+            sessionEntry: params.cronSession.sessionEntry,
+          });
+          const executionProvider =
+            (sessionRuntimeOverride &&
+            isCliProvider(sessionRuntimeOverride, params.cfgWithAgentDefaults)
+              ? sessionRuntimeOverride
+              : undefined) ??
+            (sessionRuntimeOverride
+              ? providerOverride
+              : (resolveCliRuntimeExecutionProvider({
+                  provider: providerOverride,
+                  cfg: params.cfgWithAgentDefaults,
+                  agentId: params.agentId,
+                  modelId: modelOverride,
+                }) ?? providerOverride));
+          const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+          await params.setRunContinuationCliExecutionProvider?.(
+            cliExecution ? executionProvider : undefined,
+          );
+          const bootstrapPromptWarningSignature =
+            bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+          // CLI providers can resume provider-native sessions; embedded providers
+          // use OpenClaw's transcript/session file plus prompt-cache affinity.
+          if (cliExecution) {
+            const cliSessionBinding = params.cronSession.isNewSession
+              ? undefined
+              : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
+            const guardedCliSessionBinding =
+              cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
+                ? cliSessionBinding
+                : undefined;
+            // Cron intentionally reuses its durable session id as the run id; turn
+            // claims stay unique via per-claim ids and the worker gate handles this
+            // via credential rotation (see worker-environments/service.ts fences).
+            const runId = params.cronSession.sessionEntry.sessionId;
+            const result = await withLocalSessionPlacementTurnAdmission(
+              {
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
-                sessionEntry: params.cronSession.sessionEntry,
                 agentId: params.agentId,
-                trigger: "cron",
-                jobId: params.job.id,
-                cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
-                sessionFile,
-                workspaceDir: params.workspaceDir,
-                config: params.cfgWithAgentDefaults,
-                prompt: modelPrompt,
-                transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
-                modelProvider: providerOverride,
-                provider: executionProvider,
-                model: modelOverride,
-                thinkLevel: candidateThinkLevel,
-                timeoutMs: params.timeoutMs,
                 runId,
-                lane: resolveCronAgentLane(params.lane),
-                allowEmptyAssistantReplyAsSilent,
-                cliSessionId: cliSessionBinding?.sessionId,
-                cliSessionBinding: guardedCliSessionBinding,
-                skillsSnapshot: params.skillsSnapshot,
-                messageChannel,
-                sourceReplyDeliveryMode,
-                requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-                cliSessionBindingFacts: {
+              },
+              () =>
+                runCliAgent({
+                  sessionId: params.cronSession.sessionEntry.sessionId,
+                  sessionKey: params.runSessionKey,
+                  sessionEntry: params.cronSession.sessionEntry,
+                  agentId: params.agentId,
+                  trigger: "cron",
+                  jobId: params.job.id,
+                  cleanupCliLiveSessionOnRunEnd: params.usesDetachedRunSession === true,
+                  sessionFile,
+                  workspaceDir: params.workspaceDir,
+                  config: params.cfgWithAgentDefaults,
+                  prompt: modelPrompt,
+                  transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+                  modelProvider: providerOverride,
+                  provider: executionProvider,
+                  model: modelOverride,
+                  thinkLevel: candidateThinkLevel,
+                  timeoutMs: params.timeoutMs,
+                  runId,
+                  lane: resolveCronAgentLane(params.lane),
+                  allowEmptyAssistantReplyAsSilent,
+                  cliSessionId: cliSessionBinding?.sessionId,
+                  cliSessionBinding: guardedCliSessionBinding,
+                  skillsSnapshot: params.skillsSnapshot,
+                  messageChannel,
                   sourceReplyDeliveryMode,
                   requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-                },
-                toolsAllow: resolveCliRuntimeToolsAllow(
-                  params.agentPayload?.toolsAllow,
-                  params.agentPayload?.toolsAllowIsDefault,
-                ),
-                abortSignal: params.abortSignal,
-                onExecutionStarted: params.onExecutionStarted,
-                onExecutionPhase: params.onExecutionPhase,
-                bootstrapContextMode,
-                bootstrapContextRunKind: "cron",
-                bootstrapPromptWarningSignaturesSeen,
-                bootstrapPromptWarningSignature,
+                  cliSessionBindingFacts: {
+                    sourceReplyDeliveryMode,
+                    requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+                  },
+                  toolsAllow: resolveCliRuntimeToolsAllow(
+                    params.agentPayload?.toolsAllow,
+                    params.agentPayload?.toolsAllowIsDefault,
+                  ),
+                  abortSignal: params.abortSignal,
+                  onExecutionStarted: params.onExecutionStarted,
+                  onExecutionPhase: params.onExecutionPhase,
+                  bootstrapContextMode,
+                  bootstrapContextRunKind: "cron",
+                  bootstrapPromptWarningSignaturesSeen,
+                  bootstrapPromptWarningSignature,
+                  fastModeStartedAtMs,
+                  fastModeAutoProgressState,
+                  isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                  userTurnTranscriptRecorder,
+                  suppressNextUserMessagePersistence:
+                    userTurnTranscriptRecorder.hasPersisted() ||
+                    userTurnTranscriptRecorder.isBlocked(),
+                }),
+            );
+            bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+              result.meta?.systemPromptReport,
+            );
+            return result;
+          }
+          const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
+          const promptCacheKey = resolveIsolatedCronPromptCacheKey({
+            job: params.job,
+            agentId: params.agentId,
+            agentSessionKey: params.agentSessionKey,
+            provider: providerOverride,
+            model: modelOverride,
+          });
+          const currentChannelId = await resolveCurrentChannelTarget({
+            channel: messageChannel,
+            to: params.resolvedDelivery.to,
+            threadId: params.resolvedDelivery.threadId,
+          });
+          // Embedded runs receive both the explicit route and the current-channel
+          // id so message-tool policy can target the same chat as fallback delivery.
+          const result = await runEmbeddedAgent({
+            sessionId: params.cronSession.sessionEntry.sessionId,
+            sessionKey: params.runSessionKey,
+            promptCacheKey,
+            agentId: params.agentId,
+            trigger: "cron",
+            jobId: params.job.id,
+            cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession === true,
+            allowGatewaySubagentBinding: true,
+            messageChannel,
+            agentAccountId: params.resolvedDelivery.accountId,
+            messageTo: params.resolvedDelivery.to,
+            messageThreadId: params.resolvedDelivery.threadId,
+            currentChannelId,
+            sessionFile,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+            config: params.cfgWithAgentDefaults,
+            skillsSnapshot: params.skillsSnapshot,
+            prompt: modelPrompt,
+            transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
+            lane: resolveCronAgentLane(params.lane),
+            provider: providerOverride,
+            model: modelOverride,
+            agentHarnessRuntimeOverride: sessionRuntimeOverride,
+            modelFallbacksOverride: cronFallbacksOverride,
+            authProfileId: params.liveSelection.authProfileId,
+            authProfileIdSource: params.liveSelection.authProfileId
+              ? params.liveSelection.authProfileIdSource
+              : undefined,
+            // Scheduled run: keep bursty cron overloaded/rate_limit local, while
+            // still sharing real credential/account failures across auth profiles.
+            authProfileFailurePolicy: "local_transient",
+            // Fallback selection is turn-local. Revalidate the stored or
+            // requested level without rewriting the durable preference.
+            thinkLevel: candidateThinkLevel,
+            ...(() => {
+              const fastModeState = resolveFastModeState({
+                cfg: params.cfgWithAgentDefaults,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: params.agentId,
+                sessionEntry: params.cronSession.sessionEntry,
+              });
+              return {
+                fastMode: fastModeState.mode,
+                fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
                 fastModeStartedAtMs,
                 fastModeAutoProgressState,
                 isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-                userTurnTranscriptRecorder,
-                suppressNextUserMessagePersistence:
-                  userTurnTranscriptRecorder.hasPersisted() ||
-                  userTurnTranscriptRecorder.isBlocked(),
-              }),
-          );
+              };
+            })(),
+            verboseLevel: params.resolvedVerboseLevel,
+            timeoutMs: params.timeoutMs,
+            runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+            bootstrapContextMode,
+            bootstrapContextRunKind: "cron",
+            toolsAllow: params.agentPayload?.toolsAllow,
+            execOverrides: params.suppressExecNotifyOnExit
+              ? {
+                  notifyOnExit: false,
+                  notifyOnExitEmptySuccess: false,
+                }
+              : undefined,
+            sourceReplyDeliveryMode,
+            runId: params.cronSession.sessionEntry.sessionId,
+            allowEmptyAssistantReplyAsSilent,
+            // Cron owns the resolved delivery contract. A valid announce route
+            // still needs a final payload; none, webhook, and invalid routes do not.
+            terminalReplyExpectation:
+              params.deliveryRequested === true && params.resolvedDeliveryOk
+                ? "required"
+                : "optional",
+            requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+            disableMessageTool: !sourceDelivery.messageTool.enabled,
+            forceMessageTool: sourceDelivery.messageTool.force,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            abortSignal: params.abortSignal,
+            onExecutionStarted: params.onExecutionStarted,
+            onExecutionPhase: params.onExecutionPhase,
+            onLaneWait: params.onLaneWait,
+            onSessionResetCommitted: onAttemptSessionResetCommitted,
+            bootstrapPromptWarningSignaturesSeen,
+            bootstrapPromptWarningSignature,
+            userTurnTranscriptRecorder,
+            suppressNextUserMessagePersistence:
+              userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
+          });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
           );
           return result;
+        } finally {
+          finalAttemptSessionResetCommitted = attemptSessionResetCommitted;
         }
-        const { resolveFastModeState, runEmbeddedAgent } = await loadCronEmbeddedRuntime();
-        const promptCacheKey = resolveIsolatedCronPromptCacheKey({
-          job: params.job,
-          agentId: params.agentId,
-          agentSessionKey: params.agentSessionKey,
-          provider: providerOverride,
-          model: modelOverride,
-        });
-        const currentChannelId = await resolveCurrentChannelTarget({
-          channel: messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
-        });
-        // Embedded runs receive both the explicit route and the current-channel
-        // id so message-tool policy can target the same chat as fallback delivery.
-        const result = await runEmbeddedAgent({
-          sessionId: params.cronSession.sessionEntry.sessionId,
-          sessionKey: params.runSessionKey,
-          promptCacheKey,
-          agentId: params.agentId,
-          trigger: "cron",
-          jobId: params.job.id,
-          cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession === true,
-          allowGatewaySubagentBinding: true,
-          messageChannel,
-          agentAccountId: params.resolvedDelivery.accountId,
-          messageTo: params.resolvedDelivery.to,
-          messageThreadId: params.resolvedDelivery.threadId,
-          currentChannelId,
-          sessionFile,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          config: params.cfgWithAgentDefaults,
-          skillsSnapshot: params.skillsSnapshot,
-          prompt: modelPrompt,
-          transcriptPrompt: deliveryTargetRuntimeContext ? promptText : undefined,
-          lane: resolveCronAgentLane(params.lane),
-          provider: providerOverride,
-          model: modelOverride,
-          agentHarnessRuntimeOverride: sessionRuntimeOverride,
-          modelFallbacksOverride: cronFallbacksOverride,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
-          // Scheduled run: keep bursty cron overloaded/rate_limit local, while
-          // still sharing real credential/account failures across auth profiles.
-          authProfileFailurePolicy: "local_transient",
-          // Fallback selection is turn-local. Revalidate the stored or
-          // requested level without rewriting the durable preference.
-          thinkLevel: candidateThinkLevel,
-          ...(() => {
-            const fastModeState = resolveFastModeState({
-              cfg: params.cfgWithAgentDefaults,
-              provider: providerOverride,
-              model: modelOverride,
-              agentId: params.agentId,
-              sessionEntry: params.cronSession.sessionEntry,
-            });
-            return {
-              fastMode: fastModeState.mode,
-              fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
-              fastModeStartedAtMs,
-              fastModeAutoProgressState,
-              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-            };
-          })(),
-          verboseLevel: params.resolvedVerboseLevel,
-          timeoutMs: params.timeoutMs,
-          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-          bootstrapContextMode,
-          bootstrapContextRunKind: "cron",
-          toolsAllow: params.agentPayload?.toolsAllow,
-          execOverrides: params.suppressExecNotifyOnExit
-            ? {
-                notifyOnExit: false,
-                notifyOnExitEmptySuccess: false,
-              }
-            : undefined,
-          sourceReplyDeliveryMode,
-          runId: params.cronSession.sessionEntry.sessionId,
-          allowEmptyAssistantReplyAsSilent,
-          // Cron owns the resolved delivery contract. A valid announce route
-          // still needs a final payload; none, webhook, and invalid routes do not.
-          terminalReplyExpectation:
-            params.deliveryRequested === true && params.resolvedDeliveryOk
-              ? "required"
-              : "optional",
-          requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-          disableMessageTool: !sourceDelivery.messageTool.enabled,
-          forceMessageTool: sourceDelivery.messageTool.force,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          abortSignal: params.abortSignal,
-          onExecutionStarted: params.onExecutionStarted,
-          onExecutionPhase: params.onExecutionPhase,
-          onLaneWait: params.onLaneWait,
-          onSessionResetCommitted: refreshCronSessionStateAfterResetCommit,
-          bootstrapPromptWarningSignaturesSeen,
-          bootstrapPromptWarningSignature,
-          userTurnTranscriptRecorder,
-          suppressNextUserMessagePersistence:
-            userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
-        });
-        bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-          result.meta?.systemPromptReport,
-        );
-        return result;
       },
     });
     runResult = fallbackResult.result;
@@ -641,6 +656,7 @@ function createCronPromptExecutor(params: {
       runEndedAt,
       liveSelection: params.liveSelection,
       sessionResetCommitted,
+      finalAttemptSessionResetCommitted,
     }),
   };
 }
@@ -800,8 +816,14 @@ export async function executeCronRun(params: {
     }
   }
 
-  let { runResult, fallbackProvider, fallbackModel, runEndedAt, sessionResetCommitted } =
-    executor.getState();
+  let {
+    runResult,
+    fallbackProvider,
+    fallbackModel,
+    runEndedAt,
+    sessionResetCommitted,
+    finalAttemptSessionResetCommitted,
+  } = executor.getState();
   if (!runResult) {
     throw new Error("cron isolated run returned no result");
   }
@@ -856,8 +878,14 @@ export async function executeCronRun(params: {
         "Use tools when needed, including sessions_spawn for parallel subtasks, wait for spawned subagents to finish, then return only the final summary.",
       ].join(" ");
       await executor.runPrompt(continuationPrompt);
-      ({ runResult, fallbackProvider, fallbackModel, runEndedAt, sessionResetCommitted } =
-        executor.getState());
+      ({
+        runResult,
+        fallbackProvider,
+        fallbackModel,
+        runEndedAt,
+        sessionResetCommitted,
+        finalAttemptSessionResetCommitted,
+      } = executor.getState());
     }
   }
 
@@ -872,6 +900,7 @@ export async function executeCronRun(params: {
     runEndedAt,
     liveSelection: params.liveSelection,
     sessionResetCommitted,
+    finalAttemptSessionResetCommitted,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

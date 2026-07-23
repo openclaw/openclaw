@@ -392,136 +392,160 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             }
           };
           let result: Awaited<ReturnType<typeof runGatewaySessionCompaction>>;
+          let hookResetCommitted: { key: string; sessionId: string } | undefined;
           const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
           try {
-            result = await runGatewaySessionCompaction({
-              cfg,
-              entry: latestEntry,
-              agentId: target.agentId,
-              sessionId,
-              sessionKey: target.canonicalKey,
-              sessionStoreKey: compactTarget.primaryKey,
-              storePath,
-              deferEmbeddedHookSessionReset: (request) =>
-                hookSessionResetQueue.deferResetSession({
-                  ...request,
-                  assertCurrent: request.assertCurrent ?? assertCompactionResetCurrent,
-                  onCommitted: (commit) => {
-                    request.onCommitted?.(commit);
-                    emitSessionsChanged(context, {
-                      sessionKey: commit.key,
-                      ...(commit.key === "global"
-                        ? { agentId: request.agentId ?? target.agentId ?? requestedAgentId }
-                        : {}),
-                      reason: request.reason,
-                    });
-                  },
-                }),
-            });
-          } catch (err) {
-            emitCompactionEnd(false, formatErrorMessage(err));
-            throw err;
-          }
-          if (result.ok && result.compacted) {
-            let persisted: boolean;
-            let persistedLifecycleRevision = resetGuardLifecycleRevision;
             try {
-              // Guarded terminal persist: skip when session ownership rotated
-              // while compaction ran (sessionId/lifecycleRevision/work-start).
-              const persistProjection = await applySessionPatchProjection({
+              result = await runGatewaySessionCompaction({
+                cfg,
+                entry: latestEntry,
                 agentId: target.agentId,
+                sessionId,
+                sessionKey: target.canonicalKey,
+                sessionStoreKey: compactTarget.primaryKey,
                 storePath,
-                resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
-                project: ({ existingEntry }) => {
-                  if (
-                    !existingEntry ||
-                    existingEntry.sessionId !== sessionId ||
-                    existingEntry.lifecycleRevision !== lifecycleRevision ||
-                    resolveSessionWorkStartError(target.canonicalKey, existingEntry)
-                  ) {
-                    return { ok: false };
-                  }
-                  const entryToUpdate = existingEntry;
-                  entryToUpdate.updatedAt = Date.now();
-                  entryToUpdate.compactionCount =
-                    Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-                  if (
-                    result.result?.sessionId &&
-                    result.result.sessionId !== entryToUpdate.sessionId
-                  ) {
-                    entryToUpdate.sessionId = result.result.sessionId;
-                  }
-                  delete entryToUpdate.inputTokens;
-                  delete entryToUpdate.outputTokens;
-                  delete entryToUpdate.contextBudgetStatus;
-                  if (
-                    typeof result.result?.tokensAfter === "number" &&
-                    Number.isFinite(result.result.tokensAfter)
-                  ) {
-                    entryToUpdate.totalTokens = result.result.tokensAfter;
-                    entryToUpdate.totalTokensFresh = true;
-                  } else {
-                    delete entryToUpdate.totalTokens;
-                    delete entryToUpdate.totalTokensFresh;
-                  }
-                  return { ok: true, entry: entryToUpdate };
-                },
+                deferEmbeddedHookSessionReset: (request) =>
+                  hookSessionResetQueue.deferResetSession({
+                    ...request,
+                    assertCurrent: request.assertCurrent ?? assertCompactionResetCurrent,
+                    onCommitted: (commit) => {
+                      request.onCommitted?.(commit);
+                      hookResetCommitted = { ...commit };
+                      emitSessionsChanged(context, {
+                        sessionKey: commit.key,
+                        ...(commit.key === "global"
+                          ? { agentId: request.agentId ?? target.agentId ?? requestedAgentId }
+                          : {}),
+                        reason: request.reason,
+                      });
+                    },
+                  }),
               });
-              persisted = persistProjection.ok;
-              if (persistProjection.ok) {
-                persistedLifecycleRevision =
-                  persistProjection.entry.lifecycleRevision ?? persistedLifecycleRevision;
-              }
             } catch (err) {
               emitCompactionEnd(false, formatErrorMessage(err));
+              await hookSessionResetQueue.flush();
               throw err;
             }
-            if (!persisted) {
-              const reason = `Session ${key} changed before compaction completed. Retry.`;
-              emitCompactionEnd(false, reason);
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, reason, {
-                  details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-                }),
-              );
-              return;
+            if (result.ok && result.compacted) {
+              let persisted: boolean;
+              let persistedLifecycleRevision = resetGuardLifecycleRevision;
+              try {
+                // Guarded terminal persist: skip when session ownership rotated
+                // while compaction ran (sessionId/lifecycleRevision/work-start).
+                const persistProjection = await applySessionPatchProjection({
+                  agentId: target.agentId,
+                  storePath,
+                  resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
+                  project: ({ existingEntry }) => {
+                    if (
+                      !existingEntry ||
+                      existingEntry.sessionId !== sessionId ||
+                      existingEntry.lifecycleRevision !== lifecycleRevision ||
+                      resolveSessionWorkStartError(target.canonicalKey, existingEntry)
+                    ) {
+                      return { ok: false };
+                    }
+                    const entryToUpdate = existingEntry;
+                    entryToUpdate.updatedAt = Date.now();
+                    entryToUpdate.compactionCount =
+                      Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+                    if (
+                      result.result?.sessionId &&
+                      result.result.sessionId !== entryToUpdate.sessionId
+                    ) {
+                      entryToUpdate.sessionId = result.result.sessionId;
+                    }
+                    delete entryToUpdate.inputTokens;
+                    delete entryToUpdate.outputTokens;
+                    delete entryToUpdate.contextBudgetStatus;
+                    if (
+                      typeof result.result?.tokensAfter === "number" &&
+                      Number.isFinite(result.result.tokensAfter)
+                    ) {
+                      entryToUpdate.totalTokens = result.result.tokensAfter;
+                      entryToUpdate.totalTokensFresh = true;
+                    } else {
+                      delete entryToUpdate.totalTokens;
+                      delete entryToUpdate.totalTokensFresh;
+                    }
+                    return { ok: true, entry: entryToUpdate };
+                  },
+                });
+                persisted = persistProjection.ok;
+                if (persistProjection.ok) {
+                  persistedLifecycleRevision =
+                    persistProjection.entry.lifecycleRevision ?? persistedLifecycleRevision;
+                }
+              } catch (err) {
+                emitCompactionEnd(false, formatErrorMessage(err));
+                throw err;
+              }
+              if (!persisted) {
+                const reason = `Session ${key} changed before compaction completed. Retry.`;
+                emitCompactionEnd(false, reason);
+                await hookSessionResetQueue.flush();
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, reason, {
+                    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
+                  }),
+                );
+                return;
+              }
+              if (result.result?.sessionId) {
+                resetGuardSessionId = result.result.sessionId;
+              }
+              resetGuardLifecycleRevision = persistedLifecycleRevision;
+              recordSessionCompacted({
+                sessionKey: target.canonicalKey,
+                operationId,
+                sessionId: result.result?.sessionId ?? sessionId,
+                agentId: target.agentId ?? requestedAgentId,
+              });
             }
-            if (result.result?.sessionId) {
-              resetGuardSessionId = result.result.sessionId;
-            }
-            resetGuardLifecycleRevision = persistedLifecycleRevision;
-            recordSessionCompacted({
-              sessionKey: target.canonicalKey,
-              operationId,
-              sessionId: result.result?.sessionId ?? sessionId,
-              agentId: target.agentId ?? requestedAgentId,
-            });
             await hookSessionResetQueue.flush();
-          }
+            const currentEntryAfterHookReset = hookResetCommitted
+              ? loadAccessorSessionEntryForGatewayTarget({
+                  key,
+                  cfg,
+                  agentId: requestedAgentId,
+                }).entry
+              : undefined;
+            const responseResult =
+              hookResetCommitted && result.result
+                ? {
+                    ...result.result,
+                    sessionId:
+                      currentEntryAfterHookReset?.sessionId ?? hookResetCommitted.sessionId,
+                    sessionFile: currentEntryAfterHookReset?.sessionFile,
+                  }
+                : result.result;
 
-          emitCompactionEnd(result.ok && result.compacted, result.reason);
-          respond(
-            true,
-            {
-              ok: result.ok,
-              key: target.canonicalKey,
-              compacted: result.compacted,
-              reason: result.reason,
-              result: result.result,
-            },
-            undefined,
-          );
-          if (result.ok) {
-            emitSessionsChanged(context, {
-              sessionKey: target.canonicalKey,
-              ...(target.canonicalKey === "global" && target.agentId
-                ? { agentId: target.agentId }
-                : {}),
-              reason: "compact",
-              compacted: result.compacted,
-            });
+            emitCompactionEnd(result.ok && result.compacted, result.reason);
+            respond(
+              true,
+              {
+                ok: result.ok,
+                key: target.canonicalKey,
+                compacted: result.compacted,
+                reason: result.reason,
+                result: responseResult,
+              },
+              undefined,
+            );
+            if (result.ok) {
+              emitSessionsChanged(context, {
+                sessionKey: target.canonicalKey,
+                ...(target.canonicalKey === "global" && target.agentId
+                  ? { agentId: target.agentId }
+                  : {}),
+                reason: "compact",
+                compacted: result.compacted,
+              });
+            }
+          } finally {
+            await hookSessionResetQueue.flush();
           }
         },
       });
