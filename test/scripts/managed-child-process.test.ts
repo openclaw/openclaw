@@ -375,7 +375,16 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== "linux") {
     return true;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
+    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
   } catch {
     return false;
   }
