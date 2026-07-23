@@ -27,6 +27,19 @@ const HELLO: GatewayHelloOk = {
   auth: { role: "operator", scopes: [] },
 };
 
+const HELLO_WITH_DEFAULTS: GatewayHelloOk = {
+  type: "hello-ok",
+  protocol: 1,
+  auth: { role: "operator", scopes: [] },
+  snapshot: {
+    sessionDefaults: {
+      mainSessionKey: "agent:agent-1:main",
+      defaultAgentId: "agent-1",
+      mainKey: "main",
+    },
+  },
+};
+
 class FakeGatewayClient {
   started = 0;
   stopped = 0;
@@ -401,5 +414,70 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     expect(current().opts.url).toBe(otherGateway);
     expect(localStorage.getItem(selectionKey)).toBe(otherGateway);
+  });
+
+  it("persists sessionKey to localStorage on HELLO with session defaults (fresh browser)", () => {
+    const pageGateway = "ws://127.0.0.1:18789";
+    const settings = {
+      ...loadSettings(),
+      gatewayUrl: pageGateway,
+      token: "test-token",
+    };
+    const { gateway, current } = createStore({ settings });
+
+    // Fresh browser: default sessionKey is "main".
+    expect(loadSettings().sessionKey).toBe("main");
+
+    gateway.start();
+    // HELLO resolves the default sessionKey from sessionDefaults.
+    current().opts.onHello?.(HELLO_WITH_DEFAULTS);
+
+    // Snapshot gets the resolved sessionKey.
+    expect(gateway.snapshot.sessionKey).toBe("agent:agent-1:main");
+    // localStorage is persisted by onHello.
+    const stored = loadSettings();
+    expect(stored.sessionKey).toBe("agent:agent-1:main");
+  });
+
+  it("persists sessionKey to localStorage on sidebar click even when it matches snapshot", () => {
+    const pageGateway = "ws://127.0.0.1:18789";
+    const settings = {
+      ...loadSettings(),
+      gatewayUrl: pageGateway,
+      token: "test-token",
+    };
+    const { gateway, current } = createStore({ settings });
+
+    gateway.start();
+    current().opts.onHello?.(HELLO_WITH_DEFAULTS);
+    expect(gateway.snapshot.sessionKey).toBe("agent:agent-1:main");
+
+    // Click the same session in the sidebar — setSessionKey with matching key.
+    gateway.setSessionKey("agent:agent-1:main");
+
+    // Must persist even though it matches the in-memory value.
+    const stored = loadSettings();
+    expect(stored.sessionKey).toBe("agent:agent-1:main");
+  });
+
+  it("preserves sessionKey across reconnect without explicit override", () => {
+    const pageGateway = "ws://127.0.0.1:18789";
+    const settings = {
+      ...loadSettings(),
+      gatewayUrl: pageGateway,
+      token: "test-token",
+    };
+    const { gateway, current } = createStore({ settings });
+
+    gateway.start();
+    current().opts.onHello?.(HELLO_WITH_DEFAULTS);
+    expect(gateway.snapshot.sessionKey).toBe("agent:agent-1:main");
+
+    // Reconnect without an explicit sessionKey override.
+    gateway.connect();
+    expect(gateway.snapshot.sessionKey).toBe("agent:agent-1:main");
+
+    const stored = loadSettings();
+    expect(stored.sessionKey).toBe("agent:agent-1:main");
   });
 });
