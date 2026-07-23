@@ -33,6 +33,30 @@ export type LoadPreparedModelCatalogParams = {
 
 type PreparedModelCatalogConfigPolicy = "exact" | "published";
 
+function attachAuthoritativeAgentId(
+  snapshot: PreparedModelRuntimeSnapshot,
+  params: LoadPreparedModelCatalogParams,
+): PreparedModelRuntimeSnapshot {
+  if (snapshot.agentId) {
+    return snapshot;
+  }
+  const requestedAgentId =
+    params.agentId ??
+    (params.agentDir === undefined ? resolveDefaultAgentId(snapshot.config) : undefined);
+  if (
+    !requestedAgentId ||
+    resolveAgentDir(snapshot.config, requestedAgentId) !== snapshot.agentDir
+  ) {
+    return snapshot;
+  }
+  const matchingAgentIds = listAgentIds(snapshot.config).filter(
+    (agentId) => resolveAgentDir(snapshot.config, agentId) === snapshot.agentDir,
+  );
+  return matchingAgentIds.length === 1
+    ? Object.freeze({ ...snapshot, agentId: matchingAgentIds[0] })
+    : snapshot;
+}
+
 function acceptsPreparedSnapshotConfig(
   snapshot: PreparedModelRuntimeSnapshot,
   input: PreparedModelRuntimeInput,
@@ -217,7 +241,8 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
 export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
+  const snapshot = await loadPreparedModelCatalogOwnerSnapshotWithPolicy(params, "published");
+  return attachAuthoritativeAgentId(snapshot, params);
 }
 
 /** Reads one atomic catalog generation, activating a lifecycle owner when needed. */
