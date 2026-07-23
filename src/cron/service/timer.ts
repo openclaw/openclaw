@@ -278,6 +278,7 @@ export async function executeJobCoreWithTimeout(
     return {
       status: "error" as const,
       error,
+      operatorCancelled: true,
       ...cronRunAttributionFromExecution(execution),
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
@@ -806,7 +807,7 @@ export function applyJobResult(
     result.status === "error" && typeof result.error === "string"
       ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
       : undefined;
-  if (result.status === "error") {
+  if (result.status === "error" && !result.operatorCancelled) {
     state.deps.log.warn(
       {
         jobId: job.id,
@@ -843,7 +844,7 @@ export function applyJobResult(
   // separate counter so opt-in skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const alertConfig = resolveFailureAlert(state, job);
-  if (result.status === "error") {
+  if (result.status === "error" && !result.operatorCancelled) {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
     maybeEmitFailureAlert(state, {
@@ -923,6 +924,13 @@ export function applyJobResult(
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
+      } else if (result.operatorCancelled) {
+        job.enabled = false;
+        job.state.nextRunAtMs = undefined;
+        state.deps.log.info(
+          { jobId: job.id, jobName: job.name },
+          "cron: operator cancellation is terminal; disabling one-shot without retry",
+        );
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
@@ -972,7 +980,7 @@ export function applyJobResult(
       job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
-    } else if (result.status === "error" && isJobEnabled(job)) {
+    } else if (result.status === "error" && !result.operatorCancelled && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
         cronConfig: state.deps.cronConfig,
         error: result.error,

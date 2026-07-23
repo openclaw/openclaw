@@ -205,6 +205,8 @@ export type CronRunErrorClassification =
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  /** Operator-initiated cancellation is terminal and must never enter retry/backoff paths. */
+  operatorCancelled?: boolean;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
