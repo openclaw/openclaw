@@ -22,10 +22,11 @@ export interface RollupPayload {
 }
 
 export interface RollupClassification {
-  verdict: "GREEN" | "FAILING" | "PENDING";
+  verdict: "GREEN" | "FAILING" | "PENDING" | "STALE-CANCELLED";
   pendingCount: number;
   failingNames: string[];
 }
 
 export function parseArgs(argv: string[]): WatchPrCiArgs;
 export function classifyRollup(rollup: RollupPayload | null | undefined): RollupClassification;
+export function buildFindRunArgs(repo: string, sha: string): string[];

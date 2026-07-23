@@ -79,38 +79,41 @@ export function classifyRollup(rollup) {
       ? check.state === "PENDING" || check.state === "EXPECTED"
       : check.status !== "COMPLETED",
   ).length;
-  const failingNames = checks
-    .filter((check) => {
-      if (check.kind === "StatusContext") {
-        return check.state === "ERROR" || check.state === "FAILURE";
-      }
-      return (
-        FAILURE_CONCLUSIONS.has(check.conclusion) &&
-        !(check.conclusion === "CANCELLED" && successfulNames.has(check.name))
-      );
-    })
+  const failingChecks = checks.filter((check) => {
+    if (check.kind === "StatusContext") {
+      return check.state === "ERROR" || check.state === "FAILURE";
+    }
+    return FAILURE_CONCLUSIONS.has(check.conclusion);
+  });
+  const failingNames = failingChecks
     .map(checkName)
     .filter(Boolean)
     .toSorted()
     .filter((name, index, names) => name !== names[index - 1]);
-  if (failingNames.length > 0) {
-    return { verdict: "FAILING", pendingCount, failingNames };
+  if (rollup?.state === "SUCCESS") {
+    return { verdict: "GREEN", pendingCount, failingNames: [] };
   }
-  if (pendingCount > 0 || !rollup) {
-    return { verdict: "PENDING", pendingCount, failingNames: [] };
+  if (rollup?.state === "ERROR" || rollup?.state === "FAILURE") {
+    const staleCancelled =
+      pendingCount === 0 &&
+      failingChecks.length > 0 &&
+      failingChecks.every(
+        (check) =>
+          check.kind === "CheckRun" &&
+          check.conclusion === "CANCELLED" &&
+          Boolean(check.name) &&
+          successfulNames.has(check.name),
+      );
+    if (staleCancelled) {
+      return { verdict: "STALE-CANCELLED", pendingCount, failingNames };
+    }
+    return {
+      verdict: "FAILING",
+      pendingCount,
+      failingNames: failingNames.length > 0 ? failingNames : ["status rollup"],
+    };
   }
-  const benign = (check) =>
-    isSuccess(check) ||
-    (check.kind === "CheckRun" &&
-      (["NEUTRAL", "SKIPPED"].includes(check.conclusion) ||
-        (check.conclusion === "CANCELLED" && successfulNames.has(check.name))));
-  if (rollup.state === "SUCCESS" || (nodes.length > 0 && checks.every(benign))) {
-    return { verdict: "GREEN", pendingCount: 0, failingNames: [] };
-  }
-  if (rollup.state === "ERROR" || rollup.state === "FAILURE") {
-    return { verdict: "FAILING", pendingCount: 0, failingNames: ["status rollup"] };
-  }
-  return { verdict: "PENDING", pendingCount: 0, failingNames: [] };
+  return { verdict: "PENDING", pendingCount, failingNames: [] };
 }
 
 function ghJson(...args) {
@@ -125,12 +128,23 @@ function ghJson(...args) {
 
 const readPr = (pr, repo) =>
   ghJson(...`pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "));
-const findRun = (repo, sha) =>
-  ghJson(
-    ...`run list --repo ${repo} --commit ${sha} --workflow ci.yml --limit 1 --json databaseId`.split(
-      " ",
-    ),
-  )[0]?.databaseId;
+export const buildFindRunArgs = (repo, sha) => [
+  "run",
+  "list",
+  "--repo",
+  repo,
+  "--commit",
+  sha,
+  "--workflow",
+  "ci.yml",
+  "--event",
+  "pull_request",
+  "--limit",
+  "1",
+  "--json",
+  "databaseId",
+];
+const findRun = (repo, sha) => ghJson(...buildFindRunArgs(repo, sha))[0]?.databaseId;
 const readRun = (repo, runId) =>
   ghJson(...`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "));
 
@@ -224,6 +238,12 @@ async function main(argv = process.argv.slice(2)) {
       lastState = pr.statusCheckRollup?.state ?? "NONE";
       lastPending = result.pendingCount;
       console.log(`STATUS state=${lastState} pending=${lastPending}`);
+      if (result.verdict === "STALE-CANCELLED") {
+        return emit(
+          'STALE-CANCELLED hint="aggregate FAILURE but every failing context is a CANCELLED check run with a same-name SUCCESS — likely stale attempts; verify manually"',
+          17,
+        );
+      }
       if (result.verdict === "FAILING") {
         return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
       }
@@ -231,7 +251,11 @@ async function main(argv = process.argv.slice(2)) {
       if (run.status === "completed" && run.conclusion !== "success") {
         return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
       }
-      if (result.verdict === "GREEN" && run.status === "completed") {
+      if (
+        result.verdict === "GREEN" &&
+        run.status === "completed" &&
+        run.conclusion === "success"
+      ) {
         return emit("GREEN", 0);
       }
     } catch (error) {

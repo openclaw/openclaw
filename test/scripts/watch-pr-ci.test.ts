@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyRollup, parseArgs } from "../../scripts/watch-pr-ci.mjs";
+import { buildFindRunArgs, classifyRollup, parseArgs } from "../../scripts/watch-pr-ci.mjs";
 
 const sha = "a".repeat(40);
 
@@ -38,8 +38,38 @@ describe("watch-pr-ci", () => {
     );
   });
 
-  it("classifies green and pending rollups", () => {
+  it("builds a pull-request-only run attachment query", () => {
+    expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual([
+      "run",
+      "list",
+      "--repo",
+      "openclaw/openclaw",
+      "--commit",
+      sha,
+      "--workflow",
+      "ci.yml",
+      "--event",
+      "pull_request",
+      "--limit",
+      "1",
+      "--json",
+      "databaseId",
+    ]);
+  });
+
+  it("requires aggregate success for a green rollup", () => {
     expect(classifyRollup({ state: "SUCCESS", contexts: { nodes: [] } }).verdict).toBe("GREEN");
+    expect(
+      classifyRollup({
+        state: "PENDING",
+        contexts: {
+          nodes: [{ kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" }],
+        },
+      }),
+    ).toEqual({ verdict: "PENDING", pendingCount: 0, failingNames: [] });
+  });
+
+  it("counts pending contexts without deriving the verdict from them", () => {
     expect(
       classifyRollup({
         state: "PENDING",
@@ -50,7 +80,30 @@ describe("watch-pr-ci", () => {
     ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [] });
   });
 
-  it("filters auto-response and superseded cancellation noise", () => {
+  it.each(["FAILURE", "ERROR"])(
+    "classifies stale same-name cancellations for aggregate %s",
+    (state) => {
+      expect(
+        classifyRollup({
+          state,
+          contexts: {
+            nodes: [
+              {
+                kind: "CheckRun",
+                name: "Auto response",
+                status: "COMPLETED",
+                conclusion: "FAILURE",
+              },
+              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
+              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+            ],
+          },
+        }),
+      ).toEqual({ verdict: "STALE-CANCELLED", pendingCount: 0, failingNames: ["unit"] });
+    },
+  );
+
+  it("keeps cancelled attempts in failing-name output", () => {
     expect(
       classifyRollup({
         state: "FAILURE",
@@ -63,6 +116,6 @@ describe("watch-pr-ci", () => {
           ],
         },
       }),
-    ).toEqual({ verdict: "FAILING", pendingCount: 0, failingNames: ["lint"] });
+    ).toEqual({ verdict: "FAILING", pendingCount: 0, failingNames: ["lint", "unit"] });
   });
 });
