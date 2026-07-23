@@ -666,4 +666,88 @@ describe("SessionHistorySseState", () => {
     ).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
   });
+
+  describe("inline history memory cap", () => {
+    const MAX = 500;
+
+    function manyMessages(count: number, startSeq = 1): Array<Record<string, unknown>> {
+      return Array.from({ length: count }, (_, i) => {
+        const seq = startSeq + i;
+        return {
+          role: i % 2 === 0 ? "assistant" : "user",
+          content: [{ type: "text" as const, text: `message ${seq}` }],
+          __openclaw: { seq },
+        };
+      });
+    }
+
+    test("constructor caps oversized initial history to MAX_INLINE_HISTORY_MESSAGES", () => {
+      const rawMessages = manyMessages(MAX + 50);
+      const state = newState(rawMessages, {
+        rawTranscriptSeq: MAX + 50,
+        totalRawMessages: MAX + 50,
+      });
+
+      expect(state.snapshot().messages.length).toBe(MAX);
+      expect(state.snapshot().hasMore).toBe(true);
+      expect(state.snapshot().nextCursor).toBeDefined();
+      // First retained message seq should be 51 (50 trimmed)
+      expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(51);
+    });
+
+    test("inline append does not grow beyond MAX_INLINE_HISTORY_MESSAGES", () => {
+      const state = newState(manyMessages(MAX));
+
+      for (let i = 0; i < 100; i++) {
+        const seq = MAX + 1 + i;
+        state.appendInlineMessage({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `append ${seq}` }],
+          },
+          messageSeq: seq,
+        });
+      }
+
+      expect(state.snapshot().messages.length).toBeLessThanOrEqual(MAX + 10);
+      // Last message seq should be the latest
+      const lastSeq = state.snapshot().messages.at(-1)?.["__openclaw"]?.seq;
+      expect(lastSeq).toBe(MAX + 100);
+      // hasMore should be true when trimmed
+      expect(state.snapshot().hasMore).toBe(true);
+      expect(state.snapshot().nextCursor).toBeDefined();
+    });
+
+    test("session with fewer than MAX messages is not truncated", () => {
+      const messages = manyMessages(100);
+      const state = newState(messages);
+
+      expect(state.snapshot().messages.length).toBe(100);
+      expect(state.snapshot().hasMore).toBe(false);
+      expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(1);
+    });
+
+    test("cap preserves latest messages during long-running append chain", () => {
+      const totalMessages = MAX + 200;
+      const state = newState(manyMessages(MAX));
+
+      for (let seq = MAX + 1; seq <= totalMessages; seq++) {
+        state.appendInlineMessage({
+          message: {
+            role: seq % 2 === 0 ? "assistant" : "user",
+            content: [{ type: "text", text: `message ${seq}` }],
+          },
+          messageSeq: seq,
+        });
+      }
+
+      expect(state.snapshot().messages.length).toBeLessThanOrEqual(MAX + 10);
+      // Latest message must be present
+      expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(totalMessages);
+      // First retained seq should be > 200 (since we trimmed 200+ messages)
+      const firstSeq = state.snapshot().messages[0]?.["__openclaw"]?.seq;
+      expect(typeof firstSeq).toBe("number");
+      expect(firstSeq!).toBeGreaterThan(200);
+    });
+  });
 });

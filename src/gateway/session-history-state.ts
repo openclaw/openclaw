@@ -13,6 +13,13 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 
+// Maximum in-memory history messages kept for inline (non-paginated) session
+// history. Long-running autonomous sessions can accumulate thousands of turns;
+// capping the retained window prevents unbounded heap growth while preserving
+// recent history for SSE incremental updates. Older messages remain available
+// via full transcript reads (e.g. refreshAsync or a new paginated snapshot).
+const MAX_INLINE_HISTORY_MESSAGES = 500;
+
 // Session history state owns the SSE-friendly projection of transcript JSONL:
 // raw messages are projected for display, paginated by transcript seq, then
 // incrementally updated until cursor/window semantics require a full refresh.
@@ -190,6 +197,22 @@ export function buildSessionHistorySnapshot(params: {
 }
 
 /** Tracks session-history SSE state and decides when inline appends are still valid. */
+function trimHistoryMessages(
+  history: PaginatedSessionHistory,
+  maxMessages: number,
+): PaginatedSessionHistory {
+  if (history.messages.length <= maxMessages) {
+    return history;
+  }
+  const trimmed = history.messages.slice(-maxMessages);
+  const firstSeq = resolveMessageSeq(trimmed[0]);
+  return buildPaginatedSessionHistory({
+    messages: trimmed,
+    hasMore: true,
+    ...(typeof firstSeq === "number" ? { nextCursor: String(firstSeq) } : {}),
+  });
+}
+
 export class SessionHistorySseState {
   private readonly target: SessionHistoryTranscriptTarget;
   private readonly maxChars: number;
@@ -236,8 +259,18 @@ export class SessionHistorySseState {
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
+    // In inline (unpaginated) mode, trim the initial raw messages before
+    // projection so the full transcript is never loaded and projected only
+    // to be immediately discarded by the retained window cap. Keep a margin
+    // (MAX * 2) so seq-number mapping and edge-case projections are reliable.
+    const rawMessages =
+      params.limit === undefined &&
+      params.cursor === undefined &&
+      params.initialRawMessages.length > MAX_INLINE_HISTORY_MESSAGES
+        ? params.initialRawMessages.slice(-MAX_INLINE_HISTORY_MESSAGES * 2)
+        : params.initialRawMessages;
     const snapshot = this.buildSnapshot({
-      rawMessages: params.initialRawMessages,
+      rawMessages,
       ...(typeof params.rawTranscriptSeq === "number"
         ? { rawTranscriptSeq: params.rawTranscriptSeq }
         : {}),
@@ -245,7 +278,7 @@ export class SessionHistorySseState {
         ? { totalRawMessages: params.totalRawMessages }
         : {}),
     });
-    this.sentHistory = snapshot.history;
+    this.sentHistory = trimHistoryMessages(snapshot.history, MAX_INLINE_HISTORY_MESSAGES);
     this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
     this.turnBoundaryPending = snapshot.turnBoundaryPending;
     this.transcriptPath = normalizeTranscriptPathForComparison(params.transcriptPath);
@@ -318,10 +351,13 @@ export class SessionHistorySseState {
               }) as SessionHistoryMessage)
             : projectedMessage;
         const nextMessages = [...this.sentHistory.messages, emittedMessage];
-        this.sentHistory = buildPaginatedSessionHistory({
-          messages: nextMessages,
-          hasMore: false,
-        });
+        this.sentHistory = trimHistoryMessages(
+          buildPaginatedSessionHistory({
+            messages: nextMessages,
+            hasMore: false,
+          }),
+          MAX_INLINE_HISTORY_MESSAGES,
+        );
         return {
           message: emittedMessage,
           messageSeq: resolveMessageSeq(emittedMessage),
@@ -348,10 +384,13 @@ export class SessionHistorySseState {
     }
     const projectedMessage = projectedMessages.at(-1) ?? sanitizedMessage;
     const nextMessages = [...this.sentHistory.messages, projectedMessage];
-    this.sentHistory = buildPaginatedSessionHistory({
-      messages: nextMessages,
-      hasMore: false,
-    });
+    this.sentHistory = trimHistoryMessages(
+      buildPaginatedSessionHistory({
+        messages: nextMessages,
+        hasMore: false,
+      }),
+      MAX_INLINE_HISTORY_MESSAGES,
+    );
     return {
       message: projectedMessage,
       messageSeq: resolveMessageSeq(projectedMessage),
@@ -389,7 +428,13 @@ export class SessionHistorySseState {
   }
 
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
-    if (this.cursor === undefined && typeof this.limit === "number") {
+    // Inline (unpaginated) mode has no user-specified limit. Bound the read
+    // to a multiple of the retained window so the projection never processes
+    // the full archive before trimming. The margin (MAX * 2) ensures reliable
+    // seq mapping for edge-case projections while keeping the I/O bounded.
+    const effectiveLimit =
+      this.limit ?? (this.cursor === undefined ? MAX_INLINE_HISTORY_MESSAGES : undefined);
+    if (this.cursor === undefined && typeof effectiveLimit === "number") {
       const snapshot = await readRecentSessionMessagesWithStatsAsync(
         {
           agentId: this.target.agentId,
@@ -399,7 +444,7 @@ export class SessionHistorySseState {
           storePath: this.target.storePath,
         },
         {
-          ...resolveSessionHistoryTailReadOptions(this.limit),
+          ...resolveSessionHistoryTailReadOptions(effectiveLimit),
           allowResetArchiveFallback: true,
         },
       );
