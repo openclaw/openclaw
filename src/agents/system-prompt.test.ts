@@ -219,7 +219,6 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain("Changed <version>: re-read");
     expect(prompt).toContain("External writes: batch safely");
   });
 
@@ -549,7 +548,6 @@ describe("buildAgentSystemPrompt", () => {
       "Scan <available_skills>. Clear match: read exact <location> with `Read`; obey.",
     );
     expect(prompt).not.toContain("<location>/SKILL.md");
-    expect(prompt).toContain("Changed <version>: re-read");
     expect(prompt).toContain("Several: most specific");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -810,8 +808,31 @@ describe("buildAgentSystemPrompt", () => {
       "Scan <available_skills>. Clear match: read exact <location> with `read`; obey.",
     );
     expect(prompt).not.toContain("<location>/SKILL.md");
-    expect(prompt).toContain("Changed <version>: re-read");
     expect(prompt).toContain("Several: most specific");
+  });
+
+  it("does not duplicate the skill-version reminder already carried by the skills catalog", () => {
+    // The rendered catalog (formatSkillsForPrompt/formatSkillsCompact) already carries the
+    // "<version> differs -> re-read" reminder; the header must not add a second copy.
+    const reminder = "If a skill's <version> differs from a previous turn";
+    const catalog = [
+      "The following skills provide specialized instructions for specific tasks.",
+      "Use the read tool to load a skill's file when the task matches its description.",
+      `${reminder}, re-read its SKILL.md before using it.`,
+      "",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>demo</name>",
+      "  </skill>",
+      "</available_skills>",
+    ].join("\n");
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      skillsPrompt: catalog,
+    });
+
+    const occurrences = prompt.split(reminder).length - 1;
+    expect(occurrences).toBe(1);
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
