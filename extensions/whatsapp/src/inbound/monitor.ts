@@ -60,6 +60,7 @@ import {
   requireAdmittedWhatsAppInboundMessage,
   requireWhatsAppInboundAdmission,
 } from "./admission.js";
+import { resolveWhatsAppInboundMaxBufferAgeMs } from "./debounce.js";
 import { isRecentOutboundMessage, rememberRecentOutboundMessage } from "./dedupe.js";
 import {
   createWhatsAppDurableInboundMessageId,
@@ -588,6 +589,7 @@ export async function attachWebInboxToSocket(
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
     resolveDecision: resolveInboundDebounceDecision,
+    resolveMaxBufferAgeMs: resolveWhatsAppInboundMaxBufferAgeMs,
     // Location and quote are singular contexts, so they cannot be represented safely in a batch.
     canCombine: (bufferedItems, item) =>
       !item.payload.location &&

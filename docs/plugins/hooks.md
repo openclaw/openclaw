@@ -169,7 +169,9 @@ that have the same channel-owned `event.debounceKey`. Returning nothing keeps
 the channel default.
 
 WhatsApp caps every plugin-selected window at five minutes because a text
-message may join a batch that already owns a persisted attachment file.
+message may join a batch that already owns a persisted attachment file. A batch
+that contains media also has an absolute five-minute lifetime that later
+messages cannot extend.
 
 The hook receives `ctx.channelId`, `ctx.accountId`, `ctx.conversationId`, and
 `ctx.senderId`, plus the conversation kind and message facts for media,

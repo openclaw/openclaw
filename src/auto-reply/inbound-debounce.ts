@@ -39,6 +39,7 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  deadlineAt?: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
@@ -63,6 +64,8 @@ export type InboundDebounceCreateParams<T> = {
   ) => InboundDebounceDecision | undefined | Promise<InboundDebounceDecision | undefined>;
   /** Return false to flush the current buffer before adding this item. */
   canCombine?: (bufferedItems: readonly T[], item: T) => boolean;
+  /** Optional absolute batch lifetime introduced by this item. */
+  resolveMaxBufferAgeMs?: (item: T) => number | undefined;
   serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
@@ -83,6 +86,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
     return resolveNonNegativeIntegerOption(resolved, defaultDebounceMs);
+  };
+
+  const resolveItemDeadline = (item: T): number | undefined => {
+    const maxAgeMs = params.resolveMaxBufferAgeMs?.(item);
+    if (maxAgeMs === undefined) {
+      return undefined;
+    }
+    return Date.now() + resolveNonNegativeIntegerOption(maxAgeMs, 0);
   };
 
   const runFlush = async (items: T[]) => {
@@ -247,9 +258,16 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if ((pendingDecisionCounts.get(key) ?? 0) > 0) {
       return;
     }
-    buffer.timeout = setTimeout(() => {
-      void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    const remainingLifetime =
+      buffer.deadlineAt === undefined
+        ? buffer.debounceMs
+        : Math.max(0, buffer.deadlineAt - Date.now());
+    buffer.timeout = setTimeout(
+      () => {
+        void flushBuffer(key, buffer);
+      },
+      Math.min(buffer.debounceMs, remainingLifetime),
+    );
     buffer.timeout.unref?.();
   };
 
@@ -347,6 +365,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       } else {
         existing.items.push(item);
         existing.debounceMs = debounceMs;
+        const itemDeadline = resolveItemDeadline(item);
+        if (itemDeadline !== undefined) {
+          existing.deadlineAt =
+            existing.deadlineAt === undefined
+              ? itemDeadline
+              : Math.min(existing.deadlineAt, itemDeadline);
+        }
         scheduleFlush(key, existing);
         markApplied();
         return;
@@ -378,6 +403,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      deadlineAt: resolveItemDeadline(item),
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,

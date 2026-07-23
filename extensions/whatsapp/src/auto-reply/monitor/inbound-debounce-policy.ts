@@ -3,13 +3,13 @@ import type { PluginHookInboundDebounceResult } from "openclaw/plugin-sdk/plugin
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { getPrimaryIdentityId } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  hasWhatsAppInboundMedia,
+  MAX_WHATSAPP_PLUGIN_DEBOUNCE_MS,
+} from "../../inbound/debounce.js";
 import { normalizeWebInboundMessage } from "../../inbound/message-aliases.js";
 import type { WebInboundMessageInput } from "../../inbound/types.js";
 import { getRuntimeConfig } from "../config.runtime.js";
-
-// Any text item may join a batch that already owns saved media. Keep all plugin
-// windows below the one-hour media TTL floor so files remain available at flush.
-const MAX_PLUGIN_DEBOUNCE_MS = 5 * 60_000;
 
 export function resolveWhatsAppInboundDebounceDecision(params: {
   cfg: ReturnType<typeof getRuntimeConfig>;
@@ -42,11 +42,7 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
   if (!hookRunner?.hasHooks("inbound_debounce")) {
     return defaultDecision;
   }
-  const mediaItems =
-    normalized.payload.mediaItems ?? (normalized.payload.media ? [normalized.payload.media] : []);
-  const hasMedia = mediaItems.some((entry) =>
-    Boolean(entry.path || entry.url || entry.type || entry.kind),
-  );
+  const hasMedia = hasWhatsAppInboundMedia(normalized);
   return hookRunner
     .runInboundDebounce(
       {
@@ -83,7 +79,7 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
           : params.defaultDebounceMs;
       return {
         action: "debounce" as const,
-        debounceMs: Math.min(requestedMs, MAX_PLUGIN_DEBOUNCE_MS),
+        debounceMs: Math.min(requestedMs, MAX_WHATSAPP_PLUGIN_DEBOUNCE_MS),
       };
     });
 }
