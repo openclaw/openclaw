@@ -558,11 +558,13 @@ async function runSetupWizardOnce(
     hasConfiguredDefaultModel(nextConfig) &&
     opts.authChoice !== "skip"
   ) {
+    const verificationTarget = resolveOnboardingAgentTarget(nextConfig);
     const verification = await offerLiveModelVerification({
       config: nextConfig,
       opts,
       prompter,
       runtime,
+      workspaceDir: verificationTarget.workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
     });

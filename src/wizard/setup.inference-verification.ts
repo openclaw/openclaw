@@ -116,7 +116,6 @@ export async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
-      workspaceDir: params.workspaceDir,
       ...(params.agentDir ? { agentDir: params.agentDir } : {}),
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     });
