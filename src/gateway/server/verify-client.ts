@@ -14,9 +14,11 @@ type GatewayVerifyClientParams = {
  * Pre-handshake WebSocket origin gate. Runs in `verifyClient` (before the HTTP
  * 101) and reuses the existing `checkBrowserOrigin` from the post-handshake
  * admission path, so both gates share one origin-policy contract.
- * Proxy classification: uses canonical `isTrustedProxyAddress` from net.ts
- * instead of raw forwarded-header presence. Non-browser clients send no Origin
- * and pass through; they authenticate post-handshake.
+ * Per ClawSweeper review: scope narrowed to match upstream's browser/Control-UI
+ * enforcement boundary. Proxy classification uses canonical
+ * `isTrustedProxyAddress` from net.ts instead of raw forwarded-header presence.
+ * Non-browser clients send no Origin and pass through; they authenticate
+ * post-handshake.
  */
 export function createGatewayVerifyClient(params: GatewayVerifyClientParams) {
   const { log, getConfigSnapshot } = params;
