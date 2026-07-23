@@ -17,6 +17,12 @@ import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runt
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createTelegramCallbackContext,
+  runTelegramTestMiddlewareChain,
+  type TelegramTestContext as TelegramMiddlewareTestContext,
+  type TelegramTestMiddleware as TelegramMiddleware,
+} from "./bot.test-helpers.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
@@ -111,37 +117,11 @@ const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
-type TelegramMiddlewareTestContext = Record<string, unknown>;
-type TelegramMiddleware = (
-  ctx: TelegramMiddlewareTestContext,
-  next: () => Promise<void>,
-) => Promise<void> | void;
-
-function getRegisteredTelegramMiddlewares(): TelegramMiddleware[] {
-  return middlewareUseSpy.mock.calls
-    .map((call) => call[0])
-    .filter((fn): fn is TelegramMiddleware => typeof fn === "function");
-}
-
 async function runTelegramMiddlewareChain(params: {
   ctx: TelegramMiddlewareTestContext;
   finalHandler: (ctx: TelegramMiddlewareTestContext) => Promise<void>;
 }): Promise<void> {
-  const middlewares = getRegisteredTelegramMiddlewares();
-  let idx = -1;
-  const dispatch = async (i: number): Promise<void> => {
-    if (i <= idx) {
-      throw new Error("middleware dispatch called multiple times");
-    }
-    idx = i;
-    const fn = middlewares[i];
-    if (!fn) {
-      await params.finalHandler(params.ctx);
-      return;
-    }
-    await fn(params.ctx, async () => dispatch(i + 1));
-  };
-  await dispatch(0);
+  await runTelegramTestMiddlewareChain(middlewareUseSpy, params.ctx, params.finalHandler);
 }
 
 function installPerKeySequentializer(): void {
@@ -190,6 +170,18 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
+  const data = "skip nightly build tonight";
+  return createTelegramCallbackContext({
+    id: params.id,
+    data,
+    update: params.updateId === undefined ? undefined : { update_id: params.updateId },
+    message: {
+      reply_markup: { inline_keyboard: [[{ text: "Skip tonight", callback_data: data }]] },
+    },
+  });
 }
 
 function createDeferred<T = void>() {
@@ -758,29 +750,12 @@ describe("createTelegramBot", () => {
       return { text: `reply:${body}` };
     });
 
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      const middlewares = middlewareUseSpy.mock.calls
-        .map((call) => call[0])
-        .filter(
-          (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-            typeof fn === "function",
-        );
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await handler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(
+        middlewareUseSpy,
+        ctx,
+        getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>,
+      );
 
     const extractLatestDebounceFlush = () => {
       const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
@@ -870,7 +845,7 @@ describe("createTelegramBot", () => {
       loadConfig.mockReturnValue({
         agents: {
           defaults: {
-            envelopeTimezone: "utc",
+            userTimezone: "UTC",
           },
         },
         messages: {
@@ -991,7 +966,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       messages: {
@@ -1945,6 +1920,57 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("/fast status");
     expect(payload.Body).not.toContain("callback_data: /fast status");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-slash-1");
+  });
+
+  it.each([
+    { name: "clears buttons", id: "cbq-generic-clear-1", editError: undefined },
+    {
+      name: "continues after a permanent edit error",
+      id: "cbq-generic-clear-permanent-1",
+      editError: new Error("400: Bad Request: message can't be edited"),
+    },
+  ])("routes generic callback_query payloads and $name", async ({ id, editError }) => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    if (editError) {
+      editMessageReplyMarkupSpy.mockRejectedValueOnce(editError);
+    }
+
+    await callbackHandler(makeGenericCallbackContext({ id }));
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith(id);
+  });
+
+  it("retries generic callback_query button cleanup after transient edit failures", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const ctx = makeGenericCallbackContext({ id: "cbq-generic-clear-retry-1", updateId: 779 });
+
+    editMessageReplyMarkupSpy.mockRejectedValueOnce(new Error("edit boom"));
+
+    await expect(
+      runTelegramMiddlewareChain({
+        ctx,
+        finalHandler: callbackHandler,
+      }),
+    ).rejects.toThrow("edit boom");
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await runTelegramMiddlewareChain({
+      ctx,
+      finalHandler: callbackHandler,
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
   });
 
   it("does not route opaque callback_query payloads as synthetic commands", async () => {
@@ -3158,34 +3184,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     let releaseUpdate101: (() => void) | undefined;
     const update101Gate = new Promise<void>((resolve) => {
@@ -3234,34 +3234,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -3296,34 +3270,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     await expect(
       runMiddlewareChain({ update: { update_id: 201 } }, async () => {
@@ -3365,34 +3313,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     const dispatchError = new Error("dispatch exploded");
     await runMiddlewareChain({ update: { update_id: 501 } }, async () => {
@@ -3426,34 +3348,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     const update = { update_id: 601 };
     const dispatchError = new Error("dispatch exploded");
@@ -3491,34 +3387,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     const update = { update_id: 701 };
     const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
@@ -3572,34 +3442,8 @@ describe("createTelegramBot", () => {
       },
     });
 
-    type Middleware = (
-      ctx: Record<string, unknown>,
-      next: () => Promise<void>,
-    ) => Promise<void> | void;
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter((fn): fn is Middleware => typeof fn === "function");
-
-    const runMiddlewareChain = async (
-      ctx: Record<string, unknown>,
-      finalNext: () => Promise<void>,
-    ) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await finalNext();
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>, finalNext: () => Promise<void>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, async () => finalNext());
 
     const handler = vi.fn();
     await runMiddlewareChain(
@@ -4480,7 +4324,7 @@ describe("createTelegramBot", () => {
       loadConfig.mockReturnValue({
         agents: {
           defaults: {
-            envelopeTimezone: "utc",
+            userTimezone: "UTC",
           },
         },
         identity: { name: "Bert" },
@@ -4548,7 +4392,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       channels: {
@@ -5109,9 +4953,8 @@ describe("createTelegramBot", () => {
     replySpy.mockResolvedValue({ text: "final reply" });
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], responsePrefix: "PFX" },
       },
-      messages: { responsePrefix: "PFX" },
     });
 
     createTelegramBot({ token: "tok" });
@@ -5513,28 +5356,8 @@ describe("createTelegramBot", () => {
       throw new Error("verbose command handler missing");
     }
 
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await verboseHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, verboseHandler);
 
     const ctx = {
       update: { update_id: 333 },
@@ -5576,28 +5399,8 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
     const migrationHandler = getOnHandler("message:migrate_to_chat_id");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await migrationHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, migrationHandler);
 
     const ctx = {
       update: { update_id: 444 },
@@ -5633,28 +5436,8 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
     const reactionHandler = getOnHandler("message_reaction");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await reactionHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, reactionHandler);
 
     const ctx = {
       update: { update_id: 555 },
@@ -5700,28 +5483,8 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     const ctx = {
       update: { update_id: 666 },
@@ -5763,28 +5526,8 @@ describe("createTelegramBot", () => {
   it("retries command pagination callbacks after a bubbled edit failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     const ctx = {
       update: { update_id: 777 },
@@ -5910,28 +5653,8 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     listSkillCommandsMock.mockClear();
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     const ctx = {
       update: { update_id: 778 },
@@ -5963,28 +5686,8 @@ describe("createTelegramBot", () => {
   it("retries plugin binding approval callbacks after a bubbled resolution failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
@@ -6034,28 +5737,8 @@ describe("createTelegramBot", () => {
     });
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     resolveExecApprovalSpy.mockRejectedValueOnce(new Error("approval boom"));
 
@@ -6093,28 +5776,8 @@ describe("createTelegramBot", () => {
   it("retries model provider callbacks after a bubbled edit failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     const ctx = {
       update: { update_id: 889 },
@@ -6155,28 +5818,8 @@ describe("createTelegramBot", () => {
   it("retries model selection callbacks after a bubbled session-store failure", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = getOnHandler("callback_query");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await callbackHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
+    const runMiddlewareChain = (ctx: Record<string, unknown>) =>
+      runTelegramTestMiddlewareChain(middlewareUseSpy, ctx, callbackHandler);
 
     const patchSessionEntrySpy = vi.spyOn(sessionStoreRuntime, "patchSessionEntry");
     patchSessionEntrySpy.mockRejectedValueOnce(new Error("session store boom"));

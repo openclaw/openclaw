@@ -39,6 +39,18 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it("does not detach native hook relays through a startup respawn", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],
@@ -91,7 +103,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
-  it("uses the file-backed CA store for one-shot macOS commands", () => {
+  it("uses bundled public roots for one-shot macOS commands", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "cron", "list", "--json"],
       env: { NODE_USE_SYSTEM_CA: "1" },
@@ -103,7 +115,7 @@ describe("buildCliRespawnPlan", () => {
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual([
       EXPERIMENTAL_WARNING_FLAG,
-      OPENSSL_CA_FLAG,
+      BUNDLED_CA_FLAG,
       "openclaw",
       "cron",
       "list",
@@ -170,15 +182,15 @@ describe("buildCliRespawnPlan", () => {
     },
   );
 
-  it("does not respawn again after selecting the macOS file-backed CA store", () => {
+  it("does not respawn again after selecting bundled public roots", () => {
     expect(
       buildCliRespawnPlan({
         argv: ["node", "openclaw", "cron", "list", "--json"],
         env: {
-          NODE_USE_SYSTEM_CA: "1",
+          NODE_USE_SYSTEM_CA: "0",
           [OPENCLAW_NODE_OPTIONS_READY]: "1",
         },
-        execArgv: [OPENSSL_CA_FLAG, EXPERIMENTAL_WARNING_FLAG],
+        execArgv: [BUNDLED_CA_FLAG, EXPERIMENTAL_WARNING_FLAG],
         autoNodeExtraCaCerts: undefined,
         platform: "darwin",
       }),

@@ -99,8 +99,23 @@ export function assertChannelPatch(
   channel: Awaited<ReturnType<ClickClackClient["updateChannel"]>>,
   patch: Parameters<ClickClackClient["updateChannel"]>[1],
 ): void {
-  for (const key of ["archived", "external_url", "name", "sidebar_section"] as const) {
-    if (patch[key] !== undefined && channel[key] !== patch[key]) {
+  for (const key of [
+    "archived",
+    "external_managed",
+    "external_ref",
+    "external_url",
+    "name",
+    "sidebar_section",
+  ] as const) {
+    const expected = patch[key];
+    if (expected === undefined) {
+      continue;
+    }
+    const actual =
+      key === "external_ref" || key === "external_url" || key === "sidebar_section"
+        ? (channel[key] ?? "")
+        : channel[key];
+    if (actual !== expected) {
       throw new Error(`ClickClack channel update did not apply ${key}`);
     }
   }
@@ -112,10 +127,9 @@ function assertManagedChannelContract(
 ): void {
   if (
     channel.external_managed !== true ||
-    channel.external_ref !== expected.externalRef ||
-    channel.sidebar_section !== expected.section ||
-    typeof channel.external_url !== "string" ||
-    channel.external_url !== (expected.externalUrl ?? "")
+    (channel.external_ref ?? "") !== (expected.externalRef ?? "") ||
+    (channel.sidebar_section ?? "") !== (expected.section ?? "") ||
+    (channel.external_url ?? "") !== (expected.externalUrl ?? "")
   ) {
     throw new Error(
       `ClickClack server does not support the managed discussion channel contract for ${expected.sessionKey}`,
@@ -130,9 +144,9 @@ export function assertManagedChannelListContract(
     channels.some(
       (channel) =>
         typeof channel.external_managed !== "boolean" ||
-        typeof channel.external_ref !== "string" ||
-        typeof channel.external_url !== "string" ||
-        typeof channel.sidebar_section !== "string",
+        (channel.external_ref !== undefined && typeof channel.external_ref !== "string") ||
+        (channel.external_url !== undefined && typeof channel.external_url !== "string") ||
+        (channel.sidebar_section !== undefined && typeof channel.sidebar_section !== "string"),
     )
   ) {
     throw new Error("ClickClack server does not advertise the managed discussion contract");

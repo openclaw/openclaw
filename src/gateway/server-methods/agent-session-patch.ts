@@ -17,7 +17,7 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { canonicalizeSpawnedByForAgent, loadSessionEntry } from "../session-utils.js";
+import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,
@@ -73,7 +73,7 @@ export function buildAgentSessionPatch(params: {
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
     try {
-      const parentEntry = loadSessionEntry(freshSpawnedBy)?.entry;
+      const parentEntry = loadSessionEntryReadOnly(freshSpawnedBy)?.entry;
       inheritedGroup = normalizeTrustedGroupMetadata({
         groupId: parentEntry?.groupId,
         groupChannel: parentEntry?.groupChannel,
@@ -209,7 +209,14 @@ export function buildAgentSessionPatch(params: {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
-    ...(params.touchInteraction ? { lastInteractionAt: params.now } : {}),
+    ...(params.touchInteraction
+      ? {
+          lastInteractionAt: params.now,
+          // Clear at human-turn admission, before the model may declare a new
+          // status. Later lifecycle writes must not erase a same-turn declaration.
+          agentStatus: undefined,
+        }
+      : {}),
     ...automaticRecoveryClearPatch,
     ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
     ...(effectiveDeliveryFields.deliveryContext

@@ -93,7 +93,7 @@ export class ClickClackDiscussionService {
     this.#store = getClickClackDiscussionBindingStore(runtime);
     this.#clientFactory =
       options.clientFactory ??
-      ((account) => createClickClackClient({ baseUrl: account.baseUrl, token: account.token }));
+      ((account) => createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }));
     this.#installationId = options.installationId ?? getClickClackDiscussionInstallationId(runtime);
     this.#bindingGenerationFactory = options.bindingGenerationFactory ?? randomUUID;
     this.#timersEnabled = options.startTimer !== false;

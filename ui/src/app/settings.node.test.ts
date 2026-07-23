@@ -349,7 +349,7 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatPersistCommentary: false,
+      chatPersistCommentary: true,
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
@@ -365,7 +365,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
-  it("persists custodian unpinning across save and load, normalizing bad values", () => {
+  it("persists sidebar entries across save and load, normalizing bad values", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -402,12 +402,7 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarEntries).toEqual([
-      "route:custodian",
-      "route:usage",
-      "route:cron",
-      "route:plugins",
-    ]);
+    expect(loadSettings().sidebarEntries).toEqual(["route:usage", "route:cron", "route:plugins"]);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -614,6 +609,22 @@ describe("loadSettings default gateway URL derivation", () => {
     saveSettings({ ...loadSettings(), sidebarLiveActivity: true });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "sidebarLiveActivity",
+    );
+  });
+
+  it("defaults advanced settings off and persists only an explicit opt-in", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+
+    expect(loadSettings().showAdvancedSettings).toBe(false);
+    saveSettings({ ...loadSettings(), showAdvancedSettings: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").showAdvancedSettings).toBe(true);
+    expect(loadSettings().showAdvancedSettings).toBe(true);
+
+    saveSettings({ ...loadSettings(), showAdvancedSettings: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "showAdvancedSettings",
     );
   });
 

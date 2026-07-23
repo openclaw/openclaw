@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -26,6 +27,7 @@ import {
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
+  hasQuickstartGatewayOverrides,
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
@@ -33,6 +35,7 @@ import {
   writeWizardConfigFile,
 } from "./setup.shared.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+import { resolveSetupWorkspaceSelection } from "./setup.workspace.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
 
@@ -51,17 +54,18 @@ async function offerLiveModelVerification(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  required?: boolean;
 }): Promise<{ config: OpenClawConfig; verified: boolean }> {
-  const shouldTest = await params.prompter.confirm({
-    message: t("wizard.setup.testAiAccess"),
-    initialValue: true,
-  });
-  if (!shouldTest) {
-    return { config: params.config, verified: false };
+  if (!params.required) {
+    const shouldTest = await params.prompter.confirm({
+      message: t("wizard.setup.testAiAccess"),
+      initialValue: true,
+    });
+    if (!shouldTest) {
+      return { config: params.config, verified: false };
+    }
   }
-
   const { verifySetupInferenceConfig } = await import("../system-agent/setup-inference.js");
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
@@ -106,14 +110,16 @@ async function offerLiveModelVerification(params: {
     if (result.authProfiles) {
       candidate.authProfiles = result.authProfiles;
     }
-    const action = await params.prompter.select({
-      message: t("wizard.setup.testAiFailureChoice"),
-      options: [
-        { value: "fix", label: t("wizard.setup.testAiFix") },
-        { value: "continue", label: t("wizard.setup.testAiContinue") },
-      ],
-    });
-    if (action === "continue") {
+    if (
+      !params.required &&
+      (await params.prompter.select({
+        message: t("wizard.setup.testAiFailureChoice"),
+        options: [
+          { value: "fix", label: t("wizard.setup.testAiFix") },
+          { value: "continue", label: t("wizard.setup.testAiContinue") },
+        ],
+      })) === "continue"
+    ) {
       return { config: params.config, verified: false };
     }
 
@@ -124,7 +130,6 @@ async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
-      workspaceDir: params.workspaceDir,
     });
     shouldPersistCandidate = true;
   }
@@ -338,8 +343,13 @@ async function runSetupWizardOnce(
     flow = "quickstart";
   }
   const wizardFlow: WizardFlow = flow === "advanced" ? "advanced" : "quickstart";
+  const hasExplicitQuickstartGatewayOverrides =
+    wizardFlow === "quickstart" && hasQuickstartGatewayOverrides(opts);
 
-  const quickstartGateway: QuickstartGatewayDefaults = resolveQuickstartGatewayDefaults(baseConfig);
+  const quickstartGateway: QuickstartGatewayDefaults = resolveQuickstartGatewayDefaults(
+    baseConfig,
+    wizardFlow === "quickstart" ? opts : undefined,
+  );
 
   if (flow === "quickstart") {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
@@ -366,37 +376,27 @@ async function runSetupWizardOnce(
     const formatTailscale = (value: "off" | "serve" | "funnel") => {
       return t(`wizard.gatewayTailscale.${value}`);
     };
-    const quickstartLines = quickstartGateway.hasExisting
-      ? [
-          t("wizard.setup.quickstartKeepSettings"),
-          t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
-          t("wizard.setup.quickstartGatewayBind", { bind: formatBind(quickstartGateway.bind) }),
-          ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
-            ? [
-                t("wizard.setup.quickstartGatewayCustomIp", {
-                  host: quickstartGateway.customBindHost,
-                }),
-              ]
-            : []),
-          t("wizard.setup.quickstartGatewayAuth", {
-            auth: formatAuth(quickstartGateway.authMode),
-          }),
-          t("wizard.setup.quickstartTailscaleExposure", {
-            exposure: formatTailscale(quickstartGateway.tailscaleMode),
-          }),
-          t("wizard.setup.quickstartDirectChannels"),
-        ]
-      : [
-          t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
-          t("wizard.setup.quickstartGatewayBind", { bind: t("wizard.gateway.bindLoopback") }),
-          t("wizard.setup.quickstartGatewayAuth", {
-            auth: t("wizard.setup.quickstartAuthTokenDefault"),
-          }),
-          t("wizard.setup.quickstartTailscaleExposure", {
-            exposure: t("wizard.gatewayTailscale.off"),
-          }),
-          t("wizard.setup.quickstartDirectChannels"),
-        ];
+    const quickstartLines = [
+      ...(quickstartGateway.hasExisting && !hasExplicitQuickstartGatewayOverrides
+        ? [t("wizard.setup.quickstartKeepSettings")]
+        : []),
+      t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
+      t("wizard.setup.quickstartGatewayBind", { bind: formatBind(quickstartGateway.bind) }),
+      ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
+        ? [
+            t("wizard.setup.quickstartGatewayCustomIp", {
+              host: quickstartGateway.customBindHost,
+            }),
+          ]
+        : []),
+      t("wizard.setup.quickstartGatewayAuth", {
+        auth: formatAuth(quickstartGateway.authMode),
+      }),
+      t("wizard.setup.quickstartTailscaleExposure", {
+        exposure: formatTailscale(quickstartGateway.tailscaleMode),
+      }),
+      t("wizard.setup.quickstartDirectChannels"),
+    ];
     await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
@@ -559,11 +559,22 @@ async function runSetupWizardOnce(
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
 
-  const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
+  const requestedWorkspaceDir = resolveUserPath(
+    workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+  );
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  const { allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+    baseConfig,
+    requestedWorkspaceDir,
+    prompter,
+  });
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    requestedWorkspaceDir,
+    { allowWorkspaceChange },
+  );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
@@ -574,7 +585,6 @@ async function runSetupWizardOnce(
       opts,
       prompter,
       runtime,
-      workspaceDir,
     });
     await modelAuth.persistAuthProfiles();
     nextConfig = modelAuth.config;
@@ -602,20 +612,21 @@ async function runSetupWizardOnce(
   });
 
   let liveModelVerified = false;
+  // keepExistingModelConfig is latched before auth setup, so this distinguishes
+  // a route supplied by the import from one configured normally after the import.
   if (
     opts.nonInteractive !== true &&
-    opts.authChoice !== "skip" &&
-    !usedImportFlow &&
-    hasConfiguredDefaultModel(nextConfig)
+    hasConfiguredDefaultModel(nextConfig) &&
+    ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
     const verification = await offerLiveModelVerification({
       config: nextConfig,
       opts,
       prompter,
       runtime,
-      workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+      required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
     liveModelVerified = verification.verified;
@@ -648,11 +659,13 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    agentId: onboardingTarget.agentId,
   });
 
   if (!usedImportFlow) {
@@ -674,7 +687,7 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipSkills"), t("wizard.setup.skillsTitle"));
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
-    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter, {
+    nextConfig = await setupSkills(nextConfig, onboardingTarget.workspaceDir, runtime, prompter, {
       nodeManager: opts.nodeManager,
     });
   }
@@ -686,14 +699,14 @@ async function runSetupWizardOnce(
       config: nextConfig,
       prompter,
       runtime,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
     });
     const { setupAppRecommendations } = await import("./setup.app-recommendations.js");
     const recommendationOutcome = await setupAppRecommendations({
       config: nextConfig,
       prompter,
       runtime,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
       modelRouteVerified: liveModelVerified,
     });
     nextConfig = recommendationOutcome.config;
@@ -702,7 +715,7 @@ async function runSetupWizardOnce(
     nextConfig = await setupPluginConfig({
       config: nextConfig,
       prompter,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
     });
   }
 
@@ -715,6 +728,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
@@ -724,7 +738,7 @@ async function runSetupWizardOnce(
     baseConfig,
     hadExistingConfig: snapshot.exists,
     nextConfig,
-    workspaceDir,
+    workspaceDir: onboardingTarget.workspaceDir,
     settings,
     prompter,
     runtime,

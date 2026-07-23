@@ -1,15 +1,19 @@
+import type { PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { AppSidebarMenusElement } from "./app-sidebar-menus.ts";
 import type {
   SidebarNarrationSyncInput,
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
+import { visibleSessionChildren } from "./app-sidebar-session-row-render.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 /** Gateway subscription and reactive narration state for the session-list renderer. */
 export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusElement {
-  @state() protected sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
@@ -19,16 +23,15 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
   private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = new SubscriptionsController(this);
 
-  protected abstract visibleSessionChildren(
-    session: SidebarRecentSession,
-  ): readonly SidebarRecentSession[];
-
   private visibleNarrationRowsInOrder(): SidebarRecentSession[] {
     const rows: SidebarRecentSession[] = [];
     const append = (session: SidebarRecentSession) => {
       rows.push(session);
       if (this.isSessionChildrenExpanded(session)) {
-        this.visibleSessionChildren(session).forEach(append);
+        visibleSessionChildren({
+          session,
+          fullyShownChildSessionKeys: this.fullyShownChildSessionKeys,
+        }).forEach(append);
       }
     };
     this.visibleSessionRowsInOrder().forEach(append);
@@ -71,15 +74,20 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
       if (!this.isConnected) {
         return;
       }
-      this.narration = new module.SidebarSessionNarrationController((lines) => {
-        this.sidebarNarrationLines = lines;
-      });
+      this.narration = new module.SidebarSessionNarrationController(
+        (lines) => {
+          this.sidebarNarrationLines = lines;
+        },
+        (digests) => {
+          this.sidebarObserverDigests = digests;
+        },
+      );
       this.narration.sync(this.narrationSyncInput());
     });
   }
 
-  override updated() {
-    super.updated();
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();

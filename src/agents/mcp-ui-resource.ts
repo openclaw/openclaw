@@ -31,7 +31,7 @@ export type McpAppViewLease = {
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
@@ -224,7 +224,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   viewId?: string;
 }): Promise<
@@ -286,7 +286,9 @@ export async function fetchMcpAppView(params: {
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
         : {}),
-      ...(params.authorizeAppToolCall ? { authorizeAppToolCall: params.authorizeAppToolCall } : {}),
+      ...(params.authorizeAppInteraction
+        ? { authorizeAppInteraction: params.authorizeAppInteraction }
+        : {}),
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
       toolResult: params.toolResult,
