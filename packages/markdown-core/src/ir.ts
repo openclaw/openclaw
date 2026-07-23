@@ -2,6 +2,7 @@
 import MarkdownIt from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
+import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import {
@@ -222,9 +223,9 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
   return md;
 }
 
-function protectTaskListMarkers(state: { tokens: MarkdownToken[] }): void {
+function protectTaskListMarkers(state: StateCore): void {
   const stack: Array<{ contentStarted: boolean }> = [];
-  for (const token of state.tokens) {
+  for (const token of state.tokens as MarkdownToken[]) {
     if (token.type === "list_item_open") {
       stack.push({ contentStarted: false });
       continue;
