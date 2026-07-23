@@ -65,11 +65,13 @@ function createQmdTimeoutSearchTool(options?: { oneShotCliRun?: boolean }) {
   });
 }
 
-function expectMemorySearchTimeout(details: unknown, seconds: number): void {
+function expectMemorySearchTimeout(details: unknown, seconds: number, phase?: string): void {
+  const phaseSuffix = phase ? ` during ${phase}` : "";
   expectUnavailableMemorySearchDetails(details, {
-    error: `memory_search timed out after ${seconds}s`,
-    warning: "Memory search is unavailable due to an embedding/provider error.",
-    action: "Check embedding provider configuration and retry memory_search.",
+    error: `memory_search timed out after ${seconds}s${phaseSuffix}`,
+    warning: "Memory search hit its request deadline before results were ready.",
+    action:
+      "Retry memory_search shortly; if it keeps timing out, check memory status and run openclaw memory index --force outside the tool deadline.",
   });
 }
 
@@ -360,7 +362,7 @@ describe("memory_search unavailable payloads", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       const result = await resultPromise;
-      expectMemorySearchTimeout(result.details, 15);
+      expectMemorySearchTimeout(result.details, 15, "memory setup");
       expect(close).not.toHaveBeenCalled();
 
       resolveManager({ manager: { close } });
@@ -372,7 +374,7 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
-  it("returns unavailable metadata when memory search does not settle", async () => {
+  it("returns retryable unavailable metadata when memory search does not settle", async () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
@@ -388,20 +390,14 @@ describe("memory_search unavailable payloads", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       const result = await resultPromise;
-      expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
-      });
+      expectMemorySearchTimeout(result.details, 15, "memory search");
       // The deadline must abort the orphaned search, not just race past it.
       expect(searchSignal?.aborted).toBe(true);
-      const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
-      expectUnavailableMemorySearchDetails(cooldownResult.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
-      });
-      expect(searchCalls).toBe(1);
+      const retryResultPromise = tool.execute("search-retry", { query: "hello again" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const retryResult = await retryResultPromise;
+      expectMemorySearchTimeout(retryResult.details, 15, "memory search");
+      expect(searchCalls).toBe(2);
     } finally {
       vi.useRealTimers();
     }
@@ -426,11 +422,7 @@ describe("memory_search unavailable payloads", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       const result = await resultPromise;
-      expectUnavailableMemorySearchDetails(result.details, {
-        error: "memory_search timed out after 15s",
-        warning: "Memory search is unavailable due to an embedding/provider error.",
-        action: "Check embedding provider configuration and retry memory_search.",
-      });
+      expectMemorySearchTimeout(result.details, 15, "memory search");
     } finally {
       vi.useRealTimers();
     }
@@ -587,7 +579,7 @@ describe("memory_search unavailable payloads", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       const result = await resultPromise;
-      expectMemorySearchTimeout(result.details, 15);
+      expectMemorySearchTimeout(result.details, 15, "memory search");
       expect(searchSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -663,7 +655,7 @@ describe("memory_search unavailable payloads", () => {
 
       expect(settled).toBe(true);
       const result = await resultPromise;
-      expectMemorySearchTimeout(result.details, 15);
+      expectMemorySearchTimeout(result.details, 15, "supplement search");
       expect(getMemorySearchManagerMockCalls()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -693,7 +685,7 @@ describe("memory_search unavailable payloads", () => {
 
       expect(settled).toBe(true);
       const result = await resultPromise;
-      expectMemorySearchTimeout(result.details, 15);
+      expectMemorySearchTimeout(result.details, 15, "memory search");
       expect(searchSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -714,7 +706,7 @@ describe("memory_search unavailable payloads", () => {
       await vi.advanceTimersByTimeAsync(15_000);
 
       const result = await resultPromise;
-      expectMemorySearchTimeout(result.details, 15);
+      expectMemorySearchTimeout(result.details, 15, "memory index sync");
       expect(manager.search).toHaveBeenCalledTimes(1);
       expect(manager.sync).toHaveBeenCalledTimes(1);
     } finally {
@@ -799,7 +791,7 @@ describe("memory_search unavailable payloads", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       const result = await resultPromise;
-      expectMemorySearchTimeout(result.details, 15);
+      expectMemorySearchTimeout(result.details, 15, "memory manager refresh");
       expect(managerCalls).toBe(2);
     } finally {
       vi.useRealTimers();

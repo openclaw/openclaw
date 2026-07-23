@@ -15,12 +15,14 @@ export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   return new Error(typeof reason === "string" ? reason : "memory search aborted");
 }
 
-function createMemorySearchTimeoutError(timeoutMs: number): Error {
-  return new Error(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s`);
+function createMemorySearchTimeoutError(timeoutMs: number, phase?: string): Error {
+  const phaseSuffix = phase ? ` during ${phase}` : "";
+  return new Error(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s${phaseSuffix}`);
 }
 
 export async function runMemorySearchWithDeadline<T>(params: {
   timeoutMs: number;
+  phase?: string;
   parentSignal?: AbortSignal;
   run: (
     signal: AbortSignal,
@@ -32,7 +34,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
   }
 
   const controller = new AbortController();
-  const timeoutError = createMemorySearchTimeoutError(params.timeoutMs);
+  const timeoutError = createMemorySearchTimeoutError(params.timeoutMs, params.phase);
   const timeoutOutcome = { type: "timeout" } as const;
   const parentAbortOutcome = { type: "parent-abort" } as const;
   let timer: ReturnType<typeof setTimeout> | undefined;

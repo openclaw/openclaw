@@ -267,6 +267,10 @@ function isClosedMemoryStoreError(error: unknown): boolean {
   );
 }
 
+function isMemorySearchDeadlineTimeoutMessage(message: string): boolean {
+  return /^memory_search timed out after \d+s(?: during .+)?$/i.test(message.trim());
+}
+
 function buildRecallKey(
   result: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine">,
 ): string {
@@ -510,6 +514,7 @@ export function createMemorySearchTool(options: {
           }
         };
         const runWithDefaultDeadline = async <T>(
+          phase: string,
           task: (
             signal: AbortSignal,
             controlDeadline: (action: MemorySearchDeadlineAction) => void,
@@ -517,6 +522,7 @@ export function createMemorySearchTool(options: {
         ): Promise<T> =>
           await runMemorySearchWithDeadline({
             timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+            phase,
             parentSignal: callerSignal,
             run: task,
           });
@@ -547,7 +553,7 @@ export function createMemorySearchTool(options: {
               ? await runUnavailablePhase(
                   "memory",
                   async () =>
-                    await runWithDefaultDeadline(async () => {
+                    await runWithDefaultDeadline("memory setup", async () => {
                       const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
                       const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
                       const context = trackMemoryManager(
@@ -657,6 +663,7 @@ export function createMemorySearchTool(options: {
                   }) satisfies MemoryManagerSearchOptions;
                 const searchActiveMemory = async (): Promise<MemorySearchResult[]> =>
                   await runWithDefaultDeadline(
+                    "memory search",
                     async (signal, controlDeadline) =>
                       await activeMemory.manager.search(
                         query,
@@ -671,16 +678,18 @@ export function createMemorySearchTool(options: {
                   if (!isClosedMemoryStoreError(error)) {
                     throw error;
                   }
-                  const refreshed = await runWithDefaultDeadline(async () =>
-                    trackMemoryManager(
-                      await getMemoryManagerContextWithPurpose({
-                        cfg,
-                        agentId,
-                        purpose: memoryManagerPurpose,
-                        acquireLocalService: options.acquireLocalService,
-                        withLease: options.withLease,
-                      }),
-                    ),
+                  const refreshed = await runWithDefaultDeadline(
+                    "memory manager refresh",
+                    async () =>
+                      trackMemoryManager(
+                        await getMemoryManagerContextWithPurpose({
+                          cfg,
+                          agentId,
+                          purpose: memoryManagerPurpose,
+                          acquireLocalService: options.acquireLocalService,
+                          withLease: options.withLease,
+                        }),
+                      ),
                   );
                   if ("error" in refreshed) {
                     throw error;
@@ -703,7 +712,7 @@ export function createMemorySearchTool(options: {
                   activeMemory.manager.sync &&
                   (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {
-                  await runWithDefaultDeadline(async () => {
+                  await runWithDefaultDeadline("memory index sync", async () => {
                     // Sync may join shared/background manager maintenance and has
                     // no request-cancellation contract. Bound only this tool's wait.
                     await activeMemory.manager.sync?.({ reason: "search", force: true });
@@ -717,6 +726,7 @@ export function createMemorySearchTool(options: {
                   }
                 }
                 rawResults = await runWithDefaultDeadline(
+                  "session visibility filtering",
                   async () =>
                     await filterMemorySearchHitsBySessionVisibility({
                       cfg,
@@ -791,6 +801,7 @@ export function createMemorySearchTool(options: {
                   "supplement",
                   async () =>
                     await runWithDefaultDeadline(
+                      "supplement search",
                       async () =>
                         await searchMemoryCorpusSupplements({
                           query,
@@ -849,7 +860,10 @@ export function createMemorySearchTool(options: {
             requestedCorpus !== "wiki" &&
             (requestedCorpus !== "all" || unavailablePhase === "memory");
           const message = formatErrorMessage(error);
-          if (shouldRecordCooldown) {
+          if (
+            shouldRecordCooldown &&
+            (requestedCorpus === "all" || !isMemorySearchDeadlineTimeoutMessage(message))
+          ) {
             recordMemorySearchToolCooldown(cooldownKey, message);
           }
           return jsonResult(buildMemorySearchUnavailableResult(message));
