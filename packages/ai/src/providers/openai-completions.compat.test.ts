@@ -173,6 +173,24 @@ describe("OpenAI-compatible completions compatibility", () => {
       expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
+      name: "custom provider on an uppercase Azure host",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        provider: "custom-openai-compatible",
+        baseUrl: "https://TENANT.OPENAI.AZURE.COM/openai/v1",
+      }),
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
+    },
+    {
+      name: "proxy whose query merely contains an Azure fragment",
+      model: createModel({
+        id: "gpt-5.6-luna",
+        provider: "custom-openai-compatible",
+        baseUrl: "https://proxy.example.com/v1?upstream=tenant.openai.azure.com",
+      }),
+      expected: defaultResolvedCompat,
+    },
+    {
       name: "custom proxy",
       model: createModel(),
       expected: defaultResolvedCompat,
