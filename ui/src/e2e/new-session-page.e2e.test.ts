@@ -206,6 +206,82 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("reconciles an image-bearing initial prompt into one user row", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:single-image-prompt";
+    const message = "testing if dual prompts show";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.history"],
+      methodResponses: {
+        "sessions.create": {
+          key: sessionKey,
+          runId: "initial-image-send",
+          runStarted: true,
+          messageSeq: 1,
+        },
+        "chat.history": {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: { type: "url", url: "/persisted-image.png" },
+                },
+                { type: "text", text: message },
+              ],
+              timestamp: Date.now(),
+              __openclaw: {
+                id: "persisted-image-prompt",
+                idempotencyKey: "initial-image-send:user",
+                seq: 1,
+              },
+            },
+          ],
+          sessionId: "single-image-prompt",
+          sessionInfo: { hasActiveRun: true, key: sessionKey, status: "running" },
+        },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const composer = page.locator(".new-session-page__message");
+      await composer.fill(message);
+      await pastePng(composer);
+      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+      await gateway.waitForRequest("chat.history");
+
+      const userRow = page.locator(".chat-group.user");
+      const userImage = userRow.locator("img.chat-message-image");
+      await expect.poll(() => userRow.count()).toBe(1);
+      await expect.poll(() => userImage.count()).toBe(1);
+      await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
+      const initialImageSrc = await userImage.getAttribute("src");
+      await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
+      await expect.poll(() => userRow.textContent()).toContain(message);
+      await expect.poll(() => userRow.textContent()).not.toContain("Attached image");
+
+      await gateway.resolveDeferred("chat.history");
+
+      await expect.poll(() => userRow.count()).toBe(1);
+      await expect.poll(() => userImage.count()).toBe(1);
+      await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
+      await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
+      await expect.poll(() => userRow.textContent()).toContain(message);
+      await expect.poll(() => userRow.textContent()).not.toContain("Attached image");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("waits for pasted image reads before enabling session creation", async () => {
     const context = await browser.newContext({
       locale: "en-US",

@@ -952,6 +952,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             createdAt: submittedAt,
           },
           submissionConnection,
+          { messageId: cloudStart.messageId, messageSeq: cloudStart.messageSeq },
         );
         this.attachmentDraft.clearAfterSubmit(true);
       } else {
@@ -978,6 +979,10 @@ class NewSessionPage extends OpenClawLightDomElement {
               createdAt: submittedAt,
             },
             submissionConnection,
+            {
+              messageId: result.initialRun.messageId,
+              messageSeq: result.initialRun.messageSeq,
+            },
           );
         }
         this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
