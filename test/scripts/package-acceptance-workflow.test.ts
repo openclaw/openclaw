@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -43,9 +44,10 @@ const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
-const RELEASE_MAINTAINER_SKILL = new URL(
-  "../../.agents/skills/release-openclaw-maintainer/SKILL.md",
-  import.meta.url,
+const REPO_ROOT = process.env.GITHUB_WORKSPACE ?? process.cwd();
+const RELEASE_MAINTAINER_SKILL = resolve(
+  REPO_ROOT,
+  ".agents/skills/release-openclaw-maintainer/SKILL.md",
 );
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
