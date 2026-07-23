@@ -743,6 +743,52 @@ describe("official external plugin catalog", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
+  it("retains the accepted snapshot when a signed payload changes at the same sequence", async () => {
+    const acceptedFeed = hostedCatalogFeed({
+      sequence: 10,
+      pluginName: "@openclaw/signed-v10",
+    });
+    const accepted = signedHostedCatalogFeed({ feed: acceptedFeed });
+    const conflicting = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/conflicting-v10" }),
+      privateKeyPem: accepted.privateKeyPem,
+    });
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-equivocation-load-"));
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+    const catalogConfig = signedCatalogConfig(accepted.publicKeyPem);
+
+    try {
+      const initial = await loadHostedCatalog({
+        feedProfile: "acme",
+        catalogConfig,
+        fetchImpl: vi.fn(async () => new Response(accepted.body, { status: 200 })),
+        snapshotStore,
+      });
+      expect(initial.source).toBe("hosted");
+
+      const result = await loadHostedCatalog({
+        feedProfile: "acme",
+        catalogConfig,
+        fetchImpl: vi.fn(async () => new Response(conflicting.body, { status: 200 })),
+        snapshotStore,
+      });
+
+      expect(result.source).toBe("hosted-snapshot");
+      expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v10"]);
+      if (result.source === "hosted-snapshot") {
+        expect(result.error).toContain("payload changed without a sequence increment");
+      }
+      await expect(
+        snapshotStore.read("https://packages.acme.example/openclaw/feed"),
+      ).resolves.toMatchObject({ body: accepted.body });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects malformed feed timestamps before rollback handling", async () => {
     const malformed = signedHostedCatalogFeed({
       feed: {
@@ -899,6 +945,58 @@ describe("official external plugin catalog", () => {
       });
       expect(retainedCurrent.source).toBe("hosted-snapshot");
       expect(retainedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs malformed timestamp snapshots after trusted signing keys rotate", async () => {
+    const malformed = signedHostedCatalogFeed({
+      feed: {
+        ...hostedCatalogFeed({ sequence: 10, pluginName: "@openclaw/malformed-current" }),
+        generatedAt: "not-a-date",
+      },
+      keyId: "acme-root-2026-q2",
+    });
+    const repairedFeed = hostedCatalogFeed({
+      sequence: 10,
+      pluginName: "@openclaw/repaired-current",
+    });
+    const repaired = signedHostedCatalogFeed({
+      feed: repairedFeed,
+      keyId: "acme-root-2026-q3",
+    });
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-rotation-repair-"));
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: malformed.body,
+          monotonic: { sequence: 10, generatedAt: "not-a-date" },
+        }),
+      );
+      await expect(
+        snapshotStore.read("https://packages.acme.example/openclaw/feed"),
+      ).resolves.toMatchObject({
+        monotonic: { mode: "signed-feed", sequence: 10 },
+      });
+
+      const result = await loadHostedCatalog({
+        feedProfile: "acme",
+        catalogConfig: signedCatalogConfig(repaired.publicKeyPem, "acme-root-2026-q3"),
+        fetchImpl: vi.fn(async () => new Response(repaired.body, { status: 200 })),
+        snapshotStore,
+      });
+
+      expect(result.source, JSON.stringify(result)).toBe("hosted");
+      expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/repaired-current"]);
+      await expect(
+        snapshotStore.read("https://packages.acme.example/openclaw/feed"),
+      ).resolves.toMatchObject({ body: repaired.body });
     } finally {
       closeOpenClawStateDatabaseForTest();
       rmSync(stateDir, { recursive: true, force: true });

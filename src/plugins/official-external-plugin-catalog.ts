@@ -205,10 +205,17 @@ export type HostedOfficialExternalPluginCatalogTrustState = {
   verifiedAt: string;
 };
 
+export class HostedCatalogSignedFeedMonotonicityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedCatalogSignedFeedMonotonicityError";
+  }
+}
+
 export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
   mode: "signed-feed";
   sequence: number;
-  generatedAt: string;
+  generatedAt?: string;
 };
 
 export type HostedOfficialExternalPluginCatalogLoadResult =
@@ -1078,7 +1085,9 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
             current,
           })
         ) {
-          throw new Error("hosted catalog signed feed sequence is older than current snapshot");
+          throw new HostedCatalogSignedFeedMonotonicityError(
+            "hosted catalog signed feed sequence is older than current snapshot",
+          );
         }
       }
     }
@@ -1106,10 +1115,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
           : {}),
       })
       .catch((err: unknown) => {
-        if (
-          err instanceof Error &&
-          err.message.includes("hosted catalog signed feed sequence is older")
-        ) {
+        if (err instanceof HostedCatalogSignedFeedMonotonicityError) {
           throw err;
         }
         if (params?.requireSnapshotWrite) {

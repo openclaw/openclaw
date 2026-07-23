@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
+  HostedCatalogSignedFeedMonotonicityError,
   type HostedOfficialExternalPluginCatalogMetadata,
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
@@ -160,7 +161,7 @@ function isMonotonicRollback(params: {
   if (params.candidate.sequence > params.current.sequence) {
     return false;
   }
-  if (params.current.generatedAt === undefined) {
+  if (params.candidate.generatedAt === undefined || params.current.generatedAt === undefined) {
     return false;
   }
   return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
@@ -179,7 +180,9 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
     return;
   }
   if (isMonotonicRollback({ candidate: params.candidate, current })) {
-    throw new Error("hosted catalog signed feed sequence is older than current snapshot");
+    throw new HostedCatalogSignedFeedMonotonicityError(
+      "hosted catalog signed feed sequence is older than current snapshot",
+    );
   }
   if (params.candidate.sequence !== current.sequence || current.generatedAt === undefined) {
     return;
@@ -189,7 +192,9 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
     candidate?.sequence === params.candidate.sequence &&
     candidate.payloadSha256 !== current.payloadSha256
   ) {
-    throw new Error("hosted catalog signed feed payload changed without a sequence increment");
+    throw new HostedCatalogSignedFeedMonotonicityError(
+      "hosted catalog signed feed payload changed without a sequence increment",
+    );
   }
 }
 
@@ -208,11 +213,11 @@ function rowToSnapshot(
   };
   const trust = rowToTrustState(row);
   const storedMonotonic = trust ? readMonotonicStateFromBody(row.body) : undefined;
-  const monotonic = storedMonotonic?.generatedAt
+  const monotonic = storedMonotonic
     ? {
         mode: "signed-feed" as const,
         sequence: storedMonotonic.sequence,
-        generatedAt: storedMonotonic.generatedAt,
+        ...(storedMonotonic.generatedAt ? { generatedAt: storedMonotonic.generatedAt } : {}),
       }
     : undefined;
   return {
