@@ -144,6 +144,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
   let outputFingerprint: OutputFingerprint | undefined;
   let pendingOutputPcm: Buffer = Buffer.alloc(0);
   let outputObservationDeadlineMs = Number.NEGATIVE_INFINITY;
+  let outputQueuedUntilMs = Number.NEGATIVE_INFINITY;
   let outputLoopbackSignalBytes = 0;
   let lastOutputLoopbackAt: string | undefined;
   let lastOutputLoopbackCorrelation: number | undefined;
@@ -161,6 +162,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
     outputFingerprint = undefined;
     pendingOutputPcm = Buffer.alloc(0);
     outputObservationDeadlineMs = Number.NEGATIVE_INFINITY;
+    outputQueuedUntilMs = Number.NEGATIVE_INFINITY;
   };
 
   const refreshFingerprint = (fingerprint: OutputFingerprint) => {
@@ -175,6 +177,16 @@ export function createMeetingOutputLoopbackVerifier(options: {
     for (let end = pendingBytes; end >= fullReferenceBytes; end -= fullReferenceBytes) {
       const candidate = pendingOutputPcm.subarray(end - fullReferenceBytes, end);
       const fingerprint = createOutputFingerprint(candidate, fullReferenceBytes);
+      if (fingerprint) {
+        pendingOutputPcm = Buffer.alloc(0);
+        refreshFingerprint(fingerprint);
+        return;
+      }
+    }
+    const residualBytes = pendingBytes % fullReferenceBytes;
+    if (residualBytes > 0) {
+      const residual = pendingOutputPcm.subarray(0, residualBytes);
+      const fingerprint = createOutputFingerprint(residual, fullReferenceBytes);
       if (fingerprint) {
         pendingOutputPcm = Buffer.alloc(0);
         refreshFingerprint(fingerprint);
@@ -269,9 +281,8 @@ export function createMeetingOutputLoopbackVerifier(options: {
         return;
       }
       const decoded = decodeMeetingAudio(audio, options.audioFormat);
-      if (!hasSignal(readPcm16AudioStats(decoded))) {
-        return;
-      }
+      const durationMs = decoded.byteLength * 0.5 * sampleRate ** -1 * 1_000;
+      outputQueuedUntilMs = Math.max(outputAtMs, outputQueuedUntilMs) + durationMs;
       pendingOutputPcm = Buffer.concat([pendingOutputPcm, decoded]);
       if (!outputFingerprint) {
         consumePendingOutput(true);
@@ -280,7 +291,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
       }
       outputObservationDeadlineMs = Math.max(
         outputObservationDeadlineMs,
-        outputAtMs + OUTPUT_LOOPBACK_OBSERVATION_WINDOW_MS,
+        outputQueuedUntilMs + OUTPUT_LOOPBACK_OBSERVATION_WINDOW_MS,
       );
     },
     getHealth(): MeetingOutputLoopbackHealth {

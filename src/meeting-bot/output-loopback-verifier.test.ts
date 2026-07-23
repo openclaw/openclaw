@@ -149,7 +149,7 @@ describe("meeting output loopback verifier", () => {
     });
     verifier.beginOutput();
     verifier.recordOutput(pcmEnergyFrames(outputEnvelope));
-    nowMs = 5_001;
+    nowMs = 5_801;
     verifier.recordInput(pcmEnergyFrames(outputEnvelope));
 
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
@@ -169,7 +169,11 @@ describe("meeting output loopback verifier", () => {
   });
 
   it("uses a bounded recent reference from one long output buffer", () => {
-    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
+    let nowMs = 0;
+    const verifier = createMeetingOutputLoopbackVerifier({
+      audioFormat: "pcm16-24khz",
+      now: () => nowMs,
+    });
     const longOutput = pcmEnergyFrames(
       Array.from({ length: 600 }, (_, index) => 400 + ((index * 4561) % 10_000)),
     );
@@ -177,9 +181,38 @@ describe("meeting output loopback verifier", () => {
 
     verifier.beginOutput();
     verifier.recordOutput(longOutput);
+    nowMs = 6_000;
     verifier.recordInput(recentOutput);
 
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(recentOutput.byteLength);
+  });
+
+  it("preserves silent spacing between streamed output chunks", () => {
+    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
+    const first = pcmEnergyFrames(outputEnvelope.slice(0, 30));
+    const silence = pcmEnergyFrames(Array(30).fill(0));
+    const second = pcmEnergyFrames(outputEnvelope.slice(30, 60));
+    const expectedRecentReference = Buffer.concat([silence.subarray(4_800), second]);
+
+    verifier.beginOutput();
+    verifier.recordOutput(first);
+    verifier.recordOutput(silence);
+    verifier.recordOutput(second);
+    verifier.recordInput(expectedRecentReference);
+
+    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(expectedRecentReference.byteLength);
+  });
+
+  it("checks a signal prefix shorter than a full trailing-silence window", () => {
+    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
+    const signal = pcmEnergyFrames(outputEnvelope.slice(0, 10));
+    const trailingSilence = pcmEnergyFrames(Array(50).fill(0));
+
+    verifier.beginOutput();
+    verifier.recordOutput(Buffer.concat([signal, trailingSilence]));
+    verifier.recordInput(signal);
+
+    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(signal.byteLength);
   });
 
   it("detects mu-law loopback energy without treating silence as signal", () => {
