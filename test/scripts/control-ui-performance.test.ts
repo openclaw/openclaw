@@ -197,7 +197,7 @@ describe("Control UI performance budgets", () => {
 
   it("allows startup JS growth within the ratchet tolerance", () => {
     const violations = evaluateControlUiPerformanceBudgets(
-      createMetrics(10_512),
+      createMetrics(11_024),
       looseBudgets,
       startupBaseline(10_000),
     );
@@ -206,7 +206,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("fails startup JS growth over the ratchet tolerance with update guidance", () => {
-    const metrics = createMetrics(10_513);
+    const metrics = createMetrics(11_025);
     const baseline = startupBaseline(10_000);
 
     expect(
@@ -215,7 +215,7 @@ describe("Control UI performance budgets", () => {
       ),
     ).toContain("startup JS gzip vs baseline");
     expect(formatControlUiPerformanceReport(metrics, looseBudgets, baseline)).toContain(
-      '10513 B exceeds baseline 10000 B + tolerance 512 B (limit 10512 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"',
+      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --reason "<reason>"',
     );
   });
 

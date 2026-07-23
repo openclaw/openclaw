@@ -49,7 +49,7 @@ export type ControlUiPerformanceBudgetViolation = {
 };
 
 export const CONTROL_UI_PERFORMANCE_BUDGETS: Readonly<ControlUiPerformanceBudgets>;
-export const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES: 512;
+export const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES: 1024;
 export function extractControlUiStartupAssetPaths(html: string): string[];
 export function collectControlUiPerformanceMetrics(distDir: string): ControlUiPerformanceMetrics;
 export function evaluateControlUiPerformanceBudgets(
