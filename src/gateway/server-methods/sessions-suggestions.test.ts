@@ -277,7 +277,7 @@ describe("session suggestion handlers", () => {
         { sessionKey, text: "resolve before audit" },
         client("alice", "Alice"),
       );
-      const audit = createDeferred<void>();
+      const audit = createDeferred<undefined>();
       mocks.appendSharingAudit.mockImplementationOnce(() => audit.promise);
       const broadcast = vi.fn();
       const pending = call(
@@ -294,7 +294,7 @@ describe("session suggestion handlers", () => {
         expect.any(Object),
       );
 
-      audit.resolve();
+      audit.resolve(undefined);
       expect((await pending).responses[0]?.[0]).toBe(true);
     });
   });
