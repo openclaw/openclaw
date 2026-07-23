@@ -6,6 +6,7 @@ import {
   resolveSlackLookupClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
+  SLACK_WEB_TIMEOUT_MS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
@@ -26,7 +27,12 @@ export {
 } from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
-  return new WebClient(token, resolveSlackWebClientOptions(options));
+  // One-shot web client gets a bounded request deadline. The shared resolver
+  // (resolveSlackWebClientOptions) stays timeout-free so Bolt's long-lived
+  // client is unaffected — see monitor/provider.ts createSlackBoltApp.
+  const resolved = resolveSlackWebClientOptions(options);
+  resolved.timeout ??= SLACK_WEB_TIMEOUT_MS;
+  return new WebClient(token, resolved);
 }
 
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {

@@ -135,6 +135,52 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toBe(customRetry);
   });
 
+  it("keeps shared client options timeout-free (Bolt safety)", () => {
+    const options = resolveSlackWebClientOptions();
+
+    expect(options).not.toHaveProperty("timeout");
+  });
+
+  it("applies the default one-shot web client timeout when none is provided", () => {
+    clearProxyEnvForTest();
+    try {
+      createSlackWebClient("xoxb-test");
+
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-test",
+        expect.objectContaining({ timeout: 30_000 }),
+      );
+    } finally {
+      restoreProxyEnvForTest();
+    }
+  });
+
+  it("respects explicit one-shot web client timeout overrides", () => {
+    clearProxyEnvForTest();
+    try {
+      createSlackWebClient("xoxb-test", { timeout: 5000 });
+
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-test",
+        expect.objectContaining({ timeout: 5000 }),
+      );
+    } finally {
+      restoreProxyEnvForTest();
+    }
+  });
+
+  it("applies the default write client timeout when none is provided", () => {
+    const options = resolveSlackWriteClientOptions();
+
+    expect(options.timeout).toBe(60_000);
+  });
+
+  it("respects explicit write client timeout overrides", () => {
+    const options = resolveSlackWriteClientOptions({ timeout: 5000 });
+
+    expect(options.timeout).toBe(5000);
+  });
+
   it("uses SLACK_API_URL as the default Slack Web API root", () => {
     process.env.SLACK_API_URL = " http://127.0.0.1:49152/api/ ";
 
@@ -270,6 +316,7 @@ describe("slack web client config", () => {
       expect(WebClient).toHaveBeenCalledWith("xoxb-test", {
         agent: undefined,
         retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+        timeout: 60_000,
       });
     } finally {
       restoreProxyEnvForTest();
