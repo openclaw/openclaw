@@ -1,0 +1,14 @@
+脚本启动于 2026-07-22 19:22:05+08:00 [COMMAND="node scripts/run-vitest.mjs extensions/qa-lab/src/runtime-parity-body-cancel.evidence.test.ts 2>&1" <not executed on terminal>]
+[test] starting test/vitest/vitest.extension-qa.config.ts
+
+ RUN  v4.1.10 /home/lizeyu/workspace/openclaw/.worktree/pr-109991
+
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  19:22:10
+   Duration  6.61s (transform 4.49s, setup 645ms, import 4.97s, tests 800ms, environment 0ms)
+
+[test] passed 1 Vitest shard in 12.09s
+
+脚本完成于 2026-07-22 19:22:17+08:00 [COMMAND_EXIT_CODE="0"]
