@@ -15,9 +15,12 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
-  GatewayDrainingError,
-  isGatewaySubordinateWorkAdmissionClosed,
+  getActiveGatewayRootWorkCount,
+  isGatewayRestartDraining,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -100,6 +103,40 @@ function parseSseDataLines(text: string): string[] {
     .map((line) => line.trim())
     .filter((line) => line.startsWith("data: "))
     .map((line) => line.slice("data: ".length));
+}
+
+/**
+ * Holds mocked agent work until the streaming HTTP handler has returned.
+ * SSE headers reach the client before the handler unwinds, so one extra
+ * macrotask turn guarantees the request's root-work lease was released.
+ */
+function createPostHandlerGate() {
+  let open = () => {};
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return {
+    opened,
+    openAfterHandlerReturned: async () => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      open();
+    },
+  };
+}
+
+async function waitForRootWorkCount(expected: number): Promise<number> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const active = getActiveGatewayRootWorkCount();
+    if (active === expected) {
+      return active;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+  return getActiveGatewayRootWorkCount();
 }
 
 type FirstAgentCommandOptions = {
@@ -2335,17 +2372,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
-  it("keeps streaming agent work admitted after the HTTP handler returns", async () => {
+  it("streams the answer when the agent queues lane work after the handler returned", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
+    const gate = createPostHandlerGate();
     agentCommand.mockImplementationOnce((async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      if (isGatewaySubordinateWorkAdmissionClosed()) {
-        throw new GatewayDrainingError();
-      }
-      return { payloads: [{ text: "hello" }] };
+      await gate.opened;
+      // The command queue refuses subordinate work whose root was already
+      // released, which is how a detached streaming continuation used to fail.
+      const lane = await enqueueCommandInLane("openai-http-admission-probe", async () => "queued");
+      return { payloads: [{ text: `answer ${lane}` }] };
     }) as never);
 
     const res = await postChatCompletions(port, {
@@ -2353,12 +2389,62 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       model: "openclaw",
       messages: [{ role: "user", content: "hi" }],
     });
+    await gate.openAfterHandlerReturned();
 
     expect(res.status).toBe(200);
-    const data = parseSseDataLines(await res.text());
-    expect(data.at(-1)).toBe("[DONE]");
-    expect(data.join("\n")).toContain("hello");
-    expect(data.join("\n")).not.toContain("Error: internal error");
+    const streamed = parseSseDataLines(await res.text()).join("\n");
+    expect(streamed).toContain("answer queued");
+    expect(streamed).not.toContain("Error: internal error");
+  });
+
+  it("keeps one root-work lease alive from handler return to stream end", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    const gate = createPostHandlerGate();
+    let leasesDuringRun = -1;
+    agentCommand.mockImplementationOnce((async () => {
+      await gate.opened;
+      // Counted without `excludeCurrent`: the lease being proven is the one the
+      // streaming continuation owns right here, so it must be part of the count.
+      leasesDuringRun = getActiveGatewayRootWorkCount();
+      return { payloads: [{ text: "late answer" }] };
+    }) as never);
+
+    const idleLeases = getActiveGatewayRootWorkCount();
+    const res = await postChatCompletions(port, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await gate.openAfterHandlerReturned();
+    await res.text();
+
+    expect(leasesDuringRun).toBeGreaterThan(idleLeases);
+    // A leaked lease would stall a later restart drain forever.
+    await expect(waitForRootWorkCount(idleLeases)).resolves.toBe(idleLeases);
+  });
+
+  it("refuses streaming chat completions while the gateway drains for restart", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    markGatewayRestartDraining();
+    try {
+      expect(isGatewayRestartDraining()).toBe(true);
+      const res = await postChatCompletions(port, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("1");
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe("gateway_unavailable");
+      expect(agentCommand).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+    expect(isGatewayRestartDraining()).toBe(false);
   });
 
   it("buffers replaceable assistant events for streaming chat completions", async () => {
