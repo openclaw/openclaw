@@ -146,10 +146,14 @@ export function createPersistCronSessionEntry(params: {
         // merge into the claim instead of aborting it. Exact ownership-field
         // equality alone spuriously rejected these on large, busy stores where
         // such an update lands between resolve and this first persist.
-        const initialLifecycleRevision = params.cronSession.initialSessionEntry?.lifecycleRevision;
+        const initialEntry = params.cronSession.initialSessionEntry;
+        const initialLifecycleRevision = initialEntry?.lifecycleRevision;
         const currentContinuesInitialGeneration =
+          currentEntry !== undefined &&
+          initialEntry !== undefined &&
           initialLifecycleRevision !== undefined &&
-          currentEntry?.lifecycleRevision === initialLifecycleRevision;
+          currentEntry.lifecycleRevision === initialLifecycleRevision &&
+          currentEntry.sessionId === initialEntry.sessionId;
         const canClaimInitialRevision = params.cronSession.initialSessionEntry
           ? !currentRevisionActive &&
             (initialEntryMatchesOwnershipFields || currentContinuesInitialGeneration)
