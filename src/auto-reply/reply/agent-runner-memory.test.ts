@@ -9,10 +9,6 @@ import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/r
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
-  registerIncognitoSession,
-  unregisterIncognitoSession,
-} from "../../config/sessions/incognito-session-registry.js";
-import {
   loadSessionEntry,
   readTranscriptStatsSync,
   upsertSessionEntry,
@@ -1221,10 +1217,8 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
   });
 
-  it("skips memory flush for a deleted incognito key tombstone", async () => {
-    const sessionKey = "agent:main:dashboard:deleted-incognito-memory";
-    registerIncognitoSession(sessionKey, "main");
-    unregisterIncognitoSession(sessionKey);
+  it("skips memory flush for an incognito key after process-local state is gone", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-deleted-memory";
     const sessionEntry: SessionEntry = {
       sessionId: "rematerialized-session",
       updatedAt: Date.now(),

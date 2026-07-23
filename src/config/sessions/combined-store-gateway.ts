@@ -2,15 +2,14 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   canonicalizeSpawnedByForAgent,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
+import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { listIncognitoSessionsForAgent } from "./incognito-session-registry.js";
 import { resolveStorePath } from "./paths.js";
 import { listSessionEntries, listSessionEntriesReadOnly } from "./session-accessor.js";
 import {
@@ -92,6 +91,41 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+function mergeOpenIncognitoStores(params: {
+  cfg: OpenClawConfig;
+  combined: Record<string, SessionEntry>;
+  agentId?: string;
+}): string[] {
+  const storePaths: string[] = [];
+  for (const target of listOpenIncognitoAgentDatabases()) {
+    if (params.agentId && target.agentId !== params.agentId) {
+      continue;
+    }
+    const store = loadIncognitoGatewayStoreEntries({
+      agentId: target.agentId,
+      storePath: target.storePath,
+    });
+    let merged = false;
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      if (!isIncognitoSessionKey(sessionKey) || entry.incognito !== true) {
+        continue;
+      }
+      mergeSessionEntryIntoCombined({
+        cfg: params.cfg,
+        combined: params.combined,
+        entry,
+        agentId: target.agentId,
+        canonicalKey: sessionKey,
+      });
+      merged = true;
+    }
+    if (merged) {
+      storePaths.push(target.storePath);
+    }
+  }
+  return storePaths;
+}
+
 /** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
@@ -121,32 +155,15 @@ export function loadCombinedSessionStoreForGateway(
         canonicalKey,
       });
     }
-    const incognitoAgentIds = opts.agentId ? [normalizeAgentId(opts.agentId)] : listAgentIds(cfg);
-    let hasIncognitoSessions = false;
-    for (const agentId of incognitoAgentIds) {
-      const incognitoSessionKeys = listIncognitoSessionsForAgent(agentId);
-      if (incognitoSessionKeys.length === 0) {
-        continue;
-      }
-      hasIncognitoSessions = true;
-      const incognitoStore = loadIncognitoGatewayStoreEntries({
-        agentId,
-        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
-      });
-      for (const sessionKey of incognitoSessionKeys) {
-        const entry = incognitoStore[sessionKey];
-        if (entry) {
-          mergeSessionEntryIntoCombined({
-            cfg,
-            combined,
-            entry,
-            agentId,
-            canonicalKey: sessionKey,
-          });
-        }
-      }
-    }
-    return { storePath: hasIncognitoSessions ? "(multiple)" : storePath, store: combined };
+    const incognitoStorePaths = mergeOpenIncognitoStores({
+      cfg,
+      combined,
+      ...(opts.agentId ? { agentId: normalizeAgentId(opts.agentId) } : {}),
+    });
+    return {
+      storePath: incognitoStorePaths.length > 0 ? "(multiple)" : storePath,
+      store: combined,
+    };
   }
 
   const requestedAgentId =
@@ -179,41 +196,13 @@ export function loadCombinedSessionStoreForGateway(
     }
   }
 
-  const incognitoTargets = (requestedAgentId ? [requestedAgentId] : listAgentIds(cfg)).flatMap(
-    (agentId) => {
-      const sessionKeys = listIncognitoSessionsForAgent(agentId);
-      return sessionKeys.length > 0
-        ? [
-            {
-              agentId,
-              sessionKeys,
-              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
-            },
-          ]
-        : [];
-    },
-  );
-  for (const target of incognitoTargets) {
-    const store = loadIncognitoGatewayStoreEntries(target);
-    for (const sessionKey of target.sessionKeys) {
-      const entry = store[sessionKey];
-      if (!entry) {
-        continue;
-      }
-      mergeSessionEntryIntoCombined({
-        cfg,
-        combined,
-        entry,
-        agentId: target.agentId,
-        canonicalKey: sessionKey,
-      });
-    }
-  }
+  const incognitoStorePaths = mergeOpenIncognitoStores({
+    cfg,
+    combined,
+    ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+  });
 
-  const allStorePaths = [
-    ...targets.map((target) => target.storePath),
-    ...incognitoTargets.map((target) => target.storePath),
-  ];
+  const allStorePaths = [...targets.map((target) => target.storePath), ...incognitoStorePaths];
   const storePath =
     allStorePaths.length === 1
       ? expectDefined(allStorePaths[0], "store path at 0")

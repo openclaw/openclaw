@@ -12,9 +12,9 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { initSessionState } from "../auto-reply/reply/session.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
-import { listIncognitoSessionsForAgent } from "../config/sessions/incognito-session-registry.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -22,6 +22,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
@@ -31,10 +32,12 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommand,
   agentDiscoveryMock,
+  dispatchInboundMessageMock,
   embeddedRunMock,
   rpcReq,
   testState,
@@ -64,12 +67,12 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     }>("sessions.create", { agentId: "main", incognito: true });
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "incognito session key");
+    expect(key).toMatch(/^agent:main:dashboard:incognito-/u);
     const entry = created.payload?.entry;
     expect(entry?.incognito).toBe(true);
     expect(parseSqliteSessionFileMarker(entry?.sessionFile)?.storePath).toBe(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     );
-    expect(listIncognitoSessionsForAgent("main")).toContain(key);
     const openedIncognitoDatabase = openOpenClawAgentDatabase({
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
@@ -108,7 +111,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: "incognito is immutable and requires a new session key",
+        message: "incognito-shaped session keys require incognito: true",
       },
     });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.sessionId).toBe(
@@ -163,7 +166,6 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
     const reset = await directSessionReq<{ deleted?: boolean }>("sessions.reset", { key });
     expect(reset.payload).toMatchObject({ deleted: true });
-    expect(listIncognitoSessionsForAgent("main")).not.toContain(key);
     expect(resolveGatewaySessionStoreTarget({ cfg: getRuntimeConfig(), key }).storePath).toBe(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     );
@@ -208,11 +210,43 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       ok: false,
       error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
     });
-    const durableCollisionKey = "agent:main:dashboard:durable-collision";
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey: durableCollisionKey, storePath },
-      { sessionId: "durable-collision", updatedAt: Date.now() },
-    );
+    const rejectedSubagentKey = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key: "agent:main:subagent:incognito-client-key",
+      incognito: true,
+    });
+    expect(rejectedSubagentKey).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
+    });
+    const rejectedAgentMismatch = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key: "agent:work:dashboard:incognito-client-key",
+      incognito: true,
+    });
+    expect(rejectedAgentMismatch).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create key agent (work) does not match agentId (main)",
+      },
+    });
+    const durableCollisionKey = "agent:main:dashboard:incognito-durable-collision";
+    persistentDatabase.db
+      .prepare(
+        "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("durable-collision", durableCollisionKey, "conversation", Date.now(), Date.now());
+    persistentDatabase.db
+      .prepare(
+        "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        durableCollisionKey,
+        "durable-collision",
+        JSON.stringify({ sessionId: "durable-collision", updatedAt: Date.now() }),
+        Date.now(),
+      );
     const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
       agentId: "main",
       key: durableCollisionKey,
@@ -226,6 +260,110 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       },
     });
   } finally {
+    closeOpenClawAgentDatabasesForTest();
+  }
+});
+
+test("incognito sessions survive non-default-agent webchat reply initialization", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const { ws } = await openClient({
+    browserOrigin: "http://127.0.0.1",
+    client: {
+      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      version: "dev",
+      platform: "web",
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    },
+  });
+  try {
+    const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
+      agentId: "work",
+      incognito: true,
+    });
+    expect(created.ok).toBe(true);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "incognito webchat key");
+    const sessionId = requireNonEmptyString(created.payload?.sessionId, "incognito webchat id");
+    let resolveDispatch!: (value: Awaited<ReturnType<typeof initSessionState>>) => void;
+    let rejectDispatch!: (error: unknown) => void;
+    const dispatched = new Promise<Awaited<ReturnType<typeof initSessionState>>>(
+      (resolve, reject) => {
+        resolveDispatch = resolve;
+        rejectDispatch = reject;
+      },
+    );
+    dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
+      const input = params as {
+        cfg: OpenClawConfig;
+        ctx: Parameters<typeof initSessionState>[0]["ctx"];
+        replyOptions?: {
+          expectedExistingSessionId?: string;
+          pinExpectedExistingSession?: boolean;
+          requestedSessionId?: string;
+          resumeRequestedSession?: boolean;
+        };
+      };
+      try {
+        resolveDispatch(
+          await initSessionState({
+            cfg: input.cfg,
+            ctx: input.ctx,
+            commandAuthorized: true,
+            expectedExistingSessionId: input.replyOptions?.expectedExistingSessionId,
+            pinExpectedExistingSession: input.replyOptions?.pinExpectedExistingSession,
+            requestedSessionId: input.replyOptions?.requestedSessionId,
+            resumeRequestedSession: input.replyOptions?.resumeRequestedSession,
+          }),
+        );
+      } catch (error) {
+        rejectDispatch(error);
+      }
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+      };
+    });
+
+    const sent = await rpcReq(ws, "chat.send", {
+      sessionKey,
+      sessionId,
+      message: "hello from incognito webchat",
+      idempotencyKey: "incognito-webchat-send",
+    });
+    expect(sent.ok).toBe(true);
+    await expect(dispatched).resolves.toMatchObject({
+      sessionId,
+      sessionKey,
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    closeOpenClawAgentDatabasesForTest();
+    dispatchInboundMessageMock.mockClear();
+    const stale = await rpcReq(ws, "chat.send", {
+      sessionKey,
+      sessionId,
+      message: "this must not persist after restart",
+      idempotencyKey: "stale-incognito-webchat-send",
+    });
+    expect(stale.ok).toBe(false);
+    expect(stale.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: `Incognito session "${sessionKey}" was not found.`,
+    });
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+    const persistentDatabase = openOpenClawAgentDatabase({
+      agentId: "work",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "work" }).path,
+    });
+    expect(
+      persistentDatabase.db
+        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .get(sessionKey),
+    ).toBeUndefined();
+  } finally {
+    ws.close();
     closeOpenClawAgentDatabasesForTest();
   }
 });

@@ -75,7 +75,10 @@ openclaw-new-session-page {
 }
 
 .new-session-page__incognito--active {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
   color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent);
+  font-weight: 650;
 }
 
 .new-session-page__incognito:disabled {

@@ -38,10 +38,6 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
-import {
-  lookupIncognitoSessionAgentId,
-  unregisterIncognitoSession,
-} from "../config/sessions/incognito-session-registry.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -63,6 +59,7 @@ import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -1197,9 +1194,7 @@ export async function performGatewaySessionReset(params: {
           })
         : undefined;
 
-      const incognito =
-        entry?.incognito === true ||
-        lookupIncognitoSessionAgentId(target.canonicalKey) !== undefined;
+      const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
       if (incognito) {
         if (!entry) {
           return {
@@ -1238,7 +1233,6 @@ export async function performGatewaySessionReset(params: {
             ),
           };
         }
-        unregisterIncognitoSession(target.canonicalKey);
         handleSessionStateSessionDeleted(target.canonicalKey, agentId);
         emitGatewaySessionEndPluginHook({
           cfg,

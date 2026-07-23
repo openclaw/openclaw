@@ -1,7 +1,6 @@
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { getRuntimeConfig } from "../io.js";
-import { lookupIncognitoSessionAgentId } from "./incognito-session-registry.js";
 import { resolveStorePath } from "./paths.js";
 
 type SessionStorePathScope = {
@@ -12,12 +11,9 @@ type SessionStorePathScope = {
 };
 
 export function resolveSessionStorePathForScope(scope: SessionStorePathScope): string {
-  const incognitoAgentId = scope.sessionKey
-    ? lookupIncognitoSessionAgentId(scope.sessionKey)
-    : undefined;
-  if (incognitoAgentId) {
+  if (isIncognitoSessionKey(scope.sessionKey)) {
     return resolveIncognitoOpenClawAgentSqlitePath({
-      agentId: incognitoAgentId,
+      agentId: resolveAgentIdFromSessionKey(scope.sessionKey),
       env: scope.env,
     });
   }

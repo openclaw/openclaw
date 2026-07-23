@@ -37,6 +37,7 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
@@ -307,7 +308,11 @@ function resolveInitSessionStateAttemptContext(
     isSystemEvent,
     retargetedSession: sessionCtxForState !== ctx,
     sessionCtxForState,
-    storePath: resolveStorePath(cfg.session?.store, { agentId }),
+    storePath: resolveSessionStorePathForScope({
+      agentId,
+      sessionKey: sessionCtxForState.SessionKey,
+      storePath: resolveStorePath(cfg.session?.store, { agentId }),
+    }),
   };
 }
 

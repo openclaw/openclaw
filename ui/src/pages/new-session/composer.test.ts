@@ -73,6 +73,14 @@ describe("new-session composer attachment drops", () => {
     expect(onToggleIncognito).toHaveBeenCalledOnce();
   });
 
+  it("renders a distinct active state when incognito is selected", () => {
+    const { composer } = renderComposer({ incognito: true });
+    const toggle = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    expect(toggle?.classList.contains("new-session-page__incognito--active")).toBe(true);
+  });
+
   it("adds a dropped file through the shared attachment handling", async () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");

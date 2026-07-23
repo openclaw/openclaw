@@ -1,4 +1,4 @@
-import { lookupIncognitoSessionAgentId } from "../config/sessions/incognito-session-registry.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 export const INCOGNITO_SYSTEM_PROMPT =
@@ -11,7 +11,7 @@ export function appendIncognitoSystemPrompt(params: {
   storePath?: string;
 }): string | undefined {
   const incognito =
-    (params.sessionKey && lookupIncognitoSessionAgentId(params.sessionKey) !== undefined) ||
+    isIncognitoSessionKey(params.sessionKey) ||
     (params.storePath &&
       isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId }));
   if (!incognito) {

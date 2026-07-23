@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
@@ -30,6 +32,14 @@ describe("incognito agent database", () => {
     const reopened = openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
 
     expect(reopened).toBe(first);
+    expect(listOpenIncognitoAgentDatabases()).toEqual([{ agentId: "main", storePath: sentinel }]);
+    expect(
+      withOpenClawAgentDatabaseReadOnly((database) => database.db === first.db, {
+        agentId: "main",
+        env,
+        path: sentinel,
+      }),
+    ).toEqual({ found: true, value: true });
     expect(
       first.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'sessions'")

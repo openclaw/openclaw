@@ -13,12 +13,9 @@ import {
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
-import {
-  lookupIncognitoSessionAgentId,
-  unregisterIncognitoSession,
-} from "../../config/sessions/incognito-session-registry.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import {
@@ -345,8 +342,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
         }
         const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
         const incognito =
-          postCleanupEntry?.incognito === true ||
-          lookupIncognitoSessionAgentId(target.canonicalKey) !== undefined;
+          postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
         const deletionParams = {
           agentId: target.agentId,
           archiveTranscript: incognito ? false : deleteTranscript,
@@ -380,12 +376,6 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (result.deleted) {
-          if (
-            result.deletedEntry?.incognito === true ||
-            lookupIncognitoSessionAgentId(target.canonicalKey) !== undefined
-          ) {
-            unregisterIncognitoSession(target.canonicalKey);
-          }
           emitGatewaySessionEndPluginHook({
             cfg,
             sessionKey: target.canonicalKey ?? key,

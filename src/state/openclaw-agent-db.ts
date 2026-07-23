@@ -87,6 +87,7 @@ const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
 const agentDbLog = createSubsystemLogger("state/agent-db");
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
+const incognitoDatabases = new WeakSet<OpenClawAgentDatabase>();
 const cachedDatabaseOpenFailures = new Map<string, unknown>();
 const cachedDatabaseLeases = new Map<
   string,
@@ -206,6 +207,7 @@ export function openOpenClawAgentDatabase(
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
     const database = { agentId, db, path: pathname, walMaintenance };
+    incognitoDatabases.add(database);
     unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
     cachedDatabases.set(pathname, database);
     return database;
@@ -494,6 +496,17 @@ function evictLruAgentDatabaseHandles(): void {
 export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
   const database = cachedDatabases.get(path.resolve(pathname));
   return database?.db.isOpen === true;
+}
+
+/** Lists process-held incognito databases without opening new sentinel handles. */
+export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; storePath: string }> {
+  return [...cachedDatabases.values()]
+    .filter((database) => database.db.isOpen && incognitoDatabases.has(database))
+    .map((database) => ({ agentId: database.agentId, storePath: database.path }))
+    .toSorted(
+      (left, right) =>
+        left.agentId.localeCompare(right.agentId) || left.storePath.localeCompare(right.storePath),
+    );
 }
 
 /** Close one cached agent database identified by its exact resolved pathname. */

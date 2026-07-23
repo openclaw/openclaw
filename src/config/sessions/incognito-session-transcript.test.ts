@@ -4,16 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import {
-  registerIncognitoSession,
-  unregisterIncognitoSession,
-} from "./incognito-session-registry.js";
 import { createSessionEntryWithTranscript, loadSessionEntry } from "./session-accessor.js";
 
 const sessionKey = "agent:main:dashboard:incognito-round-trip";
 
 afterEach(() => {
-  unregisterIncognitoSession(sessionKey);
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -23,7 +18,6 @@ describe("incognito transcript access", () => {
       fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "incognito-turns-")),
     );
     try {
-      registerIncognitoSession(sessionKey, "main");
       const created = await createSessionEntryWithTranscript(
         { agentId: "main", sessionKey },
         () => ({

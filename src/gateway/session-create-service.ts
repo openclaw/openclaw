@@ -28,13 +28,11 @@ import {
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  lookupIncognitoSessionAgentId,
-  registerIncognitoSession,
-} from "../config/sessions/incognito-session-registry.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
+  listSessionEntriesReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -50,6 +48,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -68,7 +67,6 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
@@ -229,8 +227,12 @@ export function resolveRequestedSessionAgentId(
   };
 }
 
-export function buildDashboardSessionKey(agentId: string): string {
-  return `agent:${agentId}:dashboard:${randomUUID()}`;
+export function buildDashboardSessionKey(
+  agentId: string,
+  options: { incognito?: boolean } = {},
+): string {
+  const opaqueId = `${options.incognito ? "incognito-" : ""}${randomUUID()}`;
+  return `agent:${agentId}:dashboard:${opaqueId}`;
 }
 
 type CreatedGatewaySession = {
@@ -374,27 +376,34 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
-  if (
-    explicitTargetKey &&
-    params.incognito !== true &&
-    lookupIncognitoSessionAgentId(explicitTargetKey) !== undefined
-  ) {
+  const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
+  const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
+  const explicitDashboardIncognito =
+    explicitIncognito &&
+    explicitTargetParts?.agentId === agentId &&
+    explicitTargetParts.rest.startsWith("dashboard:");
+  if (explicitIncognito && params.incognito !== true) {
     return {
       ok: false,
       error: errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "incognito is immutable and requires a new session key",
+        "incognito-shaped session keys require incognito: true",
       ),
     };
   }
   if (params.incognito === true && explicitTargetKey) {
-    if (!explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)) {
+    if (!explicitDashboardIncognito) {
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
       };
     }
-    if (loadSessionEntryReadOnly(explicitTargetKey).entry) {
+    const durableStorePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const durableEntryExists = listSessionEntriesReadOnly({
+      agentId,
+      storePath: durableStorePath,
+    }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
+    if (durableEntryExists || loadSessionEntryReadOnly(explicitTargetKey).entry) {
       return {
         ok: false,
         error: errorShape(
@@ -475,18 +484,6 @@ export async function createGatewaySession(params: {
       };
     }
   }
-  const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId);
-  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Isolated DM scopes lack the shared watcher; global scope lacks a per-agent main.
-  const dashboardParentSessionKey =
-    !parentSessionKey &&
-    params.fork !== true &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global" &&
-    targetSessionKey !== agentMainSessionKey
-      ? agentMainSessionKey
-      : undefined;
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
@@ -537,9 +534,7 @@ export async function createGatewaySession(params: {
     });
   }
   const parentIncognito =
-    parentSessionEntry?.incognito === true ||
-    (canonicalParentSessionKey !== undefined &&
-      lookupIncognitoSessionAgentId(canonicalParentSessionKey) !== undefined);
+    parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
   if (parentIncognito && explicitTargetKey) {
     return {
       ok: false,
@@ -561,6 +556,20 @@ export async function createGatewaySession(params: {
       ),
     };
   }
+
+  const incognito = params.incognito === true || parentIncognito;
+  const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
+  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  // Dashboard sessions parent to main for flow-up notices and sidebar threads.
+  // Isolated DM scopes lack the shared watcher; global scope lacks a per-agent main.
+  const dashboardParentSessionKey =
+    !parentSessionKey &&
+    params.fork !== true &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    params.cfg.session?.scope !== "global" &&
+    targetSessionKey !== agentMainSessionKey
+      ? agentMainSessionKey
+      : undefined;
 
   if (
     canonicalParentSessionKey &&
@@ -700,19 +709,7 @@ export async function createGatewaySession(params: {
     }
 
     const key = targetSessionKey;
-    const incognito =
-      params.incognito === true ||
-      currentParentSessionEntry?.incognito === true ||
-      (canonicalParentSessionKey !== undefined &&
-        lookupIncognitoSessionAgentId(canonicalParentSessionKey) !== undefined);
-    const target = incognito
-      ? {
-          agentId,
-          canonicalKey: key,
-          storeKeys: [key],
-          storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
-        }
-      : resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
+    const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
         agentId: target.agentId,
@@ -988,10 +985,6 @@ export async function createGatewaySession(params: {
             : created.error,
       };
     }
-    if (incognito) {
-      registerIncognitoSession(target.canonicalKey, target.agentId);
-    }
-
     createdContext = {
       key: target.canonicalKey,
       agentId: target.agentId,

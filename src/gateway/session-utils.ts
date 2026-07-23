@@ -92,7 +92,6 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
-import { lookupIncognitoSessionAgentId } from "../config/sessions/incognito-session-registry.js";
 import {
   listSessionEntries as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
@@ -103,6 +102,7 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
+  isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -1548,14 +1548,13 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     (isAgentScopedSentinelSessionKey(canonicalKey) || !parseAgentSessionKey(key))
       ? normalizeAgentId(requestedAgentId)
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
-  const incognitoAgentId = lookupIncognitoSessionAgentId(canonicalKey);
-  if (incognitoAgentId) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId });
-    const store = loadGatewaySessionLookupStore(storePath, params.clone, incognitoAgentId, {
+  if (isIncognitoSessionKey(canonicalKey)) {
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+    const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
       readOnly: false,
     });
     return {
-      agentId: incognitoAgentId,
+      agentId,
       storePath,
       canonicalKey,
       storeKeys: [canonicalKey],
