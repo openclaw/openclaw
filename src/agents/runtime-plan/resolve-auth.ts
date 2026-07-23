@@ -311,6 +311,7 @@ export async function resolvePreparedRuntimeModelAuth(
     : undefined;
 
   let firstError: unknown;
+  let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const profileId of currentCandidates) {
     try {
       const auth = await getApiKeyForModel({
@@ -327,14 +328,17 @@ export async function resolvePreparedRuntimeModelAuth(
         plan: applyResolvedAuthToPlan({ plan, auth, candidates: currentCandidates }),
       };
     } catch (error) {
-      if (
-        error instanceof SecretSurfaceUnavailableError ||
-        error instanceof OAuthRefreshFailureError
-      ) {
+      if (error instanceof SecretSurfaceUnavailableError) {
         throw error;
+      }
+      if (!refreshFailure && error instanceof OAuthRefreshFailureError) {
+        refreshFailure = error;
       }
       firstError ??= error;
     }
+  }
+  if (refreshFailure) {
+    throw refreshFailure;
   }
   throw toErrorObject(firstError, "Prepared runtime auth candidates could not be resolved.");
 }

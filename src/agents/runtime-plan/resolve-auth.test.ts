@@ -19,6 +19,13 @@ vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
   }),
 }));
 
+vi.mock("../../llm/oauth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../llm/oauth.js")>()),
+  getOAuthApiKey: vi.fn(async () => {
+    throw new Error("invalid_grant");
+  }),
+}));
+
 const platformModel = {
   id: "gpt-5.5",
   name: "gpt-5.5",
@@ -370,6 +377,55 @@ describe("resolvePreparedRuntimeModelAuth", () => {
         forwardedAuthProfileId: "openai:backup",
         forwardedAuthProfileCandidateIds: ["openai:backup"],
         selectedAuthMode: "token",
+      },
+    });
+  });
+
+  it("falls through from a stale OAuth automatic candidate to a prepared backup profile", async () => {
+    const store = authStore({
+      "openai:expired": {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+      },
+      "openai:backup": {
+        type: "api_key",
+        provider: "openai",
+        key: "backup-key",
+      },
+    });
+
+    await expect(
+      resolvePreparedRuntimeModelAuth({
+        plan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          forwardedAuthProfileId: "openai:expired",
+          forwardedAuthProfileSource: "auto",
+          forwardedAuthProfileCandidateIds: ["openai:expired", "openai:backup"],
+          selectedAuthMode: "api_key",
+          modelRoute: {
+            provider: "openai",
+            modelId: "gpt-5.5",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        },
+        model: platformModel,
+        cfg: {},
+        store,
+        secretSentinels: true,
+      }),
+    ).resolves.toMatchObject({
+      auth: { profileId: "openai:backup", mode: "api-key" },
+      plan: {
+        forwardedAuthProfileId: "openai:backup",
+        forwardedAuthProfileCandidateIds: ["openai:backup"],
+        selectedAuthMode: "api-key",
       },
     });
   });
