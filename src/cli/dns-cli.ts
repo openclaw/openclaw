@@ -15,12 +15,35 @@ import {
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 
-type RunOpts = { allowFailure?: boolean; inherit?: boolean };
+type RunOpts = {
+  allowFailure?: boolean;
+  inherit?: boolean;
+  // Override the default short probe timeout. Use this for commands that can
+  // legitimately run long (e.g. `brew install` may trigger an auto-update or
+  // build from source). Default: DNS_SPAWN_SHORT_TIMEOUT_MS.
+  timeoutMs?: number;
+};
 
-function run(cmd: string, args: string[], opts?: RunOpts): string {
+// Bound every subprocess the DNS helper spawns so a stalled brew/sudo/tee
+// (for example, sudo waiting on an unreachable pam module, or brew blocked
+// on a hung Homebrew update) cannot hang `openclaw dns setup` forever.
+//
+// Two budgets:
+//   * Short (30s): covers `brew --prefix`, `brew list`, `sudo mkdir`,
+//     `sudo tee` — all local, fast commands where 30s is plenty.
+//   * Long (5min): covers `brew install` and `sudo brew services restart`,
+//     which can legitimately take longer on a cold cache, on a slow
+//     network, or when Homebrew triggers an auto-update.
+// SIGKILL matches the bounded macOS probe pattern in src/infra/system-presence.ts.
+export const DNS_SPAWN_SHORT_TIMEOUT_MS = 30_000;
+export const DNS_SPAWN_LONG_TIMEOUT_MS = 5 * 60_000;
+
+export function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
+    timeout: opts?.timeoutMs ?? DNS_SPAWN_SHORT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (res.error) {
     throw res.error;
@@ -51,6 +74,8 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     input: content,
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
+    timeout: DNS_SPAWN_SHORT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (res.error) {
     throw res.error;
@@ -205,6 +230,11 @@ export function registerDnsCli(program: Command) {
       run("brew", ["install", "coredns"], {
         inherit: true,
         allowFailure: true,
+        // `brew install` can legitimately run long: it may trigger an
+        // auto-update, fetch bottles over a slow network, or fall back to
+        // building from source. Use the long budget so we don't kill a
+        // legitimate install.
+        timeoutMs: DNS_SPAWN_LONG_TIMEOUT_MS,
       });
 
       mkdirSudoIfNeeded(confDir);
@@ -256,6 +286,9 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log(theme.heading("Starting CoreDNS (sudo)…"));
       run("sudo", ["brew", "services", "restart", "coredns"], {
         inherit: true,
+        // `brew services restart` can trigger the same auto-update /
+        // slow-network paths as `brew install`, so use the long budget.
+        timeoutMs: DNS_SPAWN_LONG_TIMEOUT_MS,
       });
 
       if (!cfg.discovery?.wideArea?.domain?.trim()) {
