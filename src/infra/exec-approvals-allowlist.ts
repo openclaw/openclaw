@@ -552,7 +552,9 @@ function resolveSegmentAllowlistMatch(params: {
       : undefined;
   const shellPositionalArgvMatch = shellPositionalArgvCandidate
     ? matchAllowlist(
-        params.context.allowlist,
+        shellPositionalArgvCandidate.durable
+          ? params.context.allowlist
+          : params.context.allowlist.filter((entry) => entry.argPattern === undefined),
         {
           rawExecutable: shellPositionalArgvCandidate.path,
           resolvedPath: shellPositionalArgvCandidate.path,
@@ -1076,7 +1078,30 @@ function resolveShellWrapperScriptCandidatePath(params: {
 type ShellWrapperPositionalArgvCandidate = {
   path: string;
   argv: string[];
+  durable: boolean;
 };
+
+function isDurableShellPositionalCarrierCommand(command: string, tailArgv: string[]): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  if (tailArgv.length === 0) {
+    return new RegExp(
+      `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}$`,
+      "u",
+    ).test(trimmed);
+  }
+
+  const positionalAll = String.raw`(?:\$(?:@|\{@\})|"\$(?:@|\{@\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}${shellWhitespace}${positionalAll}$`,
+    "u",
+  ).test(trimmed);
+}
 
 function resolveShellWrapperPositionalArgvCandidate(params: {
   segment: ExecCommandSegment;
@@ -1108,13 +1133,19 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
     return undefined;
   }
 
-  const carriedExecutable = argv
+  const carriedOffset = argv
     .slice(inlineMatch.valueTokenIndex + 1)
-    .map((token) => token.trim())
-    .find((token) => token.length > 0);
+    .findIndex((token) => token.trim().length > 0);
+  if (carriedOffset === -1) {
+    return undefined;
+  }
+  const carriedIndex = inlineMatch.valueTokenIndex + 1 + carriedOffset;
+  const carriedExecutable = argv[carriedIndex]?.trim() ?? "";
   if (!carriedExecutable) {
     return undefined;
   }
+  const carriedTailArgv = argv.slice(carriedIndex + 1);
+  const durable = isDurableShellPositionalCarrierCommand(inlineMatch.command, carriedTailArgv);
 
   const carriedName = normalizeExecutableToken(carriedExecutable);
   if (isDispatchWrapperExecutable(carriedName) || isShellWrapperExecutable(carriedName)) {
@@ -1134,7 +1165,8 @@ function resolveShellWrapperPositionalArgvCandidate(params: {
   const trustPath = resolveCandidateTrustPath(candidatePath) ?? candidatePath;
   return {
     path: candidatePath,
-    argv: [trustPath, ...argv.slice(inlineMatch.valueTokenIndex + 2)],
+    argv: [trustPath, ...carriedTailArgv],
+    durable,
   };
 }
 
@@ -1295,6 +1327,9 @@ function collectAllowAlwaysPatterns(params: {
         })
       : undefined;
   if (positionalArgvCandidate) {
+    if (!positionalArgvCandidate.durable) {
+      return;
+    }
     const positionalTrustPath =
       resolveCandidateTrustPath(positionalArgvCandidate.path) ?? positionalArgvCandidate.path;
     const argPattern = buildArgPatternFromArgv(positionalArgvCandidate.argv, params.platform);

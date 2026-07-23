@@ -717,7 +717,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     const marker = path.join(dir, "marker");
     const platform = "linux";
     const analysis = analyzeArgvCommand({
-      argv: ["sh", "-c", '$0 "$1"', "touch", marker],
+      argv: ["sh", "-c", '$0 "$@"', "touch", marker],
       cwd: dir,
       env,
       platform,
@@ -744,7 +744,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(allowed.allowlistSatisfied).toBe(true);
 
     const changedAnalysis = analyzeArgvCommand({
-      argv: ["sh", "-c", '$0 "$1"', "touch", path.join(dir, "other-marker")],
+      argv: ["sh", "-c", '$0 "$@"', "touch", path.join(dir, "other-marker")],
       cwd: dir,
       env,
       platform,
@@ -759,6 +759,33 @@ describe("resolveAllowAlwaysPatterns", () => {
       platform,
     });
     expect(denied.allowlistSatisfied).toBe(false);
+  });
+
+  it("keeps partial generated positional carrier patterns one-shot", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    makeExecutable(dir, "touch");
+    makeExecutable(dir, "sh");
+    const env = makePathEnv(dir);
+    const marker = path.join(dir, "marker");
+    const platform = "linux";
+    const analysis = analyzeArgvCommand({
+      argv: ["sh", "-c", '$0 "$1"', "touch", marker],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(entries).toEqual([]);
   });
 
   it("rejects positional argv carriers when $0 is single-quoted", async () => {
