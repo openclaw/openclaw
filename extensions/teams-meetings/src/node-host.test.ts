@@ -60,7 +60,7 @@ describe("Teams meeting node-host prerequisite deadline", () => {
     }
 
     await expect(handleTeamsMeetingsNodeHostCommand(setupParams())).rejects.toThrow(
-      "Configured audio command not found on the node: capture",
+      "Microsoft Teams meeting audio prerequisite check timed out on the node.",
     );
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
