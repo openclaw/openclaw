@@ -178,7 +178,16 @@ describe("chat pane session suggestion lifecycle", () => {
 
   it("keeps an owner's self-authored resolved suggestion through the following list", async () => {
     const listed = createDeferred<SessionSuggestionsListResult>();
-    const request = vi.fn(() => listed.promise);
+    const resolvedResponse = createDeferred<{ suggestion: SessionSuggestion }>();
+    const request = vi.fn((method: string) => {
+      if (method === "session.suggestions.resolve") {
+        return resolvedResponse.promise;
+      }
+      if (method === "session.suggestions.list") {
+        return listed.promise;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
     const client = { request } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
@@ -214,12 +223,18 @@ describe("chat pane session suggestion lifecycle", () => {
     pane.sessionSuggestionRole = "owner";
     pane.sessionSuggestions = [pending];
 
+    const resolving = pane.resolveCurrentSessionSuggestion(pending, "queue");
+    expect(request).toHaveBeenCalledTimes(1);
     pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
     expect(pane.sessionSuggestions).toEqual([resolved]);
-    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
 
     listed.resolve({ suggestions: [resolved], role: "owner" });
     await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([resolved]));
+    resolvedResponse.resolve({ suggestion: resolved });
+    await resolving;
+
+    expect(pane.sessionSuggestions).toEqual([resolved]);
     expect(pane.sessionSuggestionRole).toBe("owner");
   });
 

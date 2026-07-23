@@ -1000,16 +1000,30 @@ class ChatPane extends OpenClawLightDomElement {
     }
     this.requestUpdate();
     try {
-      await scope.client.request("session.suggestions.resolve", {
-        sessionKey,
-        id: suggestion.id,
-        resolution,
-        ...scopedAgentParamsForSession(scope.state, sessionKey),
-      });
+      const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
+        "session.suggestions.resolve",
+        {
+          sessionKey,
+          id: suggestion.id,
+          resolution,
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+        },
+      );
       if (!this.isConnectionScopeCurrent(scope) || scope.state.sessionKey !== sessionKey) {
         return;
       }
-      this.sessionSuggestions = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
+      if (result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id) {
+        this.sessionSuggestions = [
+          ...this.sessionSuggestions.filter((item) => item.id !== suggestion.id),
+          result.suggestion,
+        ].toSorted(
+          (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+        );
+      } else {
+        this.sessionSuggestions = this.sessionSuggestions.filter(
+          (item) => item.id !== suggestion.id,
+        );
+      }
     } catch (error) {
       if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
         if (
