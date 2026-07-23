@@ -30,6 +30,7 @@ import {
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
+import { isGeneratedHashedArgPattern } from "./exec-command-resolution.js";
 import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperInvocation,
@@ -2330,12 +2331,13 @@ function applyRecordedAllowlistMetadata(params: {
       }
       changed = true;
       entryChanged = true;
-      return Object.assign({}, entry, {
+      return {
+        ...entry,
         id: entry.id ?? crypto.randomUUID(),
         lastUsedAt: Date.now(),
-        lastUsedCommand: params.command,
+        lastUsedCommand: isGeneratedHashedArgPattern(entry.argPattern) ? undefined : params.command,
         lastResolvedPath: params.resolvedPath,
-      });
+      };
     });
     if (entryChanged) {
       nextAgents[key] = { ...existing, allowlist: nextAllowlist };

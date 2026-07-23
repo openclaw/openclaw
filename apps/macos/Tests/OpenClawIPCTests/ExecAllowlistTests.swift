@@ -994,7 +994,8 @@ struct ExecAllowlistTests {
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
 
-        #expect(patterns == ["/usr/bin/printf"])
+        #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
+        #expect(patterns.first?.argPattern?.hasPrefix("sha256:argv:") == true)
     }
 
     @Test func `allow always patterns fail closed for env modified shell wrappers`() {
@@ -1020,7 +1021,8 @@ struct ExecAllowlistTests {
             env: ["PATH": "/usr/bin:/bin"],
             rawCommand: "/usr/bin/printf safe_marker")
 
-        #expect(patterns == ["/usr/bin/printf"])
+        #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
+        #expect(patterns.first?.argPattern == Self.hashedArgPattern(["/usr/bin/printf", "safe_marker"]))
     }
 
     @Test func `allow always never persists broad interpreter grants`() {

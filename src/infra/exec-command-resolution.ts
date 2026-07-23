@@ -288,6 +288,10 @@ export function resolvePolicyAllowlistCandidatePath(
 
 const HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
 
+export function isGeneratedHashedArgPattern(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(HASHED_ARG_PATTERN_PREFIX);
+}
+
 function renderGeneratedArgPatternSubject(argv: string[]): string {
   const argsSlice = argv.slice(1);
   return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";

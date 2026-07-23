@@ -2099,6 +2099,27 @@ describe("exec approvals store helpers", () => {
     ]);
     expect(allowlist.some((entry) => entry.lastUsedCommand === "/usr/bin/tool ok")).toBe(false);
 
+    vi.spyOn(Date, "now").mockReturnValue(654_323);
+    recordAllowlistMatchesUseSync({
+      approvals: readExecApprovalsSnapshot().file,
+      agentId: "worker",
+      matches: [
+        { pattern: "/usr/bin/tool", source: "allow-always", argPattern: expectedArgPattern },
+      ],
+      command: "/usr/bin/tool ok",
+      resolvedPath: "/usr/bin/tool",
+    });
+    allowlist = allowlistEntries(dir, "worker");
+    const hashedEntry = allowlist.find((entry) => entry.pattern === "/usr/bin/tool");
+    expect(hashedEntry).toMatchObject({
+      pattern: "/usr/bin/tool",
+      source: "allow-always",
+      argPattern: expectedArgPattern,
+      lastUsedAt: 654_323,
+      lastResolvedPath: "/usr/bin/tool",
+    });
+    expect(hashedEntry).not.toHaveProperty("lastUsedCommand");
+
     const partialPatterns = persistAllowAlwaysPatterns({
       approvals,
       agentId: "worker",
