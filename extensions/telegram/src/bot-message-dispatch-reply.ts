@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramDeliveryController } from "./bot-message-dispatch-delivery.js";
@@ -51,6 +51,15 @@ function resolvePayloadTelegramInlineButtons(
 
 function hasExecApprovalPayload(payload: ReplyPayload): boolean {
   return payload.channelData?.execApproval !== undefined;
+}
+
+function isInternalToolWarningPayload(payload: ReplyPayload, hasMedia: boolean): boolean {
+  return (
+    payload.isError === true &&
+    isReplyPayloadNonTerminalToolErrorWarning(payload) &&
+    !hasMedia &&
+    !hasExecApprovalPayload(payload)
+  );
 }
 
 export function createTelegramReplyDelivery(params: {
@@ -141,6 +150,17 @@ export function createTelegramReplyDelivery(params: {
     if (info.kind === "final") {
       await params.draft.enqueueEvent(async () => {});
     }
+    if (payload.isError === true) {
+      params.state.hadErrorReplyFailureOrSkip = true;
+    }
+    if (
+      params.context.isGroup &&
+      (info.kind === "tool" || info.kind === "final") &&
+      isInternalToolWarningPayload(effectivePayload, reply.hasMedia)
+    ) {
+      logVerbose("telegram: suppressed internal tool-warning payload in group chat");
+      return;
+    }
     const isToolPayloadAfterFinal =
       info.kind === "tool" &&
       (params.progress.finalAnswerDeliveryStarted() || params.progress.finalAnswerDelivered());
@@ -152,9 +172,6 @@ export function createTelegramReplyDelivery(params: {
       !hasExecApprovalPayload(effectivePayload)
     ) {
       return;
-    }
-    if (payload.isError === true) {
-      params.state.hadErrorReplyFailureOrSkip = true;
     }
 
     let blockDelivered = false;
