@@ -160,7 +160,7 @@
       }
     },
     "discovery": {
-      "novita": "refreshable"
+      "novita": "static"
     }
   }
 }

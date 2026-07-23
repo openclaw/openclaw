@@ -2,6 +2,7 @@
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function requireCatalogProvider(
   result:
@@ -33,5 +34,13 @@ describe("novita provider plugin", () => {
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe("https://api.novita.ai/openai/v1");
     expect(catalogProvider.models?.map((model) => model.id)).toContain("deepseek/deepseek-v3-0324");
+  });
+
+  // The static-authoritative model list (and the bundled static-catalog model
+  // resolver) only surface providers whose manifest declares discovery
+  // "static". Without it, the Novita catalog rows are planned but never listed,
+  // so the model selector stays empty even though staticCatalog returns rows.
+  it("declares static discovery so catalog models reach the model list", () => {
+    expect(manifest.modelCatalog?.discovery?.novita).toBe("static");
   });
 });
