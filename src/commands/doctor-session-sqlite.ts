@@ -4,13 +4,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import {
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   resolveAgentSessionStoreTargetsSync,
@@ -524,7 +524,8 @@ function resolveLegacyTranscriptPath(
   target: SessionStoreTarget,
   entry: SessionEntry,
 ): string | undefined {
-  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+  const legacySessionFile = (entry as { sessionFile?: string }).sessionFile;
+  if (parseSqliteSessionFileMarker(legacySessionFile)) {
     return undefined;
   }
   const defaultPath = resolveSessionFilePath(entry.sessionId, entry, {
@@ -534,7 +535,7 @@ function resolveLegacyTranscriptPath(
   if (fs.existsSync(defaultPath)) {
     return defaultPath;
   }
-  return entry.sessionFile?.trim() ? defaultPath : undefined;
+  return legacySessionFile?.trim() ? defaultPath : undefined;
 }
 
 function countLegacyTranscript(

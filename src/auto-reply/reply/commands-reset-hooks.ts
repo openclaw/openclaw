@@ -120,7 +120,7 @@ export async function emitResetCommandHooks(params: {
     const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     const beforeResetTranscript = await loadBeforeResetTranscript({
       agentId,
-      sessionFile: prevEntry?.sessionFile,
+      sessionFile: params.sessionKey,
       sessionId: prevEntry?.sessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,

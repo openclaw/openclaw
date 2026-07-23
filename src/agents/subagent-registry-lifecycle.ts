@@ -6,7 +6,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
@@ -597,13 +596,7 @@ export function createSubagentRegistryLifecycleController(params: {
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
-        sessionFile: entry.execution?.transcriptTarget?.storePath
-          ? formatSqliteSessionFileMarker({
-              agentId: entry.execution.transcriptTarget.agentId ?? "",
-              sessionId: entry.execution.transcriptTarget.sessionId ?? "",
-              storePath: entry.execution.transcriptTarget.storePath,
-            })
-          : undefined,
+        sessionFile: entry.childSessionKey,
       });
       resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {

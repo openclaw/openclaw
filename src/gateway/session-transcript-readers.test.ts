@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -126,92 +126,6 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject({
       found: true,
       messages: [{ content: "archived prompt" }],
-    });
-  });
-
-  test("does not reuse the current session file for a historical anchor", async () => {
-    const currentSessionId = "reader-current-collision";
-    const historicalSessionId = "reader-historical-collision";
-    const currentSessionFile = path.join(tempDir, `${currentSessionId}.jsonl`);
-    fs.writeFileSync(
-      currentSessionFile,
-      `${JSON.stringify({ type: "session", version: 3, id: currentSessionId })}\n${JSON.stringify({
-        type: "message",
-        id: "shared-message",
-        parentId: null,
-        message: { role: "user", content: "current collision" },
-      })}\n`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(tempDir, `${historicalSessionId}.jsonl.reset.2026-07-12T17-00-00.000Z`),
-      `${JSON.stringify({ type: "session", version: 3, id: historicalSessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "shared-message",
-          parentId: null,
-          message: { role: "user", content: "historical collision" },
-        },
-      )}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(
-        {
-          agentId: "main",
-          sessionId: historicalSessionId,
-          sessionKey: "agent:main:main",
-          storePath,
-          sessionEntry: { sessionId: currentSessionId, sessionFile: currentSessionFile },
-        },
-        {
-          messageId: "shared-message",
-          maxMessages: 1,
-          allowResetArchiveFallback: true,
-        },
-      ),
-    ).resolves.toMatchObject({
-      found: true,
-      messages: [{ content: "historical collision" }],
-    });
-  });
-
-  test("keeps an explicit historical session file over a mismatched current entry", async () => {
-    const historicalSessionId = "reader-explicit-historical";
-    const historicalSessionFile = path.join(tempDir, "explicit-historical.jsonl");
-    fs.writeFileSync(
-      historicalSessionFile,
-      `${JSON.stringify({ type: "session", version: 3, id: historicalSessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "historical-message",
-          parentId: null,
-          message: { role: "user", content: "explicit historical" },
-        },
-      )}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(
-        {
-          sessionFile: historicalSessionFile,
-          sessionId: historicalSessionId,
-          sessionEntry: {
-            sessionId: "reader-current-entry",
-            sessionFile: path.join(tempDir, "reader-current-entry.jsonl"),
-          },
-        },
-        {
-          messageId: "historical-message",
-          maxMessages: 1,
-          allowResetArchiveFallback: true,
-        },
-      ),
-    ).resolves.toMatchObject({
-      found: true,
-      messages: [{ content: "explicit historical" }],
     });
   });
 

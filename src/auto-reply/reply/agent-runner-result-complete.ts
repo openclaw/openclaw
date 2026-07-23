@@ -116,7 +116,6 @@ export async function completeReplyAgentRun(input: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       contextTokensUsed,
       newSessionId: runResult.meta?.agentMeta?.sessionId,
-      newSessionFile: runResult.meta?.agentMeta?.sessionFile,
     });
     const refreshedSessionEntry =
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
@@ -126,7 +125,7 @@ export async function completeReplyAgentRun(input: {
         key: queueKey,
         previousSessionId,
         nextSessionId: refreshedSessionEntry.sessionId,
-        nextSessionFile: refreshedSessionEntry.sessionFile,
+        nextSessionFile: queueKey,
       });
     }
 

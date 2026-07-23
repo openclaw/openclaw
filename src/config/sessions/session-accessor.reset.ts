@@ -251,9 +251,7 @@ export async function commitReplySessionInitialization(params: {
     isIncognitoSessionKey(params.sessionKey) || params.previousEntry?.incognito === true
       ? {}
       : params.archivePreviousTranscript === false
-        ? params.previousEntry?.sessionFile
-          ? { sessionFile: params.previousEntry.sessionFile, transcriptArchived: false }
-          : {}
+        ? {}
         : await archivePreviousSessionTranscript({
             agentId: params.agentId,
             onArchiveError: params.onArchiveError,
@@ -280,7 +278,6 @@ async function archivePreviousSessionTranscript(params: {
   const archivedTranscripts = archiveSessionTranscriptsDetailed({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,
-    sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     reason: "reset",
     onArchiveError: params.onArchiveError,
@@ -288,7 +285,6 @@ async function archivePreviousSessionTranscript(params: {
   return resolveStableSessionEndTranscript({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,
-    sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     archivedTranscripts,
   });
