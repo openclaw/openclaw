@@ -206,6 +206,17 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |
+
+Provider and web-fetch helpers that accept a configured `baseUrl` use exact
+HTTP origin trust for SSRF exemptions. The runtime serializes the configured
+origin with the platform `URL.origin` rules: path and query are ignored, default
+ports are elided, userinfo is stripped, and host case is folded. OpenClaw's SSRF
+hostname comparison separately normalizes trailing host dots. A matching origin
+may promote only the current request hostname for that request; redirects and
+sibling origins are re-evaluated independently, and metadata/link-local/private
+network blocking still runs in the resolver. Do not use origin trust as a
+wildcard for every host that shares a domain or provider plugin.
+
   </Accordion>
 
   <Accordion title="Runtime and storage subpaths">
