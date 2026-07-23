@@ -115,7 +115,7 @@ describe("resolveSlackThreadContextData", () => {
     {
       path: "/tmp/root.png",
       contentType: "image/png",
-      placeholder: "[Slack file: root.png (fileId: FROOT)]",
+      placeholder: "[Slack file: root.png (image/png, fileId: FROOT)]",
     },
   ];
 

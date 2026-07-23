@@ -4,8 +4,13 @@ import type { SlackFile } from "./types.js";
 
 export function formatSlackFileReference(file: SlackFile | undefined): string {
   const name = normalizeOptionalString(file?.name) ?? "file";
+  const mimetype = normalizeOptionalString(file?.mimetype);
+  const size = formatSlackFileSize(file?.size);
   const fileId = normalizeOptionalString(file?.id);
-  return fileId ? `${name} (fileId: ${fileId})` : name;
+  const metadata = [mimetype, size, fileId ? `fileId: ${fileId}` : undefined].filter(
+    (part): part is string => Boolean(part),
+  );
+  return metadata.length > 0 ? `${name} (${metadata.join(", ")})` : name;
 }
 
 export function formatSlackFileReferenceList(files: readonly SlackFile[] | undefined): string {
@@ -13,4 +18,11 @@ export function formatSlackFileReferenceList(files: readonly SlackFile[] | undef
     return "file";
   }
   return files.map((file) => formatSlackFileReference(file)).join(", ");
+}
+
+function formatSlackFileSize(size: unknown): string | undefined {
+  if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+    return undefined;
+  }
+  return `${size} bytes`;
 }

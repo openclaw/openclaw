@@ -1392,16 +1392,20 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createSlackMessage({
         text: "",
         files: [
-          { id: "FVOICE", name: "voice.ogg" },
-          { id: "FPHOTO", name: "photo.jpg" },
+          { id: "FVOICE", name: "voice.ogg", mimetype: "audio/ogg", size: 3210 },
+          { id: "FPHOTO", name: "photo.jpg", mimetype: "image/jpeg", size: 6543 },
         ],
       }),
     );
 
     assertPrepared(prepared);
     expect(prepared.ctxPayload.RawBody).toContain("[Slack file:");
-    expect(prepared.ctxPayload.RawBody).toContain("voice.ogg (fileId: FVOICE)");
-    expect(prepared.ctxPayload.RawBody).toContain("photo.jpg (fileId: FPHOTO)");
+    expect(prepared.ctxPayload.RawBody).toContain(
+      "voice.ogg (audio/ogg, 3210 bytes, fileId: FVOICE)",
+    );
+    expect(prepared.ctxPayload.RawBody).toContain(
+      "photo.jpg (image/jpeg, 6543 bytes, fileId: FPHOTO)",
+    );
   });
 
   it("falls back to generic file label when a Slack file name is empty", async () => {
@@ -1588,7 +1592,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared).toBeNull();
       const entries = Array.from(slackCtx.channelHistories.values()).flat();
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: diagram.png (fileId: F1)]");
+      expect(entries[0]?.body).toBe("[Slack file: diagram.png (image/png, fileId: F1)]");
       expect(entries[0]?.media).toHaveLength(1);
       expect(entries[0]?.media?.[0]).toMatchObject({
         contentType: "image/png",
@@ -1712,7 +1716,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       });
       const entries = Array.from(slackCtx.channelHistories.values()).flat();
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: parent.png (fileId: F-parent)]");
+      expect(entries[0]?.body).toBe("[Slack file: parent.png (image/png, fileId: F-parent)]");
       expect(entries[0]?.media).toBeUndefined();
       expect(mockFetch).not.toHaveBeenCalled();
     } finally {
@@ -3975,7 +3979,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(root.ctxPayload.CommandBody).toBe("");
       expect(root.ctxPayload.Transcript).toBe("Bill /new please review this");
       expect(root.ctxPayload.MediaTranscribedIndexes).toEqual([1]);
-      expect(root.ctxPayload.RawBody).toContain("[Slack file: voice.mp4 (fileId: FVOICE)]");
+      expect(root.ctxPayload.RawBody).toContain(
+        "[Slack file: voice.mp4 (video/mp4, fileId: FVOICE)]",
+      );
       expect(root.ctxPayload.BodyForAgent).toContain(
         '[Audio transcript (machine-generated, untrusted)]: "Bill /new please review this"',
       );
@@ -4084,7 +4090,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       await expect(fs.stat(downloadedPath as string)).rejects.toMatchObject({ code: "ENOENT" });
       const entries = Array.from(slackCtx.channelHistories.values()).flat();
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: report.pdf (fileId: FPDF)]");
+      expect(entries[0]?.body).toBe("[Slack file: report.pdf (application/pdf, fileId: FPDF)]");
       expect(entries[0]?.media).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;
