@@ -1,24 +1,13 @@
 // Fixtures Workspace tests cover shared E2E workspace fixture assertions.
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const FIXTURE_SCRIPT = "scripts/e2e/lib/fixture.mjs";
 
-function runAgentsDeleteAssert(
-  root: string,
-  outputPath: string,
-  env: Record<string, string> = {},
-) {
+function runAgentsDeleteAssert(root: string, outputPath: string, env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [FIXTURE_SCRIPT, "agents-delete-assert", outputPath], {
     encoding: "utf8",
     env: {
@@ -51,9 +40,7 @@ describe("workspace fixture assertions", () => {
       expect(readFileSync(path.join(workspaceDir, "IDENTITY.md"), "utf8")).toContain(
         "Open WebUI Docker compatibility smoke test assistant.",
       );
-      expect(existsSync(path.join(workspaceDir, ".openclaw", "workspace-state.json"))).toBe(
-        false,
-      );
+      expect(existsSync(path.join(workspaceDir, ".openclaw", "workspace-state.json"))).toBe(false);
       expect(existsSync(path.join(workspaceDir, "openclaw-workspace-state.json"))).toBe(false);
     } finally {
       rmSync(root, { force: true, recursive: true });
