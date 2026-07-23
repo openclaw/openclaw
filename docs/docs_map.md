@@ -6077,6 +6077,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Dimensions
   - H2: Ollama embeddings
   - H2: Recall and capture limits
+  - H3: Recall selectivity (auto-recall)
   - H2: Commands
   - H2: Storage
   - H2: Runtime dependencies and platform support

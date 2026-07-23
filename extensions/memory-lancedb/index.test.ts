@@ -1521,6 +1521,172 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("threads operator recall thresholds through live config into auto-recall", async () => {
+    // Regression: resolveCurrentHookConfig() must carry the new
+    // recallMinScore / recallResultCap / autoRecallOverfetch fields from the
+    // registration config before spreading the live runtime config. Without
+    // that, once a live runtime config object is present (the normal case)
+    // these three are dropped and reparsed as defaults, and operator-configured
+    // values never take effect in before_prompt_build. Here the knobs live only
+    // in the registration pluginConfig; the live config omits them, so they
+    // survive only via that baseline. autoRecallOverfetch=4 (not the default
+    // 10) and recallMinScore=0.85 (not the default 0.3, which would keep the
+    // weak 0.5-score row).
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const toArray = vi.fn(async () => [
+      {
+        id: "memory-strong",
+        text: "I prefer Helix for editing code.",
+        vector: [0.1, 0.2, 0.3],
+        importance: 0.8,
+        category: "preference",
+        createdAt: 1,
+        _distance: 0.1, // score = 1/1.1 ≈ 0.91 -> passes 0.85
+      },
+      {
+        id: "memory-weak",
+        text: "A weakly related note.",
+        vector: [0.1, 0.2, 0.3],
+        importance: 0.8,
+        category: "other",
+        createdAt: 1,
+        _distance: 1, // score = 1/2 = 0.50 -> passes default 0.3, fails 0.85
+      },
+    ]);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const openTable = vi.fn(async () => ({
+      schema: createAgentScopedSchemaMock(),
+      vectorSearch,
+      countRows: vi.fn(async () => 0),
+      add: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+    let configFile: Record<string, unknown> = {
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: {
+              embedding: {
+                apiKey: OPENAI_API_KEY,
+                model: "text-embedding-3-small",
+              },
+              dbPath: getDbPath(),
+              autoCapture: false,
+              autoRecall: false,
+            },
+          },
+        },
+      },
+    };
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const on = vi.fn();
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        // Thresholds live ONLY in the registration config (-> cfg baseline).
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+          recallMinScore: 0.85,
+          autoRecallOverfetch: 4,
+        },
+        runtime: {
+          config: {
+            current: () => configFile,
+          },
+        },
+        logger,
+        registerTool: vi.fn(),
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on,
+        resolvePath: (p: string) => p,
+      };
+
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
+
+      // Live config enables auto-recall but omits the threshold knobs.
+      configFile = {
+        plugins: {
+          entries: {
+            "memory-lancedb": {
+              config: {
+                embedding: {
+                  apiKey: OPENAI_API_KEY,
+                  model: "text-embedding-3-small",
+                },
+                dbPath: getDbPath(),
+                autoCapture: false,
+                autoRecall: true,
+              },
+            },
+          },
+        },
+      };
+
+      const beforePromptBuild = on.mock.calls.find(
+        ([hookName]) => hookName === "before_prompt_build",
+      )?.[1];
+      expect(beforePromptBuild).toBeTypeOf("function");
+
+      const result = await beforePromptBuild?.(
+        { prompt: "what editor should i use?", messages: [] },
+        { agentId: "main" },
+      );
+
+      // autoRecallOverfetch reached the search (not the default 10).
+      expect(limit).toHaveBeenCalledWith(4);
+      // recallMinScore=0.85 filtered the weak row; the default 0.3 would keep it.
+      expect(result?.prependContext).toContain("I prefer Helix for editing code.");
+      expect(result?.prependContext).not.toContain("A weakly related note.");
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
   test("uses live runtime config to skip auto-recall after registration", async () => {
     const embeddingsCreate = vi.fn(async () => ({
       data: [{ embedding: [0.1, 0.2, 0.3] }],

@@ -1506,6 +1506,9 @@ export default definePluginEntry({
         autoRecall: cfg.autoRecall,
         captureMaxChars: cfg.captureMaxChars,
         recallMaxChars: cfg.recallMaxChars,
+        recallMinScore: cfg.recallMinScore,
+        recallResultCap: cfg.recallResultCap,
+        autoRecallOverfetch: cfg.autoRecallOverfetch,
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
         ...asRecord(runtimePluginConfig),
       });
@@ -1960,7 +1963,12 @@ export default definePluginEntry({
             });
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            return await db.search(
+              agentId,
+              vector,
+              currentCfg.autoRecallOverfetch ?? DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT,
+              currentCfg.recallMinScore ?? 0.3,
+            );
           },
         });
         if (recall.status === "timeout") {
@@ -1973,7 +1981,7 @@ export default definePluginEntry({
         // Filter contaminated memories, then cap at the prompt-budget bound.
         const cleanResults = cleanMemorySearchResults(recall.value)
           .map(({ result, text }) => ({ category: result.entry.category, text }))
-          .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
+          .slice(0, currentCfg.recallResultCap ?? DEFAULT_AUTO_RECALL_RESULT_CAP);
 
         if (cleanResults.length === 0) {
           return undefined;

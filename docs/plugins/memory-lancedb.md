@@ -222,6 +222,26 @@ entry, or one inheriting a disabled top-level search, also gets none of the `mem
 or `memory_forget` tools and does not participate in automatic recall or
 capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 
+### Recall selectivity (auto-recall)
+
+These tune the automatic `before_prompt_build` recall — how many candidates it
+fetches, how strict the similarity cutoff is, and how many memories it injects.
+Defaults equal the previously hardcoded values, so leaving them unset preserves
+current behavior. They take effect at the before-prompt hook (not only at
+startup).
+
+| Setting               | Default | Range | Applies to                                                           |
+| --------------------- | ------- | ----- | -------------------------------------------------------------------- |
+| `recallMinScore`      | `0.3`   | 0-1   | Minimum similarity score for a memory to be injected by auto-recall. |
+| `autoRecallOverfetch` | `10`    | 1-200 | Candidate pool size fetched before scoring/capping in auto-recall.   |
+| `recallResultCap`     | `3`     | 1-50  | Maximum memories injected per turn by auto-recall.                   |
+
+The two count settings are integers (fractional values are rejected, not
+rounded). Raising `recallResultCap` grows the injected `<relevant-memories>`
+block accordingly — budget prompt space before setting it far above the
+default. `autoRecallOverfetch` only widens the internal candidate pool and does
+not increase injected content.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
