@@ -619,7 +619,7 @@ export class RealtimeCallHandler {
         return;
       }
       const reason = `${source}-barge-in`;
-      harness.finishOutputAudio(reason);
+      harness.completeOutputAudio(reason);
       harness.talk.cancelTurn({
         turnId: interruptedTurnId,
         payload: { callId, providerCallId: callSid, reason },
@@ -699,7 +699,7 @@ export class RealtimeCallHandler {
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
-          harness.recordOutputAudio(muLaw);
+          harness.appendOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw);
         },
         clearAudio: (reason) => {
@@ -712,7 +712,7 @@ export class RealtimeCallHandler {
             console.log(
               `[voice-call] realtime outbound audio clear requested callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
             );
-            harness.finishOutputAudio("clear");
+            harness.completeOutputAudio("clear");
           });
         },
         sendMark: (markName) => {
@@ -720,7 +720,7 @@ export class RealtimeCallHandler {
         },
       },
       onTranscript: (role, text, isFinal) => {
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureActiveTurn().turnId;
         const eventType =
           role === "assistant"
             ? isFinal
@@ -799,7 +799,7 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent, sessionLocal) => {
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureActiveTurn().turnId;
         harness.emit({
           type: "tool.call",
           turnId,
@@ -822,7 +822,7 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.type === "input_audio_buffer.speech_started") {
-          harness.ensureTurn();
+          harness.ensureActiveTurn();
           return;
         }
         if (event.type === "input_audio_buffer.speech_stopped") {
@@ -839,8 +839,8 @@ export class RealtimeCallHandler {
           return;
         }
         if (event.type === "response.done") {
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
+          harness.completeOutputAudio("response.done");
+          harness.completeTurn("response.done");
           return;
         }
         if (event.type === "error") {
@@ -871,7 +871,7 @@ export class RealtimeCallHandler {
         this.activeTelephonyClosersByCallId.delete(callId);
         this.activeTelephonyClosersByCallId.delete(callSid);
         this.clearUserTranscriptState(callId);
-        harness.finishOutputAudio(reason);
+        harness.completeOutputAudio(reason);
         harness.emit({
           type: "session.closed",
           payload: { reason },
@@ -918,7 +918,7 @@ export class RealtimeCallHandler {
           });
         }
       }
-      harness.recordInputAudio(audio);
+      harness.acceptInputAudio(audio);
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);

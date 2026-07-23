@@ -33,8 +33,10 @@ import {
 import type { TalkEvent, TalkEventInput } from "./talk-events.js";
 import {
   createTalkSessionController,
+  type TalkEnsureTurnResult,
   type TalkSessionController,
   type TalkSessionControllerParams,
+  type TalkTurnResult,
 } from "./talk-session-controller.js";
 
 type RealtimeVoiceSessionHarnessTalkPayloads = {
@@ -43,7 +45,11 @@ type RealtimeVoiceSessionHarnessTalkPayloads = {
   inputAudioDelta: (audio: Buffer) => unknown;
   outputAudioStarted: () => unknown;
   outputAudioDelta: (audio: Buffer) => unknown;
-  outputAudioDone: (reason: string) => unknown;
+  outputAudioDone: (reason: string, details?: RealtimeVoiceOutputAudioDoneDetails) => unknown;
+};
+
+export type RealtimeVoiceOutputAudioDoneDetails = {
+  markName?: string;
 };
 
 type RealtimeVoiceSessionHarnessEchoSuppression = {
@@ -75,6 +81,17 @@ type RealtimeVoiceSessionHarnessHealth = ReturnType<typeof getRealtimeVoiceTrans
     }>;
   };
 
+export type RealtimeVoiceInputAudioEvents = {
+  inputAudioDelta: TalkEvent;
+  turn: TalkEnsureTurnResult;
+};
+
+export type RealtimeVoiceOutputAudioEvents = {
+  outputAudioDelta: TalkEvent;
+  outputAudioStarted?: TalkEvent;
+  turn: TalkEnsureTurnResult;
+};
+
 export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
   readonly forcedConsults: RealtimeVoiceForcedConsultCoordinator<TForcedConsultContext>;
   readonly outputActivity: RealtimeVoiceOutputActivityTracker;
@@ -84,8 +101,22 @@ export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
   close(): void;
   createBridge(params: RealtimeVoiceBridgeSessionParams): RealtimeVoiceBridgeSession;
   emit<TPayload>(input: TalkEventInput<TPayload>): TalkEvent<TPayload>;
+  ensureActiveTurn(): TalkEnsureTurnResult;
+  acceptInputAudio(audio: Buffer): RealtimeVoiceInputAudioEvents | undefined;
+  appendOutputAudio(
+    audio: Buffer,
+    activity?: RealtimeVoiceOutputActivityDelta,
+  ): RealtimeVoiceOutputAudioEvents;
+  completeOutputAudio(
+    reason: string,
+    details?: RealtimeVoiceOutputAudioDoneDetails,
+  ): TalkEvent | undefined;
+  completeTurn(reason?: string): TalkTurnResult;
+  /** @deprecated Use ensureActiveTurn(). */
   ensureTurn(): string;
+  /** @deprecated Use completeTurn(). */
   endTurn(reason?: string): void;
+  /** @deprecated Use completeOutputAudio(). */
   finishOutputAudio(reason: string): void;
   flushOutput(flush: () => void): void;
   getHealth(params: {
@@ -95,7 +126,9 @@ export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
   handleBargeIn(options: RealtimeVoiceBargeInOptions, flushOutput: () => void): void;
   isLikelyAssistantEchoTranscript(text: string): boolean;
   isOutputPlaybackWindowActive(): boolean;
+  /** @deprecated Use acceptInputAudio(). */
   recordInputAudio(audio: Buffer): boolean;
+  /** @deprecated Use appendOutputAudio(). */
   recordOutputAudio(audio: Buffer, activity?: RealtimeVoiceOutputActivityDelta): void;
   recordTranscript(role: RealtimeVoiceRole, text: string): RealtimeVoiceTranscriptEntry;
 };
@@ -144,7 +177,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       })
     : undefined;
 
-  const ensureTurn = () => talk.ensureTurn({ payload: params.talkPayloads.turnStarted() }).turnId;
+  const ensureActiveTurn = () => talk.ensureTurn({ payload: params.talkPayloads.turnStarted() });
 
   const flushOutput = (flush: () => void): void => {
     outputFlushGeneration += 1;
@@ -186,12 +219,23 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       return bridge;
     },
     emit: (input) => talk.emit(input),
-    ensureTurn,
-    endTurn(reason = "completed") {
-      talk.endTurn({ payload: params.talkPayloads.turnEnded(reason) });
+    ensureActiveTurn,
+    completeTurn(reason = "completed") {
+      return talk.endTurn({ payload: params.talkPayloads.turnEnded(reason) });
+    },
+    completeOutputAudio(reason, details) {
+      return talk.finishOutputAudio({
+        payload: params.talkPayloads.outputAudioDone(reason, details),
+      });
+    },
+    ensureTurn() {
+      return harness.ensureActiveTurn().turnId;
+    },
+    endTurn(reason) {
+      void harness.completeTurn(reason);
     },
     finishOutputAudio(reason) {
-      talk.finishOutputAudio({ payload: params.talkPayloads.outputAudioDone(reason) });
+      void harness.completeOutputAudio(reason);
     },
     flushOutput,
     getHealth(healthParams) {
@@ -240,30 +284,31 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     isOutputPlaybackWindowActive() {
       return Date.now() <= Math.max(lastOutputPlayableUntilMs, suppressInputUntilMs);
     },
-    recordInputAudio(audio) {
+    acceptInputAudio(audio) {
       if (Date.now() < suppressInputUntilMs) {
         lastSuppressedInputAt = new Date().toISOString();
         suppressedInputBytes += audio.byteLength;
-        return false;
+        return undefined;
       }
       lastInputAt = new Date().toISOString();
       lastInputBytes += audio.byteLength;
-      harness.emit({
+      const turn = ensureActiveTurn();
+      const inputAudioDelta = harness.emit({
         type: "input.audio.delta",
-        turnId: ensureTurn(),
+        turnId: turn.turnId,
         payload: params.talkPayloads.inputAudioDelta(audio),
       });
-      return true;
+      return { inputAudioDelta, turn };
     },
-    recordOutputAudio(audio, activity = {}) {
-      const turnId = ensureTurn();
-      talk.startOutputAudio({
-        turnId,
+    appendOutputAudio(audio, activity = {}) {
+      const turn = ensureActiveTurn();
+      const output = talk.startOutputAudio({
+        turnId: turn.turnId,
         payload: params.talkPayloads.outputAudioStarted(),
       });
-      harness.emit({
+      const outputAudioDelta = harness.emit({
         type: "output.audio.delta",
-        turnId,
+        turnId: turn.turnId,
         payload: params.talkPayloads.outputAudioDelta(audio),
       });
       let audioMs = activity.audioMs;
@@ -286,6 +331,17 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
         sinkAudioBytes: activity.sinkAudioBytes ?? audio.byteLength,
       });
       lastOutputAt = new Date().toISOString();
+      return {
+        outputAudioDelta,
+        ...(output.event ? { outputAudioStarted: output.event } : {}),
+        turn,
+      };
+    },
+    recordInputAudio(audio) {
+      return harness.acceptInputAudio(audio) !== undefined;
+    },
+    recordOutputAudio(audio, activity) {
+      void harness.appendOutputAudio(audio, activity);
     },
     recordTranscript: (role, text) => recordRealtimeVoiceTranscript(transcript, role, text),
   };

@@ -638,6 +638,11 @@ describe("talk realtime gateway relay", () => {
       type: "mark",
       markName: "mark-1",
     });
+    expectRecordFields(markPayload.talkEvent, {
+      type: "output.audio.done",
+      payload: { markName: "mark-1" },
+      final: true,
+    });
     const markEvent = events.find((entry) => entry.payload === markPayload);
     expectRecordFields(markEvent?.opts, { dropIfSlow: false });
 
