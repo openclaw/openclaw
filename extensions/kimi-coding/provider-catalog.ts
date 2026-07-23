@@ -3,15 +3,15 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { KIMI_K3_MODEL_IDS } from "./provider-policy-api.js";
 
 const KIMI_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 const KIMI_DEFAULT_MODEL_ID = "kimi-for-coding";
 const KIMI_HIGHSPEED_MODEL_ID = "kimi-for-coding-highspeed";
-// Kimi's Claude Code endpoint uses k3[1m] as the wire id for the 1M plan;
-// normalizing it to k3 would lose the server-side context entitlement signal.
-const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
+// k3[1m] is a Claude-Code-only env-var convention, not a valid API model id.
+// Normalize it to k3 for wire requests; context entitlement is account-tier-gated.
+const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5", "k3[1m]"] as const;
+const KIMI_K3_CONTEXT_WINDOW = 1_048_576;
 const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
 const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
 const KIMI_CODING_DEFAULT_COST = {
@@ -48,9 +48,9 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
       },
-      ...KIMI_K3_MODEL_IDS.map((id) => ({
-        id,
-        name: id === "k3" ? "Kimi K3" : "Kimi K3 (1M)",
+      {
+        id: "k3",
+        name: "Kimi K3",
         reasoning: true,
         thinkingLevelMap: {
           off: null,
@@ -63,17 +63,21 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         },
         input: [...KIMI_CODING_INPUT],
         cost: KIMI_CODING_DEFAULT_COST,
-        contextWindow: id === "k3" ? KIMI_CODING_DEFAULT_CONTEXT_WINDOW : 1_048_576,
+        // Context window depends on account tier (256K Moderato, 1M Allegretto+).
+        // Advertise the maximum to avoid rejecting valid requests from 1M accounts.
+        contextWindow: KIMI_K3_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
-      })),
+      },
     ],
   };
 }
 
 export function normalizeKimiCodingModelId(modelId: string): string {
-  return KIMI_LEGACY_MODEL_IDS.includes(modelId as (typeof KIMI_LEGACY_MODEL_IDS)[number])
-    ? KIMI_DEFAULT_MODEL_ID
-    : modelId;
+  if (KIMI_LEGACY_MODEL_IDS.includes(modelId as (typeof KIMI_LEGACY_MODEL_IDS)[number])) {
+    // kimi-code and k2p5 normalize to the default; k3[1m] normalizes to k3
+    return modelId === "k3[1m]" ? "k3" : KIMI_DEFAULT_MODEL_ID;
+  }
+  return modelId;
 }
 
 export const KIMI_CODING_BASE_URL = KIMI_BASE_URL;

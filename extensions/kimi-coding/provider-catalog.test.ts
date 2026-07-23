@@ -14,12 +14,11 @@ describe("kimi provider catalog", () => {
       "kimi-for-coding",
       "kimi-for-coding-highspeed",
       "k3",
-      "k3[1m]",
     ]);
     expect(provider.models.find((model) => model.id === "k3")).toMatchObject({
       name: "Kimi K3",
       reasoning: true,
-      contextWindow: 262_144,
+      contextWindow: 1_048_576,
       maxTokens: 32_768,
       thinkingLevelMap: {
         off: null,
@@ -30,11 +29,6 @@ describe("kimi provider catalog", () => {
         xhigh: "max",
         max: "max",
       },
-    });
-    expect(provider.models.find((model) => model.id === "k3[1m]")).toMatchObject({
-      name: "Kimi K3 (1M)",
-      contextWindow: 1_048_576,
-      maxTokens: 32_768,
     });
     expect(provider.models.find((model) => model.id === "kimi-for-coding-highspeed")).toMatchObject(
       {
@@ -49,13 +43,14 @@ describe("kimi provider catalog", () => {
   it("normalizes legacy Kimi coding model ids to the stable API model id", () => {
     expect(normalizeKimiCodingModelId("kimi-code")).toBe("kimi-for-coding");
     expect(normalizeKimiCodingModelId("k2p5")).toBe("kimi-for-coding");
+    expect(normalizeKimiCodingModelId("k3[1m]")).toBe("k3");
     expect(normalizeKimiCodingModelId("kimi-for-coding")).toBe("kimi-for-coding");
     expect(normalizeKimiCodingModelId("k3")).toBe("k3");
     expect(normalizeKimiCodingModelId("kimi-for-coding-highspeed")).toBe(
       "kimi-for-coding-highspeed",
     );
     expect(isKimiK3ModelId("k3")).toBe(true);
-    expect(isKimiK3ModelId("k3[1m]")).toBe(true);
+    expect(isKimiK3ModelId("k3[1m]")).toBe(true); // legacy id still recognized for thinking/stream handling
     expect(isKimiK3ModelId("kimi-for-coding")).toBe(false);
   });
 });
