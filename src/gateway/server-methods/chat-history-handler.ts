@@ -576,6 +576,9 @@ async function handleChatHistoryRequest({
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   sessionInfo.activeRunIds = activeRunState.runIds;
+  if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
+    sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
+  }
   const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
     allowPluginNormalization: false,
   });

@@ -976,6 +976,90 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.dispatchBlockedByBeforeAgentRun = false;
   });
 
+  it.each([
+    ["stale", "previous-leaf"],
+    ["empty", null],
+  ])("rejects a %s expected active leaf before starting or writing", async (name, expectedLeaf) => {
+    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-${name}-leaf-`);
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "user", content: "existing" },
+      now: 1,
+      parentId: null,
+    });
+    const before = loadTranscriptEventsSync(transcriptScope());
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: `idem-${name}-leaf`,
+      requestParams: { expectedLeafEntryId: expectedLeaf },
+      waitFor: "none",
+    });
+
+    expect(lastRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+    ]);
+    expect(context.addChatRun).not.toHaveBeenCalled();
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(loadTranscriptEventsSync(transcriptScope())).toEqual(before);
+  });
+
+  it("allows an expected empty leaf when the transcript is still empty", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-matching-empty-leaf-");
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-matching-empty-leaf",
+      requestParams: { expectedLeafEntryId: null },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["matching", { expectedLeafEntryId: "current-leaf" }],
+    ["absent", {}],
+  ])("allows a %s expected active leaf", async (_name, requestParams) => {
+    await createGatewayUserTurnSqliteFixture(`openclaw-chat-send-${_name}-leaf-`);
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "current-leaf",
+      message: { role: "user", content: "existing" },
+      now: 1,
+      parentId: null,
+    });
+    const context = createChatContext();
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: `idem-${_name}-leaf`,
+      requestParams,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
+    expect(context.addChatRun).toHaveBeenCalledTimes(1);
+  });
+
   it("broadcasts session metadata changes reported by chat command dispatch", async () => {
     await createTranscriptFixture("openclaw-chat-send-session-metadata-");
     mockState.sessionEntry = {
@@ -1553,6 +1637,33 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.loadSessionEntryCalls).toContainEqual({
       rawKey: "agent:work:main",
       opts: { agentId: "work" },
+    });
+  });
+
+  it("returns the rendered history branch leaf in session info", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-history-active-leaf-");
+    await appendTranscriptMessage(transcriptScope(), {
+      eventId: "history-active-leaf",
+      message: { role: "user", content: "render this branch" },
+      now: 1,
+      parentId: null,
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      chatHandlers["chat.history"],
+      'chatHandlers["chat.history"] test invariant',
+    )({
+      params: { sessionKey: "main" },
+      respond: respond as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: createChatContext() as GatewayRequestContext,
+    });
+
+    expect(lastRespondCall(respond)?.[1]).toMatchObject({
+      sessionInfo: { activeLeafEntryId: "history-active-leaf" },
     });
   });
 

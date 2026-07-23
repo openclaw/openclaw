@@ -3754,6 +3754,9 @@ export const en: TranslationMap = {
   },
   chat: {
     disconnected: "Disconnected from gateway.",
+    sendErrors: {
+      activeLeafChanged: "The thread switched branches — review and resend.",
+    },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
