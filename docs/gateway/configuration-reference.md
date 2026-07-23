@@ -542,6 +542,47 @@ See [Plugins](/tools/plugin).
 
 ---
 
+## Gateway readiness
+
+```json5
+{
+  gateway: {
+    readiness: {
+      requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
+      advisoryCriteria: ["plugin.metrics.exporter"],
+    },
+  },
+}
+```
+
+- `requiredCriteria`: registered criteria that must report `True` for readiness.
+- `advisoryCriteria`: registered criteria included in diagnostics without blocking readiness.
+- Runtime activation identity is startup metadata rather than configuration.
+  Hosts may supply `OPENCLAW_RUNTIME_ID` / `--runtime-id` for a logical runtime
+  and `OPENCLAW_INCARNATION_ID` / `--incarnation-id` for one process or
+  container execution. Readiness and status report both values.
+
+The Gateway's lifecycle conditions always apply. Explicit criteria add to that
+baseline and do not require a hosting profile. See [Health checks](/gateway/health#selected-readiness-criteria)
+for evaluation semantics and the [Plugin SDK](/plugins/sdk-overview#infrastructure)
+for plugin registration.
+
+## Hosting profile
+
+```json5
+{
+  hosting: {
+    profile: "container", // local | container | reverse-proxy | node-mode
+  },
+}
+```
+
+`hosting.profile` selects an optional, release-tested readiness posture. A Gateway with no selected
+profile retains the universal lifecycle baseline and does not add profile-only requirements.
+`OPENCLAW_HOSTING_PROFILE` overrides config, and `gateway run --hosting-profile` overrides both.
+Invalid values stop Gateway startup. See [Hosting profiles](/gateway/hosting-profiles) for the
+condition set and operator examples for each profile.
+
 ## Gateway
 
 ```json5

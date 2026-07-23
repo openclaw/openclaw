@@ -126,6 +126,7 @@ const withoutSupervisorEnv = Object.fromEntries(
 const withoutGatewayAuthEnv = {
   OPENCLAW_GATEWAY_TOKEN: undefined,
   OPENCLAW_GATEWAY_PASSWORD: undefined,
+  OPENCLAW_HOSTING_PROFILE: undefined,
 };
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -138,6 +139,8 @@ const serviceEnvSnapshot = captureEnv([
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
+  "OPENCLAW_RUNTIME_ID",
+  "OPENCLAW_INCARNATION_ID",
 ]);
 
 vi.mock("../../config/config.js", () => ({
@@ -371,6 +374,9 @@ describe("gateway run option collisions", () => {
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_HOSTING_PROFILE;
+    delete process.env.OPENCLAW_RUNTIME_ID;
+    delete process.env.OPENCLAW_INCARNATION_ID;
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};
@@ -450,6 +456,7 @@ describe("gateway run option collisions", () => {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       channelAutostartSuppression?: { reason?: string };
+      hostingProfileOverride?: string;
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
@@ -1457,6 +1464,79 @@ describe("gateway run option collisions", () => {
     const options = gatewayStartOptions();
     expect(options.bind).toBe("loopback");
     expect(options.startupConfigSnapshotRead).toEqual({ snapshot: configState.snapshot });
+  });
+
+  it("sets the selected hosting profile before gateway startup", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--hosting-profile",
+      "container",
+      "--allow-unconfigured",
+    ]);
+
+    expect(process.env.OPENCLAW_HOSTING_PROFILE).toBe("container");
+    expect(startGatewayServer).toHaveBeenCalledOnce();
+    expect(gatewayStartOptions().hostingProfileOverride).toBe("container");
+  });
+
+  it("sets runtime activation identity before gateway startup", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--runtime-id",
+      "tenant-42/scout-primary",
+      "--incarnation-id",
+      "pod-7f9c",
+      "--allow-unconfigured",
+    ]);
+
+    expect(process.env.OPENCLAW_RUNTIME_ID).toBe("tenant-42/scout-primary");
+    expect(process.env.OPENCLAW_INCARNATION_ID).toBe("pod-7f9c");
+    expect(startGatewayServer).toHaveBeenCalledOnce();
+  });
+  it("ignores profile-only activation identity validation without a selected profile", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--runtime-id",
+      "contains spaces",
+      "--allow-unconfigured",
+    ]);
+
+    expect(startGatewayServer).toHaveBeenCalledOnce();
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  it("rejects invalid activation identity before destructive profiled startup work", async () => {
+    await expect(
+      runGatewayCli([
+        "gateway",
+        "run",
+        "--hosting-profile",
+        "container",
+        "--runtime-id",
+        "contains spaces",
+        "--force",
+        "--allow-unconfigured",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Invalid OPENCLAW_RUNTIME_ID: expected 1-128 characters using letters, numbers, '.', '_', ':', '/', or '-'.",
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
+    expect(forceFreePortAndWait).not.toHaveBeenCalled();
+  });
+  it("rejects unsupported hosting profiles before gateway startup", async () => {
+    await expect(
+      runGatewayCli(["gateway", "run", "--hosting-profile", "custom-host", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Invalid --hosting-profile. Use "local", "container", "reverse-proxy", "node-mode".',
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
   });
 
   it("allows authless auto startup when it resolves to loopback", async () => {

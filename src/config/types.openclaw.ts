@@ -1,4 +1,5 @@
 // Defines the top-level OpenClaw configuration type.
+import type { HostingProfileId } from "../hosting/types.js";
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
@@ -24,6 +25,11 @@ import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
+
+export type HostingConfig = {
+  /** Optional built-in hosting profile selected for runtime readiness. */
+  profile?: HostingProfileId;
+};
 
 /** One persisted suppression for a known security audit finding. */
 export type SecurityAuditSuppression = {
@@ -124,6 +130,8 @@ export type OpenClawConfig = {
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
+  /** Runtime hosting profile and host-facing readiness settings. */
+  hosting?: HostingConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
   /** Security audit suppressions and security policy settings. */

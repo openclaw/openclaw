@@ -53,12 +53,40 @@ const HealthSessionSummarySchema = closedObject({
   ),
 });
 
+const ReadinessConditionSchema = closedObject({
+  type: NonEmptyString,
+  status: Type.Union([Type.Literal("True"), Type.Literal("False"), Type.Literal("Unknown")]),
+  requirement: Type.Union([Type.Literal("required"), Type.Literal("advisory")]),
+  reason: NonEmptyString,
+  message: Type.String(),
+});
+
+const CanonicalReadinessResultSchema = closedObject({
+  profileContractVersion: Type.Optional(Type.Literal(1)),
+  profile: Type.Optional(NonEmptyString),
+  profileSource: Type.Optional(
+    Type.Union([Type.Literal("argument"), Type.Literal("environment"), Type.Literal("config")]),
+  ),
+  activation: Type.Optional(
+    closedObject({
+      runtimeId: NonEmptyString,
+      incarnationId: NonEmptyString,
+      profile: NonEmptyString,
+    }),
+  ),
+  ready: Type.Boolean(),
+  conditions: Type.Array(ReadinessConditionSchema),
+  failures: Type.Array(Type.String()),
+  advisories: Type.Array(Type.String()),
+});
+
 const HealthSnapshotSchema = closedObject({
   // Every field is optional because hello snapshots use an empty object until
   // the asynchronous health producer has populated the cache.
   ok: Type.Optional(Type.Literal(true)),
   ts: Type.Optional(Type.Integer({ minimum: 0 })),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  readiness: Type.Optional(CanonicalReadinessResultSchema),
   eventLoop: Type.Optional(
     closedObject({
       degraded: Type.Boolean(),
