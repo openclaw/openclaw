@@ -3,7 +3,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { isSecureWebSocketUrl } from "./net.js";
+import {
+  inspectBestEffortPrimaryTailnetIPv4,
+  pickBestEffortPrimaryLanIPv4,
+} from "../infra/network-discovery-display.js";
+import { isSecureWebSocketUrl, isValidIPv4 } from "./net.js";
 
 /** Resolved gateway target plus redacted display text for diagnostics. */
 export type GatewayConnectionDetails = {
@@ -45,8 +49,26 @@ export function buildGatewayConnectionDetailsWithResolvers(
     resolvers.resolveGatewayPort?.(config, process.env) ??
     resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
+  const customBindHost = config.gateway?.customBindHost?.trim();
+  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
+  // Resolve the bind address the same way resolveControlUiLinks does so
+  // CLI probes (health, cron list, doctor, gateway probe) reach a gateway
+  // bound to tailnet, lan, or a custom address instead of failing with 1006
+  // because the target hardcoded 127.0.0.1. (#108406)
+  const bindHost = (() => {
+    if (bindMode === "custom" && customBindHost && isValidIPv4(customBindHost)) {
+      return customBindHost;
+    }
+    if (bindMode === "tailnet" && tailnetIPv4) {
+      return tailnetIPv4;
+    }
+    if (bindMode === "lan") {
+      return pickBestEffortPrimaryLanIPv4() ?? "127.0.0.1";
+    }
+    return "127.0.0.1";
+  })();
   const scheme = tlsEnabled ? "wss" : "ws";
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const localUrl = `${scheme}://${bindHost}:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
   const envUrlOverride =
     cliUrlOverride || options.ignoreEnvUrlOverride || options.localPortOverride !== undefined
@@ -67,7 +89,9 @@ export function buildGatewayConnectionDetailsWithResolvers(
       ? "config gateway.remote.url"
       : remoteMisconfigured
         ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+        : bindMode === "loopback"
+          ? "local loopback"
+          : `local ${bindMode}`;
   const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
