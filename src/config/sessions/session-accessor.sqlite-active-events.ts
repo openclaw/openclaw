@@ -443,7 +443,6 @@ export function readRecentSessionTranscriptMessageEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
-    const keptPositions = new Set(visible.kept);
     const maxMessages = Math.max(
       0,
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
@@ -459,42 +458,26 @@ export function readRecentSessionTranscriptMessageEvents(
       1024,
       Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
     );
-    const db = getActiveTranscriptKysely(projection.database);
-    const rows = executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select(["active.event_seq", "active.message_position", "event.event_json"])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .orderBy("active.active_position", "desc")
-        .limit(maxLines),
-    ).rows;
-    const selected: typeof rows = [];
+    const candidates = readVisibleMessageRange(
+      projection,
+      Math.max(0, visible.total - maxLines),
+      visible.total,
+    );
+    const selected: SessionTranscriptMessageEvent[] = [];
     let bytes = 0;
-    for (const row of rows) {
-      const rowBytes = Buffer.byteLength(row.event_json) + 1;
-      if (selected.length > 0 && bytes + rowBytes > maxBytes) {
+    for (const event of candidates.toReversed()) {
+      const eventBytes = Buffer.byteLength(JSON.stringify(event.event)) + 1;
+      if (
+        selected.length >= maxMessages ||
+        (selected.length > 0 && bytes + eventBytes > maxBytes)
+      ) {
         break;
       }
-      selected.push(row);
-      bytes += rowBytes;
+      selected.push(event);
+      bytes += eventBytes;
     }
-    const events = selected
-      .toReversed()
-      .filter((row) => row.message_position !== null)
-      .filter(
-        (row) =>
-          (row.message_position ?? -1) >= visible.postStart ||
-          keptPositions.has(row.message_position ?? -1),
-      )
-      .map(parseMessageEventRow);
     return {
-      events: events.length > maxMessages ? events.slice(-maxMessages) : events,
+      events: selected.toReversed(),
       totalMessages: visible.total,
     };
   });

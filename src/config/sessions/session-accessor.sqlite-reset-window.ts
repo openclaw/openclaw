@@ -149,12 +149,14 @@ function findLatestResetMessageWindow(
       .where("active.message_position", "is", null)
       .orderBy("active.active_position", "desc"),
   ).rows;
-  const resetRow = nonMessageRows.find(
-    (row) => parseTranscriptEventType(row.event_json) === "reset",
-  );
-  if (!resetRow) {
+  const latestBoundaryRow = nonMessageRows.find((row) => {
+    const type = parseTranscriptEventType(row.event_json);
+    return type === "reset" || type === "compaction";
+  });
+  if (!latestBoundaryRow || parseTranscriptEventType(latestBoundaryRow.event_json) !== "reset") {
     return null;
   }
+  const resetRow = latestBoundaryRow;
   const reset = JSON.parse(resetRow.event_json) as { firstKeptEntryId?: unknown };
   const postBoundaryMessagePosition =
     executeSqliteQueryTakeFirstSync(
@@ -242,7 +244,7 @@ function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMess
       if (
         appendedRows.every((row) => {
           const type = parseTranscriptEventType(row.event_json);
-          return type !== "reset" && type !== "leaf";
+          return type !== "reset" && type !== "compaction" && type !== "leaf";
         })
       ) {
         const extended = { ...cached, indexedSeq: projection.state.indexedSeq };

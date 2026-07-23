@@ -225,7 +225,7 @@ describe("SQLite active transcript event projection", () => {
         {
           eventId: "kept-tool",
           parentId: "kept-user",
-          message: { role: "toolResult", content: "hidden tool" },
+          message: { role: "toolResult", content: `hidden tool ${"x".repeat(2_000)}` },
         },
         {
           eventId: "kept-assistant",
@@ -266,6 +266,29 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
     expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
+
+    const recent = readRecentSessionTranscriptMessageEvents(scope, {
+      maxBytes: 1_024,
+      maxLines: 10,
+      maxMessages: 3,
+    });
+    expect(recent.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+    ]);
+
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "newer-compaction",
+      parentId: "post-reset",
+      timestamp: "2026-07-22T00:01:00.000Z",
+      summary: "newer boundary shadows reset",
+      firstKeptEntryId: "old",
+      tokensBefore: 10,
+    });
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
   });
 
   it("reconciles work scheduled while an earlier pass is yielding", async () => {
