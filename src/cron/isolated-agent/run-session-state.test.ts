@@ -434,6 +434,58 @@ describe("createPersistCronSessionEntry", () => {
     expect(persistedStore[sessionKey]).toStrictEqual(nextSession.sessionEntry);
   });
 
+  it("claims an initial row after a benign concurrent same-generation field write", async () => {
+    // Repro for the session-store claim race: under a large, busy store a
+    // concurrent writer advances an ownership field (delivery/token/status) on
+    // the row WITHOUT minting a new lifecycle generation, between resolve and
+    // this run's first persist. The row still carries the run's resolved
+    // lifecycle revision, so no competing run has claimed it. The guard must
+    // merge-and-claim, not throw CronSessionLifecycleClaimError.
+    const sessionKey = "agent:main:session";
+    const initialRevision = "initial-revision";
+    const runRevision = crypto.randomUUID();
+    const initialSessionEntry = makeSessionEntry({
+      lifecycleRevision: initialRevision,
+      status: "running",
+      totalTokens: 10,
+    });
+    const cronSession = {
+      ...makeCronSession(
+        makeSessionEntry({
+          lifecycleRevision: runRevision,
+          status: "done",
+          totalTokens: 42,
+        }),
+      ),
+      initialSessionEntry,
+      lifecycleRevision: runRevision,
+    } as MutableCronSession;
+    const persistedStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        ...initialSessionEntry,
+        // Concurrent benign update: same lifecycle generation, drifted fields.
+        totalTokens: 25,
+        lastInteractionAt: 2000,
+        updatedAt: 2000,
+      },
+    };
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: sessionKey,
+      persistSessionEntry: makeGuardedPersistSessionEntry(persistedStore),
+    });
+
+    await expect(persist()).resolves.toBeUndefined();
+
+    // The run claims (its revision wins) while the concurrent update survives.
+    expect(persistedStore[sessionKey]).toMatchObject({
+      lifecycleRevision: runRevision,
+      status: "done",
+      totalTokens: 25,
+      lastInteractionAt: 2000,
+    });
+  });
+
   it("claims an initial row after a concurrent pin and rename", async () => {
     const sessionKey = "agent:main:session";
     const lifecycleRevision = crypto.randomUUID();
