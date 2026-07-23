@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { Writable } from "node:stream";
+import { Readable, type Writable } from "node:stream";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import {
@@ -92,9 +92,9 @@ function attachStderrLineLogger(params: {
       splitOnCarriageReturn: true,
     }).forEach(logLine);
   };
-  // The process exit lifecycle is part of the existing injected-spawn contract.
-  // It flushes a final unterminated diagnostic without requiring stream lifecycle
-  // methods from third-party spawn adapters.
+  // ChildProcess exit can precede its stdio streams' final data. Use the stream
+  // lifecycle for real Node streams, while retaining exit as a compatibility
+  // fallback for injected adapters that only implement data/error handlers.
   const flush = () => {
     if (flushed) {
       return;
@@ -110,7 +110,12 @@ function attachStderrLineLogger(params: {
       append(chunk);
     }
   });
-  params.proc.on("exit", flush);
+  if (params.stderr instanceof Readable) {
+    params.stderr.once("end", flush);
+    params.stderr.once("close", flush);
+  } else {
+    params.proc.on("exit", flush);
+  }
 }
 
 export function createLocalMeetingRealtimeAudioTransport(params: {

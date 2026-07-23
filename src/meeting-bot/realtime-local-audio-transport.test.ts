@@ -78,17 +78,17 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       proc.stderr.write(Buffer.from(unterminatedDiagnostic, "utf8"));
       expect(debug).toHaveBeenCalledTimes(callsBeforeLine + 1);
 
-      proc.emit("exit", 0, null);
+      proc.stderr.end();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(debug).toHaveBeenNthCalledWith(
         callsBeforeLine + 2,
         `[meeting] ${label}: ${unterminatedDiagnostic}`,
       );
     }
 
-    // The barge-in process also reports its normal exit through the existing
-    // lifecycle logger, in addition to its two stderr diagnostics.
-    expect(debug).toHaveBeenCalledTimes(cases.length * 2 + 1);
-    expect(debug).toHaveBeenLastCalledWith("[meeting] human barge-in input exited (0)");
+    expect(debug).toHaveBeenCalledTimes(cases.length * 2);
   });
 
   it("bounds diagnostics and drains stderr without a debug logger", async () => {
@@ -157,7 +157,10 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     expect(completedMessage).not.toContain("�");
 
     outputProcess.stderr.write(oversizedDiagnostic);
-    outputProcess.emit("exit", 0, null);
+    outputProcess.stderr.end();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const trailingMessage = debug.mock.calls.at(-1)?.[0];
     expect(trailingMessage).toEqual(
@@ -167,5 +170,38 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       8 * 1024 + Buffer.byteLength("[meeting] audio output: [stderr line truncated] ", "utf8"),
     );
     expect(trailingMessage).not.toContain("�");
+  });
+
+  it("keeps stderr bytes that arrive after child exit until the stream closes", async () => {
+    const processes = new Map<string, TestBridgeProcess>();
+    const debug = vi.fn();
+    createLocalMeetingRealtimeAudioTransport({
+      inputCommand: ["input"],
+      outputCommand: ["output"],
+      bargeInRmsThreshold: 10,
+      bargeInPeakThreshold: 10,
+      bargeInCooldownMs: 1,
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logScope: "[meeting]",
+      spawn: (command) => {
+        const proc = createTestBridgeProcess();
+        processes.set(command, proc);
+        return proc;
+      },
+    });
+    const outputProcess = processes.get("output");
+    if (!outputProcess) {
+      throw new Error("Expected output process");
+    }
+
+    outputProcess.stderr.write("before exit ");
+    outputProcess.emit("exit", 0, null);
+    outputProcess.stderr.write("after exit");
+    outputProcess.stderr.end();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
   });
 });
