@@ -1,6 +1,6 @@
+import CryptoKit
 import Foundation
 import JavaScriptCore
-import CryptoKit
 
 enum ExecAllowlistMatcher {
     private static let hashedArgPatternPrefix = "sha256:argv:"
