@@ -354,6 +354,24 @@ describe("markdownToTelegramHtml", () => {
     ).toBe("Name | Age\nAlice | 30");
   });
 
+  it("ignores malformed Telegram HTML fallback colspans instead of truncating them", () => {
+    expect(
+      telegramHtmlToPlainTextFallback(
+        "<table><tr><td colspan=2x>Alice</td><td>30</td></tr></table>",
+      ),
+    ).toBe("Alice | 30");
+    expect(
+      telegramHtmlToPlainTextFallback(
+        "<table><tr><td data-colspan=bad colspan=2>Alice</td><td>30</td></tr></table>",
+      ),
+    ).toBe("Alice |  | 30");
+    expect(
+      telegramHtmlToPlainTextFallback(
+        '<table><tr><td colspan=" 2 ">Alice</td><td>30</td></tr></table>',
+      ),
+    ).toBe("Alice |  | 30");
+  });
+
   it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
     const cases = [
       ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],

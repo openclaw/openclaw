@@ -197,20 +197,28 @@ function listToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlo
 
 const CELL_ALIGN_VALUES = new Set(["left", "center", "right"]);
 
+function parseTableSpan(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+  const span = Number.parseInt(value, 10);
+  return Number.isSafeInteger(span) && span > 1 ? span : undefined;
+}
+
 function tableCellFromElement(
   node: Extract<HtmlNode, { kind: "element" }>,
   inHeader: boolean,
 ): RichBlockTableCell {
   const attrs = parseHtmlAttrs(node.raw);
   const text = htmlNodesToRichText(node.children);
-  const colspan = Number.parseInt(attrs.get("colspan") ?? "", 10);
-  const rowspan = Number.parseInt(attrs.get("rowspan") ?? "", 10);
+  const colspan = parseTableSpan(attrs.get("colspan"));
+  const rowspan = parseTableSpan(attrs.get("rowspan"));
   const align = attrs.get("align")?.toLowerCase();
   return {
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
-    ...(Number.isFinite(colspan) && colspan > 1 ? { colspan } : {}),
-    ...(Number.isFinite(rowspan) && rowspan > 1 ? { rowspan } : {}),
+    ...(colspan !== undefined ? { colspan } : {}),
+    ...(rowspan !== undefined ? { rowspan } : {}),
     ...(align && CELL_ALIGN_VALUES.has(align)
       ? { align: align as RichBlockTableCell["align"] }
       : {}),
