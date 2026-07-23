@@ -538,14 +538,15 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
           `canonical transcript export destination is not a directory: ${destination}`,
         );
       }
-      const [sourceMetadata, destinationMetadata] = await Promise.all(
-        [source, destination].map(async (directory) =>
-          parseSession(
-            JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8")),
-            path.join(directory, "metadata.json"),
-          ),
-        ),
-      );
+      const readMetadata = async (directory: string) =>
+        parseSession(
+          JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8")),
+          path.join(directory, "metadata.json"),
+        );
+      const [sourceMetadata, destinationMetadata] = await Promise.all([
+        readMetadata(source),
+        readMetadata(destination),
+      ]);
       if (
         sourceMetadata.sessionId !== destinationMetadata.sessionId ||
         sourceMetadata.startedAt !== destinationMetadata.startedAt
