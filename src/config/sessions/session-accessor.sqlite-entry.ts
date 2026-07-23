@@ -220,17 +220,17 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
  * acceptable degradation (health snapshots) or hides real state (migration detection).
  */
 export function listSqliteSessionEntriesReadOnly(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database),
+    (database) => listSqliteSessionEntriesFromDatabase(database, scope.light),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
 }
 
-function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
+function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }, light?: boolean) {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -245,7 +245,18 @@ function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
         return undefined;
       }
       const entry = parseSessionEntryRow(row);
-      return entry ? { sessionKey: row.session_key, entry } : undefined;
+      if (!entry) {
+        return undefined;
+      }
+      if (light) {
+        const {
+          systemPromptReport: _systemPromptReport,
+          skillsSnapshot: _skillsSnapshot,
+          ...lightEntry
+        } = entry;
+        return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
+      }
+      return { sessionKey: row.session_key, entry };
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
 }
