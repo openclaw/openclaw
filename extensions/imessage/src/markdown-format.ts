@@ -12,7 +12,7 @@ type IMessageFormatRange = {
   styles: IMessageFormatStyle[];
 };
 
-export const IMESSAGE_FORMAT_PROFILE = {
+const IMESSAGE_FORMAT_PROFILE = {
   mechanism: "ranges",
   constructs: {
     bold: "native",

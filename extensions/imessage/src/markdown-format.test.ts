@@ -1,6 +1,6 @@
 // Imessage tests cover markdown format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { extractMarkdownFormatRuns, IMESSAGE_FORMAT_PROFILE } from "./markdown-format.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
 
 const MIGRATION_GOLDENS = [
   {
@@ -155,22 +155,6 @@ describe("extractMarkdownFormatRuns", () => {
     expect(extractMarkdownFormatRuns("def init():\ndef __init__(self):")).toEqual({
       text: "def init():\ndef __init__(self):",
       ranges: [],
-    });
-  });
-
-  it("declares the native four-style attributed capability profile", () => {
-    expect(IMESSAGE_FORMAT_PROFILE).toMatchObject({
-      mechanism: "ranges",
-      chunk: { limit: 4_000, unit: "utf16" },
-      constructs: {
-        bold: "native",
-        italic: "native",
-        underline: "native",
-        strikethrough: "native",
-        codeInline: "fallback",
-        linkLabel: "fallback",
-        heading: "fallback",
-      },
     });
   });
 });
