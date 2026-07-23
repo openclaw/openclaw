@@ -6,6 +6,7 @@ export * from "./frontmatter.js";
 export * from "./html-tags.js";
 export * from "./ir.js";
 export * from "./render-aware-chunking.js";
+export * from "./render-attributed.js";
 export * from "./render.js";
 export * from "./tables.js";
 export * from "./types.js";
