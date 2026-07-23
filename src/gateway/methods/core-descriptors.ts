@@ -243,6 +243,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.compact", scope: "operator.admin", since: "<=2026.7" },
   { name: "sessions.groups.list", scope: "operator.read", since: "<=2026.7" },
   { name: "sessions.groups.put", scope: "operator.write", since: "<=2026.7" },
+  { name: "sessions.groups.add", scope: "operator.write", since: "2026.7" },
+  { name: "sessions.groups.reorder", scope: "operator.write", since: "2026.7" },
   { name: "sessions.groups.rename", scope: "operator.write", since: "<=2026.7" },
   { name: "sessions.groups.delete", scope: "operator.write", since: "<=2026.7" },
   { name: "last-heartbeat", scope: "operator.read", since: "<=2026.7" },

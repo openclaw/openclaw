@@ -560,6 +560,16 @@ export const SessionsGroupsPutParamsSchema = closedObject({
   names: Type.Array(SessionLabelString, { maxItems: 200 }),
 });
 
+/** Adds one group to the catalog if it does not already exist, appended at the end. */
+export const SessionsGroupsAddParamsSchema = closedObject({
+  name: SessionLabelString,
+});
+
+/** Reorders the listed groups by position; unlisted groups keep their current position. */
+export const SessionsGroupsReorderParamsSchema = closedObject({
+  names: Type.Array(SessionLabelString, { maxItems: 200 }),
+});
+
 /** Renames a group and repoints every member session's category. */
 export const SessionsGroupsRenameParamsSchema = closedObject({
   name: SessionLabelString,
@@ -813,6 +823,8 @@ export type SessionGroup = Static<typeof SessionGroupSchema>;
 export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSchema>;
 export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
 export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
+export type SessionsGroupsAddParams = Static<typeof SessionsGroupsAddParamsSchema>;
+export type SessionsGroupsReorderParams = Static<typeof SessionsGroupsReorderParamsSchema>;
 export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
 export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParamsSchema>;
 export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;

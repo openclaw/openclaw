@@ -794,17 +794,17 @@ describe("sessions page lifecycle", () => {
   });
 
   it("surfaces a rejected custom-group creation on the Sessions page", async () => {
-    const groupsPut = vi.fn(async () => {
+    const groupsAdd = vi.fn(async () => {
       throw new Error("group name exceeds 512 characters");
     });
-    const sessions = createSessions({ groupsPut });
+    const sessions = createSessions({ groupsAdd });
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const page = await createPage(createContext(gateway, sessions));
     const name = "X".repeat(513);
 
     await page.rememberCustomGroup(name);
 
-    expect(groupsPut).toHaveBeenCalledWith([name]);
+    expect(groupsAdd).toHaveBeenCalledWith(name);
     expect(page.error).toBe("Error: group name exceeds 512 characters");
   });
 
@@ -819,14 +819,14 @@ describe("sessions page lifecycle", () => {
     const branched = deferred<{ key: string }>();
     const restored = deferred<unknown>();
     const captured = deferred<unknown>();
-    const groupsPut = deferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
+    const groupsAdd = deferred<Awaited<ReturnType<SessionCapability["groupsAdd"]>>>();
     const sessions = createSessions({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise as never),
       create: vi.fn(() => forked.promise),
       branchCheckpoint: vi.fn(() => branched.promise as never),
       restoreCheckpoint: vi.fn(() => restored.promise as never),
-      groupsPut: vi.fn(() => groupsPut.promise),
+      groupsAdd: vi.fn(() => groupsAdd.promise),
     });
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
@@ -866,7 +866,7 @@ describe("sessions page lifecycle", () => {
     branched.resolve({ key: "branched" });
     restored.reject(new Error("stale restore error"));
     captured.reject(new Error("stale capture error"));
-    groupsPut.reject(new Error("stale group error"));
+    groupsAdd.reject(new Error("stale group error"));
     await Promise.all(requests);
 
     expect(page.result?.sessions.map((row) => row.key)).toEqual(["main"]);

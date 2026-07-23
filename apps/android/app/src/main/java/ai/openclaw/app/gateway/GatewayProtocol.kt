@@ -352,6 +352,8 @@ enum class GatewayMethod(
   SessionsCompact("sessions.compact"),
   SessionsGroupsList("sessions.groups.list"),
   SessionsGroupsPut("sessions.groups.put"),
+  SessionsGroupsAdd("sessions.groups.add"),
+  SessionsGroupsReorder("sessions.groups.reorder"),
   SessionsGroupsRename("sessions.groups.rename"),
   SessionsGroupsDelete("sessions.groups.delete"),
   LastHeartbeat("last-heartbeat"),

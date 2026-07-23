@@ -1038,6 +1038,22 @@ function installControlUiMockGateway(input: {
         persistGroupsState();
         return { ok: true, ...groupsPayload() };
       }
+      case "sessions.groups.add": {
+        const name = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
+        if (name && !groupsState.names.includes(name)) {
+          groupsState.names = [...groupsState.names, name];
+          persistGroupsState();
+        }
+        return { ok: true, ...groupsPayload() };
+      }
+      case "sessions.groups.reorder": {
+        const ordered = normalizedGroupNames(isRecord(params) ? params.names : undefined);
+        // Preserve any names the client did not include, appended in their prior relative order.
+        const remaining = groupsState.names.filter((name) => !ordered.includes(name));
+        groupsState.names = [...ordered, ...remaining];
+        persistGroupsState();
+        return { ok: true, ...groupsPayload() };
+      }
       case "sessions.groups.rename": {
         const from = isRecord(params) && typeof params.name === "string" ? params.name.trim() : "";
         const to = isRecord(params) && typeof params.to === "string" ? params.to.trim() : "";

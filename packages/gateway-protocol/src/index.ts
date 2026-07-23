@@ -454,12 +454,14 @@ import {
   SessionsReclaimParamsSchema,
   SessionsReclaimResultSchema,
   SessionGroupSchema,
+  SessionsGroupsAddParamsSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsListParamsSchema,
   SessionsGroupsListResultSchema,
   SessionsGroupsMutationResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
+  SessionsGroupsReorderParamsSchema,
   SessionDiffFileSchema,
   SessionDiffFileStatusSchema,
   SessionsDiffParamsSchema,
@@ -806,6 +808,8 @@ export const validateSessionsResetParams = lazyCompile(SessionsResetParamsSchema
 export const validateSessionsDeleteParams = lazyCompile(SessionsDeleteParamsSchema);
 export const validateSessionsGroupsListParams = lazyCompile(SessionsGroupsListParamsSchema);
 export const validateSessionsGroupsPutParams = lazyCompile(SessionsGroupsPutParamsSchema);
+export const validateSessionsGroupsAddParams = lazyCompile(SessionsGroupsAddParamsSchema);
+export const validateSessionsGroupsReorderParams = lazyCompile(SessionsGroupsReorderParamsSchema);
 export const validateSessionsGroupsRenameParams = lazyCompile(SessionsGroupsRenameParamsSchema);
 export const validateSessionsGroupsDeleteParams = lazyCompile(SessionsGroupsDeleteParamsSchema);
 export const validateSessionsCompactParams = lazyCompile(SessionsCompactParamsSchema);
@@ -1188,12 +1192,14 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionGroupSchema,
+  SessionsGroupsAddParamsSchema,
   SessionsGroupsListParamsSchema,
   SessionsGroupsListResultSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
   SessionsGroupsDeleteParamsSchema,
   SessionsGroupsMutationResultSchema,
+  SessionsGroupsReorderParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
   SessionDiscussionStateSchema,

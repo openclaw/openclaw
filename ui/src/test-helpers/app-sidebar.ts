@@ -187,6 +187,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const groupsPut = vi.fn(() => Promise.resolve());
+  const groupsAdd = vi.fn(() => Promise.resolve());
+  const groupsReorder = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
@@ -240,6 +242,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
+    groupsAdd,
+    groupsReorder,
     groupsRename,
     groupsDelete,
     create,
@@ -262,6 +266,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   return {
     sessions,
     groupsPut,
+    groupsAdd,
+    groupsReorder,
     groupsRename,
     groupsDelete,
     create,

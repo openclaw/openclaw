@@ -11,7 +11,7 @@ export function sessionCategoryNames(
   return [...new Set([...customGroups, ...fromRows.toSorted((a, b) => a.localeCompare(b))])];
 }
 
-type GroupMutationSessions = Pick<SessionCapability, "groupsPut" | "state">;
+type GroupMutationSessions = Pick<SessionCapability, "groupsAdd" | "state">;
 
 export async function rememberSessionCustomGroup(options: {
   name: string;
@@ -24,7 +24,7 @@ export async function rememberSessionCustomGroup(options: {
     return;
   }
   try {
-    await options.sessions.groupsPut([...(options.sessions.state.groups ?? []), options.name]);
+    await options.sessions.groupsAdd(options.name);
   } catch (error) {
     if (options.isCurrent()) {
       options.onError(String(error));

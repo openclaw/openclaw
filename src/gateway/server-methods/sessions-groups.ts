@@ -2,17 +2,21 @@
 import {
   ErrorCodes,
   errorShape,
+  validateSessionsGroupsAddParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
   validateSessionsGroupsPutParams,
   validateSessionsGroupsRenameParams,
+  validateSessionsGroupsReorderParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  addSessionGroup,
   deleteSessionGroup,
   listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
+  reorderSessionGroups,
 } from "../session-groups.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -33,8 +37,37 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    respond(true, { ok: true, groups: putSessionGroups(params.names) }, undefined);
+    putSessionGroups(params.names);
+    respond(true, { ok: true, groups: listSessionGroups() }, undefined);
     // Catalog-only changes still need to reach other open clients.
+    emitSessionsChanged(context, { reason: "groups" });
+  },
+  "sessions.groups.add": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(params, validateSessionsGroupsAddParams, "sessions.groups.add", respond)
+    ) {
+      return;
+    }
+    try {
+      addSessionGroup(params.name);
+      respond(true, { ok: true, groups: listSessionGroups() }, undefined);
+      emitSessionsChanged(context, { reason: "groups" });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
+  "sessions.groups.reorder": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsGroupsReorderParams,
+        "sessions.groups.reorder",
+        respond,
+      )
+    ) {
+      return;
+    }
+    respond(true, { ok: true, groups: reorderSessionGroups(params.names) }, undefined);
     emitSessionsChanged(context, { reason: "groups" });
   },
   "sessions.groups.rename": async ({ params, respond, context }) => {

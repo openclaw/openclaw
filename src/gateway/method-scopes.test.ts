@@ -72,6 +72,8 @@ describe("method scope resolution", () => {
     ["worktrees.create", ["operator.admin"]],
     ["sessions.groups.list", ["operator.read"]],
     ["sessions.groups.put", ["operator.write"]],
+    ["sessions.groups.add", ["operator.write"]],
+    ["sessions.groups.reorder", ["operator.write"]],
     ["sessions.groups.rename", ["operator.write"]],
     ["sessions.groups.delete", ["operator.write"]],
     ["sessions.catalog.list", ["operator.read"]],
