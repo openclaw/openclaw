@@ -5659,9 +5659,12 @@ describe("update-cli", () => {
     {
       name: "ignores stale pre-update channel snapshots during post-core resume",
       preserveParsed: true,
-      prepare: async (configPath: string, preUpdateConfig: OpenClawConfig) => {
+      prepare: async (configPath: string) => {
+        const staleConfig = {
+          channels: { whatsapp: { enabled: true } },
+        } as OpenClawConfig;
         const snapshotPath = `${configPath}.pre-update`;
-        await fs.writeFile(snapshotPath, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+        await fs.writeFile(snapshotPath, `${JSON.stringify(staleConfig)}\n`, "utf-8");
         const staleTime = new Date(Date.now() - 7 * 60 * 60 * 1000);
         await fs.utimes(snapshotPath, staleTime, staleTime);
         return {};
