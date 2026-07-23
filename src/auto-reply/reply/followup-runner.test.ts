@@ -3391,6 +3391,96 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "keeps queued regular-verbose failed tool result payloads hidden",
+      failedText: "🛠️ Exec: failing queued helper",
+      sourceReplyDeliveryMode: "message_tool_only" as const,
+      finalText: undefined,
+      suppressFinal: false,
+      expectedDeliveries: [],
+    },
+    {
+      name: "drops queued regular-verbose failed tool payloads after a visible final success",
+      failedText: "🛠️ Exec: recovered helper failure",
+      sourceReplyDeliveryMode: undefined,
+      finalText: "final reply",
+      suppressFinal: false,
+      expectedDeliveries: [{ kind: "final", text: "final reply", isError: undefined }],
+    },
+    {
+      name: "flushes queued regular-verbose failed tool payloads when final routing is suppressed",
+      failedText: "🛠️ Exec: recovered helper failure",
+      sourceReplyDeliveryMode: undefined,
+      finalText: "suppressed final reply",
+      suppressFinal: true,
+      expectedDeliveries: [
+        { kind: "final", text: "suppressed final reply", isError: undefined },
+        { kind: "tool", text: "🛠️ Exec: recovered helper failure", isError: true },
+      ],
+    },
+    {
+      name: "flushes queued regular-verbose failed tool payloads when no final payload is visible",
+      failedText: "🛠️ Exec: terminal helper failure",
+      sourceReplyDeliveryMode: undefined,
+      finalText: undefined,
+      suppressFinal: false,
+      expectedDeliveries: [
+        { kind: "tool", text: "🛠️ Exec: terminal helper failure", isError: true },
+      ],
+    },
+  ])(
+    "$name",
+    async ({
+      failedText,
+      sourceReplyDeliveryMode,
+      finalText,
+      suppressFinal,
+      expectedDeliveries,
+    }) => {
+      if (suppressFinal) {
+        routeReplyMock.mockResolvedValueOnce({ ok: true, suppressed: true });
+      }
+      const queued = createQueuedRun({
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "acct-1",
+        originatingThreadId: "thread-1",
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode,
+          verboseLevel: "on",
+        },
+      });
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (args: {
+          onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+        }) => {
+          await args.onToolResult?.({ text: failedText, isError: true });
+          return {
+            payloads: finalText ? [{ text: finalText }] : [],
+            meta: { agentMeta: {} },
+          };
+        },
+      );
+
+      const runner = createFollowupRunner({
+        typing: createMockTypingController(),
+        typingMode: "instant",
+        defaultModel: "claude",
+      });
+      await runner(queued);
+
+      expect(
+        routeReplyMock.mock.calls.map((_, index) => {
+          const call = requireMockCallArg(routeReplyMock, index);
+          const payload = requireRecord(call.payload, `mock call ${index} payload`);
+          return { kind: call.replyKind, text: payload.text, isError: payload.isError };
+        }),
+      ).toEqual(expectedDeliveries);
+    },
+  );
+
   it("delivers queued fast auto progress for non-room-event message-tool-only turns", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -3530,7 +3620,7 @@ describe("createFollowupRunner progress forwarding", () => {
       originatingThreadId: "thread-1",
       run: {
         messageProvider: "discord",
-        verboseLevel: "on",
+        verboseLevel: "full",
       },
     });
     let releaseProgressRoute: (() => void) | undefined;
@@ -3746,7 +3836,7 @@ describe("createFollowupRunner progress forwarding", () => {
       originatingThreadId: "thread-1",
       run: {
         messageProvider: "discord",
-        verboseLevel: "on",
+        verboseLevel: "full",
       },
     });
 
@@ -4107,7 +4197,7 @@ describe("createFollowupRunner progress forwarding", () => {
               exitCode: 1,
             },
           });
-          expect(shouldSuppress()).toBe(true);
+          expect(shouldSuppress()).toBeUndefined();
           return { payloads: [], meta: { agentMeta: {} } };
         },
       )
@@ -4145,7 +4235,7 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
   it("keeps queued tool-error fallbacks when the channel declines failed progress", async () => {
@@ -4186,7 +4276,7 @@ describe("createFollowupRunner progress forwarding", () => {
         run: {
           messageProvider: "discord",
           sourceReplyDeliveryMode: "message_tool_only",
-          verboseLevel: "on",
+          verboseLevel: "full",
         },
       }),
     );

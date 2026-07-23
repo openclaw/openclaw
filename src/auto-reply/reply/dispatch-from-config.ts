@@ -768,15 +768,15 @@ async function dispatchReplyFromConfigInner(
     abortSignal?: AbortSignal,
     mirror?: boolean,
     kind: ReplyDispatchKind = "tool",
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
-      return;
+      return false;
     }
     const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
-      return;
+      return false;
     }
     const result = await routeReplyToOriginating(payload, {
       abortSignal: effectiveAbortSignal,
@@ -786,6 +786,7 @@ async function dispatchReplyFromConfigInner(
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
     }
+    return result ? isRoutedReplyDelivered(result) : false;
   };
 
   type PluginBindingTranscriptOwner = {
@@ -1649,15 +1650,16 @@ async function dispatchReplyFromConfigInner(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (isRoutedReplyDelivered(result)) {
+        const delivered = isRoutedReplyDelivered(result);
+        if (delivered) {
           await mirrorDeliveredReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
           });
         }
         return {
-          queuedFinal: result.ok,
-          routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+          queuedFinal: delivered,
+          routedFinalCount: delivered ? 1 : 0,
         };
       }
       throwIfFinalDeliveryAborted();
@@ -1981,6 +1983,8 @@ async function dispatchReplyFromConfigInner(
     let accumulatedBlockText = "";
     let accumulatedBlockTtsText = "";
     let blockCount = 0;
+    let cleanRoutedBlockDeliverySucceeded = false;
+    const cleanDirectBlockDeliveryOutcomes: Array<Promise<ReplyDispatchDeliveryOutcome>> = [];
     const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
       cfg,
       ttsAuto: sessionTtsAuto,
@@ -2058,6 +2062,33 @@ async function dispatchReplyFromConfigInner(
       payload.status === "failed" ||
       payload.status === "error" ||
       (typeof payload.exitCode === "number" && payload.exitCode !== 0);
+    const shouldForwardFailedProgress = (options?: { force?: boolean }) =>
+      options?.force === true || shouldEmitFullVerboseProgress();
+    const shouldBufferFailedProgress = (options?: { force?: boolean }) =>
+      sourceReplyDeliveryMode !== "message_tool_only" &&
+      !shouldForwardFailedProgress(options) &&
+      hasVisibleRegularVerboseToolProgress();
+    const shouldForwardFailedProgressStatus = (payload: {
+      phase?: string;
+      status?: string;
+      exitCode?: number | null;
+    }) => shouldForwardFailedProgress() || !hasFailedProgressStatus(payload);
+    const pendingFailedProgressDeliveries: Array<() => Promise<void>> = [];
+    const enqueuePendingFailedProgressDelivery = (deliver: () => Promise<void>) => {
+      pendingFailedProgressDeliveries.push(deliver);
+    };
+    const discardPendingFailedProgressDeliveries = () => {
+      pendingFailedProgressDeliveries.length = 0;
+    };
+    const flushPendingFailedProgressDeliveries = async () => {
+      const deliveries = pendingFailedProgressDeliveries.splice(0);
+      for (const deliver of deliveries) {
+        if (isDispatchOperationAborted()) {
+          return;
+        }
+        await deliver();
+      }
+    };
     const shouldSuppressToolErrorWarnings = () => {
       if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
         return params.replyOptions.suppressToolErrorWarnings;
@@ -2080,7 +2111,7 @@ async function dispatchReplyFromConfigInner(
       const text = normalizeOptionalString(payload.text);
       return Boolean(text?.startsWith("🛠️") || text?.startsWith("🔧"));
     };
-    const shouldForwardToolResultProgressCallback = (
+    const shouldForwardToolResultProgressCallbackBase = (
       payload: ReplyPayload,
       isFastModeAutoProgress: boolean,
     ) => {
@@ -2095,6 +2126,13 @@ async function dispatchReplyFromConfigInner(
       }
       return shouldSendToolSummaries() && shouldForwardProgressCallback();
     };
+    const shouldForwardToolResultProgressCallback = (
+      payload: ReplyPayload,
+      isFastModeAutoProgress: boolean,
+      isForcedToolProgress: boolean,
+    ) =>
+      (payload.isError !== true || shouldForwardFailedProgress({ force: isForcedToolProgress })) &&
+      shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress);
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       allowWhenToolSummariesHidden?: boolean;
       requiresToolSummaryVisibility?: boolean;
@@ -2154,6 +2192,8 @@ async function dispatchReplyFromConfigInner(
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => Promise<void> | void;
         onVisible?: (...args: Args) => Promise<void> | void;
+        deferWhenShouldForwardFalse?: boolean;
+        shouldForward?: (...args: Args) => boolean;
         waitForDirectBlockReplyDelivery?: boolean;
       },
     ): ((...args: Args) => Promise<Result | undefined>) | undefined => {
@@ -2175,6 +2215,21 @@ async function dispatchReplyFromConfigInner(
             if (isDispatchOperationAborted()) {
               return undefined;
             }
+          }
+          if (options?.shouldForward?.(...args) === false) {
+            if (options.deferWhenShouldForwardFalse === true && shouldBufferFailedProgress()) {
+              enqueuePendingFailedProgressDelivery(async () => {
+                if (!shouldForwardProgressCallback(options)) {
+                  return;
+                }
+                await options.onForward?.(...args);
+                const result = await callback(...args);
+                if (result !== false) {
+                  await options.onVisible?.(...args);
+                }
+              });
+            }
+            return undefined;
           }
           if (shouldForwardProgressCallback(options)) {
             if (preserveProgressCallbackStartOrder && options?.onForward) {
@@ -2229,6 +2284,8 @@ async function dispatchReplyFromConfigInner(
       ? wrapProgressCallback(params.replyOptions?.onItemEvent, {
           ...itemEventForwardingOptions,
           waitForDirectBlockReplyDelivery: true,
+          deferWhenShouldForwardFalse: true,
+          shouldForward: shouldForwardFailedProgressStatus,
           onForward: (payload) =>
             preserveProgressCallbackStartOrder &&
             deliverStandaloneCommentaryProgress &&
@@ -2338,6 +2395,8 @@ async function dispatchReplyFromConfigInner(
                     forwardWhenSourceDeliverySuppressed: true,
                     requiresToolSummaryVisibility: true,
                     waitForDirectBlockReplyDelivery: true,
+                    deferWhenShouldForwardFalse: true,
+                    shouldForward: shouldForwardFailedProgressStatus,
                     onVisible: (payload) => {
                       if (hasFailedProgressStatus(payload)) {
                         markVisibleToolErrorProgress();
@@ -2393,9 +2452,20 @@ async function dispatchReplyFromConfigInner(
                       const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                         payload,
                         isFastModeAutoProgress,
+                        isForcedToolProgress,
                       );
                       if (progressCallbackForwarded) {
                         await onToolResultFromReplyOptions?.(payload);
+                      } else if (
+                        onToolResultFromReplyOptions &&
+                        payload.isError === true &&
+                        shouldBufferFailedProgress({ force: isForcedToolProgress }) &&
+                        shouldForwardToolResultProgressCallbackBase(payload, isFastModeAutoProgress)
+                      ) {
+                        enqueuePendingFailedProgressDelivery(async () => {
+                          markVisibleToolErrorProgress();
+                          await onToolResultFromReplyOptions(payload);
+                        });
                       }
                       if (isDispatchOperationAborted()) {
                         return;
@@ -2468,9 +2538,6 @@ async function dispatchReplyFromConfigInner(
                           return;
                         }
                       }
-                      if (deliveryPayload.isError === true) {
-                        markVisibleToolErrorProgress();
-                      }
                       const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
                       if (
                         askUserQuestionId !== undefined &&
@@ -2480,6 +2547,29 @@ async function dispatchReplyFromConfigInner(
                       }
                       if (isDispatchOperationAborted()) {
                         return;
+                      }
+                      if (
+                        deliveryPayload.isError === true &&
+                        !shouldForwardFailedProgress({ force: isForcedToolProgress })
+                      ) {
+                        if (shouldBufferFailedProgress({ force: isForcedToolProgress })) {
+                          enqueuePendingFailedProgressDelivery(async () => {
+                            if (isDispatchOperationAborted()) {
+                              return;
+                            }
+                            markVisibleToolErrorProgress();
+                            if (shouldRouteToOriginating) {
+                              await sendPayloadAsync(deliveryPayload, undefined, false);
+                            } else {
+                              markInboundDedupeReplayUnsafe();
+                              dispatcher.sendToolResult(deliveryPayload);
+                            }
+                          });
+                        }
+                        return;
+                      }
+                      if (deliveryPayload.isError === true) {
+                        markVisibleToolErrorProgress();
                       }
                       if (shouldRouteToOriginating) {
                         await sendPayloadAsync(deliveryPayload, undefined, false);
@@ -2715,18 +2805,31 @@ async function dispatchReplyFromConfigInner(
                       if (isDispatchOperationAborted()) {
                         return;
                       }
+                      const isCleanBlockDelivery =
+                        payload.isError !== true &&
+                        payload.isReasoning !== true &&
+                        payload.isCommentary !== true &&
+                        !isStatusNotice;
                       if (shouldRouteToOriginating) {
-                        await sendPayloadAsync(
+                        const delivered = await sendPayloadAsync(
                           normalizedPayload,
                           context?.abortSignal,
                           false,
                           "block",
                         );
+                        cleanRoutedBlockDeliverySucceeded =
+                          (isCleanBlockDelivery && delivered) || cleanRoutedBlockDeliverySucceeded;
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        const delivered = dispatcher.sendBlockReply(normalizedPayload);
-                        if (delivered) {
+                        const deliveryOutcome = isCleanBlockDelivery
+                          ? captureReplyDispatchDeliveryOutcome(normalizedPayload)
+                          : undefined;
+                        const queued = dispatcher.sendBlockReply(normalizedPayload);
+                        if (queued) {
                           hasPendingDirectBlockReplyDelivery = true;
+                          if (deliveryOutcome?.isTracked()) {
+                            cleanDirectBlockDeliveryOutcomes.push(deliveryOutcome.promise);
+                          }
                         }
                       }
                     };
@@ -2738,7 +2841,11 @@ async function dispatchReplyFromConfigInner(
             ),
           trackDispatchLifecycleWork,
         ),
-    );
+    ).catch(async (error: unknown) => {
+      await flushPendingCommentaryProgress();
+      await flushPendingFailedProgressDeliveries();
+      throw error;
+    });
     const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
     notifySessionMetadataChanges(sessionMetadataChanges);
     const finalDispatchAcquisition = await ensureDispatchReplyOperation("dispatch");
@@ -2843,6 +2950,8 @@ async function dispatchReplyFromConfigInner(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    let cleanRoutedFinalDeliverySucceeded = false;
+    let completedReplyOperationBeforeFinalSettlement = false;
     const finalDeliveries: Array<{
       outcome: Promise<ReplyDispatchDeliveryOutcome>;
       payload: ReplyPayload;
@@ -2893,9 +3002,18 @@ async function dispatchReplyFromConfigInner(
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
+      const isCleanFinalDelivery =
+        reply.isError !== true &&
+        reply.isReasoning !== true &&
+        reply.isCommentary !== true &&
+        !isReplyPayloadStatusNotice(reply) &&
+        hasOutboundReplyContent(reply, { trimText: true });
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
+      if (isCleanFinalDelivery && finalReply.routedFinalCount > 0) {
+        cleanRoutedFinalDeliverySucceeded = true;
+      }
       if (finalReply.queuedFinal) {
         if (finalReply.dispatcherOutcome) {
           finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
@@ -2994,9 +3112,11 @@ async function dispatchReplyFromConfigInner(
               kind: "final",
             });
             if (result) {
-              queuedFinal = result.ok || queuedFinal;
-              if (isRoutedReplyDelivered(result)) {
+              const delivered = isRoutedReplyDelivered(result);
+              queuedFinal = delivered || queuedFinal;
+              if (delivered) {
                 routedFinalCount += 1;
+                cleanRoutedFinalDeliverySucceeded = true;
               }
               if (!result.ok) {
                 logVerbose(
@@ -3006,8 +3126,19 @@ async function dispatchReplyFromConfigInner(
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
+              const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedTtsOnlyPayload);
               const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
               queuedFinal = didQueue || queuedFinal;
+              if (didQueue) {
+                if (deliveryOutcome.isTracked()) {
+                  finalDeliveries.push({
+                    outcome: deliveryOutcome.promise,
+                    payload: normalizedTtsOnlyPayload,
+                  });
+                } else {
+                  allQueuedFinalsObserved = false;
+                }
+              }
             }
           }
         } catch (err) {
@@ -3022,6 +3153,45 @@ async function dispatchReplyFromConfigInner(
     }
 
     await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
+    if (pendingFailedProgressDeliveries.length > 0) {
+      const cleanDirectFinalDeliveries = finalDeliveries.filter(
+        ({ payload }) =>
+          payload.isError !== true &&
+          payload.isReasoning !== true &&
+          payload.isCommentary !== true &&
+          !isReplyPayloadStatusNotice(payload) &&
+          hasOutboundReplyContent(payload, { trimText: true }),
+      );
+      let cleanDirectDeliverySucceeded = false;
+      if (
+        !cleanRoutedFinalDeliverySucceeded &&
+        !cleanRoutedBlockDeliverySucceeded &&
+        !getObservedReplyDelivery() &&
+        (cleanDirectFinalDeliveries.length > 0 || cleanDirectBlockDeliveryOutcomes.length > 0)
+      ) {
+        if (cleanDirectFinalDeliveries.length > 0) {
+          // Release the session lane before waiting for queued final delivery so a
+          // same-session dispatcher handoff cannot deadlock final settlement.
+          completeDispatchReplyOperation();
+          completedReplyOperationBeforeFinalSettlement = true;
+        }
+        const outcomes = await Promise.all([
+          ...cleanDirectFinalDeliveries.map(({ outcome }) => outcome),
+          ...cleanDirectBlockDeliveryOutcomes,
+        ]);
+        cleanDirectDeliverySucceeded = outcomes.includes("delivered");
+      }
+      if (
+        cleanRoutedFinalDeliverySucceeded ||
+        cleanRoutedBlockDeliverySucceeded ||
+        cleanDirectDeliverySucceeded ||
+        getObservedReplyDelivery()
+      ) {
+        discardPendingFailedProgressDeliveries();
+      } else {
+        await flushPendingFailedProgressDeliveries();
+      }
+    }
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     commitInboundDedupeIfClaimed();
@@ -3031,7 +3201,9 @@ async function dispatchReplyFromConfigInner(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    completeDispatchReplyOperation();
+    if (!completedReplyOperationBeforeFinalSettlement) {
+      completeDispatchReplyOperation();
+    }
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
