@@ -179,6 +179,11 @@ What should I grab on the way?`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
+  it("preserves the line immediately after active memory block without trailing empty separator", () => {
+    const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\nNext line`;
+    expect(stripInboundMetadata(input)).toBe("Next line");
+  });
+
   it("strips a leading active-memory prompt prefix block from leading-only history views", () => {
     const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
     expect(stripLeadingInboundMetadata(input)).toBe("What should I grab on the way?");
