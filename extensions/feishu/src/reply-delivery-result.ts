@@ -121,13 +121,3 @@ export function isFeishuPartialReplyDeliveryError(
     )
   );
 }
-
-/** Attaches provider settlement without changing the immediate delivery result. */
-export function withFeishuReplyFinalization(
-  result: FeishuReplyDeliveryResult,
-  finalization: Promise<FeishuReplyDeliveryResult>,
-): FeishuReplyDeliveryResultWithFinalization {
-  // Observe rejections here because core cannot await until the dispatcher finishes onIdle.
-  void finalization.catch(() => undefined);
-  return { ...result, finalization };
-}

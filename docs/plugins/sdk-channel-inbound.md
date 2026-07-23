@@ -90,11 +90,12 @@ not emit those events in the plugin too. Durable sends already emit through
 the shared outbound owner and are not duplicated.
 
 Return one result per logical payload. `finalization` is not a second send and
-must not rerun `reply_payload_sending` or `message_sending`. Core waits for all
-returned finalization promises after reply dispatch settles, then emits at most
-one terminal observation per payload with the finalized content and provider
-id. `onDelivered`, when present, receives the settled result after that
-observation.
+must not rerun `reply_payload_sending` or `message_sending`. As soon as
+`deliver` returns, core observes the finalization promise's rejection so it
+cannot become unhandled; core still awaits the original promise after reply
+dispatch settles. It then emits at most one terminal observation per payload
+with the finalized content and provider id. `onDelivered`, when present,
+receives the settled result after that observation.
 
 Reject `deliver` or `finalization` when native delivery fails. If no provider
 send was attempted, throw `PlatformMessageNotDispatchedError` from
