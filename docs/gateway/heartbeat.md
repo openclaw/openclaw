@@ -32,7 +32,6 @@ Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
     `target: "none"` is the default; set `target: "last"` to route to the last contact.
   </Step>
   <Step title="Optional tuning">
-    - Enable heartbeat reasoning delivery for transparency.
     - Use lightweight bootstrap context if heartbeat runs only need the monitor scratch.
     - Enable isolated sessions to avoid sending full conversation history each heartbeat.
     - Restrict heartbeats to active hours (local time).
