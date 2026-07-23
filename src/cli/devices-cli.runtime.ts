@@ -311,6 +311,11 @@ function isDevicePairingApprovalDenied(error: unknown): boolean {
   );
 }
 
+function isMissingOperatorScopeError(error: unknown, scope: OperatorScope): boolean {
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  return message.includes("missing scope") && message.includes(scope);
+}
+
 function isUnknownRequestIdError(error: unknown): boolean {
   const maybeGatewayError =
     typeof error === "object" && error !== null
@@ -333,30 +338,135 @@ function isScopeUpgradePendingApproval(error: unknown): boolean {
   );
 }
 
+/**
+ * Whether the CLI is targeting a local loopback gateway, making it safe to
+ * read/write pairing files directly as a fallback.
+ */
+function isLocalLoopbackGateway(opts: DevicesRpcOpts): boolean {
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  if (connection.urlSource !== "local loopback") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(connection.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
 ): { details: ConnectPairingRequiredDetails } | null {
-  // Local fallback is only safe for implicit loopback gateway URLs.
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   const details = readConnectPairingRequiredMessage(message);
   if (!details) {
     return null;
   }
-  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
-    // Explicit --url might point at a remote/tunneled gateway; never silently
-    // switch to local pairing files in that case.
+  if (!isLocalLoopbackGateway(opts)) {
     return null;
   }
-  const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
-    return null;
+  return { details };
+}
+
+/**
+ * Attempt local file-based approval when the gateway returns `unknown requestId`
+ * (password auth mode). In password mode the CLI connects successfully, but the
+ * pending request may have been refreshed by a node-host reconnect before the
+ * approval lands — producing a method-level error instead of the connection-level
+ * `pairing required` error that {@link resolveLocalPairingFallback} expects.
+ *
+ * Returns the approval result on success, `null` if the request is genuinely
+ * absent from local state, or `undefined` if local fallback is not applicable
+ * (non-loopback or no local pending entries).
+ */
+async function tryLocalApproveForLoopback(
+  opts: DevicesRpcOpts,
+  requestId: string,
+  originalRequest: PendingDevice | null,
+): Promise<Record<string, unknown> | null | undefined> {
+  if (!isLocalLoopbackGateway(opts)) {
+    return undefined;
   }
-  try {
-    return isLoopbackHost(new URL(connection.url).hostname) ? { details } : null;
-  } catch {
-    return null;
+  const local = await listDevicePairing();
+  const localPending = local.pending as PendingDevice[];
+  const localPaired = local.paired.map((device) => redactLocalPairedDevice(device));
+
+  // Case 1: the original requestId still exists in local pending state.
+  if (findPendingRequestById(localPending, requestId)) {
+    const approved = await approveDevicePairing(requestId, {
+      callerScopes: ["operator.admin"],
+    });
+    if (!approved) {
+      return null;
+    }
+    if (approved.status === "forbidden") {
+      throw new Error(formatDevicePairingForbiddenMessage(approved));
+    }
+    if (opts.json !== true) {
+      defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+    }
+    return {
+      requestId,
+      device: redactLocalPairedDevice(approved.device),
+    };
   }
+
+  // Case 2: node-host already refreshed the request. Use the existing
+  // compatibility gate to find a safe same-device replacement.
+  if (originalRequest) {
+    const replacement = localPending
+      .filter(
+        (req) =>
+          normalizeOptionalString(req.deviceId) ===
+            normalizeOptionalString(originalRequest.deviceId) &&
+          normalizeOptionalString(req.requestId) !== requestId,
+      )
+      .map((candidate) =>
+        findSameDeviceReplacementRequest({
+          originalRequest,
+          originalRequestId: requestId,
+          gatewayRequestId: normalizeOptionalString(candidate.requestId) ?? "",
+          pending: localPending,
+          paired: localPaired,
+        }),
+      )
+      .find((result): result is PendingDevice => result !== null);
+
+    if (replacement) {
+      const approved = await approveDevicePairing(replacement.requestId, {
+        callerScopes: ["operator.admin"],
+      });
+      if (!approved) {
+        return null;
+      }
+      if (approved.status === "forbidden") {
+        throw new Error(formatDevicePairingForbiddenMessage(approved));
+      }
+      if (opts.json !== true) {
+        defaultRuntime.log(
+          theme.warn(
+            `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
+          ),
+        );
+        defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+      }
+      return {
+        requestId: replacement.requestId,
+        resolved: {
+          kind: "same-device-replacement" as const,
+          requestedRequestId: requestId,
+          approvedRequestId: replacement.requestId,
+        },
+        device: redactLocalPairedDevice(approved.device),
+      };
+    }
+  }
+
+  return undefined;
 }
 
 function buildFallbackStateMismatchError(details: ConnectPairingRequiredDetails): Error {
@@ -401,6 +511,16 @@ async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePair
   } catch (error) {
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
+      if (isMissingOperatorScopeError(error, PAIRING_SCOPE) && isLocalLoopbackGateway(opts)) {
+        const local = await listDevicePairing();
+        if (opts.json !== true) {
+          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+        }
+        return {
+          pending: local.pending as PendingDevice[],
+          paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+        };
+      }
       throw error;
     }
     const local = await listDevicePairing();
@@ -439,6 +559,16 @@ async function approvePairingWithFallback(
         );
       } catch (adminError) {
         if (isUnknownRequestIdError(adminError)) {
+          // Password auth: gateway connection succeeded but the pending request
+          // was refreshed before approval. Try local file-based fallback.
+          const localApproved = await tryLocalApproveForLoopback(
+            opts,
+            requestId,
+            originalRequest,
+          );
+          if (localApproved !== undefined) {
+            return localApproved;
+          }
           return null;
         }
         throw adminError;
@@ -446,7 +576,28 @@ async function approvePairingWithFallback(
     }
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
+      if (isMissingOperatorScopeError(error, PAIRING_SCOPE)) {
+        // Password/shared-secret loopback auth can connect device-less but lose
+        // operator scopes before the gateway reaches requestId validation.
+        const localApproved = await tryLocalApproveForLoopback(opts, requestId, originalRequest);
+        if (localApproved !== undefined) {
+          return localApproved;
+        }
+        return null;
+      }
       if (isUnknownRequestIdError(error)) {
+        // Password auth mode: the gateway accepted the connection but returned
+        // a method-level unknown-requestId error (the pending request was
+        // rotated by node-host reconnect). Resolve via local pairing files
+        // when operating against a loopback gateway.
+        const localApproved = await tryLocalApproveForLoopback(
+          opts,
+          requestId,
+          originalRequest,
+        );
+        if (localApproved !== undefined) {
+          return localApproved;
+        }
         return null;
       }
       throw error;
