@@ -4725,6 +4725,64 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("defers rollover of a legacy pending-reset tombstone while the same session has an active run", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "active-tombstone-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-tombstone-archive-");
+      const sessionKey = "agent:main:telegram:dm:active-tombstone-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      // Older releases persisted updatedAt=0 as an explicit pending reset marker;
+      // evaluateSessionFreshness reports it as { fresh: false } with no staleReason.
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: 0,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello while active",
+          RawBody: "hello while active",
+          CommandBody: "hello while active",
+          From: "user-active-tombstone",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.previousSessionEntry).toBeUndefined();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not defer stale archival for the current turn's queued reservation", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
