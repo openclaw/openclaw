@@ -11,8 +11,8 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 /** Gateway subscription and reactive narration state for the session-list renderer. */
 export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusElement {
-  @state() protected sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
-  @state() protected sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
+  @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the

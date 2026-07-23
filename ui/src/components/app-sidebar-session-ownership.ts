@@ -10,7 +10,7 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
   protected sessionCreatorOptions: readonly SessionCreatedBy[] = [];
   protected activeSessionCreatorId: string | null = null;
   protected sessionCreatorFilterActive = false;
-  protected sessionOwnershipVisible = false;
+  sessionOwnershipVisible = false;
 
   override updated() {
     super.updated();
