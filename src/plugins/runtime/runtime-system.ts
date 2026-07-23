@@ -42,7 +42,21 @@ export function createRuntimeSystem(): PluginRuntime["system"] {
         heartbeat: heartbeat ? { target: heartbeat.target } : undefined,
       });
     },
-    runCommandWithTimeout,
+    // Host-hook / plugin runtime commands default to process-tree termination so
+    // timeout and abort cleanup reaps descendants, not only the direct child.
+    // Callers may still pass killProcessTree: false to opt out explicitly.
+    runCommandWithTimeout: ((argv, optionsOrTimeout) => {
+      if (typeof optionsOrTimeout === "number") {
+        return runCommandWithTimeout(argv, {
+          timeoutMs: optionsOrTimeout,
+          killProcessTree: true,
+        });
+      }
+      return runCommandWithTimeout(argv, {
+        ...optionsOrTimeout,
+        killProcessTree: optionsOrTimeout.killProcessTree ?? true,
+      });
+    }) as typeof runCommandWithTimeout,
     formatNativeDependencyHint,
   };
 }

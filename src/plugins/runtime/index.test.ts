@@ -147,7 +147,27 @@ describe("plugin runtime command execution", () => {
 
     const runtime = createPluginRuntime();
     await expectRunCommandOutcome({ runtime, expected, commandResult });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], {
+      timeoutMs: 1000,
+      killProcessTree: true,
+    });
+  });
+
+  it("preserves explicit killProcessTree:false for plugin runtime commands", async () => {
+    const commandResult = createCommandResult();
+    const runCommandWithTimeoutMock = vi.spyOn(execModule, "runCommandWithTimeout");
+    runCommandWithTimeoutMock.mockResolvedValue(commandResult);
+
+    const runtime = createPluginRuntime();
+    await runtime.system.runCommandWithTimeout(["echo", "hello"], {
+      timeoutMs: 1000,
+      killProcessTree: false,
+    });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], {
+      timeoutMs: 1000,
+      killProcessTree: false,
+    });
   });
 
   it.each([

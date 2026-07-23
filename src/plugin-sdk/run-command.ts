@@ -34,10 +34,13 @@ export async function runPluginCommandWithTimeout(
   }
 
   try {
+    // Plugin-managed commands may spawn descendants; reaping only the direct
+    // child on timeout/abort leaves orphans holding host resources.
     const result = await runCommandWithTimeout(options.argv, {
       timeoutMs: options.timeoutMs,
       cwd: options.cwd,
       env: options.env,
+      killProcessTree: true,
     });
     const timedOut = result.termination === "timeout" || result.termination === "no-output-timeout";
     return {
