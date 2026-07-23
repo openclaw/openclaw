@@ -18,9 +18,9 @@ const pool = mysql.createPool({
 });
 export async function query<T>(sql: string, params: any[] = []): Promise<T[]> {
   const [rows] = await pool.query(sql, params);
-  //   const [tester] = await pool.query(
-  //     "SELECT PoolPrivateYN, ViewYN FROM rets_property WHERE L_Status = 'Active' AND L_City = 'Irvine' ORDER BY L_SystemPrice ASC LIMIT 10 OFFSET 0",
-  //   );
-  //   console.log("MySQL connection test result:", tester);
+  // const [tester] = await pool.query(
+  //   "SELECT City,COUNT(*) AS sold_count, ROUND(AVG(ClosePrice), 0) AS avg_close_price, ROUND(AVG(ClosePrice / NULLIF(LivingArea,0)),0) AS avg_price_per_sqft, ROUND(AVG(DaysOnMarket), 1) AS avg_dom, ROUND(AVG(ClosePrice / NULLIF(ListPrice,0)) * 100, 1) AS list_to_close_pct FROM california_sold WHERE PropertyType = 'Residential' AND CloseDate >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH) AND LivingArea > 0 GROUP BY City ORDER BY sold_count DESC LIMIT 25;",
+  // );
+  // console.log("MySQL connection test result:", tester);
   return rows as T[];
 }

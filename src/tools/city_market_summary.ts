@@ -1,4 +1,4 @@
-import { query } from "./tools/mySQL_connector.ts";
+import { query } from "./mySQL_connector.ts";
 
 export async function get_market_summary() {
   const sql = `
