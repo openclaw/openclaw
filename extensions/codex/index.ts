@@ -10,7 +10,6 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -58,6 +57,16 @@ export default definePluginEntry({
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
   register(api) {
+    // CLI metadata discovery (and other partial host loads) invoke register
+    // without a full runtime surface. Register the command descriptors first so
+    // metadata stays discoverable, then defer all runtime wiring (which needs
+    // runtime.state.openSyncKeyedStore and would otherwise throw and surface as
+    // "Codex crashed" on unknown commands) to the authoritative full lifecycle
+    // mode. See #107219.
+    registerCodexCliMetadata(api);
+    if (api.registrationMode !== "full") {
+      return;
+    }
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
@@ -85,28 +94,13 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
-    const openBindingStateStore = () =>
-      (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
+    const bindingStore = createLazyCodexAppServerBindingStore(() =>
+      api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         overflowPolicy: "reject-new",
-      }));
-    // The base registration runtime deliberately rejects state access. Open the
-    // store only when a proxied runtime performs the first binding operation.
-    const lazyBindingStateStore: Pick<
-      PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-      "entries" | "lookup" | "update"
-    > = {
-      entries: () => openBindingStateStore().entries(),
-      lookup: (key) => openBindingStateStore().lookup(key),
-      get update() {
-        const store = openBindingStateStore();
-        return store.update?.bind(store);
-      },
-    };
-    const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
-    registerCodexCliMetadata(api);
+      }),
+    );
     const sessionCatalogControl = createCodexSessionCatalogControl({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,

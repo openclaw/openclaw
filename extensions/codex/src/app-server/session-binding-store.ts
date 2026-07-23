@@ -9,17 +9,24 @@ import type { CodexAppServerBindingStore, StoredCodexAppServerBinding } from "./
 export { CODEX_APP_SERVER_BINDING_MAX_ENTRIES, CODEX_APP_SERVER_BINDING_NAMESPACE };
 export type { StoredCodexAppServerBinding } from "./session-binding.js";
 
-/** Defers schema compilation and auth loading until the first binding operation. */
+type CodexAppServerBindingState = Pick<
+  PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
+  "entries" | "lookup" | "update"
+>;
+
+/**
+ * Defers schema compilation, auth loading, AND plugin-state acquisition until
+ * the first binding operation. `state` may be a resolved store or a thunk; the
+ * thunk (which calls `openSyncKeyedStore`) is only invoked lazily so plugin
+ * registration never touches the runtime state proxy. See #107219.
+ */
 export function createLazyCodexAppServerBindingStore(
-  state: Pick<
-    PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-    "entries" | "lookup" | "update"
-  >,
+  state: CodexAppServerBindingState | (() => CodexAppServerBindingState),
 ): CodexAppServerBindingStore {
   let resolved: Promise<CodexAppServerBindingStore> | undefined;
   const store = () =>
     (resolved ??= import("./session-binding.js").then(({ createCodexAppServerBindingStore }) =>
-      createCodexAppServerBindingStore(state),
+      createCodexAppServerBindingStore(typeof state === "function" ? state() : state),
     ));
   return {
     read: async (identity) => (await store()).read(identity),
