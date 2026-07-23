@@ -26,7 +26,10 @@ vi.mock("./browser-session-control.js", () => ({
 }));
 
 import { createMeetingChromeTransport } from "./chrome-transport.js";
-import type { MeetingPlatformAdapter, MeetingPlatformRuntimeMetadata } from "./platform-adapter.js";
+import type {
+  MeetingPlatformAdapter,
+  MeetingPlatformRuntimeMetadata,
+} from "./platform-adapter-contract.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 
 type TestMode = "agent" | "transcribe";
