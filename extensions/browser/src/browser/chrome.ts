@@ -1379,19 +1379,22 @@ export async function isChromeCdpOwnedByPid(
   }
 }
 
-async function requestGracefulChromeClose(
-  running: RunningChrome,
-  timeoutMs: number,
-): Promise<boolean> {
+async function requestGracefulChromeClose(params: {
+  cdpUrl: string;
+  pid: number;
+  timeoutMs: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<boolean> {
   const commandTimeoutMs = Math.max(
     1,
-    Math.min(timeoutMs, CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS),
+    Math.min(params.timeoutMs, CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS),
   );
   let commandSent = false;
   try {
     const wsUrl = await getChromeWebSocketUrl(
-      cdpUrlForPort(running.cdpPort),
+      params.cdpUrl,
       Math.min(commandTimeoutMs, CHROME_STOP_PROBE_TIMEOUT_MS),
+      params.ssrfPolicy,
     );
     if (!wsUrl) {
       return false;
@@ -1402,7 +1405,7 @@ async function requestGracefulChromeClose(
         // The fixed port can be rebound while this handle remains retained.
         // Never ask a replacement browser to close on behalf of the old child.
         const processInfo = await send("SystemInfo.getProcessInfo");
-        if (!cdpProcessListOwnsBrowser(processInfo, running.pid)) {
+        if (!cdpProcessListOwnsBrowser(processInfo, params.pid)) {
           return;
         }
         commandSent = true;
@@ -1423,6 +1426,59 @@ async function requestGracefulChromeClose(
   }
 }
 
+/** Stop the exact managed Chrome owned by a profile, even without its launch handle. */
+export async function stopOwnedOpenClawChrome(
+  resolved: ResolvedBrowserConfig,
+  profile: ResolvedBrowserProfile,
+  timeoutMs = CHROME_STOP_TIMEOUT_MS,
+): Promise<boolean> {
+  if (!profile.cdpIsLoopback || profile.attachOnly || profile.driver !== "openclaw") {
+    return false;
+  }
+  let exe: BrowserExecutable | null;
+  try {
+    exe = resolveBrowserExecutable(resolved, profile);
+  } catch {
+    return false;
+  }
+  if (!exe) {
+    return false;
+  }
+  const userDataDir = resolveOpenClawUserDataDir(profile.name);
+  const pid = readCurrentHostSingletonPid(userDataDir);
+  if (pid == null) {
+    return false;
+  }
+  const identity = readOwnedManagedChromeIdentity({ pid, exe, profile, userDataDir });
+  if (!identity) {
+    return false;
+  }
+
+  // Browser runtimes can live in separate Node processes, so this stopper may
+  // lack the launch handle. Re-prove exact process identity before any signal.
+  const gracefulCloseRequested = await requestGracefulChromeClose({
+    cdpUrl: profile.cdpUrl,
+    pid,
+    timeoutMs,
+    ssrfPolicy: resolved.ssrfPolicy,
+  });
+  if (gracefulCloseRequested && (await waitForPidExit(pid, timeoutMs))) {
+    clearRecoveredChromeSingletonArtifacts(userDataDir, pid);
+    return true;
+  }
+  if (!processExists(pid)) {
+    clearRecoveredChromeSingletonArtifacts(userDataDir, pid);
+    return true;
+  }
+  if (
+    !(await terminateOwnedStaleChromeProcess({ identity, exe, profile, userDataDir }, timeoutMs))
+  ) {
+    return false;
+  }
+  clearRecoveredChromeSingletonArtifacts(userDataDir, pid);
+  return true;
+}
+
 /** Stop a managed Chrome process and wait for shutdown. */
 export async function stopOpenClawChrome(
   running: RunningChrome,
@@ -1438,7 +1494,11 @@ export async function stopOpenClawChrome(
   // Gateway shutdown/restart awaits the Browser plugin stop chain into this
   // method. Browser.close keeps cookies in Chromium's protected profile;
   // signals remain a bounded fallback without duplicating credentials.
-  const gracefulCloseRequested = await requestGracefulChromeClose(running, timeoutMs);
+  const gracefulCloseRequested = await requestGracefulChromeClose({
+    cdpUrl: cdpUrlForPort(running.cdpPort),
+    pid: running.pid,
+    timeoutMs,
+  });
   if (gracefulCloseRequested && (await waitForChromeProcessExit(proc, timeoutMs))) {
     return;
   }
