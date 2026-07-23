@@ -170,7 +170,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const gateway = this.context?.gateway.snapshot;
     return {
       enabled: this.sidebarLiveActivity,
-      connected: this.connected && gateway?.connected === true,
+      connected: this.connected && gateway?.phase === "connected",
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
       rows: this.visibleNarrationRowsInOrder(),

@@ -2783,7 +2783,7 @@ class ChatPane extends OpenClawLightDomElement {
     const sourceChanged =
       state.client !== snapshot.client || wasConnected !== (snapshot.phase === "connected");
     const clientChanged = this.connectedClient !== snapshot.client;
-    if (!snapshot.connected) {
+    if (snapshot.phase !== "connected") {
       this.presencePayload = undefined;
     } else if (clientChanged || !wasConnected) {
       const presence = readPresenceEntries(snapshot.hello?.snapshot);

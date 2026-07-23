@@ -1340,7 +1340,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     const title = formatDocumentTitle({
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
-      offline: !context.gateway.snapshot.connected,
+      offline: context.gateway.snapshot.phase !== "connected",
       queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total ?? 0,
     });
     if (document.title !== title) {
@@ -1747,7 +1747,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 </openclaw-tooltip>
                 ${navCollapsed
                   ? html`<openclaw-tooltip
-                      .content=${gatewaySnapshot.connected
+                      .content=${gatewaySnapshot.phase === "connected"
                         ? t("chat.runControls.newSession")
                         : t("chat.runControls.newSessionDisconnected")}
                     >
@@ -1755,7 +1755,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                         type="button"
                         class="shell-chrome-controls__button shell-chrome-controls__new-thread"
                         aria-label=${t("chat.runControls.newSession")}
-                        ?disabled=${!gatewaySnapshot.connected}
+                        ?disabled=${gatewaySnapshot.phase !== "connected"}
                         @click=${() => this.openNewSession(selectedAgentId)}
                       >
                         ${icons.plus}
