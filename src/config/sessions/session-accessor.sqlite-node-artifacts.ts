@@ -38,7 +38,18 @@ export function rehomeLegacySessionNodeArtifacts(
         db
           .insertInto("board_tabs")
           .values({ ...tab, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.columns(["session_key", "tab_id"]).doNothing()),
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "tab_id"])
+              .doUpdateSet({
+                title: tab.title,
+                position: tab.position,
+                chat_dock: tab.chat_dock,
+                created_by: tab.created_by,
+                revision: tab.revision,
+              })
+              .where("revision", "<", tab.revision),
+          ),
       );
     }
     const widgets = executeSqliteQuerySync(
@@ -51,7 +62,38 @@ export function rehomeLegacySessionNodeArtifacts(
         db
           .insertInto("board_widgets")
           .values({ ...widget, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.columns(["session_key", "name"]).doNothing()),
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "name"])
+              .doUpdateSet({
+                tab_id: widget.tab_id,
+                title: widget.title,
+                content_kind: widget.content_kind,
+                html: widget.html,
+                descriptor_json: widget.descriptor_json,
+                sha256: widget.sha256,
+                view_generation: widget.view_generation,
+                revision: widget.revision,
+                size_w: widget.size_w,
+                size_h: widget.size_h,
+                position: widget.position,
+                manifest: widget.manifest,
+                grant_state: widget.grant_state,
+                granted_sha: widget.granted_sha,
+                created_by: widget.created_by,
+                created_at: widget.created_at,
+                updated_at: widget.updated_at,
+              })
+              .where((eb) =>
+                eb.or([
+                  eb("revision", "<", widget.revision),
+                  eb.and([
+                    eb("revision", "=", widget.revision),
+                    eb("updated_at", "<", widget.updated_at),
+                  ]),
+                ]),
+              ),
+          ),
       );
     }
   }
@@ -66,7 +108,34 @@ export function rehomeLegacySessionNodeArtifacts(
         db
           .insertInto("heartbeat_outcomes")
           .values({ ...heartbeat, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.column("session_key").doNothing()),
+          .onConflict((conflict) =>
+            conflict
+              .column("session_key")
+              .doUpdateSet({
+                run_session_key: heartbeat.run_session_key,
+                outcome: heartbeat.outcome,
+                summary: heartbeat.summary,
+                response_reason: heartbeat.response_reason,
+                priority: heartbeat.priority,
+                next_check: heartbeat.next_check,
+                task_names_json: heartbeat.task_names_json,
+                wake_source: heartbeat.wake_source,
+                wake_reason: heartbeat.wake_reason,
+                occurred_at: heartbeat.occurred_at,
+                context_run_id: heartbeat.context_run_id,
+                context_claimed_at: heartbeat.context_claimed_at,
+                updated_at: heartbeat.updated_at,
+              })
+              .where((eb) =>
+                eb.or([
+                  eb("updated_at", "<", heartbeat.updated_at),
+                  eb.and([
+                    eb("updated_at", "=", heartbeat.updated_at),
+                    eb("occurred_at", "<", heartbeat.occurred_at),
+                  ]),
+                ]),
+              ),
+          ),
       );
     }
   }

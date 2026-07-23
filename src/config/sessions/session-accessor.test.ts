@@ -687,7 +687,7 @@ describe("session accessor seam", () => {
       .prepare(
         `INSERT INTO board_tabs (
            session_key, tab_id, title, position, chat_dock, created_by, revision
-         ) VALUES ('agent:main:main', 'main', 'Alias board', 0, 'right', 'user', 1)`,
+         ) VALUES ('agent:main:main', 'main', 'Alias board', 0, 'right', 'user', 2)`,
       )
       .run();
     aliasDatabase.db
@@ -697,7 +697,34 @@ describe("session accessor seam", () => {
            revision, size_w, size_h, position, created_by, created_at, updated_at
          ) VALUES (
            'agent:main:main', 'status', 'main', 'html', X'3C703E6F6B3C2F703E',
-           'hash', 'view-1', 1, 4, 4, 0, 'user', 20, 20
+           'alias-hash', 'view-1', 2, 4, 4, 0, 'user', 20, 20
+         )`,
+      )
+      .run();
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO board_tabs (
+           session_key, tab_id, title, position, chat_dock, created_by, revision
+         ) VALUES ('agent:main:work', 'main', 'Stale canonical board', 0, 'right', 'user', 1)`,
+      )
+      .run();
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO board_widgets (
+           session_key, name, tab_id, content_kind, html, sha256, view_generation,
+           revision, size_w, size_h, position, created_by, created_at, updated_at
+         ) VALUES (
+           'agent:main:work', 'status', 'main', 'html', X'3C703E7374616C653C2F703E',
+           'stale-canonical-hash', 'view-stale', 1, 4, 4, 0, 'user', 10, 10
+         )`,
+      )
+      .run();
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO heartbeat_outcomes (
+           session_key, run_session_key, outcome, summary, occurred_at, updated_at
+         ) VALUES (
+           'agent:main:work', 'agent:main:work', 'progress', 'stale canonical heartbeat', 10, 10
          )`,
       )
       .run();
@@ -758,14 +785,24 @@ describe("session accessor seam", () => {
     ]);
     expect(
       aliasDatabase.db
-        .prepare("SELECT session_key, title FROM board_tabs ORDER BY session_key")
+        .prepare("SELECT session_key, title, revision FROM board_tabs ORDER BY session_key")
         .all(),
-    ).toEqual([{ session_key: "agent:main:work", title: "Alias board" }]);
+    ).toEqual([{ session_key: "agent:main:work", title: "Alias board", revision: 2 }]);
     expect(
       aliasDatabase.db
-        .prepare("SELECT session_key, name FROM board_widgets ORDER BY session_key")
+        .prepare(
+          "SELECT session_key, name, sha256, revision, updated_at FROM board_widgets ORDER BY session_key",
+        )
         .all(),
-    ).toEqual([{ session_key: "agent:main:work", name: "status" }]);
+    ).toEqual([
+      {
+        session_key: "agent:main:work",
+        name: "status",
+        sha256: "alias-hash",
+        revision: 2,
+        updated_at: 20,
+      },
+    ]);
     expect(
       aliasDatabase.db
         .prepare("SELECT session_key, summary FROM heartbeat_outcomes ORDER BY session_key")
