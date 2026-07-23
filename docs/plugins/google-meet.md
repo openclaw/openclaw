@@ -18,9 +18,10 @@ The `google-meet` plugin joins explicit Meet URLs on behalf of an OpenClaw agent
 
 ## Quick start
 
-Install the local audio dependencies, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider:
+Install the plugin and local audio dependencies, then set a realtime provider key. OpenAI is the default transcription provider for `agent` mode; Google Gemini Live is available as the `bidi`-mode voice provider:
 
 ```bash
+openclaw plugins install npm:@openclaw/google-meet
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
 # only needed when realtime.voiceProvider is "google" for bidi mode
@@ -40,20 +41,21 @@ system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin:
+The plugin is enabled by default after installation. Add an entry only to customize it:
 
 ```json5
 {
   plugins: {
     entries: {
       "google-meet": {
-        enabled: true,
         config: {},
       },
     },
   },
 }
 ```
+
+Run `openclaw plugins disable google-meet` if you do not want the plugin active.
 
 Check setup, then join:
 
@@ -163,10 +165,10 @@ system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin in the VM and start the node host:
+Install the plugin in the VM, where it is enabled by default, and start the node host:
 
 ```bash
-openclaw plugins enable google-meet
+openclaw plugins install npm:@openclaw/google-meet
 openclaw node run --host <gateway-host> --port 18789 --display-name parallels-macos
 ```
 
@@ -244,7 +246,7 @@ If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one con
 | Symptom                                                  | Fix                                                                                                                                                                                                                                                                 |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Configured Google Meet node ... is not usable: offline` | The pinned node is known but unavailable. Report the setup blocker; do not silently fall back to another transport unless asked.                                                                                                                                    |
-| `No connected Google Meet-capable node`                  | Run `openclaw node run` in the VM, approve pairing, and run `openclaw plugins enable google-meet` and `openclaw plugins enable browser` there. Confirm `gateway.nodes.commands.allow` includes `googlemeet.chrome` and `browser.proxy`.                             |
+| `No connected Google Meet-capable node`                  | Install `npm:@openclaw/google-meet` in the VM, run `openclaw node run`, and approve pairing. If either plugin was explicitly disabled, enable `google-meet` and `browser`. Confirm `gateway.nodes.commands.allow` includes `googlemeet.chrome` and `browser.proxy`. |
 | `BlackHole 2ch audio device not found`                   | Install `blackhole-2ch` on the host being checked and reboot.                                                                                                                                                                                                       |
 | `BlackHole 2ch audio device not found on the node`       | Install `blackhole-2ch` in the VM and reboot the VM.                                                                                                                                                                                                                |
 | Chrome opens but cannot join                             | Sign in to the browser profile in the VM, or keep `chrome.guestName` set. Guest auto-join uses OpenClaw browser automation through the node browser proxy; point the node's `browser.defaultProfile` (or a named existing-session profile) at the profile you want. |
@@ -1020,7 +1022,7 @@ On non-macOS Gateway hosts, `google_meet` stays visible, but local Chrome talk-b
 On the node host:
 
 ```bash
-openclaw plugins enable google-meet
+openclaw plugins install npm:@openclaw/google-meet
 openclaw plugins enable browser
 OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
   openclaw node run --host <gateway-lan-ip> --port 18789 --display-name parallels-macos
