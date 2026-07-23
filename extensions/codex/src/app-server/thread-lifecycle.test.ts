@@ -36,6 +36,26 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
 >;
 
+describe("Codex incognito thread persistence", () => {
+  it("marks only incognito-shaped harness sessions ephemeral", () => {
+    const appServer = createAppServerOptions() as never;
+    const persistent = createAttemptParams({ provider: "openai" });
+    persistent.sessionKey = "agent:main:dashboard:persistent-thread";
+    const incognito = createAttemptParams({ provider: "openai" });
+    incognito.sessionKey = "agent:main:dashboard:incognito-private-thread";
+
+    const build = (params: EmbeddedRunAttemptParams) =>
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      });
+
+    expect(build(persistent)).not.toHaveProperty("ephemeral");
+    expect(build(incognito)).toMatchObject({ ephemeral: true });
+  });
+});
+
 describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
