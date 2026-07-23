@@ -91,12 +91,16 @@ function collectDeliveryRewrites(database: DatabaseSync): DeliveryRewrite[] {
     db.selectFrom("session_nodes").select(["session_key", "current_session_id", "entry_json"]),
   ).rows;
   return rows.flatMap((row) => {
-    let entry: SessionEntry;
+    let parsed: unknown;
     try {
-      entry = JSON.parse(row.entry_json) as SessionEntry;
+      parsed = JSON.parse(row.entry_json);
     } catch {
       return [];
     }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return [];
+    }
+    const entry = parsed as SessionEntry;
     const normalizedEntry = normalizeLegacySessionEntryDelivery(entry);
     const entryJson = JSON.stringify(normalizedEntry);
     return entryJson === row.entry_json

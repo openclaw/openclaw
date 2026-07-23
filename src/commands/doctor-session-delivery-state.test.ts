@@ -59,6 +59,28 @@ function readEntryJson(env: NodeJS.ProcessEnv, sessionKey: string): string {
 }
 
 describe("doctor canonical session delivery state", () => {
+  it("skips structurally invalid row JSON while repairing valid sessions", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-invalid-row-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    insertSessionRow(env, "agent:main:legacy", {
+      sessionId: "legacy-session",
+      updatedAt: 10,
+      deliveryContext: { channel: "telegram", to: "-1001" },
+    });
+    openOpenClawAgentDatabase({ agentId: "main", env })
+      .db.prepare(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:invalid", "invalid-session", "null", 20);
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 1,
+      repaired: 1,
+      scannedStores: 1,
+    });
+    expect(readEntryJson(env, "agent:main:invalid")).toBe("null");
+  });
+
   it("migrates a copied realistic store without touching the source or canonical row bytes", () => {
     const sourceStateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-source-"));
     const sourceEnv = { ...process.env, OPENCLAW_STATE_DIR: sourceStateDir };
