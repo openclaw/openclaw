@@ -40,8 +40,118 @@ type CoerceDisplayValueOptions = {
   includeZero?: boolean;
   includeNonFinite?: boolean;
   maxStringChars?: number;
+  maxUrlStringChars?: number;
   maxArrayEntries?: number;
 };
+
+const DEFAULT_MAX_STRING_CHARS = 160;
+const DEFAULT_MAX_URL_STRING_CHARS = 1024;
+
+const SIGNED_URL_QUERY_KEYS = new Set([
+  "awsaccesskeyid",
+  "expires",
+  "googleaccessid",
+  "ossaccesskeyid",
+  "signature",
+  "x-amz-algorithm",
+  "x-amz-credential",
+  "x-amz-date",
+  "x-amz-expires",
+  "x-amz-security-token",
+  "x-amz-signature",
+  "x-goog-algorithm",
+  "x-goog-credential",
+  "x-goog-date",
+  "x-goog-expires",
+  "x-goog-signature",
+  "x-oss-access-key-id",
+  "x-oss-expires",
+  "x-oss-signature",
+]);
+
+function parseHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  return Boolean(parseHttpUrl(value));
+}
+
+function normalizeQueryKey(key: string): string {
+  try {
+    return decodeURIComponent(key.replace(/\+/g, " ")).toLowerCase();
+  } catch {
+    return key.toLowerCase();
+  }
+}
+
+function rawUrlQuery(value: string): string | undefined {
+  const url = parseHttpUrl(value);
+  if (!url?.search) {
+    return undefined;
+  }
+  const searchIndex = value.indexOf("?");
+  if (searchIndex < 0) {
+    return undefined;
+  }
+  const hashIndex = value.indexOf("#", searchIndex + 1);
+  return hashIndex < 0 ? value.slice(searchIndex) : value.slice(searchIndex, hashIndex);
+}
+
+function collectSignedUrlQueryPairs(value: string): string[] {
+  const query = rawUrlQuery(value);
+  if (!query) {
+    return [];
+  }
+  const pairs: string[] = [];
+  const pairPattern = /([?&])([^=&#]+)=([^&#]*)/g;
+  for (const match of query.matchAll(pairPattern)) {
+    const pair = match[0];
+    const rawKey = match[2];
+    if (pair && rawKey && SIGNED_URL_QUERY_KEYS.has(normalizeQueryKey(rawKey))) {
+      pairs.push(pair);
+    }
+  }
+  return pairs;
+}
+
+function preserveSignedUrlQueryPairs(rawUrl: string, redactedUrl: string): string {
+  const originalPairs = collectSignedUrlQueryPairs(rawUrl);
+  if (originalPairs.length === 0) {
+    return redactedUrl;
+  }
+  const redactedPairs = collectSignedUrlQueryPairs(redactedUrl);
+  if (redactedPairs.length !== originalPairs.length) {
+    return redactedUrl;
+  }
+
+  let restored = redactedUrl;
+  for (let index = 0; index < originalPairs.length; index += 1) {
+    const originalPair = originalPairs[index];
+    const redactedPair = redactedPairs[index];
+    if (!originalPair || !redactedPair || originalPair === redactedPair) {
+      continue;
+    }
+    const pairIndex = restored.indexOf(redactedPair);
+    if (pairIndex < 0) {
+      return redactedUrl;
+    }
+    restored =
+      `${restored.slice(0, pairIndex)}${originalPair}` +
+      restored.slice(pairIndex + redactedPair.length);
+  }
+  return restored;
+}
+
+export function redactToolDisplayText(rawLine: string): string {
+  const redacted = redactToolPayloadText(rawLine);
+  return isHttpUrl(rawLine) ? preserveSignedUrlQueryPairs(rawLine, redacted) : redacted;
+}
 
 /** Normalize a tool name for fallback display. */
 export function normalizeToolName(name?: string): string {
@@ -117,7 +227,8 @@ function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
-  const maxStringChars = opts.maxStringChars ?? 160;
+  const maxStringChars = opts.maxStringChars ?? DEFAULT_MAX_STRING_CHARS;
+  const maxUrlStringChars = opts.maxUrlStringChars ?? DEFAULT_MAX_URL_STRING_CHARS;
   const maxArrayEntries = opts.maxArrayEntries ?? 3;
 
   if (value === null || value === undefined) {
@@ -132,10 +243,11 @@ function coerceDisplayValue(
     if (!rawLine) {
       return undefined;
     }
-    const firstLine = redactToolPayloadText(rawLine);
-    if (firstLine.length > maxStringChars) {
-      const half = Math.floor((maxStringChars - 1) / 2);
-      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
+    const firstLine = redactToolDisplayText(rawLine);
+    const maxChars = isHttpUrl(firstLine) ? maxUrlStringChars : maxStringChars;
+    if (firstLine.length > maxChars) {
+      const half = Math.floor((maxChars - 1) / 2);
+      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxChars - 1 - half))}`;
     }
     return firstLine;
   }

@@ -29,6 +29,60 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("coerceDisplayValue surrogate-safe truncation", () => {
+  it("preserves signed URL query parameters beyond the generic string limit", () => {
+    const signedUrl =
+      "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/output/generated-image.png" +
+      `?Expires=1800000000&${"x".repeat(120)}` +
+      "&OSSAccessKeyId=CAzABCDEFGHIJKLMNOPQRSTUVWX" +
+      "&Signature=abcdefghijklmnopqrstuvwxyz0123456789abcdef";
+    expect(signedUrl.length).toBeGreaterThan(160);
+
+    const { detail } = resolveToolVerbAndDetailForArgs({
+      toolKey: "image",
+      args: { url: signedUrl },
+      fallbackDetailKeys: ["url"],
+      detailMode: "first",
+    });
+
+    expect(detail).toBe(signedUrl);
+    expect(detail).toContain("OSSAccessKeyId=");
+    expect(detail).toContain("Signature=");
+    expect(detail).not.toContain("…");
+  });
+
+  it("still bounds unusually long URL strings", () => {
+    const longUrl = `https://example.test/result?${"x".repeat(1200)}&Signature=tail`;
+
+    const { detail } = resolveToolVerbAndDetailForArgs({
+      toolKey: "image",
+      args: { url: longUrl },
+      fallbackDetailKeys: ["url"],
+      detailMode: "first",
+    });
+
+    expect(detail).toBeDefined();
+    expect((detail as string).length).toBeLessThan(longUrl.length);
+    expect(detail).toContain("…");
+    expect(detail).toContain("Signature=tail");
+  });
+
+  it("continues to redact bearer tokens in URL query parameters", () => {
+    const url =
+      "https://example.test/callback?access_token=abcdef1234567890ghij&safe=value&Signature=abc123";
+
+    const { detail } = resolveToolVerbAndDetailForArgs({
+      toolKey: "api",
+      args: { url },
+      fallbackDetailKeys: ["url"],
+      detailMode: "first",
+    });
+
+    expect(detail).toBe(
+      "https://example.test/callback?access_token=abcdef…ghij&safe=value&Signature=abc123",
+    );
+    expect(detail).not.toContain("abcdef1234567890ghij");
+  });
+
   it("does not split an emoji across the truncation boundary (default maxStringChars=160)", () => {
     // 200 UTF-16 units: 78 'a', an emoji (surrogate pair at indices 78-79), 120 'b'.
     // With maxStringChars=160, half = floor(159/2) = 79, so the naive
