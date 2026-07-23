@@ -5,9 +5,11 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export function canStartSessionAsDraft(params: {
   allowedVisibilities?: readonly string[];
-  identityCount?: number;
+  hasMultipleIdentities?: boolean;
 }): boolean {
-  return params.allowedVisibilities?.includes("draft") === true && (params.identityCount ?? 0) >= 2;
+  return (
+    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
+  );
 }
 
 export function isWorktreeNameValid(value: string): boolean {

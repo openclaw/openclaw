@@ -178,6 +178,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.gatewayRecoveryScope = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnected = connected;
+    if (this.startAsDraft && !this.canStartAsDraft()) {
+      this.startAsDraft = false;
+    }
     if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
       this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
     }
@@ -419,7 +422,8 @@ class NewSessionPage extends OpenClawLightDomElement {
   private canStartAsDraft(): boolean {
     return canStartSessionAsDraft({
       allowedVisibilities: this.context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
-      identityCount: this.context?.gateway.snapshot.hello?.policy?.sessionSharingIdentityCount,
+      hasMultipleIdentities:
+        this.context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities,
     });
   }
 

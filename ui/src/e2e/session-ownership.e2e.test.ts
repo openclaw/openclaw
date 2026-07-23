@@ -78,6 +78,18 @@ async function captureUiProof(targetPage: Page, fileName: string) {
   });
 }
 
+async function replaceGatewayClient(targetPage: Page) {
+  await targetPage.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { connect: () => void } } };
+    };
+    if (!app.runtime) {
+      throw new Error("OpenClaw application runtime is unavailable");
+    }
+    app.runtime.context.gateway.connect();
+  });
+}
+
 describeControlUiE2e("Control UI session ownership", () => {
   beforeAll(async () => {
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
@@ -208,7 +220,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
       allowedSessionVisibilities: ["shared", "draft"],
-      sessionSharingIdentityCount: 2,
+      hasMultipleSessionSharingIdentities: true,
       methodResponses: {
         "sessions.list": sessionsList(["profile-ada", "profile-bob"]),
         "sessions.create": { key: "agent:main:new-draft", runStarted: true },
@@ -287,13 +299,42 @@ describeControlUiE2e("Control UI session ownership", () => {
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(1);
   });
 
+  it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      allowedSessionVisibilities: ["shared", "draft"],
+      hasMultipleSessionSharingIdentities: true,
+      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}new`);
+    const draftToggle = currentPage.getByLabel("Start as draft");
+    await draftToggle.check();
+    await gateway.setSessionSharingPolicy({
+      allowedSessionVisibilities: ["shared"],
+      hasMultipleSessionSharingIdentities: false,
+    });
+    await replaceGatewayClient(currentPage);
+    await expect.poll(() => draftToggle.count()).toBe(0);
+
+    await gateway.setSessionSharingPolicy({
+      allowedSessionVisibilities: ["shared", "draft"],
+      hasMultipleSessionSharingIdentities: true,
+    });
+    await replaceGatewayClient(currentPage);
+    await draftToggle.waitFor();
+    expect(await draftToggle.isChecked()).toBe(false);
+  });
+
   it("keeps create-as-draft dormant for one creator", async () => {
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
     await installMockGateway(currentPage, {
       allowedSessionVisibilities: ["shared", "draft"],
-      sessionSharingIdentityCount: 1,
+      hasMultipleSessionSharingIdentities: false,
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-ada"]) },
     });
 

@@ -139,7 +139,7 @@ export const HelloOkSchema = closedObject({
     maxBufferedBytes: Type.Integer({ minimum: 1 }),
     tickIntervalMs: Type.Integer({ minimum: 1 }),
     allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
-    sessionSharingIdentityCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),
 });
 

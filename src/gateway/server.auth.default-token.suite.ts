@@ -163,7 +163,7 @@ export function registerDefaultAuthTokenSuite(): void {
             snapshot?: { configPath?: string; stateDir?: string };
             policy?: {
               allowedSessionVisibilities?: unknown;
-              sessionSharingIdentityCount?: unknown;
+              hasMultipleSessionSharingIdentities?: unknown;
             };
           }
         | undefined;
@@ -185,15 +185,13 @@ export function registerDefaultAuthTokenSuite(): void {
         "suggest",
         "draft",
       ]);
-      expect(payload?.policy?.sessionSharingIdentityCount).toBe(0);
+      expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(false);
 
       ws.close();
     });
 
     test("hello policy counts canonical session-sharing identities", async () => {
-      const { ensureProfileForEmail, linkEmail, listProfiles } =
-        await import("../state/user-profiles.js");
-      const before = listProfiles().filter((profile) => !profile.mergedInto).length;
+      const { ensureProfileForEmail, linkEmail } = await import("../state/user-profiles.js");
       const suffix = `${process.pid}-${Date.now()}`;
       ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
       const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);
@@ -204,9 +202,9 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         const res = await connectReq(ws);
         const payload = res.payload as
-          | { policy?: { sessionSharingIdentityCount?: unknown } }
+          | { policy?: { hasMultipleSessionSharingIdentities?: unknown } }
           | undefined;
-        expect(payload?.policy?.sessionSharingIdentityCount).toBe(before + 2);
+        expect(payload?.policy?.hasMultipleSessionSharingIdentities).toBe(true);
       } finally {
         ws.close();
       }

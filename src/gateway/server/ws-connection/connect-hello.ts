@@ -125,7 +125,8 @@ export async function sendGatewayHello(
       maxBufferedBytes: MAX_BUFFERED_BYTES,
       tickIntervalMs: TICK_INTERVAL_MS,
       allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
-      sessionSharingIdentityCount: listProfiles().filter((profile) => !profile.mergedInto).length,
+      hasMultipleSessionSharingIdentities:
+        listProfiles().filter((profile) => !profile.mergedInto).length >= 2,
     },
   };
   advanceHandshakePhase("hello_payload_prepared");

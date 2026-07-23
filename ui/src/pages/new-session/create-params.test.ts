@@ -7,24 +7,24 @@ describe("create-as-draft availability", () => {
     expect(
       canStartSessionAsDraft({
         allowedVisibilities: ["shared", "draft"],
-        identityCount: 2,
+        hasMultipleIdentities: true,
       }),
     ).toBe(true);
     expect(
       canStartSessionAsDraft({
         allowedVisibilities: ["shared"],
-        identityCount: 2,
+        hasMultipleIdentities: true,
       }),
     ).toBe(false);
-    expect(canStartSessionAsDraft({ identityCount: 2 })).toBe(false);
+    expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
   });
 
   it("stays dormant when the gateway has fewer than two identities", () => {
-    for (const identityCount of [undefined, 0, 1]) {
+    for (const hasMultipleIdentities of [undefined, false]) {
       expect(
         canStartSessionAsDraft({
           allowedVisibilities: ["shared", "draft"],
-          identityCount,
+          hasMultipleIdentities,
         }),
       ).toBe(false);
     }
