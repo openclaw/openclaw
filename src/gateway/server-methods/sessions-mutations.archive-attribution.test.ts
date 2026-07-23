@@ -6,9 +6,11 @@ import {
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+  addSessionMember,
+  listSessionMembers,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -147,7 +149,7 @@ describe("sessions.patch archive attribution", () => {
     });
   });
 
-  it("rolls back the archive transition when its audit cannot be appended", async () => {
+  it("reverses only archive state when its audit cannot be appended", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:archive-audit-failure";
       await upsertSessionEntry(
@@ -179,15 +181,16 @@ describe("sessions.patch archive attribution", () => {
       const restored = loadSessionEntry({ agentId: "main", sessionKey });
       expect(restored?.archivedAt).toBeUndefined();
       expect(restored?.archivedBy).toBeUndefined();
-      expect(restored?.pinnedAt).toBe(2);
-      expect(restored?.label).toBe("original");
+      expect(restored?.pinnedAt).toBeUndefined();
+      expect(restored?.label).toBe("partial-success");
     });
   });
 
-  it("restores every alias candidate row byte-for-byte when archive auditing fails", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  it("reverses alias archive state without reviving a concurrently removed member", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const canonicalKey = "agent:main:alias-archive";
       const aliasKey = "alias-archive";
+      const memberId = "profile-member";
       await upsertSessionEntry(
         { agentId: "main", sessionKey: canonicalKey },
         {
@@ -204,54 +207,19 @@ describe("sessions.patch archive attribution", () => {
           label: "alias",
         },
       );
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const aliasRow = database.db
-        .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
-        .get(aliasKey) as { entry_json: string };
-      const nonCanonicalAliasJson = JSON.stringify(JSON.parse(aliasRow.entry_json), null, 2);
-      database.db
-        .prepare(
-          "UPDATE session_entries SET entry_json = ?, updated_at = ?, status = ? WHERE session_key = ?",
-        )
-        .run(nonCanonicalAliasJson, 777, "failed", aliasKey);
-      database.db
-        .prepare(
-          "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
-        )
-        .run(aliasKey, "profile-member", "profile-owner", 123);
-      const readCandidateState = () => ({
-        entryRows: database.db
-          .prepare(
-            `SELECT session_key, session_id, entry_json, updated_at, status
-             FROM session_entries
-             WHERE session_key IN (?, ?)
-             ORDER BY session_key`,
-          )
-          .all(canonicalKey, aliasKey) as Array<{
-          session_key: string;
-          session_id: string;
-          entry_json: string;
-          updated_at: number;
-          status: string | null;
-        }>,
-        memberRows: database.db
-          .prepare(
-            `SELECT session_key, identity_id, added_by, added_at
-             FROM session_members
-             WHERE session_key IN (?, ?)
-             ORDER BY session_key, identity_id`,
-          )
-          .all(canonicalKey, aliasKey) as Array<{
-          session_key: string;
-          identity_id: string;
-          added_by: string;
-          added_at: number;
-        }>,
+      const memberScope = { agentId: "main", sessionKey: canonicalKey };
+      addSessionMember(memberScope, {
+        identityId: memberId,
+        addedBy: "profile-owner",
+        addedAt: 123,
       });
-      const before = readCandidateState();
+      expect(listSessionMembers(memberScope)).toEqual([
+        { identityId: memberId, addedBy: "profile-owner", addedAt: 123 },
+      ]);
       const append = vi
         .spyOn(SessionManager.prototype, "appendMessage")
         .mockImplementationOnce(() => {
+          removeSessionMember(memberScope, memberId);
           throw new Error("audit unavailable");
         });
 
@@ -263,16 +231,10 @@ describe("sessions.patch archive attribution", () => {
         append.mockRestore();
       }
 
-      const after = readCandidateState();
-      expect(after).toEqual(before);
-      expect(after.entryRows.map((row) => row.session_key)).toEqual(
-        [canonicalKey, aliasKey].toSorted(),
-      );
-      for (const row of after.entryRows) {
-        const entry = JSON.parse(row.entry_json) as Record<string, unknown>;
-        expect(entry.archivedAt).toBeUndefined();
-        expect(entry.archivedBy).toBeUndefined();
-      }
+      const restored = loadSessionEntry({ agentId: "main", sessionKey: canonicalKey });
+      expect(restored?.archivedAt).toBeUndefined();
+      expect(restored?.archivedBy).toBeUndefined();
+      expect(listSessionMembers(memberScope)).toEqual([]);
     });
   });
 });

@@ -31,14 +31,12 @@ import {
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
   applySqliteSessionStoreProjection,
-  captureSqliteSessionEntryCandidateLayout,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   purgeSqliteDeletedAgentSessionEntries,
   rollbackSqliteAgentHarnessSessionEntryLifecycle,
   rollbackSqlitePluginOwnedSessionEntryLifecycle,
   resetSqliteSessionEntryLifecycle,
-  restoreSqliteSessionEntryCandidateLayout,
 } from "./session-accessor.sqlite.js";
 import type {
   SessionAccessScope,
@@ -56,7 +54,6 @@ import type {
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
   SessionPatchProjectionResult,
-  SessionEntryCandidateLayoutSnapshot,
   ResetSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleParams,
 } from "./session-accessor.types.js";
@@ -256,23 +253,6 @@ export async function applySessionPatchProjection<
     skipMaintenance: true,
   });
   return { ...projected, entry: structuredClone(projected.entry) };
-}
-
-/** Current canonical session storage is SQLite; this keeps callers storage-neutral. */
-export function captureSessionEntryCandidateLayout(params: {
-  agentId?: string;
-  storePath: string;
-  sessionKeys: readonly string[];
-}): SessionEntryCandidateLayoutSnapshot {
-  return captureSqliteSessionEntryCandidateLayout(params);
-}
-
-export async function restoreSessionEntryCandidateLayout(params: {
-  agentId?: string;
-  storePath: string;
-  snapshot: SessionEntryCandidateLayoutSnapshot;
-}): Promise<void> {
-  await restoreSqliteSessionEntryCandidateLayout(params);
 }
 
 /**

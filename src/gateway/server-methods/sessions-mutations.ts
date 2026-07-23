@@ -11,8 +11,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   applySessionPatchProjection,
-  captureSessionEntryCandidateLayout,
-  restoreSessionEntryCandidateLayout,
+  type SessionPatchProjectionSnapshot,
 } from "../../config/sessions/session-accessor.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -115,9 +114,16 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return catalog;
     };
     let entryBeforePatch: NonNullable<typeof lifecycleEntry> | undefined;
-    let candidateLayoutBeforePatch:
-      | ReturnType<typeof captureSessionEntryCandidateLayout>
-      | undefined;
+    const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+        agentId: requestedAgentId,
+      });
+      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+    };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
       // A reset queued ahead of archive can rotate the row before this mutation starts.
@@ -174,28 +180,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         agentId: target.agentId,
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         storePath,
-        resolveTarget: ({ entries }) => {
-          const store = Object.fromEntries(
-            entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-          );
-          const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-            cfg,
-            key,
-            store,
-            agentId: requestedAgentId,
-          });
-          const candidateKeysBeforePatch = [
-            ...new Set(
-              migratedTarget.storeKeys.map((candidate) => candidate.trim()).filter(Boolean),
-            ),
-          ];
-          candidateLayoutBeforePatch = captureSessionEntryCandidateLayout({
-            agentId: target.agentId,
-            storePath,
-            sessionKeys: candidateKeysBeforePatch,
-          });
-          return { primaryKey, candidateKeys: migratedTarget.storeKeys };
-        },
+        resolveTarget: resolvePatchTarget,
         project: async ({ primaryKey, existingEntry, entries }) => {
           entryBeforePatch = existingEntry ? structuredClone(existingEntry) : undefined;
           const projected = await projectSessionsPatchEntry({
@@ -253,14 +238,42 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             now: Date.now(),
           });
         } catch (error) {
-          if (!candidateLayoutBeforePatch) {
-            throw error;
-          }
-          await restoreSessionEntryCandidateLayout({
+          const rollbackArchived = entryBeforePatch?.archivedAt !== undefined;
+          const rollback = await applySessionPatchProjection({
             agentId: target.agentId,
             storePath,
-            snapshot: candidateLayoutBeforePatch,
+            resolveTarget: resolvePatchTarget,
+            project: async ({ primaryKey, existingEntry, entries }) => {
+              const projected = await projectSessionsPatchEntry({
+                cfg,
+                entries,
+                existingEntry,
+                storeKey: primaryKey,
+                agentId: requestedAgentId,
+                patch: { key: primaryKey, archived: rollbackArchived },
+                archivedBy: entryBeforePatch?.archivedBy,
+              });
+              if (!projected.ok) {
+                return projected;
+              }
+              if (entryBeforePatch?.archivedAt === undefined) {
+                delete projected.entry.archivedAt;
+              } else {
+                projected.entry.archivedAt = entryBeforePatch.archivedAt;
+              }
+              if (entryBeforePatch?.archivedBy === undefined) {
+                delete projected.entry.archivedBy;
+              } else {
+                projected.entry.archivedBy = entryBeforePatch.archivedBy;
+              }
+              return projected;
+            },
           });
+          if (!rollback.ok) {
+            sessionLog.error(
+              `sessions.patch: failed to restore archive state for ${canonicalKey}: ${rollback.error.message}`,
+            );
+          }
           throw error;
         }
         return result;

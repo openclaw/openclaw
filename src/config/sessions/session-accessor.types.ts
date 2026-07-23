@@ -797,24 +797,6 @@ export type SessionPatchProjectionSnapshot = {
   entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
 };
 
-/** Exact SQLite rows replaced while canonicalizing one logical session's candidate keys. */
-export type SessionEntryCandidateLayoutSnapshot = {
-  sessionKeys: string[];
-  entryRows: Array<{
-    session_key: string;
-    session_id: string;
-    entry_json: string;
-    updated_at: number;
-    status: string | null;
-  }>;
-  memberRows: Array<{
-    session_key: string;
-    identity_id: string;
-    added_by: string;
-    added_at: number;
-  }>;
-};
-
 export type SessionPatchProjectionTarget = {
   candidateKeys?: readonly string[];
   primaryKey: string;
