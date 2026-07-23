@@ -482,6 +482,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
 
   let stageDatabase: DatabaseSync | undefined;
   let stagePath: string | undefined;
+  const recoveryChanges: string[] = [];
   try {
     fsSync.mkdirSync(params.stateDir, { recursive: true });
     stagePath = path.join(params.stateDir, `.meeting-transcripts-migration-${randomUUID()}.sqlite`);
@@ -560,7 +561,6 @@ export async function migrateLegacyMeetingTranscripts(params: {
       }
       plans.push(snapshot);
     }
-    const recoveryChanges: string[] = [];
     if (divergentExportDirs.length > 0) {
       const recoveryRoot = `${detected.sourceDir}.exports-recovered-${new Date(now)
         .toISOString()
@@ -620,7 +620,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       if (!(await rehashLegacyMeetingTranscriptSnapshots(plans))) {
         rollbackImportedSnapshots({ snapshots: plans, runId, env, stateDir: params.stateDir });
         return {
-          changes: [],
+          changes: recoveryChanges,
           warnings: [
             "Legacy meeting transcript files changed after import; rolled back SQLite rows and left every source in place for a Doctor retry",
           ],
@@ -643,6 +643,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       if (error instanceof LegacyMeetingTranscriptArchiveMovedError) {
         return {
           changes: [
+            ...recoveryChanges,
             `Imported ${plans.length} meeting transcript session${plans.length === 1 ? "" : "s"} into shared SQLite state`,
           ],
           warnings: [
@@ -652,7 +653,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       }
       rollbackImportedSnapshots({ snapshots: plans, runId, env, stateDir: params.stateDir });
       return {
-        changes: [],
+        changes: recoveryChanges,
         warnings: [
           `Failed archiving verified legacy meeting transcripts; rolled back SQLite rows and left every source in place for Doctor retry: ${String(error)}`,
         ],
@@ -676,7 +677,10 @@ export async function migrateLegacyMeetingTranscripts(params: {
       warnings: [],
     };
   } catch (error) {
-    return { changes: [], warnings: [`Failed migrating meeting transcripts: ${String(error)}`] };
+    return {
+      changes: recoveryChanges,
+      warnings: [`Failed migrating meeting transcripts: ${String(error)}`],
+    };
   } finally {
     try {
       stageDatabase?.close();

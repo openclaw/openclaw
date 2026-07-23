@@ -508,6 +508,17 @@ describe("meeting transcript Doctor migration", () => {
 
   it("resumes an interruption after the import commit", async () => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+      env: databaseEnv(stateDir),
+    });
+    const nativeSession = {
+      sessionId: "modified-before-interruption",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-07-02T10:00:00.000Z",
+    };
+    await store.writeSession(nativeSession);
+    const nativeArtifacts = await store.materializeSessionArtifacts(nativeSession, "metadata");
+    await fs.appendFile(nativeArtifacts.metadataPath, " ");
     await seedLegacySession({ stateDir, sessionId: "interrupted-import" });
     const detected = detectLegacyMeetingTranscripts({
       stateDir,
@@ -525,6 +536,7 @@ describe("meeting transcript Doctor migration", () => {
       },
     });
     expect(interrupted.warnings.join("\n")).toContain("interrupted");
+    expect(interrupted.changes.join("\n")).toContain("modified meeting transcript export");
 
     const pending = detectLegacyMeetingTranscripts({
       stateDir,
