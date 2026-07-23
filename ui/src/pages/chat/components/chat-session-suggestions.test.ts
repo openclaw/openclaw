@@ -22,7 +22,7 @@ afterEach(() => {
   container = undefined;
 });
 
-function mount(role: "owner" | "viewer", row = suggestion, canResolve = true) {
+function mount(role: "owner" | "viewer", row = suggestion, canResolve = true, archived = false) {
   const onResolve = vi.fn();
   container = document.createElement("div");
   document.body.append(container);
@@ -31,6 +31,7 @@ function mount(role: "owner" | "viewer", row = suggestion, canResolve = true) {
       suggestions: [row],
       role,
       busyIds: new Set(),
+      archived,
       canResolve,
       onResolve,
     }),
@@ -74,6 +75,7 @@ describe("chat session suggestions", () => {
         suggestions: [suggestion],
         role: undefined,
         busyIds: new Set(),
+        archived: false,
         canResolve: true,
         onResolve,
       }),
@@ -92,6 +94,7 @@ describe("chat session suggestions", () => {
         suggestions: [suggestion],
         role: "member",
         busyIds: new Set(),
+        archived: false,
         canResolve: true,
         onResolve,
       }),
@@ -105,5 +108,15 @@ describe("chat session suggestions", () => {
     const view = mount("owner", suggestion, false);
     expect(view.container.querySelector("button")).toBeNull();
     expect(view.container.textContent).toContain("Pending");
+  });
+
+  it("keeps only dismiss available for an archived session", () => {
+    const view = mount("owner", suggestion, true, true);
+    const buttons = [...view.container.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Dismiss Alice's suggestion",
+    ]);
+    buttons[0]?.click();
+    expect(view.onResolve).toHaveBeenCalledWith(suggestion, "dismiss");
   });
 });

@@ -788,6 +788,15 @@ class ChatPane extends OpenClawLightDomElement {
     );
   }
 
+  private isCurrentSessionArchived(state: ChatPageHost): boolean {
+    return (
+      state.selectedChatSessionArchived ||
+      state.sessionsResult?.sessions.some(
+        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+      ) === true
+    );
+  }
+
   private resetSessionSuggestions(): void {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
@@ -796,6 +805,21 @@ class ChatPane extends OpenClawLightDomElement {
     this.sessionSuggestionBusyIds.clear();
     this.sessionSuggestionAddOperation = undefined;
     this.sessionSuggestionEditOperation = undefined;
+  }
+
+  private syncSessionSuggestionTarget(
+    agentId: string,
+    session: GatewaySessionRow | undefined,
+  ): void {
+    const signature = session
+      ? `${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      : "";
+    if (signature === this.sessionSuggestionTargetSignature) {
+      return;
+    }
+    this.sessionSuggestionTargetSignature = signature;
+    this.resetSessionSuggestions();
+    void this.refreshSessionSuggestions();
   }
 
   private refreshSessionSuggestions(): Promise<void> {
@@ -824,6 +848,7 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   private async loadSessionSuggestions(requestVersion: number): Promise<void> {
+    const targetSignature = this.sessionSuggestionTargetSignature;
     const scope = this.captureConnectionScope();
     const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
@@ -851,24 +876,25 @@ class ChatPane extends OpenClawLightDomElement {
       if (!this.isConnectionScopeCurrent(scope) || scope.state.sessionKey !== sessionKey) {
         return;
       }
-      if (requestVersion !== this.sessionSuggestionsRequestVersion) {
+      if (
+        requestVersion !== this.sessionSuggestionsRequestVersion ||
+        targetSignature !== this.sessionSuggestionTargetSignature
+      ) {
         return;
       }
       this.sessionSuggestions = result.suggestions;
       this.sessionSuggestionRole = result.role;
       this.requestUpdate();
     } catch {
-      if (requestVersion === this.sessionSuggestionsRequestVersion) {
+      if (
+        requestVersion === this.sessionSuggestionsRequestVersion &&
+        targetSignature === this.sessionSuggestionTargetSignature
+      ) {
         this.sessionSuggestions = [];
         this.sessionSuggestionRole = undefined;
         this.requestUpdate();
       }
     }
-  }
-
-  private invalidateSessionSuggestionsRefresh(): void {
-    this.sessionSuggestionsRequestVersion += 1;
-    void this.refreshSessionSuggestions();
   }
 
   private handleSessionSuggestionEvent(event: SessionSuggestionEvent): void {
@@ -980,6 +1006,9 @@ class ChatPane extends OpenClawLightDomElement {
       (resolution === "edit" && this.sessionSuggestionEditOperation !== undefined) ||
       !this.sessionSuggestionMatchesCurrentSession(suggestion)
     ) {
+      return;
+    }
+    if (this.isCurrentSessionArchived(scope.state) && resolution !== "dismiss") {
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -3104,13 +3133,10 @@ class ChatPane extends OpenClawLightDomElement {
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
-    const suggestionTargetSignature = selectedSession
-      ? `${selectedSession.key}\0${selectedSession.visibility ?? "shared"}\0${selectedSession.sharingRole ?? "owner"}`
-      : "";
-    if (suggestionTargetSignature !== this.sessionSuggestionTargetSignature) {
-      this.sessionSuggestionTargetSignature = suggestionTargetSignature;
-      this.invalidateSessionSuggestionsRefresh();
-    }
+    this.syncSessionSuggestionTarget(
+      stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
+      selectedSession,
+    );
     if (selectedSessionDeleted) {
       const agentId =
         parseAgentSessionKey(state.sessionKey)?.agentId ??
@@ -3949,11 +3975,7 @@ class ChatPane extends OpenClawLightDomElement {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const selectedSessionArchived =
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true;
+    const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
@@ -3963,6 +3985,7 @@ class ChatPane extends OpenClawLightDomElement {
     const multiIdentity = this.hasMultipleIdentities();
     const suggestionViewer =
       multiIdentity &&
+      !selectedSessionArchived &&
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
       selectedSession?.visibility === "suggest" &&
       selectedSession.sharingRole === "viewer" &&
@@ -4211,6 +4234,7 @@ class ChatPane extends OpenClawLightDomElement {
       sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
       sessionSuggestionRole: this.sessionSuggestionRole,
       sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
+      sessionSuggestionsArchived: selectedSessionArchived,
       canResolveSessionSuggestions:
         state.connected &&
         hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&

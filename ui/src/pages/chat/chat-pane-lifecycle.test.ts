@@ -9,6 +9,7 @@ import type {
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import {
@@ -146,6 +147,59 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(pane.sessionSuggestionRole).toBe("viewer");
     await Promise.resolve();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears cached suggestions until a rotated session instance list resolves", async () => {
+    const listed = createDeferred<SessionSuggestionsListResult>();
+    const request = vi.fn(() => listed.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    const row = (sessionId: string): GatewaySessionRow =>
+      ({
+        key: state.sessionKey,
+        kind: "direct",
+        sessionId,
+        updatedAt: 1,
+        visibility: "suggest",
+        sharingRole: "owner",
+      }) as GatewaySessionRow;
+    const stale: SessionSuggestion = {
+      id: "stale-instance",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text: "old instance",
+      createdAt: 1,
+      state: "pending",
+    };
+    const fresh: SessionSuggestion = {
+      ...stale,
+      id: "fresh-instance",
+      text: "new instance",
+    };
+
+    pane.syncSessionSuggestionTarget("main", row("session-a"));
+    await pane.refreshSessionSuggestions();
+    pane.sessionSuggestions = [stale];
+    state.sessionsResultAgentId = "main";
+    state.sessionsResult = {
+      count: 1,
+      path: "",
+      sessions: [row("session-b")],
+    } as never;
+
+    pane.syncSessionSuggestionTarget("main", row("session-b"));
+
+    expect(pane.sessionSuggestions).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(1);
+    listed.resolve({ suggestions: [fresh], role: "owner" });
+    await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([fresh]));
   });
 
   it("preserves an author's resolved event while its role is still loading", () => {

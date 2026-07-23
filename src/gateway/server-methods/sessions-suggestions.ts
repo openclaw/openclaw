@@ -17,6 +17,7 @@ import {
   finalizeSessionSuggestionClaim,
   listSessionSuggestions,
   releaseSessionSuggestionDispatch,
+  resolveSessionWorkStartError,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
@@ -351,6 +352,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (requireVisibleSuggestionRole({ client, target, respond }) === null) {
       return;
     }
+    const lifecycleError = resolveSessionWorkStartError(target.canonicalKey, target.entry);
+    if (lifecycleError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
+      return;
+    }
     if (!author) {
       respond(
         false,
@@ -472,7 +478,15 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const resolution = params.resolution as SessionSuggestionResolution;
-    if ((resolution === "send" || resolution === "queue") && !client) {
+    const dispatching = resolution === "send" || resolution === "queue";
+    if (dispatching) {
+      const lifecycleError = resolveSessionWorkStartError(target.canonicalKey, target.entry);
+      if (lifecycleError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));
+        return;
+      }
+    }
+    if (dispatching && !client) {
       respond(
         false,
         undefined,
@@ -481,7 +495,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const scope = suggestionScope(target);
-    const dispatching = resolution === "send" || resolution === "queue";
     const claim = claimSessionSuggestionDispatch(scope, {
       id: params.id,
       resolution,

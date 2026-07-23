@@ -31,6 +31,7 @@ export function renderChatSessionSuggestions(props: {
   suggestions: readonly SessionSuggestion[];
   role?: SessionSharingRole;
   busyIds: ReadonlySet<string>;
+  archived: boolean;
   canResolve: boolean;
   onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
 }) {
@@ -50,24 +51,28 @@ export function renderChatSessionSuggestions(props: {
             ${canResolve && suggestion.state === "pending"
               ? html`
                   <div class="session-suggestion__actions">
-                    ${actionButton({
-                      icon: icons.arrowUp,
-                      label: t("chat.sessionSuggestions.sendNow", { author }),
-                      busy,
-                      onClick: () => props.onResolve(suggestion, "send"),
-                    })}
-                    ${actionButton({
-                      icon: icons.check,
-                      label: t("chat.sessionSuggestions.queue", { author }),
-                      busy,
-                      onClick: () => props.onResolve(suggestion, "queue"),
-                    })}
-                    ${actionButton({
-                      icon: icons.edit,
-                      label: t("chat.sessionSuggestions.edit", { author }),
-                      busy,
-                      onClick: () => props.onResolve(suggestion, "edit"),
-                    })}
+                    ${props.archived
+                      ? nothing
+                      : html`
+                          ${actionButton({
+                            icon: icons.arrowUp,
+                            label: t("chat.sessionSuggestions.sendNow", { author }),
+                            busy,
+                            onClick: () => props.onResolve(suggestion, "send"),
+                          })}
+                          ${actionButton({
+                            icon: icons.check,
+                            label: t("chat.sessionSuggestions.queue", { author }),
+                            busy,
+                            onClick: () => props.onResolve(suggestion, "queue"),
+                          })}
+                          ${actionButton({
+                            icon: icons.edit,
+                            label: t("chat.sessionSuggestions.edit", { author }),
+                            busy,
+                            onClick: () => props.onResolve(suggestion, "edit"),
+                          })}
+                        `}
                     ${actionButton({
                       icon: icons.trash,
                       label: t("chat.sessionSuggestions.dismiss", { author }),

@@ -48,6 +48,9 @@ export type TestChatPane = HTMLElement & {
   resetSessionSuggestions: () => void;
   sessionSuggestions: SessionSuggestion[];
   sessionSuggestionsRequestVersion: number;
+  sessionSuggestionsRefreshPromise: Promise<void> | undefined;
+  sessionSuggestionTargetSignature: string;
+  syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (

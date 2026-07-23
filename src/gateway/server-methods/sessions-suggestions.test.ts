@@ -240,6 +240,60 @@ describe("session suggestion handlers", () => {
     });
   });
 
+  it("rejects archived suggestion creation and dispatch while allowing dismiss", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const archivedKey = "agent:main:archived-suggestions";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: archivedKey },
+        {
+          sessionId: "session-archived",
+          updatedAt: 1,
+          archivedAt: 2,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      addSessionSuggestion(
+        { agentId: "main", sessionKey: archivedKey },
+        {
+          id: "archived-suggestion",
+          authorId: "alice",
+          text: "archived work",
+          expectedSessionId: "session-archived",
+        },
+      );
+      const owner = client("owner", "Owner");
+
+      const add = await call(
+        "session.suggestions.add",
+        { sessionKey: archivedKey, text: "new archived work" },
+        owner,
+      );
+      expect(add.responses[0]?.[0]).toBe(false);
+      expect(add.responses[0]?.[2]?.message).toMatch(/is archived/);
+
+      for (const resolution of ["send", "queue"] as const) {
+        const dispatched = await call(
+          "session.suggestions.resolve",
+          { sessionKey: archivedKey, id: "archived-suggestion", resolution },
+          owner,
+        );
+        expect(dispatched.responses[0]?.[0]).toBe(false);
+        expect(dispatched.responses[0]?.[2]?.message).toMatch(/is archived/);
+      }
+      expect(mocks.handleChatSend).not.toHaveBeenCalled();
+
+      const dismissed = await call(
+        "session.suggestions.resolve",
+        { sessionKey: archivedKey, id: "archived-suggestion", resolution: "dismiss" },
+        owner,
+      );
+      expect(dismissed.responses[0]?.[1]).toMatchObject({
+        suggestion: { id: "archived-suggestion", state: "dismissed" },
+      });
+    });
+  });
+
   it.each([
     ["send", "steer"],
     ["queue", "followup"],
