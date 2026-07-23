@@ -1,5 +1,6 @@
 /** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
+import { readManagedServiceEnvKeysFromEnvironment } from "./service-managed-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 // launchd defaults to a 10s spawn throttle. Keep that default explicitly so
@@ -41,6 +42,28 @@ function parseGeneratedEnvValue(value: string): string {
     return trimmed;
   }
   return trimmed.slice(1, -1).replaceAll("'\\''", "'");
+}
+
+// Heals OpenClaw-managed values that carried a stray JSON quote pair inside
+// the shell quotes (export AWS_REGION='"us-east-1"'). Gated on the file's own
+// OPENCLAW_SERVICE_MANAGED_ENV_KEYS provenance: managed values are sourced by
+// OpenClaw loaders (dotenv/secret resolution) that strip quotes, so a fully
+// wrapping pair can only be corruption there. Operator-authored entries stay
+// lossless - a deliberate value of "secret" (quotes as data) is preserved
+// verbatim (#103804).
+function healManagedGeneratedEnvValues(environment: Record<string, string>): void {
+  const managedKeys = readManagedServiceEnvKeysFromEnvironment(environment);
+  if (managedKeys.size === 0) {
+    return;
+  }
+  for (const [key, value] of Object.entries(environment)) {
+    if (!managedKeys.has(key) && !managedKeys.has(key.toUpperCase())) {
+      continue;
+    }
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      environment[key] = value.slice(1, -1);
+    }
+  }
 }
 
 function includesGeneratedEnvironmentPathToken(value: string | undefined, token: string): boolean {
@@ -170,6 +193,7 @@ async function readLaunchAgentEnvironmentFile(
     }
     environment[key] = parseGeneratedEnvValue(value);
   }
+  healManagedGeneratedEnvValues(environment);
   return environment;
 }
 
