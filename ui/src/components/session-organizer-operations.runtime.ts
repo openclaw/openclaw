@@ -409,8 +409,8 @@ export async function assignSessionCategory(
   host: SessionOrganizerControllerHost,
   session: SidebarRecentSession,
   category: string | null,
-  patch: { pinned?: boolean } = {},
   scope: SidebarSessionMutationScope,
+  patch: { pinned?: boolean } = {},
 ): Promise<void> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;

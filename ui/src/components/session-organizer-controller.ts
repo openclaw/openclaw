@@ -478,7 +478,7 @@ export class SessionOrganizerController implements ReactiveController {
       return;
     }
     const operations = await this.loadOperations(scope);
-    await operations?.assignSessionCategory(this.host, session, category, patch, scope);
+    await operations?.assignSessionCategory(this.host, session, category, scope, patch);
   }
 
   sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
