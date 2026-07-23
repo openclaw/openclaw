@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "../cron/store.js";
+import {
+  loadCronJobsStore,
+  resolveCronJobsStorePath,
+  resolveCronJobsStorePathFromConfig,
+} from "../cron/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
@@ -55,8 +59,8 @@ async function createFixture() {
   return { root, stateDir, workspace, cfg, heartbeatPath: path.join(workspace, "HEARTBEAT.md") };
 }
 
-async function loadMonitor() {
-  const storePath = resolveCronJobsStorePath();
+async function loadMonitor(cfg?: OpenClawConfig) {
+  const storePath = cfg ? resolveCronJobsStorePathFromConfig(cfg) : resolveCronJobsStorePath();
   const store = await loadCronJobsStore(storePath);
   const monitor = store.jobs.find((job) => heartbeatMonitorAgentId(job) === "main");
   if (!monitor) {
@@ -168,6 +172,69 @@ describe("HEARTBEAT.md cron scratch migration", () => {
         "shared checklist\n",
       );
     }
+  });
+
+  it("respects a configured cron store partition", async () => {
+    const fixture = await createFixture();
+    const customStore = path.join(fixture.root, "custom-cron", "jobs.json");
+    const cfg = { ...fixture.cfg, cron: { store: customStore } } as unknown as OpenClawConfig;
+    await fs.writeFile(fixture.heartbeatPath, "custom store scratch\n", "utf8");
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
+
+    expect(result.warnings).toEqual([]);
+    const { monitor, storePath } = await loadMonitor(cfg);
+    expect(storePath).toBe(path.resolve(customStore));
+    expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(
+      "custom store scratch\n",
+    );
+    expect((await loadCronJobsStore(resolveCronJobsStorePath())).jobs).toEqual([]);
+  });
+
+  it("does not resurrect a legacy file after scratch was explicitly unset", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.heartbeatPath, "initial\n", "utf8");
+    await maybeMigrateHeartbeatFilesToScratch({ cfg: fixture.cfg, shouldRepair: true });
+    const { monitor, storePath } = await loadMonitor();
+    const state = readCronJobScratchState(storePath, monitor.id);
+    const unset = writeCronJobScratch({
+      storePath,
+      jobId: monitor.id,
+      content: null,
+      expectedRevision: state.currentRevision,
+    });
+    expect(unset.ok).toBe(true);
+    await fs.writeFile(fixture.heartbeatPath, "recreated\n", "utf8");
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("scratch was explicitly unset");
+    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe("recreated\n");
+    expect(readCronJobScratchState(storePath, monitor.id).scratch).toBeUndefined();
+  });
+
+  it("preserves a concurrent file replacement acquired by the atomic claim", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
+      await fs.writeFile(String(from), "concurrent replacement\n", "utf8");
+      await rename(from, to);
+    });
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings.join("\n")).toContain("changed before the migration claim");
+    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
+      "concurrent replacement\n",
+    );
   });
 
   it("rejects external symlink targets without importing or removing them", async () => {

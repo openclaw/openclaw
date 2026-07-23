@@ -37,9 +37,10 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
 export async function seedHeartbeatScratchForTest(params: {
   content: string | null;
   agentId?: string;
+  storePath?: string;
 }): Promise<string> {
   const agentId = params.agentId ?? "main";
-  const storePath = resolveCronJobsStorePath();
+  const storePath = params.storePath ?? resolveCronJobsStorePath();
   const noop = () => {};
   const cron = new CronService({
     storePath,

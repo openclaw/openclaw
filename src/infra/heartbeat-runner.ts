@@ -97,7 +97,6 @@ import {
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
-import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import { readHeartbeatMonitorScratch, writeCronJobScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -120,7 +119,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import {
   createActiveHoursPredicate,
@@ -181,6 +180,8 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { isPathInside } from "./path-guards.js";
+import { readRegularFile } from "./regular-file.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -201,6 +202,42 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
+const LEGACY_HEARTBEAT_FILE_MAX_BYTES = 16 * 1024 * 1024;
+const legacyHeartbeatFallbackWarnings = new Set<string>();
+const legacyHeartbeatDecoder = new TextDecoder("utf-8", { fatal: true });
+
+async function readLegacyHeartbeatFileForMigration(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<string | undefined> {
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  try {
+    const workspaceRealPath = await fs.realpath(workspaceDir);
+    const sourceRealPath = await fs.realpath(heartbeatPath);
+    if (sourceRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, sourceRealPath)) {
+      throw new Error("HEARTBEAT.md symlink target escapes the agent workspace");
+    }
+    const file = await readRegularFile({
+      filePath: sourceRealPath,
+      maxBytes: LEGACY_HEARTBEAT_FILE_MAX_BYTES,
+    });
+    const content = legacyHeartbeatDecoder.decode(file.buffer);
+    if (!legacyHeartbeatFallbackWarnings.has(heartbeatPath)) {
+      legacyHeartbeatFallbackWarnings.add(heartbeatPath);
+      log.warn(
+        `heartbeat: using legacy ${DEFAULT_HEARTBEAT_FILENAME}; run openclaw doctor --fix to migrate it into cron scratch`,
+      );
+    }
+    return content;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    log.warn(`heartbeat: legacy file migration fallback failed: ${formatErrorMessage(error)}`);
+    return undefined;
+  }
+}
 
 const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("./heartbeat-runner.runtime.js"),
@@ -896,6 +933,21 @@ async function resolveHeartbeatPreflight(params: {
   } catch (error) {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
+  let heartbeatScratchContent = monitorScratch?.state.scratch?.content;
+  if (
+    !shouldBypassFileGates &&
+    heartbeatScratchContent === undefined &&
+    (monitorScratch?.state.currentRevision ?? 0) === 0
+  ) {
+    // Named upgrade bridge: tagged builds shipped HEARTBEAT.md as the only
+    // instruction store. Doctor owns the migration; this read-only fallback
+    // prevents silent loss until one full stable upgrade window has shipped,
+    // after which the fallback and legacy template repair can be deleted.
+    heartbeatScratchContent = await readLegacyHeartbeatFileForMigration({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+  }
   const basePreflight = {
     ...wakeFlags,
     session,
@@ -910,16 +962,12 @@ async function resolveHeartbeatPreflight(params: {
           scratchRevision: monitorScratch.state.currentRevision,
         }
       : {}),
-    ...(monitorScratch?.state.scratch
-      ? { heartbeatScratchContent: monitorScratch.state.scratch.content }
-      : {}),
+    ...(heartbeatScratchContent !== undefined ? { heartbeatScratchContent } : {}),
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
   if (shouldBypassFileGates) {
     return basePreflight;
   }
-
-  const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   if (heartbeatScratchContent === undefined) {
     // No scratch row preserves the old missing-file behavior: the model still
     // gets the generic heartbeat prompt and decides whether anything is due.

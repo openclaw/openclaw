@@ -16,12 +16,10 @@ import {
   writeCronJobScratch,
 } from "../cron/scratch-store.js";
 import { CronService } from "../cron/service.js";
-import {
-  loadCronJobsStoreWithConfigJobsReadOnly,
-  resolveCronJobsStorePathFromConfig,
-} from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { resolveHeartbeatAgents } from "../infra/heartbeat-runner.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
 import { shortenHomePath } from "../utils.js";
@@ -36,6 +34,7 @@ type HeartbeatScratchMigrationResult = {
 
 type HeartbeatSource = {
   path: string;
+  canonicalPath: string;
   content: string;
   sha256: string;
 };
@@ -83,6 +82,7 @@ async function readHeartbeatSource(
   }
   return {
     path: heartbeatPath,
+    canonicalPath: sourceRealPath,
     content,
     sha256: hashCronScratchSource(content),
   };
@@ -137,7 +137,6 @@ function archivePathForSource(agentId: string, sha256: string, env: NodeJS.Proce
 }
 
 async function archiveAndRemoveSource(params: {
-  cfg: OpenClawConfig;
   agentId: string;
   source: HeartbeatSource;
   env: NodeJS.ProcessEnv;
@@ -155,11 +154,38 @@ async function archiveAndRemoveSource(params: {
       throw new Error(`heartbeat migration archive collision at ${archivePath}`, { cause: error });
     }
   }
-  const current = await readHeartbeatSource(params.cfg, params.agentId);
-  if (!current || current.sha256 !== params.source.sha256) {
-    throw new Error("HEARTBEAT.md changed after scratch was committed; leaving it in place");
+  const claimPath = `${params.source.path}.doctor-importing-${process.pid}-${params.source.sha256.slice(0, 12)}`;
+  await fs.rename(params.source.path, claimPath);
+  try {
+    const workspaceRealPath = await fs.realpath(path.dirname(params.source.path));
+    const claimRealPath = await fs.realpath(claimPath);
+    if (claimRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, claimRealPath)) {
+      throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
+    }
+    const claimed = await readRegularFile({
+      filePath: claimRealPath,
+      maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+    });
+    const claimedContent = utf8Decoder.decode(claimed.buffer);
+    if (hashCronScratchSource(claimedContent) !== params.source.sha256) {
+      throw new Error("HEARTBEAT.md changed before the migration claim was acquired");
+    }
+    await fs.unlink(claimPath);
+  } catch (error) {
+    try {
+      await fs.rename(claimPath, params.source.path);
+    } catch (restoreError) {
+      if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") {
+        const conflictPath = `${claimPath}.conflict-${Date.now()}`;
+        await fs.rename(claimPath, conflictPath).catch(() => undefined);
+        throw new Error(
+          `HEARTBEAT.md migration claim could not be restored; preserved at ${conflictPath}`,
+          { cause: error },
+        );
+      }
+    }
+    throw error;
   }
-  await fs.unlink(params.source.path);
 }
 
 function migrationFinding(params: {
@@ -184,35 +210,33 @@ function migrationFinding(params: {
 export async function collectHeartbeatScratchMigrationFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const storePath = resolveCronJobsStorePathFromConfig(cfg);
-  const existingJobs = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs;
   const findings: HealthFinding[] = [];
-  for (const spec of resolveHeartbeatMonitorSpecs(cfg, existingJobs)) {
+  for (const agent of resolveHeartbeatAgents(cfg)) {
     const heartbeatPath = path.join(
-      resolveAgentWorkspaceDir(cfg, spec.agentId),
+      resolveAgentWorkspaceDir(cfg, agent.agentId),
       DEFAULT_HEARTBEAT_FILENAME,
     );
     try {
-      const source = await readHeartbeatSource(cfg, spec.agentId);
+      const source = await readHeartbeatSource(cfg, agent.agentId);
       if (!source) {
         continue;
       }
       findings.push(
         migrationFinding({
-          agentId: spec.agentId,
+          agentId: agent.agentId,
           path: heartbeatPath,
           requirement: "legacy-heartbeat-file",
-          message: `Agent "${spec.agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
+          message: `Agent "${agent.agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
         }),
       );
     } catch (error) {
       findings.push(
         migrationFinding({
-          agentId: spec.agentId,
+          agentId: agent.agentId,
           path: heartbeatPath,
           requirement: "heartbeat-file-migration-blocked",
           severity: "error",
-          message: `Agent "${spec.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
+          message: `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
         }),
       );
     }
@@ -231,19 +255,18 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   if (!params.shouldRepair) {
-    const existingJobs = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs;
-    for (const spec of resolveHeartbeatMonitorSpecs(params.cfg, existingJobs)) {
+    for (const agent of resolveHeartbeatAgents(params.cfg)) {
       try {
-        const source = await readHeartbeatSource(params.cfg, spec.agentId);
+        const source = await readHeartbeatSource(params.cfg, agent.agentId);
         if (source) {
           note(
-            `${shortenHomePath(source.path)} will migrate into scratch for Heartbeat (${spec.agentId}).`,
+            `${shortenHomePath(source.path)} will migrate into scratch for Heartbeat (${agent.agentId}).`,
             "Heartbeat migration preview",
           );
         }
       } catch (error) {
         warnings.push(
-          `Agent "${spec.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
+          `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
         );
       }
     }
@@ -278,9 +301,9 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     if (!source) {
       continue;
     }
-    const group = groups.get(source.path) ?? { source, agents: [] };
+    const group = groups.get(source.canonicalPath) ?? { source, agents: [] };
     group.agents.push([agentId, monitor]);
-    groups.set(source.path, group);
+    groups.set(source.canonicalPath, group);
   }
 
   for (const { source, agents } of groups.values()) {
@@ -288,6 +311,13 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     for (const [agentId, monitor] of agents) {
       const state = readCronJobScratchState(storePath, monitor.id, { env });
       const current = state.scratch;
+      if (state.currentRevision > 0 && !current) {
+        warnings.push(
+          `Agent "${agentId}" scratch was explicitly unset; ${shortenHomePath(source.path)} was left unchanged.`,
+        );
+        importedAll = false;
+        continue;
+      }
       if (current && current.content !== source.content && current.sourceSha256 !== source.sha256) {
         warnings.push(
           `Agent "${agentId}" already has different cron scratch; ${shortenHomePath(source.path)} was left unchanged.`,
@@ -331,7 +361,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       continue;
     }
     try {
-      await archiveAndRemoveSource({ cfg: params.cfg, agentId: agents[0]![0], source, env });
+      await archiveAndRemoveSource({ agentId: agents[0]![0], source, env });
     } catch (error) {
       warnings.push(
         `${shortenHomePath(source.path)} was migrated but not removed: ${errorMessage(error)}. Rerun doctor to retry safely.`,

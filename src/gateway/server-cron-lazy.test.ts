@@ -48,6 +48,17 @@ describe("createLazyGatewayCronState", () => {
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
   });
 
+  it("respects a configured legacy cron store partition", () => {
+    const customStore = "/tmp/openclaw-custom-cron/jobs.json";
+    const params = createParams();
+    const lazy = createLazyGatewayCronState({
+      ...params,
+      cfg: { ...params.cfg, cron: { store: customStore } } as unknown as OpenClawConfig,
+    });
+
+    expect(lazy.storePath).toBe(customStore);
+  });
+
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
     const cron = createCronService();
     const state = createCronState(cron);

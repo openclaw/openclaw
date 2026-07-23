@@ -1545,6 +1545,62 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("keeps legacy HEARTBEAT.md active until doctor migrates it", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-legacy-fallback");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      "# Legacy instructions\n\n- Check the deployment\n",
+      "utf8",
+    );
+    const legacyCronStore = path.join(tmpDir, "legacy-cron", "jobs.json");
+    await seedHeartbeatScratchForTest({ content: null, storePath: legacyCronStore });
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, heartbeat: { every: "5m" } } },
+      cron: { store: legacyCronStore },
+      session: { store: storePath },
+    } as unknown as OpenClawConfig;
+    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
+    const replySpy = vi.fn().mockResolvedValue({ text: "Checked deployment" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replyBody(replySpy).Body).toContain("Check the deployment");
+  });
+
+  it("reads heartbeat scratch from a configured cron store partition", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-custom-store");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const customCronStore = path.join(tmpDir, "custom-cron", "jobs.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await seedHeartbeatScratchForTest({
+      content: "- Check the custom cron partition\n",
+      storePath: customCronStore,
+    });
+    const cfg = {
+      agents: { defaults: { workspace: workspaceDir, heartbeat: { every: "5m" } } },
+      cron: { store: customCronStore },
+      session: { store: storePath },
+    } as unknown as OpenClawConfig;
+    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
+    const replySpy = vi.fn().mockResolvedValue({ text: "Checked custom partition" });
+
+    const result = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
+    });
+
+    expect(result.status).toBe("ran");
+    expect(replyBody(replySpy).Body).toContain("Check the custom cron partition");
+  });
+
   it("keeps non-task scratch context while stripping blank-line-separated task blocks", async () => {
     const tmpDir = await createCaseDir("openclaw-hb-tasks-context");
     const storePath = path.join(tmpDir, "sessions.json");
