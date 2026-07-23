@@ -26,6 +26,7 @@ import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
+import type { SessionCreatorOption } from "./session-owner-chip.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -76,6 +77,10 @@ interface SidebarMenusControllerHost
     Pick<SessionDataController, "approvalBadgeSnapshot" | "sessionsLoading">;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
+  readonly sessionCreatorFilterActive: boolean;
+  sessionCreatorFilterId: string | null;
+  readonly sessionCreatorOptions: readonly SessionCreatorOption[];
+  readonly sessionOwnershipVisible: boolean;
   readonly sidebarEntries: readonly string[];
   sessionSortMode: SidebarSessionSortMode;
   readonly terminalAvailable: boolean;

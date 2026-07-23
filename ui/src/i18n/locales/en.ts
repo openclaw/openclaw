@@ -591,7 +591,7 @@ export const en: TranslationMap = {
     filters: "Filters",
     createdBy: "Created by {name}",
     archivedBy: "Archived by {name}",
-    filterByCreator: "Filter by creator",
+    people: "People",
     allCreators: "All people",
     filterControls: "Thread filters",
     sourceFilters: "Thread source filters",

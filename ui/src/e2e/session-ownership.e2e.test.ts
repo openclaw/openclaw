@@ -131,7 +131,17 @@ describeControlUiE2e("Control UI session ownership", () => {
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await expect.poll(() => currentPage.locator("openclaw-session-owner-chip").count()).toBe(3);
 
-    await currentPage.getByLabel("Filter by creator").selectOption("profile-ada");
+    await currentPage.locator(".sidebar-session-sort").click();
+    const creatorMenu = currentPage.locator(".sidebar-session-sort-menu");
+    await creatorMenu.locator('[value="creator:profile-ada"]').waitFor();
+    await creatorMenu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "creator:profile-ada" } },
+        }),
+      ),
+    );
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
@@ -165,7 +175,13 @@ describeControlUiE2e("Control UI session ownership", () => {
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    expect(await currentPage.getByLabel("Filter by creator").count()).toBe(0);
+    await currentPage.locator(".sidebar-session-sort").click();
+    const creatorMenu = currentPage.locator(".sidebar-session-sort-menu");
+    await creatorMenu.waitFor();
+    expect(
+      await creatorMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
+    ).toBe(0);
+    expect(await creatorMenu.locator('[value^="creator:"]').count()).toBe(0);
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
   });
 
