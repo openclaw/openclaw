@@ -6,12 +6,14 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getCloseMemorySearchManagerMockCalls,
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
   getMemorySyncMockCalls,
   resetMemoryToolMockState,
+  setCloseMemorySearchManagerImpl,
   setMemoryBackend,
   setMemoryCloseImpl,
   setMemoryCustomStatus,
@@ -1062,7 +1064,7 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
-  it("returns unavailable metadata when the index identity is paused", async () => {
+  it("returns unavailable when the index identity stays paused after manager refresh", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
       searchCalls += 1;
@@ -1091,6 +1093,83 @@ describe("memory_search unavailable payloads", () => {
       action:
         "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
     });
+    // One search before refresh, one after reacquire; still paused → unavailable.
+    expect(searchCalls).toBe(2);
+    expect(getCloseMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("closes and reacquires the manager once when the index identity is stale, then recovers", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls <= 1) {
+        return [];
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Recovered result after manager refresh.",
+          source: "memory" as const,
+        },
+      ];
+    });
+    const reason = "index was built for provider openai, expected ollama";
+    setMemoryCustomStatus({
+      indexIdentity: {
+        status: "mismatched",
+        reason,
+      },
+    });
+    // Closing the stale cached manager models re-opening against a healthy identity.
+    setCloseMemorySearchManagerImpl(() => {
+      setMemoryCustomStatus(undefined);
+    });
+
+    const beforeRefreshCalls = getMemorySearchManagerMockCalls();
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("stale-identity-refresh", {
+      query: "hidden thread codename",
+    });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
+    expect(getCloseMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySearchManagerMockCalls()).toBe(beforeRefreshCalls + 2);
+    expect(getMemorySyncMockCalls()).toBe(0);
+  });
+
+  it("skips forced sync for corpus=sessions zero-hit searches", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+    const result = await tool.execute("sessions-zero-hit", {
+      query: "nonexistent topic",
+      corpus: "sessions",
+    });
+
+    const details = result.details as { results?: unknown[]; error?: string };
+    expect(details.results).toEqual([]);
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);
   });
