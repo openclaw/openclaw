@@ -316,7 +316,7 @@ export class CodexAppServerEventProjector {
 
   buildResult(
     toolTelemetry: CodexAppServerToolTelemetry,
-    options?: { yieldDetected?: boolean },
+    options?: { yieldDetected?: boolean; yieldMessage?: string },
   ): EmbeddedRunAttemptResult {
     // Result construction runs after the notification queue drains. Close any
     // tool lacking a terminal item so audit consumers never retain an open action.
@@ -448,6 +448,9 @@ export class CodexAppServerEventProjector {
         activeCount: this.activeItemIds.size,
       },
       yieldDetected: options?.yieldDetected || false,
+      ...(options?.yieldDetected && options?.yieldMessage
+        ? { yieldMessage: options.yieldMessage }
+        : {}),
       didSendDeterministicApprovalPrompt:
         this.eventProjection.guardianReviewCount > 0 ? false : undefined,
     };

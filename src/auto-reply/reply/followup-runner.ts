@@ -16,6 +16,7 @@ import {
   hasCompletedSourceReplyDeliveryEvidence,
   hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
+  hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
@@ -76,6 +77,7 @@ import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-ou
 import {
   buildEmptyInteractiveReplyPayload,
   buildPreflightCompactionFailureText,
+  buildSessionsYieldAckReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -1847,7 +1849,30 @@ export function createFollowupRunner(params: {
         }).filter(
           (payload) => hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
         );
-      let finalPayloads = resolveDeliveryPayloads(runResult.payloads ?? []);
+      // A yielded spawn-and-wait followup turn intentionally ends with zero payloads;
+      // deliver the model's sessions_yield acknowledgment instead of silence (#107788).
+      // Same strictly user-visible evidence gate as runReplyAgent: accepted spawns and
+      // cron adds are replay-safety evidence, not something the user saw.
+      const sessionsYieldAckPayload =
+        (runResult.payloads?.length ?? 0) === 0
+          ? buildSessionsYieldAckReplyPayload({
+              yielded: runResult.meta?.yielded === true,
+              yieldMessage: runResult.meta?.yieldMessage,
+              isInteractive,
+              isHeartbeat: opts?.isHeartbeat,
+              silentExpected: run.silentExpected,
+              isMessageToolOnly: run.sourceReplyDeliveryMode === "message_tool_only",
+              hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+              hasCommittedDelivery:
+                hasCommittedSourceReplyDeliveryEvidence(runResult) ||
+                hasVisibleCommittedMessagingToolDeliveryEvidence(runResult) ||
+                runResult.didSendViaMessagingTool === true ||
+                runResult.didSendDeterministicApprovalPrompt === true,
+            })
+          : undefined;
+      let finalPayloads = resolveDeliveryPayloads(
+        sessionsYieldAckPayload ? [sessionsYieldAckPayload] : (runResult.payloads ?? []),
+      );
       const hasTerminalReplyPayload = finalPayloads.some(
         (payload) =>
           payload.isReasoning !== true &&

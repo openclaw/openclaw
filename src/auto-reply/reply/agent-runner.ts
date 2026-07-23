@@ -97,6 +97,7 @@ import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
+  buildSessionsYieldAckReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import {
   createShouldEmitToolOutput,
@@ -2262,13 +2263,14 @@ export async function runReplyAgent(params: {
     const fallbackFailureKnown =
       fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback;
     const hasSpecificFallbackFailure = fallbackTransition.fallbackActive && fallbackFailureKnown;
+    const isInteractiveTurn =
+      followupRun.currentInboundEventKind !== "room_event" &&
+      (followupRun.run.inputProvenance?.kind === undefined ||
+        followupRun.run.inputProvenance.kind === "external_user");
     const emptyInteractiveReplyPayload = terminalFailurePayload
       ? undefined
       : buildEmptyInteractiveReplyPayload({
-          isInteractive:
-            followupRun.currentInboundEventKind !== "room_event" &&
-            (followupRun.run.inputProvenance?.kind === undefined ||
-              followupRun.run.inputProvenance.kind === "external_user"),
+          isInteractive: isInteractiveTurn,
           isHeartbeat,
           silentExpected: followupRun.run.silentExpected,
           allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
@@ -2455,6 +2457,44 @@ export async function runReplyAgent(params: {
           isFallbackNotice: true,
         }),
       );
+    }
+
+    // A yielded spawn-and-wait turn intentionally ends with zero assistant payloads;
+    // deliver the model's sessions_yield acknowledgment instead of silence (#107788).
+    if (
+      payloadArray.length === 0 &&
+      fallbackNoticePayloads.length === 0 &&
+      !shouldDeliverTerminalFailure
+    ) {
+      const sessionsYieldAckPayload = buildSessionsYieldAckReplyPayload({
+        yielded: runResult.meta?.yielded === true,
+        yieldMessage: runResult.meta?.yieldMessage,
+        isInteractive: isInteractiveTurn,
+        isHeartbeat,
+        silentExpected: followupRun.run.silentExpected,
+        isMessageToolOnly:
+          (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
+          "message_tool_only",
+        hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
+        // Only user-visible delivery counts here. successfulTerminalDelivery and
+        // visibleOutboundDelivery treat accepted spawns/cron adds as delivery evidence
+        // (replay-safety semantics) — exactly what a yielded spawn turn produces while
+        // the user sees nothing, so they must not suppress the ack (#107788).
+        hasCommittedDelivery:
+          hasSuccessfulTerminalSourceReplyDelivery({
+            blockReplyPipeline,
+            directlySentBlockPayloads,
+          }) ||
+          successfulSourceReplyDelivery ||
+          committedMessagingToolSourceReplyDelivery ||
+          completedSourceReplyDelivery ||
+          hasVisibleCommittedMessagingToolDeliveryEvidence(runResult) ||
+          runResult.didSendViaMessagingTool === true ||
+          runResult.didSendDeterministicApprovalPrompt === true,
+      });
+      if (sessionsYieldAckPayload) {
+        payloadArray.push(sessionsYieldAckPayload);
+      }
     }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

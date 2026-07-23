@@ -524,6 +524,38 @@ export function buildEmptyInteractiveReplyPayload(params: {
   });
 }
 
+/**
+ * Surfaces the model's sessions_yield acknowledgment when a yielded turn would otherwise
+ * end silently (#107788). Yield messages are user-facing interim acks ("research started,
+ * results will follow"), so the empty payload set is replaced with the ack; turns with any
+ * other visible delivery evidence keep their payloads and never double-acknowledge.
+ */
+export function buildSessionsYieldAckReplyPayload(params: {
+  yielded: boolean;
+  yieldMessage?: string;
+  isInteractive: boolean;
+  isHeartbeat?: boolean;
+  silentExpected?: boolean;
+  isMessageToolOnly: boolean;
+  hasExplicitSilentReply: boolean;
+  hasCommittedDelivery: boolean;
+}): ReplyPayload | undefined {
+  const text = params.yieldMessage?.trim();
+  if (
+    !params.yielded ||
+    !text ||
+    !params.isInteractive ||
+    params.isHeartbeat === true ||
+    params.silentExpected === true ||
+    params.isMessageToolOnly ||
+    params.hasExplicitSilentReply ||
+    params.hasCommittedDelivery
+  ) {
+    return undefined;
+  }
+  return { text };
+}
+
 /** Converts known agent-run failures into user-facing reply payloads. */
 export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
