@@ -133,5 +133,5 @@ export async function runSystemAgentWithInference(
   runtime.log("OpenClaw requires working inference. Starting guided AI setup…");
   const runGuidedOnboarding =
     deps.runGuidedOnboarding ?? (await import("./onboard-guided.js")).runGuidedOnboarding;
-  await runGuidedOnboarding(onboardingOptions, runtime);
+  await runGuidedOnboarding(onboardingOptions, runtime, { handoffMode: "chat" });
 }
