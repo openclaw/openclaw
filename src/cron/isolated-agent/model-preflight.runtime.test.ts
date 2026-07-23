@@ -1,5 +1,6 @@
 // Runtime model preflight tests cover provider/model checks before cron execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -85,6 +86,54 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     expect(request.url).toBe("http://127.0.0.1:8000/v1/models");
     expect(request.timeoutMs).toBe(2500);
+  });
+
+  it("starts unread-body cancellation before release without awaiting a tee branch", async () => {
+    const cleanupOrder: string[] = [];
+    const cancel = vi.fn(() => {
+      cleanupOrder.push("cancel");
+      return new Promise<void>(() => {});
+    });
+    const release = vi.fn(async () => {
+      cleanupOrder.push("release");
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: { status: 200, bodyUsed: false, body: { cancel } },
+      release,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const result = await withTestTimeout(
+      preflightCronModelProvider({
+        cfg,
+        provider: "vllm",
+        model: "llama",
+      }),
+      1_000,
+      "timed out waiting for cron model preflight cleanup",
+    );
+    const cached = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "llama-cached",
+    });
+
+    expect(result).toEqual({ status: "available" });
+    expect(cached).toEqual({ status: "available" });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(cleanupOrder).toEqual(["cancel", "release"]);
   });
 
   it("marks unreachable local Ollama endpoints unavailable and caches the result", async () => {
