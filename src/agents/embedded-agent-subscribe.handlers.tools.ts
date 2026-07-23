@@ -73,6 +73,7 @@ import {
   collectMessagingMediaUrlsFromToolResult,
   capLiveExecResult,
   extractMessagingToolSourceReplyPayload,
+  extractReadToolImageContentMediaArtifact,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
@@ -923,7 +924,17 @@ async function emitToolResultOutput(params: {
   }
 
   const outputText = extractToolResultText(sanitizedResult);
-  const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
+  const mediaReply = isToolError
+    ? undefined
+    : (extractToolResultMediaArtifact(result) ??
+      (await extractReadToolImageContentMediaArtifact({
+        toolName: rawToolName,
+        result,
+        builtinToolNames: ctx.builtinToolNames,
+      }).catch((err) => {
+        ctx.log.warn(`failed to persist read tool image media: ${String(err)}`);
+        return undefined;
+      })));
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(
         rawToolName,
