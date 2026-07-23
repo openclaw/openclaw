@@ -195,10 +195,12 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     outputProcess.stderr.write("before exit ");
     outputProcess.emit("exit", 0, null);
-    outputProcess.stderr.write("after exit");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    outputProcess.stderr.write(Buffer.from([0xe4]));
+    outputProcess.stderr.write(Buffer.from([0xbd, 0xa0]));
     outputProcess.stderr.end();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit 你");
   });
 
   it("preserves exit-following diagnostics from a data-only stderr adapter", async () => {
@@ -229,6 +231,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     outputProcess.stderr.emit("data", "after exit");
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit");
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: after exit");
   });
 });

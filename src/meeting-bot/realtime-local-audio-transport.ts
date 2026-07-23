@@ -61,7 +61,6 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
 }
 
 function attachStderrLineLogger(params: {
-  proc: Pick<BridgeProcess, "on">;
   stderr: BridgeProcess["stderr"];
   debug: RuntimeLogger["debug"];
   prefix: string;
@@ -74,9 +73,17 @@ function attachStderrLineLogger(params: {
     return;
   }
   const debug = params.debug;
+  if (!(params.stderr instanceof Readable)) {
+    // The public injected adapter contract does not require a completion event.
+    // Keep its existing per-chunk behavior so stderr arriving after child exit
+    // remains visible instead of guessing when a UTF-8 stream has ended.
+    params.stderr.on("data", (chunk) => {
+      debug(`${params.prefix}: ${String(chunk).trim()}`);
+    });
+    return;
+  }
   const accumulator = createUtf8LineAccumulator();
   let finalized = false;
-  let exitFlushScheduled = false;
   const logLine = ({ line, truncated }: AccumulatedUtf8Line) => {
     const trimmed = line.trim();
     if (!trimmed && !truncated) {
@@ -93,39 +100,25 @@ function attachStderrLineLogger(params: {
       splitOnCarriageReturn: true,
     }).forEach(logLine);
   };
-  // ChildProcess exit can precede its stdio streams' final data. A stream end
-  // finalizes the accumulator, while the exit fallback only snapshots a tail:
-  // injected adapters can still emit later stderr data without losing it.
-  const flush = (final = false) => {
+  // ChildProcess exit can precede its stdio streams' final data, so only the
+  // stream lifecycle is authoritative for finishing the UTF-8 decoder.
+  const flush = () => {
     if (finalized) {
       return;
     }
-    finalized = final;
+    finalized = true;
     const trailing = flushUtf8Line(accumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
     if (trailing) {
       logLine(trailing);
     }
-  };
-  const scheduleExitFlush = () => {
-    if (finalized || exitFlushScheduled) {
-      return;
-    }
-    exitFlushScheduled = true;
-    setImmediate(() => {
-      exitFlushScheduled = false;
-      flush();
-    });
   };
   params.stderr.on("data", (chunk) => {
     if (!finalized) {
       append(chunk);
     }
   });
-  params.proc.on("exit", scheduleExitFlush);
-  if (params.stderr instanceof Readable) {
-    params.stderr.once("end", () => flush(true));
-    params.stderr.once("close", () => flush(true));
-  }
+  params.stderr.once("end", flush);
+  params.stderr.once("close", flush);
 }
 
 export function createLocalMeetingRealtimeAudioTransport(params: {
@@ -188,7 +181,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
     });
     attachStderrLineLogger({
-      proc,
       stderr: proc.stderr,
       debug: params.logger.debug,
       prefix: `${params.logScope} audio output`,
@@ -210,7 +202,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     }
   });
   attachStderrLineLogger({
-    proc: inputProcess,
     stderr: inputProcess.stderr,
     debug: params.logger.debug,
     prefix: `${params.logScope} audio input`,
@@ -328,7 +319,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
         );
       });
       attachStderrLineLogger({
-        proc: bargeInInputProcess,
         stderr: bargeInInputProcess.stderr,
         debug: params.logger.debug,
         prefix: `${params.logScope} barge-in input`,
