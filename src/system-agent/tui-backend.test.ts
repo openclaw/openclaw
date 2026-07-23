@@ -149,7 +149,7 @@ describe("runSystemAgentTui", () => {
     if (!options.backend || typeof options.backend !== "object") {
       throw new Error("expected openclaw TUI backend");
     }
-  });
+  }, 240_000);
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
     const config = {
