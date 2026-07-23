@@ -13,6 +13,7 @@ const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-up
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_UPDATE_REGISTRY_SCRIPT = "scripts/e2e/lib/plugin-update/registry-server.mjs";
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
+const PLUGIN_UPDATE_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 function runProbe(command: string, payload: unknown): void {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
@@ -163,6 +164,43 @@ describe("plugin update unchanged Docker E2E", () => {
       expect(result.stderr).toContain("missing marker tail");
       expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG");
       expect(result.stderr.length).toBeLessThan(80 * 1024);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prints UTF-8-safe assert-output diagnostics when the tail starts inside a multibyte character", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
+    try {
+      for (const [name, boundary] of [
+        ["emoji", "\u{1F642}"],
+        ["cjk", "\u754C"],
+      ] as const) {
+        const boundaryBytes = Buffer.from(boundary, "utf8");
+        const marker = `UTF8_BOUNDARY_MARKER_${name}`;
+        const markerBytes = Buffer.from(`\n${marker}\n`, "utf8");
+        const bytesAfterBoundary = PLUGIN_UPDATE_OUTPUT_TAIL_BYTES + 1 - boundaryBytes.length;
+        const filler = Buffer.alloc(bytesAfterBoundary - markerBytes.length, "a");
+        const logPath = path.join(root, `${name}.log`);
+        writeFileSync(
+          logPath,
+          Buffer.concat([
+            Buffer.from(`DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG_${name}\n`, "utf8"),
+            boundaryBytes,
+            filler,
+            markerBytes,
+          ]),
+        );
+
+        const result = runProbeFileStatus("assert-output", logPath);
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Expected up-to-date output missing");
+        expect(result.stderr).toContain("Output tail:");
+        expect(result.stderr).toContain(marker);
+        expect(result.stderr).not.toContain("\uFFFD");
+        expect(result.stderr).not.toContain("DO_NOT_PRINT_OLD_PLUGIN_UPDATE_LOG");
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
