@@ -223,6 +223,7 @@ describe("renderModelSetup", () => {
                 label: "Claude Code",
                 hint: "Anthropic's coding agent CLI",
                 website: "https://code.claude.com/docs/en/quickstart",
+                icon: "https://cdn.example.com/claude-code.png",
               },
               {
                 id: "codex-cli",
@@ -230,6 +231,7 @@ describe("renderModelSetup", () => {
                 label: "Codex CLI",
                 hint: "OpenAI's coding agent CLI",
                 website: "https://developers.openai.com/codex/cli/",
+                icon: "https://cdn.example.com/codex-cli.png",
               },
             ],
           },
@@ -247,6 +249,7 @@ describe("renderModelSetup", () => {
         '[data-recommended-install="codex-cli"] [data-provider-icon="codex"]',
       ),
     ).not.toBeNull();
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("never renders remote icon URLs directly", () => {
