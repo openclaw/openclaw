@@ -196,6 +196,31 @@ describe("TranscriptsStore", () => {
     expect(fs.readFileSync(transcriptPath, "utf8")).toContain("legacy line");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "checks the shipped slug path before inserting a portable encoded session",
+    async () => {
+      const { stateDir, store } = createStore();
+      const target = session("trailing-dot.");
+      const legacyDir = path.join(stateDir, "transcripts", "2026-07-01", "trailing-dot.");
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, "transcript.jsonl"), "legacy\n");
+
+      await expect(store.writeSession(target)).rejects.toThrow("run openclaw doctor --fix");
+      await expect(store.readSession(target.sessionId)).resolves.toBeUndefined();
+    },
+  );
+
+  it("does not let a dot session mask the shipped dot-dot root layout", async () => {
+    const { stateDir, store } = createStore();
+    await store.writeSession(session("."));
+    const transcriptRoot = path.join(stateDir, "transcripts");
+    fs.mkdirSync(transcriptRoot, { recursive: true });
+    fs.writeFileSync(path.join(transcriptRoot, "transcript.jsonl"), "legacy root transcript\n");
+
+    await expect(store.writeSession(session(".."))).rejects.toThrow("run openclaw doctor --fix");
+    await expect(store.readSession("..")).resolves.toBeUndefined();
+  });
+
   it("does not let a modified export block canonical session updates", async () => {
     const { store } = createStore();
     const target = session("mutable-export");

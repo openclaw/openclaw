@@ -33,6 +33,10 @@ export function safeTranscriptPathSegment(value: string): string {
   return segment;
 }
 
+function legacyTranscriptPathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
+}
+
 function dateSegment(value: string | undefined): string {
   const isoDate = value?.match(/^(\d{4}-\d{2}-\d{2})T/)?.[1];
   return isoDate ?? new Date().toISOString().slice(0, 10);
@@ -40,6 +44,20 @@ function dateSegment(value: string | undefined): string {
 
 export function transcriptSessionSelector(session: TranscriptSessionDescriptor): string {
   return `${dateSegment(session.startedAt)}/${safeTranscriptPathSegment(session.sessionId)}`;
+}
+
+export function legacyTranscriptSessionSelector(session: TranscriptSessionDescriptor): string {
+  const date = dateSegment(session.startedAt);
+  const segment = legacyTranscriptPathSegment(session.sessionId);
+  // The shipped sanitizer allowed dot components: `.` collapsed to the date
+  // directory and `..` collapsed to the transcript root.
+  if (segment === ".") {
+    return date;
+  }
+  if (segment === "..") {
+    return ".";
+  }
+  return `${date}/${segment}`;
 }
 
 export function transcriptSessionExportKey(session: TranscriptSessionDescriptor): string {

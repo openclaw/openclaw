@@ -110,6 +110,11 @@ describe("transcripts CLI", () => {
 
     expect(output).toContain("# Design review");
     expect(output).toContain("Ship CLI");
+    expect(output.endsWith("\n")).toBe(true);
+    const jsonOutput = JSON.parse(await runTranscriptsCli(["show", "design-review", "--json"])) as {
+      summary: string;
+    };
+    expect(jsonOutput.summary.endsWith("\n")).toBe(true);
     await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toContain(
       "Ship CLI",
     );

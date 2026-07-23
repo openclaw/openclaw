@@ -93,6 +93,12 @@ async function showCommand(sessionSelector: string, options: TranscriptsCliOptio
     throw new Error(`transcripts session not found: ${sessionSelector}`);
   }
   const storedSummary = await store.readSummary(entry.session);
+  const materializedMarkdown =
+    storedSummary.markdown === undefined
+      ? undefined
+      : storedSummary.markdown.endsWith("\n")
+        ? storedSummary.markdown
+        : `${storedSummary.markdown}\n`;
   // `show` is an explicit export boundary: keep the shipped summary path current.
   await store.materializeSessionArtifacts(entry.session, "summary");
   if (options.json) {
@@ -101,14 +107,14 @@ async function showCommand(sessionSelector: string, options: TranscriptsCliOptio
       selector: entry.selector,
       path: entry.sessionDir,
       summaryPath: entry.summaryPath,
-      summary: storedSummary.markdown ?? null,
+      summary: materializedMarkdown ?? null,
     });
     return;
   }
-  if (storedSummary.markdown === undefined) {
+  if (materializedMarkdown === undefined) {
     throw new Error(`summary.md not found for transcripts session: ${sessionSelector}`);
   }
-  process.stdout.write(sanitizeMarkdownForTerminal(storedSummary.markdown));
+  process.stdout.write(sanitizeMarkdownForTerminal(materializedMarkdown));
 }
 
 function selectedArtifactKind(options: TranscriptsPathOptions): TranscriptArtifactKind {

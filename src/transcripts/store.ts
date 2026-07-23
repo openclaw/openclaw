@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
-import { ensureAbsoluteDirectory, writeExternalFileWithinRoot } from "../infra/fs-safe.js";
+import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -21,6 +21,7 @@ import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provide
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
   isCaseSensitiveDirectory,
+  legacyTranscriptSessionSelector,
   normalizeExportText,
   removeTranscriptArtifact,
   safeTranscriptPathSegment,
@@ -29,6 +30,7 @@ import {
   transcriptSessionSelector,
   writeTranscriptArtifact,
 } from "./store-artifacts.js";
+import { writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
 import {
   assertTranscriptExportPathAvailable,
   hasAliasedCanonicalTranscriptExportPathOwner,
@@ -147,31 +149,6 @@ export class TranscriptsStore {
     return digest.digest("hex");
   }
 
-  private async writeTranscriptJsonlArtifact(
-    sessionDir: string,
-    session: TranscriptSessionDescriptor,
-  ): Promise<string> {
-    const { database, query } = this.transcriptRows(session);
-    const digest = createHash("sha256");
-    await writeExternalFileWithinRoot({
-      rootDir: sessionDir,
-      path: "transcript.jsonl",
-      write: async (tempPath) => {
-        const handle = await fs.open(tempPath, "w", 0o600);
-        try {
-          for (const row of iterateSqliteQuerySync(database.db, query)) {
-            const line = `${JSON.stringify(utteranceFromRow(row))}\n`;
-            await handle.writeFile(line);
-            digest.update(line);
-          }
-        } finally {
-          await handle.close();
-        }
-      },
-    });
-    return digest.digest("hex");
-  }
-
   private async expectedExportHashes(
     session: TranscriptSessionDescriptor,
   ): Promise<Record<string, string>> {
@@ -269,8 +246,10 @@ export class TranscriptsStore {
     );
   }
 
-  private async assertExportDestinationOwned(session: TranscriptSessionDescriptor): Promise<void> {
-    const sessionDir = this.sessionDir(session);
+  private async assertExportDestinationOwned(
+    session: TranscriptSessionDescriptor,
+    sessionDir = this.sessionDir(session),
+  ): Promise<void> {
     let entries;
     try {
       entries = await fs.readdir(sessionDir, { withFileTypes: true });
@@ -340,6 +319,20 @@ export class TranscriptsStore {
       }))
     ) {
       await this.assertExportDestinationOwned(session);
+      const legacySessionDir = path.join(
+        this.exportRootDir,
+        legacyTranscriptSessionSelector(session),
+      );
+      const legacyOwner = await this.readSession(legacyTranscriptSessionSelector(session));
+      const legacyPathIsCanonical =
+        legacyOwner !== undefined &&
+        path.resolve(this.sessionDir(legacyOwner)) === path.resolve(legacySessionDir);
+      if (
+        path.resolve(legacySessionDir) !== path.resolve(this.sessionDir(session)) &&
+        !legacyPathIsCanonical
+      ) {
+        await this.assertExportDestinationOwned(session, legacySessionDir);
+      }
     }
     const selector = transcriptSessionSelector(session);
     const sourceJson = JSON.stringify(session.source);
@@ -662,10 +655,11 @@ export class TranscriptsStore {
       );
     }
     if (includeTranscript) {
-      exportedHashes["transcript.jsonl"] = await this.writeTranscriptJsonlArtifact(
+      exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
         sessionDir,
         session,
-      );
+        databaseOptions: this.databaseOptions,
+      });
     }
     if (includeSummary) {
       if (storedSummary.summary) {
