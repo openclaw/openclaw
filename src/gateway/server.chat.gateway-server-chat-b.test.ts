@@ -2091,18 +2091,25 @@ describe("gateway server chat", () => {
         run: async () => {
           mutationStarted.resolve();
           await performDeletion.promise;
-          // Use the resolved store target: writeSessionStore also rewrites the
-          // suite config, adding an unrelated config-watcher race to this test.
+          // Read the authoritative row inside the mutation. Admission startup
+          // may refresh metadata before it blocks, but this test deletes that
+          // same session generation rather than a stale pre-admission snapshot.
+          const deletionSession = loadGatewaySessionEntry("main");
+          const deletionEntry = expectDefined(
+            deletionSession.entry,
+            "session deletion test invariant",
+          );
+          expect(deletionEntry.sessionId).toBe(seededSessionId);
           const deletion = await deleteSessionEntryLifecycle({
             agentId: "main",
             archiveTranscript: false,
-            expectedEntry: seededSession.entry,
+            expectedEntry: deletionEntry,
             expectedSessionId: seededSessionId,
             requireWriteSuccess: true,
-            storePath: seededSession.storePath,
+            storePath: deletionSession.storePath,
             target: {
-              canonicalKey: seededSession.canonicalKey,
-              storeKeys: seededSession.storeKeys,
+              canonicalKey: deletionSession.canonicalKey,
+              storeKeys: deletionSession.storeKeys,
             },
           });
           expect(deletion.deleted).toBe(true);
