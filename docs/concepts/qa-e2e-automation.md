@@ -110,6 +110,13 @@ the QA Lab page where an operator or automation loop can give the agent a QA
 mission, observe real channel behavior, and record what worked, failed, or
 stayed blocked.
 
+The Runner's Scenarios panel can launch flow, Playwright, Vitest, and script
+catalog entries together. In Config, Provider lane and Channel driver are
+independent choices. For example, select Real frontier providers with Crabline
+local providers, or Synthetic (mock) with Real channels. Explicit selections
+run exactly the checked catalog IDs; empty or unknown selections are rejected
+instead of being replaced by defaults.
+
 For faster QA Lab UI iteration without rebuilding the Docker image each time,
 start the stack with a bind-mounted QA Lab bundle:
 

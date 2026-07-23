@@ -12,11 +12,16 @@ import {
   type QaProviderMode,
 } from "./providers/index.js";
 import type { QaSeedScenario } from "./scenario-catalog.js";
+import {
+  qaScorecardChannelDriverSchema,
+  type QaScorecardChannelDriver,
+} from "./scorecard-taxonomy.js";
 
 export type { QaProviderMode } from "./model-selection.js";
 export type { QaProviderModeInput } from "./providers/index.js";
 
-type QaLabRunSelection = {
+export type QaLabRunSelection = {
+  channelDriver: QaScorecardChannelDriver;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -66,6 +71,7 @@ function createDefaultQaRunSelection(
   const providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE;
   const resolveDefaultModel = options?.resolveDefaultModel ?? defaultQaModelForMode;
   return {
+    channelDriver: "qa-channel",
     providerMode,
     primaryModel: resolveDefaultModel(providerMode),
     alternateModel: resolveDefaultModel(providerMode, true),
@@ -92,23 +98,50 @@ function normalizeModel(input: unknown, fallback: string) {
 
 function normalizeScenarioIds(input: unknown, scenarios: QaSeedScenario[]) {
   const defaultScenarioIds = qaLabFlowScenarioIds(scenarios);
-  const availableIds = new Set(defaultScenarioIds);
-  const requestedIds = Array.isArray(input)
-    ? input
-        .map((value) => (typeof value === "string" ? value.trim() : ""))
-        .filter((value) => value.length > 0)
-    : [];
-  const selectedIds = uniqueStrings(requestedIds.filter((id) => availableIds.has(id)));
-  return selectedIds.length > 0 ? selectedIds : defaultScenarioIds;
+  if (input === undefined) {
+    return defaultScenarioIds;
+  }
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new Error("QA runner scenarioIds must be a non-empty array");
+  }
+  const requestedIds = input.map((value) => {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error("QA runner scenarioIds must contain non-empty strings");
+    }
+    return value.trim();
+  });
+  const selectedIds = uniqueStrings(requestedIds);
+  const availableIds = new Set(scenarios.map((scenario) => scenario.id));
+  const unknownIds = selectedIds.filter((id) => !availableIds.has(id));
+  if (unknownIds.length > 0) {
+    throw new Error(`unknown QA scenario id(s): ${unknownIds.join(", ")}`);
+  }
+  return selectedIds;
+}
+
+function normalizeQaChannelDriver(input: unknown): QaScorecardChannelDriver {
+  if (input === undefined || input === null || input === "") {
+    return "qa-channel";
+  }
+  const parsed = qaScorecardChannelDriverSchema.safeParse(input);
+  if (!parsed.success) {
+    const details = typeof input === "string" ? `: ${input}` : "";
+    throw new Error(`unknown QA channel driver${details}`);
+  }
+  return parsed.data;
 }
 
 export function normalizeQaRunSelection(
   input: unknown,
   scenarios: QaSeedScenario[],
 ): QaLabRunSelection {
-  const payload = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("QA runner request must be a JSON object");
+  }
+  const payload = input as Record<string, unknown>;
   const providerMode = normalizeQaProviderMode(payload.providerMode);
   return {
+    channelDriver: normalizeQaChannelDriver(payload.channelDriver),
     providerMode,
     primaryModel: normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode)),
     alternateModel: normalizeModel(

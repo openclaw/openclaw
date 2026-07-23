@@ -113,6 +113,14 @@ export function renderSidebar(state: UiState): string {
                   <option value="live-frontier"${selection?.providerMode === "live-frontier" ? " selected" : ""}>Real frontier providers</option>
                 </select>
               </div>
+              <div class="config-field">
+                <span class="config-label">Channel driver</span>
+                <select id="channel-driver"${isRunning ? " disabled" : ""}>
+                  <option value="qa-channel"${selection?.channelDriver === "qa-channel" ? " selected" : ""}>Synthetic QA channel</option>
+                  <option value="crabline"${selection?.channelDriver === "crabline" ? " selected" : ""}>Crabline local providers</option>
+                  <option value="live"${selection?.channelDriver === "live" ? " selected" : ""}>Real channels</option>
+                </select>
+              </div>
               ${renderModelSelect({
                 id: "primary-model",
                 label: "Primary model",
@@ -160,7 +168,7 @@ export function renderSidebar(state: UiState): string {
                           <span class="${statusDotClass(status)}"></span>
                           <div class="scenario-item-info">
                             <span class="scenario-item-title">${esc(s.title)}</span>
-                            <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.id)}</span>
+                            <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.execution?.kind ?? "flow")} · ${esc(s.id)}</span>
                           </div>
                         </label>`;
                     })
