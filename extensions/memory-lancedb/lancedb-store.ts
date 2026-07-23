@@ -4,8 +4,11 @@ import type { MemoryCategory } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
   hasAgentScopeColumn,
+  hasMemoryScopeColumn,
   legacyMemorySchemaError,
+  legacyScopeSchemaError,
   memoryAgentPredicate,
+  memoryScopePredicate,
   MEMORY_TABLE_NAME,
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
@@ -20,6 +23,8 @@ export type MemoryEntry = {
   importance: number;
   category: MemoryCategory;
   createdAt: number;
+  /** Opaque caller-defined partition within one agent's rows; "" = global. */
+  scope?: string;
 };
 
 type MemoryListEntry = Omit<MemoryEntry, "vector">;
@@ -106,8 +111,17 @@ export class MemoryDB {
 
       if (tables.includes(MEMORY_TABLE_NAME)) {
         table = await db.openTable(MEMORY_TABLE_NAME);
-        if (!hasAgentScopeColumn(await table.schema())) {
+        const schema = await table.schema();
+        if (!hasAgentScopeColumn(schema)) {
           throw legacyMemorySchemaError();
+        }
+        // Schema changes are never applied during normal runtime
+        // initialization: like the agentId migration above, adding the scope
+        // column goes through `openclaw doctor --fix` (see
+        // doctor-contract-api.ts), which previews, mutates, and verifies the
+        // table explicitly. Existing rows migrate to "" (global).
+        if (!hasMemoryScopeColumn(schema)) {
+          throw legacyScopeSchemaError();
         }
       } else {
         table = await db.createTable(MEMORY_TABLE_NAME, [
@@ -119,6 +133,7 @@ export class MemoryDB {
             category: "other",
             createdAt: 0,
             agentId: SCHEMA_SENTINEL_ID,
+            scope: "",
           },
         ]);
         await table.delete(`id = ${quoteLanceSqlString(SCHEMA_SENTINEL_ID)}`);
@@ -137,6 +152,7 @@ export class MemoryDB {
     await this.ensureInitialized();
 
     const fullEntry: MemoryEntry = {
+      scope: "",
       ...entry,
       id: randomUUID(),
       createdAt: Date.now(),
@@ -152,15 +168,20 @@ export class MemoryDB {
     vector: number[],
     limit = 5,
     minScore = 0.5,
+    scope?: string,
   ): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
     // LanceDB applies metadata predicates before vector ranking. Foreign rows
-    // must never enter this agent's candidate set or top-K.
-    const results = await this.table!.vectorSearch(vector)
-      .where(memoryAgentPredicate(agentId))
-      .limit(limit)
-      .toArray();
+    // must never enter this agent's candidate set or top-K. When a scope is
+    // given ("" = global-only, non-empty = that exact partition), it joins the
+    // same single predicate — LanceDB 0.30 replaces rather than combines
+    // repeated where() calls, so agent isolation cannot be lost.
+    const predicate =
+      scope === undefined
+        ? memoryAgentPredicate(agentId)
+        : `(${memoryAgentPredicate(agentId)}) AND (${memoryScopePredicate(scope)})`;
+    const results = await this.table!.vectorSearch(vector).where(predicate).limit(limit).toArray();
 
     const mapped = results.map((row) => {
       const distance = row["_distance"] ?? 0;
@@ -173,12 +194,31 @@ export class MemoryDB {
           importance: row.importance as number,
           category: row.category as MemoryEntry["category"],
           createdAt: row.createdAt as number,
+          scope: (row.scope as string | undefined) ?? "",
         },
         score,
       };
     });
 
     return mapped.filter((result) => result.score >= minScore);
+  }
+
+  // Returns the scope of one of this agent's rows by id ("" = global), or null
+  // when the agent has no such row. Used to fence memoryId-based deletes to the
+  // caller's partition without leaking other agents' rows.
+  async getScopeById(agentId: string, id: string): Promise<string | null> {
+    await this.ensureInitialized();
+    if (!UUID_PATTERN.test(id)) {
+      throw new Error(`Invalid memory ID format: ${id}`);
+    }
+    const rows = await this.table!.query()
+      .where(scopedPredicate(agentId, { column: "id", operator: "=", value: id }))
+      .limit(1)
+      .toArray();
+    if (rows.length === 0) {
+      return null;
+    }
+    return (rows[0]?.scope as string | undefined) ?? "";
   }
 
   async list(

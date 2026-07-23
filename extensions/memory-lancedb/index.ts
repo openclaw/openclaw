@@ -185,6 +185,22 @@ const DEFAULT_AUTO_RECALL_RESULT_CAP = 3;
 const DUPLICATE_SEARCH_LIMIT = 5;
 type MemoryCliColumn = MemoryQueryColumn;
 
+// A scope key is an opaque partition slug matching [a-zA-Z0-9_-]+, partitioning
+// rows WITHIN one agent's store (agent isolation is enforced separately by the
+// store's agentId predicate).
+const SCOPE_KEY_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+// Parse an optional scope tool argument. An empty/absent value means "unscoped"
+// (global). A non-empty value that is not a valid slug is reported as invalid
+// rather than silently stripped/transformed — otherwise a punctuated key could
+// be canonicalized into (and mixed with) a different partition.
+function parseScopeArg(raw: unknown): { scope: string } | { invalidKey: string } {
+  if (typeof raw !== "string" || raw === "") {
+    return { scope: "" };
+  }
+  return SCOPE_KEY_PATTERN.test(raw) ? { scope: raw } : { invalidKey: raw };
+}
+
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -676,13 +692,27 @@ async function findCleanDuplicateMemory(
       vector: number[],
       limit?: number,
       minScore?: number,
+      scope?: string,
     ): Promise<MemorySearchResult[]>;
   },
   agentId: string,
   vector: number[],
+  scope: string,
 ): Promise<MemorySearchResult | undefined> {
-  const existing = await db.search(agentId, vector, DUPLICATE_SEARCH_LIMIT, 0.95);
-  return existing.find((result) => sanitizeRecallMemoryText(result.entry.text) !== null);
+  // Prefilter by scope so the near-exact (>=0.95) neighbors are all within the
+  // requested scope. A scope-blind top-K could otherwise push the same-scope
+  // duplicate out of the returned rows once many scopes share a near-identical
+  // vector, silently accepting a duplicate that already exists in that scope —
+  // and the same fact must be allowed to coexist under different scopes.
+  // Scoped writes match that exact scope; global writes (scope === "") match
+  // other global rows (stored "" or legacy NULL). The scope post-filter is a
+  // defensive ''/NULL normalization; the sanitize post-filter mirrors this
+  // helper's prior behavior.
+  const existing = await db.search(agentId, vector, DUPLICATE_SEARCH_LIMIT, 0.95, scope);
+  return existing.find(
+    (result) =>
+      sanitizeRecallMemoryText(result.entry.text) !== null && (result.entry.scope ?? "") === scope,
+  );
 }
 
 function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{
@@ -1559,11 +1589,30 @@ export default definePluginEntry({
           parameters: Type.Object({
             query: Type.String({ description: "Search query" }),
             limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
+            scope: Type.Optional(
+              Type.String({
+                description:
+                  "Restrict recall to this scope — an opaque partition key (a slug matching [A-Za-z0-9_-]+) such as a project, person, or channel. This scope's memories are returned first; unscoped/global memories fill any remaining slots. When omitted, only unscoped/global memories are searched — scoped memories stay hidden.",
+              }),
+            ),
           }),
           async execute(_toolCallId, params) {
             const rawParams = params as Record<string, unknown>;
             const query = rawParams.query as string;
             const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
+            const scopeArg = parseScopeArg(rawParams.scope);
+            if ("invalidKey" in scopeArg) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Invalid scope: a scope key must be a slug matching [A-Za-z0-9_-]+ (map channel/room ids to a slug first).",
+                  },
+                ],
+                details: { count: 0 },
+              };
+            }
+            const scope = scopeArg.scope;
 
             const currentCfg = resolveCurrentHookConfig();
             const cooldown = readMemoryRecallCooldown(agentId);
@@ -1584,12 +1633,27 @@ export default definePluginEntry({
                   } catch (error) {
                     throw new MemoryRecallEmbeddingError(error);
                   }
-                  return await db.search(
-                    agentId,
-                    vector,
-                    limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA,
-                    0.1,
-                  );
+                  const overfetch = limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA;
+                  if (!scope) {
+                    // Unscoped recall is a global-only view: partitioned rows
+                    // stay hidden unless the caller asks for their scope, so
+                    // scoped memories never bleed into an unrelated plain
+                    // recall.
+                    return await db.search(agentId, vector, overfetch, 0.1, "");
+                  }
+                  // Explicit scoped recall prioritizes the requested scope. The
+                  // scope's own matches and the global rows are retrieved in
+                  // separate ANN passes, each with its own candidate budget, so
+                  // many strong global neighbors can never crowd the requested
+                  // scope out of a single shared top-K window (which would make
+                  // a scoped recall silently miss rows from the very scope the
+                  // caller asked for). Scoped matches come first; global
+                  // matches fill any remaining slots.
+                  const [scoped, globals] = await Promise.all([
+                    db.search(agentId, vector, overfetch, 0.1, scope),
+                    db.search(agentId, vector, overfetch, 0.1, ""),
+                  ]);
+                  return [...scoped, ...globals];
                 },
               });
             } catch (error) {
@@ -1664,7 +1728,7 @@ export default definePluginEntry({
           name: "memory_store",
           label: "Memory Store",
           description:
-            "Save important information in long-term memory. Use for preferences, facts, decisions.",
+            "Save important information in long-term memory. Use for preferences, facts, decisions. Prefix the text with [SCOPE:<slug>] to partition a memory to a scope (slug = [A-Za-z0-9_-]+); an invalid scope tag is rejected.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
             importance: optionalFiniteNumberSchema({
@@ -1700,9 +1764,54 @@ export default definePluginEntry({
               };
             }
 
-            const vector = await embeddings.embed(text);
+            // The [SCOPE:...] tag is a routing prefix, not part of the fact.
+            // Detect it broadly (any content up to ']') so a punctuated key is
+            // not silently treated as untagged — which would store an
+            // intended-scoped memory in the global partition. A tag must carry
+            // a valid slug key; otherwise reject rather than mis-scope. Strip a
+            // valid tag before embedding and storing so the vector reflects the
+            // content, not the synthetic prefix.
+            const scopeTagMatch = /^\s*\[SCOPE:([^\]]*)\]\s*/.exec(text);
+            let scope = "";
+            let memoryText = text;
+            if (scopeTagMatch) {
+              const scopeKey = expectDefined(scopeTagMatch[1], "store scope tag key");
+              if (!SCOPE_KEY_PATTERN.test(scopeKey)) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: "Memory was not stored: the [SCOPE:...] key must be a slug matching [A-Za-z0-9_-]+ (map channel/room ids to a slug first).",
+                    },
+                  ],
+                  details: { action: "rejected", reason: "invalid_scope_key" },
+                };
+              }
+              scope = scopeKey;
+              // A tag-only payload ([SCOPE:x] with nothing — or only whitespace
+              // — after it) carries no fact to store. Reject it rather than
+              // fall back to the raw text: that would embed and persist the
+              // control tag itself, breaking the invariant that [SCOPE:...] is
+              // stripped before storage and leaving a synthetic tag-only memory
+              // that could later be recalled. The trim() also guards embedding
+              // backends that error on blank input.
+              memoryText = text.slice(scopeTagMatch[0].length);
+              if (memoryText.trim().length === 0) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: "Memory was not stored: the [SCOPE:...] tag has no memory text after it.",
+                    },
+                  ],
+                  details: { action: "rejected", reason: "empty_scoped_text" },
+                };
+              }
+            }
 
-            const existing = await findCleanDuplicateMemory(db, agentId, vector);
+            const vector = await embeddings.embed(memoryText);
+
+            const existing = await findCleanDuplicateMemory(db, agentId, vector, scope);
             if (existing) {
               return {
                 content: [
@@ -1720,14 +1829,17 @@ export default definePluginEntry({
             }
 
             const entry = await db.store(agentId, {
-              text,
+              text: memoryText,
               vector,
               importance,
               category,
+              scope,
             });
 
             return {
-              content: [{ type: "text", text: `Stored: "${truncateUtf16Safe(text, 100)}..."` }],
+              content: [
+                { type: "text", text: `Stored: "${truncateUtf16Safe(memoryText, 100)}..."` },
+              ],
               details: { action: "created", id: entry.id },
             };
           },
@@ -1752,11 +1864,62 @@ export default definePluginEntry({
           parameters: Type.Object({
             query: Type.Optional(Type.String({ description: "Search to find memory" })),
             memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
+            scope: Type.Optional(
+              Type.String({
+                description:
+                  "Restrict the query search to this scope — an opaque partition key (a slug matching [A-Za-z0-9_-]+) such as a project, person, or channel. Only matches within this scope can be forgotten. When omitted, only unscoped/global memories can be forgotten. With memoryId, the delete is fenced to this scope (or to global when omitted).",
+              }),
+            ),
           }),
           async execute(_toolCallId, params) {
-            const { query, memoryId } = params as { query?: string; memoryId?: string };
+            const {
+              query,
+              memoryId,
+              scope: scopeParam,
+            } = params as {
+              query?: string;
+              memoryId?: string;
+              scope?: string;
+            };
+
+            const scopeArg = parseScopeArg(scopeParam);
+            if ("invalidKey" in scopeArg) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Invalid scope: a scope key must be a slug matching [A-Za-z0-9_-]+ (map channel/room ids to a slug first).",
+                  },
+                ],
+                details: { action: "rejected", reason: "invalid_scope_key" },
+              };
+            }
+            const scope = scopeArg.scope;
+            const scopeProvided = typeof scopeParam === "string" && scopeParam !== "";
 
             if (memoryId) {
+              const rowScope = await db.getScopeById(agentId, memoryId);
+              if (rowScope === null) {
+                return {
+                  content: [{ type: "text", text: `Memory ${memoryId} was not found.` }],
+                  details: { action: "not_found", id: memoryId },
+                };
+              }
+              // Scope fence: a scoped row can only be forgotten from within its
+              // scope; an unscoped forget (no scope arg) may only remove global
+              // rows. Prevents deleting another partition's row via a known id.
+              const allowed = scopeProvided ? rowScope === scope : rowScope === "";
+              if (!allowed) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Memory ${memoryId} belongs to a different scope and was not deleted.`,
+                    },
+                  ],
+                  details: { action: "blocked", id: memoryId, reason: "scope_mismatch" },
+                };
+              }
               const deleted = await db.delete(agentId, memoryId);
               if (!deleted) {
                 return {
@@ -1775,7 +1938,11 @@ export default definePluginEntry({
               const vector = await embeddings.embed(
                 normalizeRecallQuery(query, currentCfg.recallMaxChars),
               );
-              const results = await db.search(agentId, vector, 5, 0.7);
+              // A scoped forget is restricted to that exact scope: a delete
+              // must never reach global or other scopes. An unscoped forget is
+              // global-only for the same reason — it must never nominate or
+              // delete a partitioned row that belongs to another scope.
+              const results = await db.search(agentId, vector, 5, 0.7, scope);
 
               if (results.length === 0) {
                 return {
@@ -1855,11 +2022,26 @@ export default definePluginEntry({
           .argument("<query>", "Search query")
           .option("--agent <id>", "Agent id (default: configured default agent)")
           .option("--limit <n>", "Max results", "5")
+          .option(
+            "--scope <slug>",
+            "Restrict the search to a scope partition (default: global/untagged rows only)",
+          )
           .action(async (query, opts) => {
             const agentId = resolveCliAgentId(opts.agent);
+            // Mirror the memory_recall tool contract: no --scope means
+            // global-only (a table-wide scan would leak scoped rows across
+            // partitions), a slug restricts to that partition, and a non-slug
+            // key is rejected rather than silently canonicalized into another
+            // partition.
+            const scopeArg = parseScopeArg(opts.scope);
+            if ("invalidKey" in scopeArg) {
+              throw new Error(
+                `--scope must be a slug matching [A-Za-z0-9_-]+ (got "${scopeArg.invalidKey}")`,
+              );
+            }
             const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
-            const results = await db.search(agentId, vector, limit, 0.3);
+            const results = await db.search(agentId, vector, limit, 0.3, scopeArg.scope);
             // Strip vectors for output
             const output = results.map((r) => ({
               id: r.entry.id,
@@ -1960,7 +2142,12 @@ export default definePluginEntry({
             });
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            // The before-prompt hook has no active-scope signal, so it injects
+            // only global/untagged memories. Partitioned rows are never
+            // auto-recalled into an unrelated session; scope-aware
+            // auto-injection is left for a later change that can derive the
+            // active scope here.
+            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3, "");
           },
         });
         if (recall.status === "timeout") {
@@ -2026,9 +2213,36 @@ export default definePluginEntry({
             for (const text of extractUserTextContent(message)) {
               // Sanitize envelope metadata before checking and storing
               const sanitized = sanitizeForMemoryCapture(text);
+              if (!sanitized) {
+                continue;
+              }
+
+              // Detect and strip the [SCOPE:...] tag BEFORE the capture
+              // heuristics, so the routing prefix never changes capture
+              // eligibility: its length must not push short content over the
+              // minimum, nor a long tag push otherwise-valid content past
+              // captureMaxChars. A punctuated/invalid key is skipped rather
+              // than stored globally (which would leak an intended-scoped
+              // memory into the global partition). The stripped text is what
+              // both the heuristic and the embedding see.
+              const scopeTagMatch = /^\s*\[SCOPE:([^\]]*)\]\s*/.exec(sanitized);
+              let scope = "";
+              let memoryText = sanitized;
+              if (scopeTagMatch) {
+                const scopeKey = expectDefined(scopeTagMatch[1], "capture scope tag key");
+                if (!SCOPE_KEY_PATTERN.test(scopeKey)) {
+                  continue;
+                }
+                scope = scopeKey;
+                memoryText = sanitized.slice(scopeTagMatch[0].length);
+              }
+
+              // Tag-only or whitespace-only payloads carry no fact; run the
+              // capture heuristics on the stripped text so eligibility is
+              // tag-independent.
               if (
-                !sanitized ||
-                !shouldCapture(sanitized, {
+                memoryText.trim().length === 0 ||
+                !shouldCapture(memoryText, {
                   customTriggers: currentCfg.customTriggers,
                   maxChars: currentCfg.captureMaxChars,
                 })
@@ -2040,19 +2254,20 @@ export default definePluginEntry({
                 continue;
               }
 
-              const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(sanitized);
+              const category = detectCategory(memoryText);
+              const vector = await embeddings.embed(memoryText);
 
-              const existing = await findCleanDuplicateMemory(db, agentId, vector);
+              const existing = await findCleanDuplicateMemory(db, agentId, vector, scope);
               if (existing) {
                 continue;
               }
 
               await db.store(agentId, {
-                text: sanitized,
+                text: memoryText,
                 vector,
                 importance: 0.7,
                 category,
+                scope,
               });
               stored++;
             }

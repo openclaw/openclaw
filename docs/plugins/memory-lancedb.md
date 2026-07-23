@@ -229,7 +229,7 @@ capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
 
 ```bash
 openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
-openclaw ltm search <query> [--agent <id>] [--limit <n>]
+openclaw ltm search <query> [--agent <id>] [--limit <n>] [--scope <slug>]
 openclaw ltm stats [--agent <id>]
 ```
 
@@ -250,11 +250,58 @@ openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
 
 Agents get three tools from the active memory plugin:
 
-- `memory_recall`: vector search over stored memories.
+- `memory_recall`: vector search over stored memories. Takes an optional `scope`
+  to read one partition (see [Scope](#scope-partitioning-a-shared-store));
+  unscoped, it reads global memories only.
 - `memory_store`: save a fact, preference, decision, or entity (rejects text
   that looks like a prompt-injection payload; skips near-duplicate stores).
+  Prefix the text with `[SCOPE:<slug>]` to partition the memory.
 - `memory_forget`: delete by `memoryId`, or by `query` (auto-deletes a single
-  match above 90% score, otherwise lists candidate IDs to disambiguate).
+  match above 90% score, otherwise lists candidate IDs to disambiguate). Takes an
+  optional `scope`; unscoped, it only deletes global memories, and a `memoryId`
+  delete is fenced to the target row's scope.
+
+## Scope (partitioning a shared store)
+
+Every memory belongs to one agent (see the per-agent isolation notes above);
+within an agent's store, every memory is **global** by default: visible to
+recall, auto-recall, and forget across that whole store. A memory can instead be
+tagged with an opaque **scope** — a partition key such as a project, person,
+channel, or tenant — so it is only visible to operations that ask for that
+scope. This partitions one agent's shared store without splitting it into a
+separate store per context.
+
+- **Tagging.** Prefix the stored text with `[SCOPE:<slug>]` (via the
+  `memory_store` tool or a tagged user message). The tag is parsed into a `scope`
+  column and stripped before embedding, so the vector reflects the fact, not the
+  prefix, and the tag is never echoed back on recall. A scope key must be a slug
+  matching `[A-Za-z0-9_-]+`; a tag whose key is not a valid slug (for example a
+  raw channel/room id with punctuation) is **rejected**, not silently stored
+  global — map it to a slug first. A tag with no text after it (`[SCOPE:<slug>]`
+  alone) is likewise rejected on store and skipped on auto-capture, so the control
+  tag is never embedded or persisted as a memory on its own.
+- **Scoped vs unscoped recall.** `memory_recall` takes an optional `scope`. A
+  scoped call returns that scope's matches first, with global rows filling the
+  rest (scope and global are retrieved in separate vector passes so strong global
+  neighbors cannot crowd the scope out). An unscoped call returns global rows
+  only, so a scoped memory never surfaces in a plain recall.
+- **Scoped vs unscoped forget.** `memory_forget` takes the same `scope`. A scoped
+  forget only deletes within that scope; an unscoped forget only deletes global
+  rows. This holds for both delete paths: a `query` forget filters by scope, and a
+  `memoryId` forget is fenced by first checking the target row's scope — so a
+  known id from another partition cannot bypass it.
+- **Automatic recall is global-only.** The `before_prompt_build` auto-recall has
+  no active-scope signal, so it injects only global/untagged memories; a scoped
+  memory is never auto-recalled into an unrelated turn.
+- **CLI search mirrors the tool.** `ltm search` is global-only by default; pass
+  `--scope <slug>` to vector-search within one partition. Unscoped, it never scans
+  across partitions, so scoped rows do not leak into a plain `ltm search`.
+
+Scope is behavior-preserving until you use it: like the per-agent isolation
+column, pre-existing tables gain the `scope` column through a one-time
+`openclaw doctor --fix` migration (previewed and verified; every existing row
+stays global, and a table predating per-agent isolation gains both columns in
+that same single pass), and installs that never tag a memory see no change.
 
 ## Storage
 

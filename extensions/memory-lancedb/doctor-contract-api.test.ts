@@ -73,6 +73,126 @@ describe("memory-lancedb doctor migration", () => {
     migratedConnection.close();
   });
 
+  test("adds the scope column to an agent-isolated table, keeping rows global", async () => {
+    const connection = await lancedb.connect(getDbPath());
+    const table = await connection.createTable("memories", [
+      {
+        id: "33333333-3333-4333-8333-333333333333",
+        text: "agent-isolated memory without scope",
+        vector: [1, 0],
+        importance: 0.7,
+        category: "fact",
+        createdAt: 3,
+        agentId: "main",
+      },
+    ]);
+    table.close();
+    connection.close();
+
+    const config = {
+      agents: { list: [{ id: "main", default: true }] },
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: { dbPath: getDbPath() },
+          },
+        },
+      },
+    };
+    const params = {
+      config,
+      env: { ...process.env, HOME: getTmpDir() },
+      stateDir: getTmpDir(),
+      oauthDir: path.join(getTmpDir(), "oauth"),
+      context: unusedDoctorContext,
+    };
+    // The agent-scope migration must not claim this table (agentId present)...
+    const agentMigration = expectDefined(stateMigrations[0], "agent state migration");
+    await expect(agentMigration.detectLegacyState(params)).resolves.toBeNull();
+    // ...the scope-column migration does.
+    const migration = expectDefined(stateMigrations[1], "scope state migration");
+
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining("add the scope column")],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: ["Added the Memory LanceDB scope column; 1 existing row stays global"],
+      warnings: [],
+    });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+
+    const migratedConnection = await lancedb.connect(getDbPath());
+    const migratedTable = await migratedConnection.openTable("memories");
+    await expect(migratedTable.countRows("scope = ''")).resolves.toBe(1);
+    await expect(migratedTable.countRows("agentId = 'main'")).resolves.toBe(1);
+    migratedTable.close();
+    migratedConnection.close();
+  });
+
+  test("upgrades a released table missing both agentId and scope in one doctor pass", async () => {
+    const connection = await lancedb.connect(getDbPath());
+    const table = await connection.createTable("memories", [
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        text: "released-schema memory without agentId or scope",
+        vector: [1, 0],
+        importance: 0.7,
+        category: "fact",
+        createdAt: 4,
+      },
+    ]);
+    table.close();
+    connection.close();
+
+    const config = {
+      agents: { list: [{ id: "main", default: true }] },
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: { dbPath: getDbPath() },
+          },
+        },
+      },
+    };
+    const params = {
+      config,
+      env: { ...process.env, HOME: getTmpDir() },
+      stateDir: getTmpDir(),
+      oauthDir: path.join(getTmpDir(), "oauth"),
+      context: unusedDoctorContext,
+    };
+
+    // Doctor inventories every plan before applying any, so both migrations
+    // must detect on the released schema in the same pass.
+    const detected = [];
+    for (const migration of stateMigrations) {
+      if (await migration.detectLegacyState(params)) {
+        detected.push(migration);
+      }
+    }
+    expect(detected.map((migration) => migration.id)).toEqual([
+      "memory-lancedb-agent-scope",
+      "memory-lancedb-scope-column",
+    ]);
+
+    // ...and the collected plans are applied in order without re-detecting.
+    for (const migration of detected) {
+      await expect(migration.migrateLegacyState(params)).resolves.toMatchObject({
+        warnings: [],
+      });
+    }
+
+    for (const migration of stateMigrations) {
+      await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    }
+
+    const migratedConnection = await lancedb.connect(getDbPath());
+    const migratedTable = await migratedConnection.openTable("memories");
+    await expect(migratedTable.countRows("agentId = 'main' AND scope = ''")).resolves.toBe(1);
+    migratedTable.close();
+    migratedConnection.close();
+  });
+
   test("resolves a relative database path from the plugin root", async () => {
     const packageRoot = path.join(getTmpDir(), "standalone-package");
     const packagedDoctorUrl = pathToFileURL(

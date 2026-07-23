@@ -165,7 +165,7 @@ function materializeRegisteredTool(
 }
 
 function createAgentScopedSchemaMock() {
-  return vi.fn(async () => ({ fields: [{ name: "agentId" }] }));
+  return vi.fn(async () => ({ fields: [{ name: "agentId" }, { name: "scope" }] }));
 }
 
 function createAgentScopedVectorQuery(limit: ReturnType<typeof vi.fn>) {
@@ -4259,6 +4259,1352 @@ describe("memory plugin e2e", () => {
     expect(
       escapeMemoryForPrompt("Photo [media attached: media://inbound/abc123.jpg] was attached"),
     ).toBe("Photo was attached");
+  });
+  test("memory_store captures the [SCOPE:<slug>] tag and strips it from the stored text", async () => {
+    // Regression: the scope-tag slug regex must accept hyphens. A pre-fix
+    // pattern of [a-zA-Z0-9_]+ truncated a hyphenated, underscored scope value
+    // ("demo-shop_eu") at the hyphen to "demo", silently
+    // mis-scoping the row. Underscores must survive too; an untagged store
+    // must leave scope = "" (global). See also the autoCapture path, which
+    // uses the same pattern. The [SCOPE:...] tag must also be stripped from the
+    // embedded input and the persisted text, so the vector reflects the fact
+    // (not the synthetic prefix) and the tag is never echoed back on recall.
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ where: () => ({ limit }), limit }));
+    const openTable = vi.fn(async () => ({
+      schema: createAgentScopedSchemaMock(),
+      vectorSearch,
+      add,
+      countRows: vi.fn(async () => 0),
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: {
+              apiKey: OPENAI_API_KEY,
+              model: "text-embedding-3-small",
+            },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const storeTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
+        );
+        if (!storeTool) {
+          throw new Error("memory_store tool was not registered");
+        }
+
+        // Hyphen + underscore slug must be captured verbatim (the regression).
+        const tagged = await storeTool.execute("test-call-scope-hyphen", {
+          text: "[SCOPE:demo-shop_eu] go-live is late December",
+          importance: "0.8",
+          category: "fact",
+        });
+        expect(tagged.details?.action).toBe("created");
+        expect(add).toHaveBeenCalledTimes(1);
+        expect(firstAddedMemory(add).scope).toBe("demo-shop_eu");
+        // The routing tag is stripped from the persisted text and the embedded
+        // input; the vector reflects the fact, not the synthetic prefix.
+        expect(firstAddedMemory(add).text).toBe("go-live is late December");
+        expect(embeddingsCreate).toHaveBeenNthCalledWith(1, {
+          model: "text-embedding-3-small",
+          input: "go-live is late December",
+        });
+
+        // An untagged store stays global (scope = "").
+        add.mockClear();
+        const untagged = await storeTool.execute("test-call-scope-none", {
+          text: "The user prefers concise replies",
+          importance: "0.7",
+          category: "preference",
+        });
+        expect(untagged.details?.action).toBe("created");
+        expect(add).toHaveBeenCalledTimes(1);
+        expect(firstAddedMemory(add).scope).toBe("");
+        // Untagged text is stored unchanged.
+        expect(firstAddedMemory(add).text).toBe("The user prefers concise replies");
+      },
+    });
+  });
+
+  test("dedup is scope-aware: the same fact survives under different scopes", async () => {
+    // Regression (P2): findCleanDuplicateMemory must scope duplicate detection to
+    // the row's scope. Before the fix it deduped globally, so storing the same
+    // fact under [SCOPE:beta] after [SCOPE:alpha] was wrongly rejected as a
+    // duplicate and could never be recalled scoped to beta. Same-scope and
+    // global-vs-global writes must still dedup.
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [];
+    const add = vi.fn(async (batch: Array<Record<string, unknown>>) => {
+      rows.push(expectDefined(batch[0], "dedup add batch row"));
+    });
+    // Stateful search: every row added so far comes back as an exact match
+    // (_distance 0 -> score 1.0, above the 0.95 dedup threshold).
+    const toArray = vi.fn(async () => rows.map((r) => Object.assign({}, r, { _distance: 0 })));
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ where: () => ({ limit }), limit }));
+    const openTable = vi.fn(async () => ({
+      schema: createAgentScopedSchemaMock(),
+      vectorSearch,
+      add,
+      countRows: vi.fn(async () => rows.length),
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const storeTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
+        );
+        if (!storeTool) {
+          throw new Error("memory_store tool was not registered");
+        }
+
+        const fact = "the release deadline is Friday";
+
+        // 1. First scope: nothing to match yet -> stored.
+        const alpha = await storeTool.execute("call-alpha", {
+          text: `[SCOPE:alpha] ${fact}`,
+          category: "fact",
+        });
+        expect(alpha.details?.action).toBe("created");
+
+        // 2. Same fact, DIFFERENT scope: the alpha row is an exact vector match
+        //    but a different scope -> NOT a duplicate -> stored.
+        const beta = await storeTool.execute("call-beta", {
+          text: `[SCOPE:beta] ${fact}`,
+          category: "fact",
+        });
+        expect(beta.details?.action).toBe("created");
+        expect(rows.map((r) => r.scope)).toEqual(["alpha", "beta"]);
+
+        // 3. Same fact, SAME scope -> still deduped (must not break legit dedup).
+        const alphaAgain = await storeTool.execute("call-alpha-2", {
+          text: `[SCOPE:alpha] ${fact}`,
+          category: "fact",
+        });
+        expect(alphaAgain.details?.action).toBe("duplicate");
+        expect(rows).toHaveLength(2);
+
+        // 4. Untagged/global writes still dedup against other global rows.
+        const global1 = await storeTool.execute("call-global-1", { text: fact, category: "fact" });
+        expect(global1.details?.action).toBe("created");
+        expect(rows.at(-1)?.scope).toBe("");
+        const global2 = await storeTool.execute("call-global-2", { text: fact, category: "fact" });
+        expect(global2.details?.action).toBe("duplicate");
+        expect(rows).toHaveLength(3);
+      },
+    });
+  });
+
+  test("dedup prefilters by scope so a same-scope duplicate is not pushed out by other scopes", async () => {
+    // Regression (codex P2): findCleanDuplicateMemory prefilters by scope via
+    // .where() BEFORE the top-K limit. Otherwise, when many other-scope rows share
+    // a near-identical vector, the same-scope duplicate can fall outside the top
+    // DUPLICATE_SEARCH_LIMIT neighbors and a duplicate write is wrongly accepted.
+    // Here the alpha duplicate is seeded LAST, behind 6 global rows (> the limit of
+    // 5) with the same vector: only a scope prefilter surfaces it.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const fact = "the deadline is Friday";
+    const rows: Array<Record<string, unknown>> = [
+      ...Array.from({ length: 6 }, (_unused, i) => ({
+        id: `global-${i}`,
+        text: fact,
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "",
+      })),
+      {
+        id: "alpha-dup",
+        text: fact,
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "alpha",
+      },
+    ];
+    const add = vi.fn(async () => undefined);
+    const matchesFilter = (r: Record<string, unknown>, filter?: string): boolean => {
+      if (!filter) {
+        return true;
+      }
+      const rowScope = typeof r.scope === "string" ? r.scope : "";
+      if (rowScope !== "") {
+        return filter.includes(`scope = '${rowScope}'`);
+      }
+      return filter.includes("scope = '' OR scope IS NULL");
+    };
+    // .where()-aware query: filters by the prefilter BEFORE applying the limit.
+    const buildQuery = (filter?: string) => ({
+      where: (f: string) => buildQuery(f),
+      limit: (n: number) => ({
+        toArray: async () =>
+          rows
+            .filter((r) => matchesFilter(r, filter))
+            .slice(0, n)
+            .map((r) => Object.assign({}, r, { _distance: 0 })),
+      }),
+    });
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const openTable = vi.fn(async () => ({
+      schema: createAgentScopedSchemaMock(),
+      vectorSearch,
+      add,
+      countRows: vi.fn(async () => rows.length),
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const storeTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
+        );
+        if (!storeTool) {
+          throw new Error("memory_store tool was not registered");
+        }
+
+        const result = await storeTool.execute("call-alpha-dup", {
+          text: `[SCOPE:alpha] ${fact}`,
+          category: "fact",
+        });
+        expect(result.details?.action).toBe("duplicate");
+        expect(add).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("scoped memory_recall prioritizes the requested scope over many strong global matches", async () => {
+    // Regression (codex P2): a scoped memory_recall must give the requested
+    // scope its own retrieval budget and return its matches first. Before the
+    // fix a single ANN query over (scope OR global) with a shared top-K let the
+    // scope's one row fall outside the candidate window once enough strong
+    // global neighbors existed, so a scoped recall silently missed rows from the
+    // very scope the caller asked for. Here 20 global rows (> the overfetch of
+    // limit + 10 = 15) share the query vector and the sole alpha row is seeded
+    // LAST: only a separate scoped pass surfaces it.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [
+      ...Array.from({ length: 20 }, (_unused, i) => ({
+        id: `global-${i}`,
+        text: "a global memory",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "",
+      })),
+      {
+        id: "alpha-1",
+        text: "an alpha-only memory",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "alpha",
+      },
+    ];
+    const matchesFilter = (r: Record<string, unknown>, filter?: string): boolean => {
+      if (!filter) {
+        return true;
+      }
+      const rowScope = typeof r.scope === "string" ? r.scope : "";
+      if (rowScope !== "") {
+        return filter.includes(`scope = '${rowScope}'`);
+      }
+      return filter.includes("scope = '' OR scope IS NULL");
+    };
+    // .where()-aware query: filters by the prefilter BEFORE applying the limit.
+    const buildQuery = (filter?: string) => ({
+      where: (f: string) => buildQuery(f),
+      limit: (n: number) => ({
+        toArray: async () =>
+          rows
+            .filter((r) => matchesFilter(r, filter))
+            .slice(0, n)
+            .map((r) => Object.assign({}, r, { _distance: 0 })),
+      }),
+    });
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          countRows: vi.fn(async () => rows.length),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const recallTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
+        );
+        if (!recallTool) {
+          throw new Error("memory_recall tool was not registered");
+        }
+
+        const result = await recallTool.execute("call-scoped-recall", {
+          query: "a memory",
+          scope: "alpha",
+        });
+
+        const text = result.content?.[0]?.text ?? "";
+        // The alpha row is returned despite 20 stronger-or-equal global rows...
+        expect(text).toContain("an alpha-only memory");
+        // ...and it comes first (scoped matches precede global fill).
+        expect(text.indexOf("an alpha-only memory")).toBeLessThan(text.indexOf("a global memory"));
+        expect(result.details?.count).toBe(5);
+      },
+    });
+  });
+
+  test("unscoped memory_recall returns only global memories, hiding scoped rows", async () => {
+    // Partition semantics (codex P2): an unscoped recall is a global-only view.
+    // A row stored under [SCOPE:alpha] must not bleed into a plain memory_recall
+    // with no scope; only unscoped/global rows are eligible. Before the fix the
+    // no-scope branch searched the whole table and surfaced the scoped row.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [
+      {
+        id: "global-1",
+        text: "a global memory",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "",
+      },
+      {
+        id: "alpha-1",
+        text: "an alpha-scoped memory",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "alpha",
+      },
+    ];
+    const matchesFilter = (r: Record<string, unknown>, filter?: string): boolean => {
+      if (!filter) {
+        return true;
+      }
+      const rowScope = typeof r.scope === "string" ? r.scope : "";
+      if (rowScope !== "") {
+        return filter.includes(`scope = '${rowScope}'`);
+      }
+      return filter.includes("scope = '' OR scope IS NULL");
+    };
+    const buildQuery = (filter?: string) => ({
+      where: (f: string) => buildQuery(f),
+      limit: (n: number) => ({
+        toArray: async () =>
+          rows
+            .filter((r) => matchesFilter(r, filter))
+            .slice(0, n)
+            .map((r) => Object.assign({}, r, { _distance: 0 })),
+      }),
+    });
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          countRows: vi.fn(async () => rows.length),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const recallTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
+        );
+        if (!recallTool) {
+          throw new Error("memory_recall tool was not registered");
+        }
+
+        const result = await recallTool.execute("call-unscoped-recall", { query: "a memory" });
+        const text = result.content?.[0]?.text ?? "";
+        expect(text).toContain("a global memory");
+        expect(text).not.toContain("an alpha-scoped memory");
+        expect(result.details?.count).toBe(1);
+      },
+    });
+  });
+
+  test("unscoped memory_forget cannot nominate or delete a scoped row", async () => {
+    // Partition semantics (codex P2): a query-based memory_forget with no scope
+    // must be global-only, so it can never auto-delete or nominate a partitioned
+    // row from another scope. Before the fix the no-scope search spanned every
+    // scoped row and could delete the wrong context's memory.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [
+      {
+        id: "alpha-1",
+        text: "an alpha-scoped memory",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 0,
+        scope: "alpha",
+      },
+    ];
+    const matchesFilter = (r: Record<string, unknown>, filter?: string): boolean => {
+      if (!filter) {
+        return true;
+      }
+      const rowScope = typeof r.scope === "string" ? r.scope : "";
+      if (rowScope !== "") {
+        return filter.includes(`scope = '${rowScope}'`);
+      }
+      return filter.includes("scope = '' OR scope IS NULL");
+    };
+    const buildQuery = (filter?: string) => ({
+      where: (f: string) => buildQuery(f),
+      limit: (n: number) => ({
+        toArray: async () =>
+          rows
+            .filter((r) => matchesFilter(r, filter))
+            .slice(0, n)
+            // High score so it WOULD be an auto-delete candidate if surfaced.
+            .map((r) => Object.assign({}, r, { _distance: 0 })),
+      }),
+    });
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const del = vi.fn(async () => undefined);
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          countRows: vi.fn(async () => rows.length),
+          add: vi.fn(async () => undefined),
+          delete: del,
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const forgetTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool,
+        );
+        if (!forgetTool) {
+          throw new Error("memory_forget tool was not registered");
+        }
+
+        const result = await forgetTool.execute("call-unscoped-forget", { query: "a memory" });
+        expect(result.details?.found).toBe(0);
+        expect(del).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("auto-recall injects only global memories, never scoped rows", async () => {
+    // Partition semantics (codex P2): the before_prompt_build hook has no
+    // active-scope signal, so it must inject only global/untagged memories. A row
+    // stored under [SCOPE:alpha] must never be auto-recalled into an unrelated
+    // session. Before the fix the hook ran a global ANN search with no filter and
+    // could surface scoped rows.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const rows: Array<Record<string, unknown>> = [
+      {
+        id: "global-1",
+        text: "I prefer Helix for editing code.",
+        category: "preference",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 1,
+        scope: "",
+      },
+      {
+        id: "alpha-1",
+        text: "an alpha-scoped secret",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: 1,
+        scope: "alpha",
+      },
+    ];
+    const matchesFilter = (r: Record<string, unknown>, filter?: string): boolean => {
+      if (!filter) {
+        return true;
+      }
+      const rowScope = typeof r.scope === "string" ? r.scope : "";
+      if (rowScope !== "") {
+        return filter.includes(`scope = '${rowScope}'`);
+      }
+      return filter.includes("scope = '' OR scope IS NULL");
+    };
+    const buildQuery = (filter?: string) => ({
+      where: (f: string) => buildQuery(f),
+      limit: (n: number) => ({
+        toArray: async () =>
+          rows
+            .filter((r) => matchesFilter(r, filter))
+            .slice(0, n)
+            .map((r) => Object.assign({}, r, { _distance: 0.1 })),
+      }),
+    });
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          countRows: vi.fn(async () => rows.length),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const on = vi.fn();
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: true,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: vi.fn(),
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on,
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const beforePromptBuild = on.mock.calls.find(
+          ([hookName]) => hookName === "before_prompt_build",
+        )?.[1];
+        expect(beforePromptBuild).toBeTypeOf("function");
+
+        const result = await beforePromptBuild?.(
+          {
+            prompt: "what editor should i use?",
+            messages: [{ role: "user", content: "what editor should i use?" }],
+          },
+          { agentId: "main" },
+        );
+
+        expect(result?.prependContext).toContain("I prefer Helix for editing code.");
+        expect(result?.prependContext).not.toContain("an alpha-scoped secret");
+      },
+    });
+  });
+
+  test("memory_store rejects a [SCOPE:...] tag whose key is not a slug", async () => {
+    // Regression (codex P2): a punctuated scope key (e.g. a Matrix room id like
+    // "!ops:example.org") must NOT silently fall back to the global partition.
+    // The store is rejected so an intended-scoped memory never leaks into global
+    // recall; a valid slug tag still stores scoped (covered by another test).
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ where: () => ({ limit }), limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const storeTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
+        );
+        if (!storeTool) {
+          throw new Error("memory_store tool was not registered");
+        }
+
+        const result = await storeTool.execute("call-bad-scope", {
+          text: "[SCOPE:!ops:example.org] remember X",
+          category: "fact",
+        });
+        expect(result.details?.action).toBe("rejected");
+        expect(result.details?.reason).toBe("invalid_scope_key");
+        expect(add).not.toHaveBeenCalled();
+        // The embedding must not run for a rejected store.
+        expect(embeddingsCreate).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("memory_store rejects a [SCOPE:...] tag with no memory text after it", async () => {
+    // Regression (codex P3): a tag-only payload ([SCOPE:alpha] with nothing after
+    // it) must NOT fall back to storing the raw text. That would embed and persist
+    // the control tag itself, breaking the invariant that [SCOPE:...] is stripped
+    // before storage and leaving a synthetic tag-only memory that can be recalled.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ where: () => ({ limit }), limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add,
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const storeTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
+        );
+        if (!storeTool) {
+          throw new Error("memory_store tool was not registered");
+        }
+
+        const result = await storeTool.execute("call-empty-scope", {
+          text: "[SCOPE:alpha]   ",
+          category: "fact",
+        });
+        expect(result.details?.action).toBe("rejected");
+        expect(result.details?.reason).toBe("empty_scoped_text");
+        expect(add).not.toHaveBeenCalled();
+        // The embedding must not run for a rejected store.
+        expect(embeddingsCreate).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("auto-capture eligibility ignores the [SCOPE:...] tag length (heuristic runs on stripped text)", async () => {
+    // Regression (codex P3): the routing tag must not change capture eligibility.
+    // A long tag prepended to otherwise-valid content used to push the raw string
+    // past captureMaxChars, so the message was wrongly rejected before the tag was
+    // ever stripped. Eligibility must be evaluated on the stripped fact, not the
+    // tagged string — and the stripped fact is what gets embedded and stored.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const add = vi.fn(async () => undefined);
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ where: () => ({ limit }), limit }));
+    const openTable = vi.fn(async () => ({
+      schema: createAgentScopedSchemaMock(),
+      vectorSearch,
+      countRows: vi.fn(async () => 0),
+      add,
+      delete: vi.fn(async () => undefined),
+    }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable,
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+      ensureGlobalUndiciEnvProxyDispatcher,
+    }));
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      const on = vi.fn();
+      // Stripped fact fits under captureMaxChars (100); the tagged form exceeds it.
+      // Under the old order (heuristic on the tagged string) this was rejected.
+      const fact = `I prefer Helix. ${"x".repeat(79)}`;
+      const tagged = `[SCOPE:project] ${fact}`;
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+          dbPath: getDbPath(),
+          autoCapture: true,
+          autoRecall: false,
+          captureMaxChars: 100,
+        },
+        runtime: {},
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        registerTool: vi.fn(),
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on,
+        resolvePath: (p: string) => p,
+      };
+
+      registerTestPlugin(dynamicMemoryPlugin, mockApi);
+      // Guard the arithmetic the regression hinges on: stripped <= max < tagged.
+      expect(fact.length).toBeLessThanOrEqual(100);
+      expect(tagged.length).toBeGreaterThan(100);
+
+      const agentEnd = on.mock.calls.find(([hookName]) => hookName === "agent_end")?.[1];
+      expect(agentEnd).toBeTypeOf("function");
+
+      await agentEnd?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: tagged }],
+        },
+        { agentId: "main" },
+      );
+
+      // Captured on the stripped fact, under its scope; the tag is never embedded.
+      expect(embeddingsCreate).toHaveBeenCalledTimes(1);
+      expect(embeddingsCreate).toHaveBeenCalledWith({
+        model: "text-embedding-3-small",
+        input: fact,
+      });
+      expect(add).toHaveBeenCalledTimes(1);
+      const memory = firstAddedMemory(add);
+      expect(memory.text).toBe(fact);
+      expect(memory.scope).toBe("project");
+    } finally {
+      vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+  });
+
+  test("ltm search is global-only by default and honors --scope", async () => {
+    // Regression (codex P2): the CLI search path passed no filter, so a table-wide
+    // ANN scan leaked scoped rows across partitions once any [SCOPE:...] memory
+    // existed. It must mirror the memory_recall tool: unscoped is global-only,
+    // --scope <slug> restricts to that partition, and a non-slug key is rejected.
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const whereFilters: string[] = [];
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const where = vi.fn((filter: string) => {
+      whereFilters.push(filter);
+      return { limit };
+    });
+    const vectorSearch = vi.fn(() => ({ where, limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          add: vi.fn(async () => undefined),
+          countRows: vi.fn(async () => 0),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registerCli = vi.fn();
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: vi.fn(),
+          registerCli,
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        try {
+          registerTestPlugin(dynamicMemoryPlugin, mockApi);
+          const registrar = firstMockArg(registerCli as unknown as MockCallSource, "cli registrar");
+          const runSearch = async (args: string[]) => {
+            const program = new Command();
+            program.exitOverride();
+            (registrar as (params: { program: Command }) => void)({ program });
+            await program.parseAsync(["node", "openclaw", "ltm", "search", ...args]);
+          };
+
+          // Unscoped: global-only prefilter, never a table-wide scan.
+          await runSearch(["deploy notes"]);
+          expect(whereFilters).toHaveLength(1);
+          expect(whereFilters[0]).toContain("agentId = ");
+          expect(whereFilters[0]).toContain("scope = '' OR scope IS NULL");
+
+          // Scoped: restricted to the requested partition.
+          await runSearch(["deploy notes", "--scope", "demo-shop_eu"]);
+          expect(whereFilters).toHaveLength(2);
+          expect(whereFilters[1]).toContain("agentId = ");
+          expect(whereFilters[1]).toContain("scope = 'demo-shop_eu'");
+
+          // A non-slug scope key is rejected before any search runs.
+          await expect(runSearch(["deploy notes", "--scope", "!ops:example.org"])).rejects.toThrow(
+            /slug/,
+          );
+          expect(whereFilters).toHaveLength(2);
+        } finally {
+          log.mockRestore();
+        }
+      },
+    });
+  });
+
+  test("memory_forget by memoryId is fenced to the row's scope", async () => {
+    // Regression (codex P2): deleting by memoryId must respect the partition. A
+    // scoped row can only be forgotten from within its scope; an unscoped forget
+    // may only remove global rows. Otherwise a known id from another partition
+    // could bypass the isolation this feature adds.
+    const scopedId = "11111111-1111-1111-1111-111111111111";
+    const globalId = "22222222-2222-2222-2222-222222222222";
+    const missingId = "33333333-3333-3333-3333-333333333333";
+    const rowsById: Record<string, { id: string; scope: string }> = {
+      [scopedId]: { id: scopedId, scope: "alpha" },
+      [globalId]: { id: globalId, scope: "" },
+    };
+    const embeddingsCreate = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const del = vi.fn(async () => undefined);
+    // .where()-aware query() mock: getScopeById filters by `id = '<id>'`.
+    const query = vi.fn(() => {
+      let filter = "";
+      const q: {
+        where: (f: string) => typeof q;
+        limit: (n: number) => { toArray: () => Promise<unknown[]> };
+      } = {
+        where: (f: string) => {
+          filter = f;
+          return q;
+        },
+        limit: (_n: number) => ({
+          toArray: async () => {
+            const m = /id = '([^']+)'/.exec(filter);
+            const id = m?.[1];
+            const row = id ? rowsById[id] : undefined;
+            return row ? [row] : [];
+          },
+        }),
+      };
+      return q;
+    });
+    const emptyVectorQuery = {
+      where: () => ({ limit: () => ({ toArray: async () => [] }) }),
+      limit: () => ({ toArray: async () => [] }),
+    };
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch: vi.fn(() => emptyVectorQuery),
+          query,
+          add: vi.fn(async () => undefined),
+          countRows: vi.fn(async () => 2),
+          delete: del,
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher,
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = {
+          id: "memory-lancedb",
+          name: "Memory (LanceDB)",
+          source: "test",
+          config: {},
+          pluginConfig: {
+            embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+            dbPath: getDbPath(),
+            autoCapture: false,
+            autoRecall: false,
+          },
+          runtime: {},
+          logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+          registerCli: vi.fn(),
+          registerService: vi.fn(),
+          on: vi.fn(),
+          resolvePath: (filePath: string) => filePath,
+        };
+
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const forgetTool = materializeRegisteredTool(
+          registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool,
+        );
+        if (!forgetTool) {
+          throw new Error("memory_forget tool was not registered");
+        }
+
+        // 1. Unscoped forget of a SCOPED row -> blocked, not deleted.
+        const blocked = await forgetTool.execute("c1", { memoryId: scopedId });
+        expect(blocked.details?.action).toBe("blocked");
+        expect(del).not.toHaveBeenCalled();
+
+        // 2. Forget with the MATCHING scope -> deleted.
+        const okScoped = await forgetTool.execute("c2", { memoryId: scopedId, scope: "alpha" });
+        expect(okScoped.details?.action).toBe("deleted");
+        // MemoryDB.delete composes the agent predicate with `id = '<id>'`.
+        expect(del).toHaveBeenCalledWith(expect.stringContaining(`id = '${scopedId}'`));
+
+        // 3. Forget with a DIFFERENT scope -> blocked.
+        del.mockClear();
+        const wrongScope = await forgetTool.execute("c3", { memoryId: scopedId, scope: "beta" });
+        expect(wrongScope.details?.action).toBe("blocked");
+        expect(del).not.toHaveBeenCalled();
+
+        // 4. Unscoped forget of a GLOBAL row -> deleted.
+        del.mockClear();
+        const okGlobal = await forgetTool.execute("c4", { memoryId: globalId });
+        expect(okGlobal.details?.action).toBe("deleted");
+        expect(del).toHaveBeenCalledWith(expect.stringContaining(`id = '${globalId}'`));
+
+        // 5. Unknown id -> not found, nothing deleted.
+        del.mockClear();
+        const missing = await forgetTool.execute("c5", { memoryId: missingId });
+        expect(missing.details?.action).toBe("not_found");
+        expect(del).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("memory_forget scopes the query search: forgetting in one scope spares another", async () => {
+    // Regression (P2): the query-based forget must not delete a same-fact row from
+    // a different scope. With a `scope`, the search is restricted to that exact
+    // scope via a native .where() prefilter, so a scoped forget can only ever
+    // delete within its own scope — never a global or other-scope copy.
+    const alphaId = "11111111-1111-4111-8111-111111111111";
+    const betaId = "22222222-2222-4222-8222-222222222222";
+    // The same fact stored under two different scopes.
+    const rows: Array<Record<string, unknown>> = [
+      {
+        id: alphaId,
+        text: "[SCOPE:alpha] the deadline is Friday",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: Date.now(),
+        scope: "alpha",
+      },
+      {
+        id: betaId,
+        text: "[SCOPE:beta] the deadline is Friday",
+        category: "fact",
+        vector: [0.1],
+        importance: 0.8,
+        createdAt: Date.now(),
+        scope: "beta",
+      },
+    ];
+
+    // Query builder that honors the `scope = '<x>'` prefilter; every surviving row
+    // comes back as an exact match (_distance 0 -> score 1.0, above the 0.9 auto-
+    // delete threshold).
+    const buildQuery = (filter?: string) => ({
+      where: (f: string) => buildQuery(f),
+      limit: () => ({
+        toArray: async () =>
+          rows
+            .filter((r) => {
+              if (!filter) {
+                return true;
+              }
+              const rowScope = typeof r.scope === "string" ? r.scope : "";
+              if (rowScope !== "") {
+                return filter.includes(`scope = '${rowScope}'`);
+              }
+              return filter.includes("scope = '' OR scope IS NULL");
+            })
+            .map((r) => Object.assign({}, r, { _distance: 0 })),
+      }),
+    });
+    const vectorSearch = vi.fn(() => buildQuery(undefined));
+    const deleteFn = vi.fn(async (predicate: string) => {
+      const match = /id = '([^']+)'/.exec(predicate);
+      if (match) {
+        const idx = rows.findIndex((r) => r.id === match[1]);
+        if (idx >= 0) {
+          rows.splice(idx, 1);
+        }
+      }
+    });
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        post = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule: vi.fn(async () => ({
+        connect: vi.fn(async () => ({
+          tableNames: vi.fn(async () => ["memories"]),
+          openTable: vi.fn(async () => ({
+            schema: createAgentScopedSchemaMock(),
+            vectorSearch,
+            countRows: vi.fn(async () => rows.length),
+            add: vi.fn(async () => undefined),
+            delete: deleteFn,
+          })),
+        })),
+      })),
+    }));
+
+    try {
+      const { default: memoryPluginLocal } = await import("./index.js");
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small" },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        registerCli: vi.fn(),
+        registerService: vi.fn(),
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      registerTestPlugin(memoryPluginLocal, mockApi);
+      const forgetTool = materializeRegisteredTool(
+        registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool,
+      );
+      if (!forgetTool) {
+        throw new Error("expected memory_forget tool registration");
+      }
+      expectToolExecute(forgetTool);
+
+      // Forget the fact in beta only: it deletes beta's row, and the alpha copy
+      // (an exact vector match in a different scope) must survive.
+      const result = await forgetTool.execute("call-forget-beta", {
+        query: "the deadline is Friday",
+        scope: "beta",
+      });
+      expect(result.details?.action).toBe("deleted");
+      expect(result.details?.id).toBe(betaId);
+      expect(rows.map((r) => r.id)).toEqual([alphaId]);
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
   });
 });
 
