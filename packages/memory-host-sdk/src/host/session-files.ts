@@ -10,7 +10,6 @@ import {
   isDreamingNarrativeSessionStoreKey,
   extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
@@ -25,6 +24,7 @@ import {
   readTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId,
   resolveSessionTranscriptsDirForAgent,
+  stripHeartbeatToken,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
@@ -607,11 +607,20 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
-  // nothing to do" reply to a heartbeat tick. Drop on the assistant side
-  // directly so we do not have to rely on cross-message coupling with the
-  // preceding user message (which a real user could spoof).
-  if (role === "assistant" && normalized === HEARTBEAT_TOKEN) {
-    return null;
+  // nothing to do" reply to a heartbeat tick. Drop it on the assistant side
+  // directly rather than coupling to the preceding user message (which a real
+  // user could spoof). Reuse the canonical token stripper, but only drop when
+  // the token carries no substantive prose — i.e. the message is the bare
+  // token plus pure punctuation/markup decoration ("HEARTBEAT_OK.",
+  // "**HEARTBEAT_OK**"). Without trusted heartbeat ownership we cannot treat
+  // an arbitrary short reply that merely contains the token (e.g. "HEARTBEAT_OK
+  // means the check passed.") as an ack, so any surviving letter or digit keeps
+  // the message in the corpus.
+  if (role === "assistant") {
+    const strippedHeartbeat = stripHeartbeatToken(normalized, { mode: "message" });
+    if (strippedHeartbeat.didStrip && !/[\p{L}\p{N}]/u.test(strippedHeartbeat.text)) {
+      return null;
+    }
   }
   const withoutSystemEnvelope = normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim();
   if (isExecCompletionEvent(withoutSystemEnvelope)) {

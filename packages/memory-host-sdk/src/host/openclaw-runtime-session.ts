@@ -27,6 +27,7 @@ export {
   resolveTranscriptSessionKeyBySessionId,
   resolveSessionAgentId,
   resolveSessionTranscriptsDirForAgent,
+  stripHeartbeatToken,
   stripInboundMetadata,
   stripInternalRuntimeContext,
   type SessionEntry,

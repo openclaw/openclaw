@@ -27,7 +27,7 @@ export {
 
 // Session and reply helpers.
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
-export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
+export { HEARTBEAT_PROMPT, stripHeartbeatToken } from "../../../../src/auto-reply/heartbeat.js";
 export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 export {
   HEARTBEAT_TOKEN,

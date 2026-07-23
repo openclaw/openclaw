@@ -1089,4 +1089,50 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.messageTimestampsMs).toStrictEqual([0]);
   });
+
+  it("drops bare heartbeat acknowledgements including decoration variants (#103720)", async () => {
+    const jsonlLines = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "What is the weather?" } }),
+      // Bare token — already handled by the previous exact-string match.
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "HEARTBEAT_OK" } }),
+      // Trailing punctuation — leaked before because it was not an exact match.
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "HEARTBEAT_OK." } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "HEARTBEAT_OK!!!" } }),
+      // Markdown / HTML wrappers — leaked before.
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "**HEARTBEAT_OK**" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "<b>HEARTBEAT_OK</b>" },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-ack-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+
+    // Only the real user turn survives; the bare token and its pure-decoration
+    // variants are filtered so they never become dreaming-corpus snippets.
+    expect(entry.content).toBe("User: What is the weather?");
+    expect(entry.lineMap).toStrictEqual([1]);
+  });
+
+  it("preserves genuine assistant prose that merely contains HEARTBEAT_OK (#103720)", async () => {
+    // Any real word content beyond the token means the message is substantive
+    // and must stay searchable in the dreaming corpus. We cannot tell a genuine
+    // short explanation apart from a heartbeat ack without trusted heartbeat
+    // ownership, so we only drop pure token+decoration and keep everything else.
+    const shortExplanation = "HEARTBEAT_OK means the periodic check succeeded.";
+    const ackWithNote = "HEARTBEAT_OK. No pending tasks this cycle.";
+    const jsonlLines = [
+      JSON.stringify({ type: "message", message: { role: "assistant", content: shortExplanation } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: ackWithNote } }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-prose-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+
+    expect(entry.content).toBe(`Assistant: ${shortExplanation}\nAssistant: ${ackWithNote}`);
+    expect(entry.lineMap).toStrictEqual([1, 2]);
+  });
 });
