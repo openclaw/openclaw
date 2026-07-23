@@ -433,17 +433,19 @@ export type FinalizedRuntimeMsgContext = Omit<
     CommandTurn?: CommandTurnContext;
   };
 
-export type TemplateContext = Omit<RuntimeMsgContext, keyof CanonicalInboundText> &
-  CanonicalInboundText & {
-    BodyStripped?: string;
-    SessionId?: string;
-    IsNewSession?: string;
-    /** Documented singular media variables projected only at template execution. */
-    MediaPath?: string;
-    MediaUrl?: string;
-    MediaType?: string;
-    MediaDir?: string;
-  };
+export type TemplateContext = RuntimeMsgContext & {
+  BodyStripped?: string;
+  SessionId?: string;
+  IsNewSession?: string;
+  /** Documented singular media variables projected only at template execution. */
+  MediaPath?: string;
+  MediaUrl?: string;
+  MediaType?: string;
+  MediaDir?: string;
+};
+
+export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
+  CanonicalInboundText;
 
 function formatTemplateValue(value: unknown): string {
   if (value == null) {

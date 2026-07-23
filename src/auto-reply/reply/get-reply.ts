@@ -719,7 +719,7 @@ export async function getReplyFromConfig(
     })
   ) {
     const fastCommand = buildFastReplyCommandContext({
-      ctx,
+      ctx: finalized,
       cfg,
       agentId,
       sessionKey,

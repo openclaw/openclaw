@@ -8,10 +8,10 @@ import {
   toInternalMessagePreprocessedContext,
   toInternalMessageTranscribedContext,
 } from "../../hooks/message-hook-mappers.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 
 export function emitPreAgentMessageHooks(params: {
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   isFastTestEnv: boolean;
 }): void {

@@ -168,7 +168,7 @@ function resolveStoredSessionId(params: {
 }
 
 function resolveBoundAcpAbortTargetSessionKey(params: {
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   activeSessionKey: string;
 }): string | undefined {

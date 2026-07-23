@@ -63,7 +63,11 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import type { MsgContext, OriginatingChannelType, TemplateContext } from "../templating.js";
+import type {
+  FinalizedTemplateContext as TemplateContext,
+  MsgContext,
+  OriginatingChannelType,
+} from "../templating.js";
 import {
   type ElevatedLevel,
   formatThinkingLevels,

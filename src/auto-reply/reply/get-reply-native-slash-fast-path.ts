@@ -17,7 +17,7 @@ import {
 } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
 import {
   takeCommandSessionMetadataChangesFromTargets,

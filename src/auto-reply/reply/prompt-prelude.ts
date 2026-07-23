@@ -9,7 +9,7 @@ import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type { FinalizedTemplateContext as TemplateContext, MsgContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 const REPLY_MEDIA_HINT =
