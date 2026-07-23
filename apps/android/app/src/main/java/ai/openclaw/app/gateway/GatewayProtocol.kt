@@ -489,6 +489,7 @@ enum class GatewayMethod(
   SessionMembersList("session.members.list"),
   SessionMembersAdd("session.members.add"),
   SessionMembersRemove("session.members.remove"),
+  Ready("ready"),
 }
 
 enum class GatewayEvent(

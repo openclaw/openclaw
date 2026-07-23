@@ -64,6 +64,7 @@ type OpenClawPluginHostedMediaResolver = import("./types.js").OpenClawPluginHost
 type OpenClawPluginReloadRegistration = import("./types.js").OpenClawPluginReloadRegistration;
 type OpenClawPluginSecurityAuditCollector =
   import("./types.js").OpenClawPluginSecurityAuditCollector;
+type OpenClawPluginReadinessCriterion = import("./types.js").OpenClawPluginReadinessCriterion;
 type OpenClawPluginService = import("./types.js").OpenClawPluginService;
 type OpenClawPluginToolFactory = import("./types.js").OpenClawPluginToolFactory;
 type PluginConversationBindingResolvedEvent =
@@ -277,6 +278,15 @@ export type PluginServiceRegistration = {
   origin: PluginOrigin;
   trustedOfficialInstall?: boolean;
   rootDir?: string;
+};
+
+export type PluginReadinessCriterionRegistration = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  criterion: OpenClawPluginReadinessCriterion;
+  pluginConfig?: Record<string, unknown>;
+  source: string;
 };
 
 export type PluginGatewayDiscoveryServiceRegistration = {
@@ -513,6 +523,7 @@ export type PluginRegistry = {
   nodeHostCommands: PluginNodeHostCommandRegistration[];
   nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
   securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
+  readinessCriteria: PluginReadinessCriterionRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
