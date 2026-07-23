@@ -8,8 +8,9 @@
  * invalid_input instead of opaque parse noise.
  */
 
+// ESM `export …` is a JS marker; bare shell `export FOO=1` must still hit SHELL_HEAD.
 const JS_MARKERS =
-  /\b(?:await|return|const|let|var|function|class|import|export|typeof|new|tools\.|ALL_TOOLS|API\.|namespaces\.)\b|=>/;
+  /\b(?:await|return|typeof|new)\s+|\b(?:const|let|var|function|class|import)\s+[A-Za-z_$*{]|\bexport\s+(?:(?:const|let|var|function|async|default|type|interface|enum|declare|namespace)\b|\{|\*)|\b(?:tools\.|ALL_TOOLS|API\.|namespaces\.)|=>/;
 
 const SHELL_HEAD =
   /^(?:(?:\/(?:usr\/)?bin\/)?(?:ls|pwd|echo|cat|find|dir|sh|bash|zsh|head|tail|mkdir|rm|cp|mv|chmod|curl|wget|which|env|export|cd|true|false|printf|test|stat|file|grep|sed|awk|xargs|tee|touch|ln|python|python3|node|ruby|perl)\b)/;
@@ -31,6 +32,8 @@ export function isShellLikeCodeModeSource(source: string): boolean {
     return true;
   }
   // Compact shell pipelines / redirects without JS markers (observed keep-trying storms).
+  // Tradeoff: keyword-free JS one-liners like `a || b` can false-positive; realistic guest
+  // programs almost always include return/const/await/tools markers first.
   if (
     trimmed.length <= 240 &&
     !trimmed.includes("\n") &&

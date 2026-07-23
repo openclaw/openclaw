@@ -7,6 +7,7 @@ import {
 describe("isShellLikeCodeModeSource", () => {
   it.each([
     "ls -la /workspace/",
+    "ls -la /var/folders/proof/workspace/",
     "ls /workspace/",
     "pwd",
     "echo hello",
@@ -18,6 +19,10 @@ describe("isShellLikeCodeModeSource", () => {
     "ls /workspace/ > /tmp/wlist.txt 2>&1; cat /tmp/wlist.txt",
     "cat /workspace/HEARTBEAT.md",
     "dir /workspace",
+    "export FOO=bar",
+    "export PATH=/x",
+    "ls /var/log",
+    "cat /var/log/syslog",
   ])("flags shell-shaped payloads: %s", (source) => {
     expect(isShellLikeCodeModeSource(source)).toBe(true);
   });
@@ -28,6 +33,10 @@ describe("isShellLikeCodeModeSource", () => {
     'const hit = ALL_TOOLS.find((t) => t.id === "openclaw:core:read");\nreturn await tools.callValue(hit.id, { path: "/workspace" });',
     'return "test";',
     "console.log(await tools.callValue('openclaw:core:read', { path: '/workspace/' }));",
+    "export const answer = 7;\nreturn answer;",
+    "export { answer };\nreturn answer;",
+    "export interface Foo { x: number }\nreturn 1;",
+    "export enum Color { Red, Green }\nreturn Color.Red;",
   ])("allows JS/TS guest programs: %s", (source) => {
     expect(isShellLikeCodeModeSource(source)).toBe(false);
   });
