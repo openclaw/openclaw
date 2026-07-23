@@ -1,10 +1,10 @@
 // Voice Call tests cover cli plugin behavior.
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
 const sleepMock = vi.hoisted(() =>
   vi.fn(
@@ -14,7 +14,20 @@ const sleepMock = vi.hoisted(() =>
       }),
   ),
 );
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = new Set<string>();
+
+function makeTempDir(prefix: string) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.add(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  tempDirs.clear();
+});
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
@@ -119,7 +132,7 @@ describe("voice-call CLI status fallback", () => {
   });
 
   it("drops a partial leading JSONL record from capped diagnostic reads", async () => {
-    const tempRoot = tempDirs.make("openclaw-voice-call-cli-");
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-");
     const file = path.join(tempRoot, "diagnostics.jsonl");
     const completeRecords = [
       JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 120 } } }),
