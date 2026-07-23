@@ -39,9 +39,9 @@ export function appendUtf8Lines(params: {
   maxLineBytes?: number;
   splitOnCarriageReturn?: boolean;
 }): AccumulatedUtf8Line[] {
-  let text = Buffer.isBuffer(params.chunk)
-    ? params.accumulator.decoder.write(params.chunk)
-    : params.chunk;
+  let text = params.accumulator.decoder.write(
+    Buffer.isBuffer(params.chunk) ? params.chunk : Buffer.from(params.chunk, "utf8"),
+  );
   if (params.accumulator.skipLeadingLf && text.startsWith("\n")) {
     text = text.slice(1);
   }

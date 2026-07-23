@@ -63,6 +63,7 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
 function attachStderrLineLogger(params: {
   proc: Pick<BridgeProcess, "on">;
   stderr: BridgeProcess["stderr"];
+  useStderrLifecycle: boolean;
   debug: RuntimeLogger["debug"];
   prefix: string;
 }): void {
@@ -110,7 +111,7 @@ function attachStderrLineLogger(params: {
       append(chunk);
     }
   });
-  if (params.stderr instanceof Readable) {
+  if (params.useStderrLifecycle && params.stderr instanceof Readable) {
     params.stderr.once("end", flush);
     params.stderr.once("close", flush);
   } else {
@@ -134,6 +135,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const spawnFn: MeetingRealtimeAudioSpawn =
     params.spawn ??
     ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
+  const useStderrLifecycle = !params.spawn;
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();
@@ -180,6 +182,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     attachStderrLineLogger({
       proc,
       stderr: proc.stderr,
+      useStderrLifecycle,
       debug: params.logger.debug,
       prefix: `${params.logScope} audio output`,
     });
@@ -202,6 +205,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   attachStderrLineLogger({
     proc: inputProcess,
     stderr: inputProcess.stderr,
+    useStderrLifecycle,
     debug: params.logger.debug,
     prefix: `${params.logScope} audio input`,
   });
@@ -320,6 +324,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       attachStderrLineLogger({
         proc: bargeInInputProcess,
         stderr: bargeInInputProcess.stderr,
+        useStderrLifecycle,
         debug: params.logger.debug,
         prefix: `${params.logScope} barge-in input`,
       });

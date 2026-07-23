@@ -6,6 +6,16 @@ import {
 } from "./utf8-line-accumulator.js";
 
 describe("UTF-8 line accumulator", () => {
+  it("flushes pending UTF-8 bytes before a following string delimiter", () => {
+    const accumulator = createUtf8LineAccumulator();
+    expect(
+      appendUtf8Lines({ accumulator, chunk: Buffer.from([0xe4]), maxPendingLineBytes: 8192 }),
+    ).toEqual([]);
+    expect(appendUtf8Lines({ accumulator, chunk: "\n", maxPendingLineBytes: 8192 })).toEqual([
+      { line: "�", truncated: false },
+    ]);
+  });
+
   it("preserves split UTF-8 and treats a split CRLF as one delimiter", () => {
     const accumulator = createUtf8LineAccumulator();
     const firstLine = Buffer.from("alpha 你好\r", "utf8");
