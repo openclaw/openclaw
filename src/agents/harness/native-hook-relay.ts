@@ -468,7 +468,7 @@ export function registerNativeHookRelay(
       return (
         relays.get(relayId) === registration &&
         bridge !== undefined &&
-        bridge.server.listening &&
+        relayBridges.get(relayId) === bridge &&
         registration.expiresAtMs > Date.now()
       );
     },

@@ -41,10 +41,18 @@ const COMMAND_RECEIPT_RULES: ReadonlyArray<{
   {
     kind: "deploy",
     pattern:
-      /\b(?:vercel|fly|wrangler)\s+deploy\b|\bsupabase\s+functions\s+deploy\b|\bdeploy(?:ment)?[-_:./\w]*\b/iu,
+      /\b(?:vercel|fly|wrangler)\s+deploy\b|\bsupabase\s+functions\s+deploy\b|(?:^|[;&|]\s*)(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:deploy|[\w:-]+:deploy)\b/iu,
   },
-  { kind: "canary", pattern: /\bcanary[-_:./\w]*\b/iu },
-  { kind: "readback", pattern: /\b(?:readback|verify[-_:./\w]*|smoke[-_:./\w]*)\b/iu },
+  {
+    kind: "canary",
+    pattern:
+      /(?:^|[;&|]\s*)(?:(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:canary|[\w:-]+:canary)\b|[./\w-]*canary(?:\s|$))/iu,
+  },
+  {
+    kind: "readback",
+    pattern:
+      /(?:^|[;&|]\s*)(?:(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:readback|verify[-:]deploy|smoke[-:]deploy)\b|[./\w-]*(?:readback|verify-deploy|smoke-deploy)(?:\s|$))/iu,
+  },
 ];
 
 const TOOL_RECEIPT_RULES: ReadonlyArray<{
