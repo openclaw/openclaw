@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createAgentHarnessTaskRuntime } from "../../../../src/plugin-sdk/agent-harness-task-runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { createAgentHarnessTaskRuntimeScope } from "../../../../src/tasks/agent-harness-task-runtime-scope.js";
-import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
-import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
-import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
+import { CodexNativeSubagentTaskMirror } from "../extensions/codex/src/app-server/native-subagent-task-mirror.js";
+import { createAgentHarnessTaskRuntime } from "../src/plugin-sdk/agent-harness-task-runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { createAgentHarnessTaskRuntimeScope } from "../src/tasks/agent-harness-task-runtime-scope.js";
+import { resetTaskRegistryForTests } from "../src/tasks/task-runtime.test-helpers.js";
+import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
 afterEach(() => {
   resetTaskRegistryForTests({ persist: false });

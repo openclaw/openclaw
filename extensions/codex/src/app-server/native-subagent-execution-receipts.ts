@@ -11,7 +11,7 @@ type ExecutionArtifactKind =
   | "canary"
   | "readback";
 
-export type CodexNativeExecutionReceipt = {
+type CodexNativeExecutionReceipt = {
   kind: ExecutionArtifactKind;
   status: "ok" | "error";
   summary: string;
