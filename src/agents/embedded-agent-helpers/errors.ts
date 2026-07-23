@@ -442,6 +442,7 @@ const TIMEOUT_ERROR_CODES = new Set([
   "ENETRESET",
   "EPIPE",
   "EAI_AGAIN",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
 ]);
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
