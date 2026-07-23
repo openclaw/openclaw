@@ -16,7 +16,6 @@ import {
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
-import type { ReplyPayload } from "./reply-dispatcher-runtime-api.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
