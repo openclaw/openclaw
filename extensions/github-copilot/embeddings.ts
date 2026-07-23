@@ -36,6 +36,7 @@ const COPILOT_HEADERS_STATIC: Record<string, string> = {
 };
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const GITHUB_COPILOT_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
   try {
@@ -105,6 +106,7 @@ async function discoverEmbeddingModels(params: {
     },
     policy: params.ssrfPolicy,
     auditContext: "memory-remote",
+    timeoutMs: GITHUB_COPILOT_MODEL_DISCOVERY_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

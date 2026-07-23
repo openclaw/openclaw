@@ -122,6 +122,7 @@ function firstDiscoveryRequest() {
   return request as {
     init: { headers: Record<string, string> };
     url: string;
+    timeoutMs?: number;
   };
 }
 
@@ -170,6 +171,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
     expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
+  });
+
+  it("applies a timeout to the model discovery request", async () => {
+    mockDiscoveryResponse({
+      ok: true,
+      json: buildModelsResponse([
+        { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+      ]),
+    });
+
+    await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    expect(firstDiscoveryRequest().timeoutMs).toBe(30_000);
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
