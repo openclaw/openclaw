@@ -45,7 +45,7 @@ import {
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
-  countTranscriptEventsForPath,
+  countLegacyTranscriptEvents,
   createTranscriptEventReader,
   createTranscriptEventPrefixReader,
   readOnlySqliteDbStats,
@@ -500,7 +500,7 @@ function countLegacyTranscript(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   if (result.status === "missing") {
     report.issues.push({
       code: "transcript_missing",
@@ -530,7 +530,7 @@ async function importLegacySessionRecord(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): Promise<void> {
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
   if (result.status === "missing") {
     if (markAlreadyMigratedTranscript(target, record, report)) {
@@ -575,7 +575,7 @@ async function importLegacySessionRecord(
     entry: record.entry,
     sessionKey: record.sessionKey,
     storePath: target.storePath,
-    ...(record.transcriptPath && result.status === "ok"
+    ...(record.transcriptPath && result.status === "ok" && result.hasTranscript
       ? { readTranscriptEvents: createTranscriptEventReader(record.transcriptPath) }
       : {}),
     ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
@@ -637,7 +637,7 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   if (result.status === "missing") {
     return;
   }
@@ -887,7 +887,7 @@ function validateTranscriptEventCount(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const result = countTranscriptEvents(record);
+  const result = countLegacyTranscriptEvents(record);
   if (result.status === "missing") {
     const migratedEvents = countAlreadyMigratedTranscriptEventsForValidate(target, record);
     if (migratedEvents !== undefined) {
@@ -961,15 +961,6 @@ function countAlreadyMigratedTranscriptEventsForValidate(
   }
   const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
   return eventCount.ok ? eventCount.events : undefined;
-}
-
-function countTranscriptEvents(
-  record: LegacySessionRecord,
-):
-  | { status: "ok"; events: number }
-  | { status: "missing" }
-  | { status: "malformed"; message: string } {
-  return countTranscriptEventsForPath(record.transcriptPath);
 }
 
 function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {
