@@ -177,7 +177,17 @@ const POSIX_SHELL_OPTIONS_WITH_VALUE = new Set([
   "+o",
 ]);
 
-const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set(["ash", "bash", "dash", "ksh", "sh", "zsh"]);
+const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+]);
 
 function isPosixShellOptionToken(token: string, supportsPlusOptions: boolean): boolean {
   return token.startsWith("-") || (supportsPlusOptions && token.startsWith("+"));

@@ -1080,6 +1080,24 @@ describe("hardenApprovedExecutionPaths", () => {
         decoyName: "pipefail",
         expectedArgvIndex: 3,
       },
+      {
+        name: "mksh plus set option",
+        argv: ["mksh", "+o", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
+      },
+      {
+        name: "yash plus interactive option",
+        argv: ["yash", "+i", "./run.sh"],
+        decoyName: "+i",
+        expectedArgvIndex: 2,
+      },
+      {
+        name: "osh combined plus set option",
+        argv: ["osh", "+eo", "errexit", "./run.sh"],
+        decoyName: "errexit",
+        expectedArgvIndex: 3,
+      },
     ];
 
     for (const testCase of casesValue) {
