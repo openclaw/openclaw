@@ -51,6 +51,10 @@ type RuntimeSnapshot = {
 
 let loadedSnapshotPath: string | undefined;
 
+function principalScopedKey(authenticatedPrincipalId: string, identity: string): string {
+  return `${authenticatedPrincipalId}\0${identity}`;
+}
+
 function snapshotRuntimeState(): RuntimeSnapshot {
   return {
     leases: [...acquireByIdempotencyKey.values()],
@@ -71,15 +75,24 @@ function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
   spawnPendingByClientRequestId.clear();
 
   for (const lease of snapshot.leases) {
-    acquireByIdempotencyKey.set(lease.acquireIdempotencyKey, lease);
-    acquireByClientLeaseId.set(lease.clientLeaseId, lease);
-    if (!lease.released_at_ms) {
+    acquireByIdempotencyKey.set(
+      principalScopedKey(lease.authenticatedPrincipalId, lease.acquireIdempotencyKey),
+      lease,
+    );
+    acquireByClientLeaseId.set(
+      principalScopedKey(lease.authenticatedPrincipalId, lease.clientLeaseId),
+      lease,
+    );
+    if (!lease.released_at_ms && !lease.consumed_at_ms) {
       leasesByGatewayId.set(lease.gatewayLeaseId, lease);
     }
   }
   for (const replay of snapshot.releaseReplays) {
     if (replay.releaseIdempotencyKey) {
-      releaseByReleaseIdempotencyKey.set(replay.releaseIdempotencyKey, replay);
+      releaseByReleaseIdempotencyKey.set(
+        principalScopedKey(replay.authenticatedPrincipalId, replay.releaseIdempotencyKey),
+        replay,
+      );
     }
   }
   for (const session of snapshot.sessions) {
@@ -119,7 +132,13 @@ function metadataEnvelope(normalized: Record<string, unknown>): RuntimeMetadata 
 }
 
 function leaseResponse(record: LeaseRecord): Record<string, unknown> {
-  const status = record.released_at_ms ? "released" : "active";
+  const status = record.released_at_ms
+    ? "released"
+    : record.consumed_at_ms
+      ? "consumed"
+      : record.spawn_reservation_fingerprint
+        ? "reserved"
+        : "active";
   return {
     status,
     gateway_lease_id: record.gatewayLeaseId,
@@ -130,6 +149,7 @@ function leaseResponse(record: LeaseRecord): Record<string, unknown> {
       gateway_lease_id: record.gatewayLeaseId,
       client_lease_id: record.clientLeaseId,
       expires_at_ms: record.expires_at_ms,
+      consumed_at_ms: record.consumed_at_ms,
       released_at_ms: record.released_at_ms,
       metadata: record.acquireMetadata,
     },
@@ -177,8 +197,12 @@ function pruneExpiredLeases(now = Date.now()) {
       now - record.released_at_ms > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS
     ) {
       acquireByIdempotencyKey.delete(key);
-      if (acquireByClientLeaseId.get(record.clientLeaseId) === record) {
-        acquireByClientLeaseId.delete(record.clientLeaseId);
+      const clientLeaseKey = principalScopedKey(
+        record.authenticatedPrincipalId,
+        record.clientLeaseId,
+      );
+      if (acquireByClientLeaseId.get(clientLeaseKey) === record) {
+        acquireByClientLeaseId.delete(clientLeaseKey);
       }
       changed = true;
     }
@@ -231,17 +255,16 @@ export function acquireAgenticOsAllowLease(
     return rejectConflict(`ttl_ms exceeds maximum ${AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS}`);
   }
   const fingerprint = stableJson({ ...owner, ttl_ms: ttlMs });
-  const existingByIdempotency = acquireByIdempotencyKey.get(owner.idempotency_key);
+  const idempotencyScopedKey = principalScopedKey(authenticatedPrincipalId, owner.idempotency_key);
+  const clientLeaseScopedKey = principalScopedKey(authenticatedPrincipalId, owner.client_lease_id);
+  const existingByIdempotency = acquireByIdempotencyKey.get(idempotencyScopedKey);
   if (existingByIdempotency) {
-    if (existingByIdempotency.authenticatedPrincipalId !== authenticatedPrincipalId) {
-      return rejectConflict("allow lease belongs to a different authenticated principal");
-    }
     if (existingByIdempotency.fingerprint !== fingerprint) {
       return rejectConflict("conflicting allow lease acquire idempotency_key");
     }
     return leaseResponse(existingByIdempotency);
   }
-  const existingByClientLease = acquireByClientLeaseId.get(owner.client_lease_id);
+  const existingByClientLease = acquireByClientLeaseId.get(clientLeaseScopedKey);
   if (existingByClientLease) {
     return rejectConflict("conflicting allow lease client_lease_id");
   }
@@ -266,8 +289,8 @@ export function acquireAgenticOsAllowLease(
     expires_at_ms: now + ttlMs,
   };
   leasesByGatewayId.set(gatewayLeaseId, record);
-  acquireByIdempotencyKey.set(owner.idempotency_key, record);
-  acquireByClientLeaseId.set(owner.client_lease_id, record);
+  acquireByIdempotencyKey.set(idempotencyScopedKey, record);
+  acquireByClientLeaseId.set(clientLeaseScopedKey, record);
   persistRuntimeState();
   return leaseResponse(record);
 }
@@ -279,7 +302,7 @@ export function listAgenticOsAllowLeases(
   pruneExpiredLeases();
   const activeLeases = new Map<string, LeaseRecord>();
   for (const record of acquireByIdempotencyKey.values()) {
-    if (!record.released_at_ms) {
+    if (!record.released_at_ms && !record.consumed_at_ms) {
       activeLeases.set(record.gatewayLeaseId, record);
       leasesByGatewayId.set(record.gatewayLeaseId, record);
     }
@@ -287,7 +310,9 @@ export function listAgenticOsAllowLeases(
   const leases = [...activeLeases.values()]
     .filter(
       (record) =>
-        !record.released_at_ms && record.authenticatedPrincipalId === authenticatedPrincipalId,
+        !record.released_at_ms &&
+        !record.consumed_at_ms &&
+        record.authenticatedPrincipalId === authenticatedPrincipalId,
     )
     .map((record) => leaseResponse(record));
   return { status: "ok", leases };
@@ -313,17 +338,18 @@ export function releaseAgenticOsAllowLease(
     gateway_lease_id: gatewayLeaseId,
   };
   const fingerprint = stableJson(normalized);
-  const replay = releaseByReleaseIdempotencyKey.get(releaseIdempotencyKey);
+  const releaseScopedKey = principalScopedKey(authenticatedPrincipalId, releaseIdempotencyKey);
+  const replay = releaseByReleaseIdempotencyKey.get(releaseScopedKey);
   if (replay) {
-    if (replay.authenticatedPrincipalId !== authenticatedPrincipalId) {
-      return rejectConflict("allow lease release belongs to a different authenticated principal");
-    }
     if (replay.fingerprint !== fingerprint) {
       return rejectConflict("conflicting allow lease release release_idempotency_key");
     }
     return replay.response;
   }
-  const record = acquireByClientLeaseId.get(owner.client_lease_id);
+  assertRecordCapacity(releaseByReleaseIdempotencyKey, "allow lease release replay");
+  const record = acquireByClientLeaseId.get(
+    principalScopedKey(authenticatedPrincipalId, owner.client_lease_id),
+  );
   if (!record || record.gatewayLeaseId !== gatewayLeaseId) {
     return rejectConflict("unknown allow lease owner or gateway_lease_id");
   }
@@ -338,8 +364,7 @@ export function releaseAgenticOsAllowLease(
   record.released_at_ms = record.released_at_ms ?? Date.now();
   leasesByGatewayId.delete(gatewayLeaseId);
   const response = releaseResponse(record, metadataEnvelope(normalized));
-  assertRecordCapacity(releaseByReleaseIdempotencyKey, "allow lease release replay");
-  releaseByReleaseIdempotencyKey.set(releaseIdempotencyKey, {
+  releaseByReleaseIdempotencyKey.set(releaseScopedKey, {
     releaseIdempotencyKey,
     fingerprint,
     response,
@@ -524,6 +549,9 @@ export async function spawnAgenticOsSession(
   if (!lease || lease.gatewayLeaseId !== gatewayLeaseId || lease.released_at_ms) {
     return rejectConflict("gateway_lease_id is not active");
   }
+  if (lease.consumed_at_ms || lease.spawn_reservation_fingerprint) {
+    return rejectConflict("gateway_lease_id is already reserved or consumed");
+  }
   if (
     authenticatedRequesterAgentId &&
     lease.spawnOwner.requester_agent_id !== authenticatedRequesterAgentId
@@ -536,54 +564,75 @@ export async function spawnAgenticOsSession(
   requireLeaseAuthorizesSpawn({ lease, metadata, agentId });
   assertRecordCapacity(spawnByIdempotencyKey, "session spawn replay");
   assertRecordCapacity(spawnPendingByIdempotencyKey, "pending session spawn");
+  lease.spawn_reserved_at_ms = Date.now();
+  lease.spawn_reservation_fingerprint = fingerprint;
+  persistRuntimeState();
   const pending: SpawnPending = {
     fingerprint,
     authenticatedPrincipalId,
     promise: (async () => {
-      const spawnResult = (await spawnSubagentDirect(
-        {
-          task,
+      try {
+        const spawnResult = (await spawnSubagentDirect(
+          {
+            task,
+            taskName,
+            agentId,
+            mode,
+            cleanup,
+            context,
+            lightContext,
+            expectsCompletionMessage: false,
+          },
+          {
+            agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}`,
+            requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
+            authorizedTargetAgentId: lease.spawnOwner.agent_id,
+          },
+        )) as Record<string, unknown>;
+        if (spawnResult.status !== "accepted") {
+          throw new ContractInputError(
+            typeof spawnResult.error === "string"
+              ? spawnResult.error
+              : "child runner rejected spawn",
+          );
+        }
+        const sessionKey = spawnResultSessionKey(spawnResult);
+        if (!sessionKey) {
+          return rejectConflict("sessions_spawn accepted without a child session identity");
+        }
+        const record: SessionRecord = {
+          sessionKey,
+          fingerprint,
+          clientRequestId,
+          idempotencyKey,
+          gatewayLeaseId,
+          metadata: metadataEnvelope(metadata),
           taskName,
           agentId,
-          mode,
-          cleanup,
-          context,
-          lightContext,
-          expectsCompletionMessage: false,
-        },
-        {
-          agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}`,
-          requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
-          authorizedTargetAgentId: lease.spawnOwner.agent_id,
-        },
-      )) as Record<string, unknown>;
-      if (spawnResult.status !== "accepted") {
-        throw new ContractInputError(
-          typeof spawnResult.error === "string" ? spawnResult.error : "child runner rejected spawn",
-        );
+          authenticatedPrincipalId,
+          runId: spawnResultRunId(spawnResult),
+          created_at_ms: Date.now(),
+        };
+        sessionsByKey.set(sessionKey, record);
+        spawnByIdempotencyKey.set(idempotencyKey, record);
+        spawnByClientRequestId.set(clientRequestId, record);
+        lease.consumed_at_ms = Date.now();
+        delete lease.spawn_reserved_at_ms;
+        delete lease.spawn_reservation_fingerprint;
+        leasesByGatewayId.delete(gatewayLeaseId);
+        persistRuntimeState();
+        return record;
+      } catch (error) {
+        if (lease.spawn_reservation_fingerprint === fingerprint) {
+          delete lease.spawn_reserved_at_ms;
+          delete lease.spawn_reservation_fingerprint;
+          if (!lease.released_at_ms && !lease.consumed_at_ms) {
+            leasesByGatewayId.set(gatewayLeaseId, lease);
+          }
+          persistRuntimeState();
+        }
+        throw error;
       }
-      const sessionKey = spawnResultSessionKey(spawnResult);
-      if (!sessionKey) {
-        return rejectConflict("sessions_spawn accepted without a child session identity");
-      }
-      const record: SessionRecord = {
-        sessionKey,
-        fingerprint,
-        clientRequestId,
-        idempotencyKey,
-        gatewayLeaseId,
-        metadata: metadataEnvelope(metadata),
-        taskName,
-        agentId,
-        authenticatedPrincipalId,
-        runId: spawnResultRunId(spawnResult),
-        created_at_ms: Date.now(),
-      };
-      sessionsByKey.set(sessionKey, record);
-      spawnByIdempotencyKey.set(idempotencyKey, record);
-      spawnByClientRequestId.set(clientRequestId, record);
-      persistRuntimeState();
-      return record;
     })(),
   };
   spawnPendingByIdempotencyKey.set(idempotencyKey, pending);

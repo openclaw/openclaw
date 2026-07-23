@@ -961,7 +961,6 @@ src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
 src/plugins/clawhub.ts
 src/plugins/commands.test.ts
-src/plugins/compat/registry.ts
 src/plugins/contracts/host-hooks.contract.test.ts
 src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
@@ -1043,7 +1042,6 @@ src/status/status-message.ts
 src/system-agent/chat-engine.test.ts
 src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts
-src/system-agent/setup-inference.ts
 src/system-agent/verified-inference.test.ts
 src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts
@@ -1073,10 +1071,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/browser/browser-panel.ts
-ui/src/components/config-form.node.ts
-ui/src/components/markdown.ts
-ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
 ui/src/e2e/new-session-page.e2e.test.ts
 ui/src/e2e/session-management.e2e.test.ts

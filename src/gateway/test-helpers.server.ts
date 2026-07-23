@@ -59,6 +59,7 @@ import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import type { GatewayServerOptions } from "./server.js";
+import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
@@ -366,6 +367,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   );
   setTestConfigRoot(tempConfigRoot);
   resetConfigRuntimeState();
+  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;
@@ -465,6 +467,7 @@ async function resetGatewayTestRuntimeOnly() {
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   resetConfigRuntimeState();
+  invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
   sessionStoreSaveDelayMs.value = 0;

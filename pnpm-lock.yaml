@@ -770,6 +770,9 @@ importers:
       libopus-wasm:
         specifier: 0.2.0
         version: 0.2.0
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3
       p-map:
         specifier: 7.0.5
         version: 7.0.5

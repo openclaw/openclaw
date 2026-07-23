@@ -19,6 +19,7 @@ import {
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "../infra/plugin-approvals.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
@@ -2868,6 +2869,51 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
+  it("sends full reviewer detail for oversized non-Bash tool input", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "claude-native-bounded-detail",
+      decision: "allow-once",
+    });
+    const content = `line one ${"x".repeat(500)} line end`;
+    const live = mockClaudeLiveRun(supervisorSpawnMock, {
+      events: buildClaudeControlRequestEvents({
+        requestId: "req-write-bounded-detail",
+        toolUseId: "tool-write-bounded-detail-1",
+        toolName: "Write",
+        input: { file_path: "/tmp/out.txt", content },
+        sessionId: "live-control-write-bounded-detail",
+      }),
+      pid: 3012,
+    });
+
+    const result = await executePreparedCliRun(
+      buildClaudeLiveRunContext({
+        prompt: "hello",
+        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+      }),
+    );
+
+    expect(result.text).toBe("ok");
+    await vi.waitFor(() =>
+      expect(live.writes.some((entry) => entry.includes('"control_response"'))).toBe(true),
+    );
+    expectClaudeControlDecision(live, {
+      behavior: "allow",
+      requestId: "req-write-bounded-detail",
+      toolUseId: "tool-write-bounded-detail-1",
+      updatedInput: { file_path: "/tmp/out.txt", content },
+    });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        detail: JSON.stringify({ file_path: "/tmp/out.txt", content }),
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+      { expectFinal: false },
+    );
+  });
+
   it("fails closed when a Claude native tool Gateway approval is unavailable", async () => {
     mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
     const live = mockClaudeLiveRun(supervisorSpawnMock, {
@@ -2903,7 +2949,7 @@ describe("runCliAgent spawn path", () => {
       events: buildClaudeControlRequestEvents({
         requestId: "req-bash-oversized",
         toolUseId: "tool-bash-oversized-1",
-        input: { command: `echo ${"x".repeat(500)}; rm -rf /tmp/example` },
+        input: { command: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) },
         sessionId: "live-control-bash-oversized",
       }),
       pid: 3014,

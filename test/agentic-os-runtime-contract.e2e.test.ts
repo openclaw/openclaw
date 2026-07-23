@@ -276,9 +276,34 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
             session_key: firstSpawn.session_key,
           }),
         ).rejects.toThrow(/different authenticated principal/i);
+        await expect(
+          client.request("sessions_spawn", {
+            ...spawnParams,
+            client_request_id: `consumed-${probeId}`,
+            idempotency_key: `consumed-idem-${probeId}`,
+            metadata: {
+              ...metadata,
+              client_request_id: `consumed-${probeId}`,
+              idempotency_key: `consumed-idem-${probeId}`,
+            },
+          }),
+        ).rejects.toThrow(/not active|reserved or consumed/i);
 
+        const failureAcquireParams = {
+          ...acquireParams,
+          client_lease_id: `lease-failure-${probeId}`,
+          idempotency_key: `acquire-failure-${probeId}`,
+          run_id: `run-failure-${probeId}`,
+          transition_id: `transition-failure-${probeId}`,
+        };
+        const failureLease = await client.request<{ gateway_lease_id: string }>(
+          "subagents.allowLease.acquire",
+          failureAcquireParams,
+        );
         const failureMetadata = {
           ...metadata,
+          run_id: failureAcquireParams.run_id,
+          transition_id: failureAcquireParams.transition_id,
           client_request_id: `spawn-failure-${probeId}`,
           idempotency_key: `spawn-failure-idem-${probeId}`,
           task_digest: sha256(FAILURE_MARKER),
@@ -289,6 +314,7 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
             ...spawnParams,
             task: `Trigger the isolated failure marker ${FAILURE_MARKER}`,
             taskName: "agentic-os-real-gateway-failure-probe",
+            gateway_lease_id: failureLease.gateway_lease_id,
             client_request_id: failureMetadata.client_request_id,
             idempotency_key: failureMetadata.idempotency_key,
             metadata: failureMetadata,
@@ -311,6 +337,24 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
           1,
         );
 
+        const failureReleaseParams = {
+          client_lease_id: failureAcquireParams.client_lease_id,
+          release_idempotency_key: `release-failure-${probeId}`,
+          run_id: failureAcquireParams.run_id,
+          phase: failureAcquireParams.phase,
+          transition_id: failureAcquireParams.transition_id,
+          agent_id: failureAcquireParams.agent_id,
+          requester_agent_id: failureAcquireParams.requester_agent_id,
+          gateway_lease_id: failureLease.gateway_lease_id,
+        };
+        expect(
+          (
+            await client.request<{ released?: boolean }>(
+              "subagents.allowLease.release",
+              failureReleaseParams,
+            )
+          ).released,
+        ).toBe(true);
         const releaseParams = {
           client_lease_id: acquireParams.client_lease_id,
           release_idempotency_key: `release-${probeId}`,

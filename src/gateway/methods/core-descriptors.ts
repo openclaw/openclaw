@@ -459,6 +459,11 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // the answer is ephemeral and never mutates the run or its transcript.
   { name: "sessions.observer.ask", scope: "operator.read", since: "2026.7" },
   { name: "sessions.observer.visibility", scope: "operator.read", since: "2026.7" },
+  // Additive phase-2 collaboration methods append so older advertised indices stay stable.
+  { name: "session.visibility.set", scope: "operator.write", since: "2026.7" },
+  { name: "session.members.list", scope: "operator.read", since: "2026.7" },
+  { name: "session.members.add", scope: "operator.write", since: "2026.7" },
+  { name: "session.members.remove", scope: "operator.write", since: "2026.7" },
   {
     name: "subagents.allowLease.acquire",
     scope: "operator.admin",

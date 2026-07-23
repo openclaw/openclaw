@@ -5444,6 +5444,21 @@ td.data-table-key-col {
   position: relative;
 }
 
+.session-row-host--draft {
+  opacity: 0.68;
+}
+
+.session-row-host--draft:hover,
+.session-row-host--draft:focus-within,
+.session-row-host--draft.sidebar-recent-session--selected {
+  opacity: 1;
+}
+
+.session-row-draft-indicator {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
 /* Unread indicator shared by the sidebar recents list, the chat session
    picker, and the sessions page key cell. */
 .session-unread-dot {

@@ -39,6 +39,7 @@ export type PendingFinalDeliveryPayload = {
 
 export type SubagentExecutionState = {
   status: "queued" | "running" | "interrupted" | "terminal";
+  acceptedAt?: number;
   startedAt?: number;
   endedAt?: number;
   outcome?: SubagentRunOutcome;

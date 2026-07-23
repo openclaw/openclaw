@@ -41835,7 +41835,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 52,
+      "line": 116,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawKit/InstanceIdentity.swift",
       "source": "Apple Watch",
       "surface": "apple",

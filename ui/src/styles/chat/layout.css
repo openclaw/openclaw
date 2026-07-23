@@ -1064,6 +1064,10 @@ openclaw-chat-page {
   justify-content: flex-end;
 }
 
+.chat-group.user.chat-group--peer .chat-message-images {
+  justify-content: flex-start;
+}
+
 .chat-assistant-attachments {
   display: flex;
   flex-direction: column;

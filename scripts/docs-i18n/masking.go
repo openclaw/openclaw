@@ -14,7 +14,7 @@ var (
 	linkLabelRe           = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
 	placeholderRe         = regexp.MustCompile(`__OC_I18N_\d+__`)
 	listMarkerRe          = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
-	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:>[ \t]*)*$`)
+	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:(?:>[ \t]*)|(?:(?:[-+*]|[0-9]+[.)])[ \t]+))*$`)
 	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
 	// model-visible so target-language plurals and ordinals can change grammar without false failures.
 	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
@@ -150,18 +150,18 @@ func normalizeMaskedListMarkerPlaceholders(text string, mapping map[string]strin
 	return strings.Join(lines, "")
 }
 
-func maskedListMarkerPlaceholders(mapping map[string]string) map[string]struct{} {
-	placeholders := make(map[string]struct{})
+func maskedListMarkerPlaceholders(mapping map[string]string) map[string]string {
+	placeholders := make(map[string]string)
 	for placeholder, original := range mapping {
 		markerSpan := listMarkerRe.FindStringIndex(original)
 		if markerSpan != nil && markerSpan[0] == 0 && markerSpan[1] == len(original) {
-			placeholders[placeholder] = struct{}{}
+			placeholders[placeholder] = original
 		}
 	}
 	return placeholders
 }
 
-func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]struct{}) string {
+func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]string) string {
 	ranges := markdownListMarkerRanges(text)
 	if len(ranges) == 0 {
 		return text

@@ -102,7 +102,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             : null;
         return {
           client: availabilityClient,
-          connected: snapshot?.connected ?? false,
+          connected: snapshot?.phase === "connected",
           available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
           key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
             snapshot?.hello?.server?.version ?? ""
@@ -170,7 +170,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     const gateway = this.context?.gateway.snapshot;
     return {
       enabled: this.sidebarLiveActivity,
-      connected: this.connected && gateway?.connected === true,
+      connected: this.connected && gateway?.phase === "connected",
       connectionIdentity: gateway?.client ?? null,
       source: this.context?.sessions ?? null,
       rows: this.visibleNarrationRowsInOrder(),

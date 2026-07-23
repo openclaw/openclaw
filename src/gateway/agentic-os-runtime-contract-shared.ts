@@ -77,6 +77,9 @@ export type LeaseRecord = {
   acquireMetadata: RuntimeMetadata;
   created_at_ms: number;
   expires_at_ms: number;
+  consumed_at_ms?: number;
+  spawn_reserved_at_ms?: number;
+  spawn_reservation_fingerprint?: string;
   released_at_ms?: number;
 };
 

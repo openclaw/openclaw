@@ -711,7 +711,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       ...result,
     });
   },
-  "sessions.files.set": async ({ params, respond }) => {
+  "sessions.files.set": async ({ params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
@@ -766,6 +766,9 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     let update: WorkspaceFileUpdateResult;
+    // The resolved root belongs to the authorized instance. Recheck after all async path
+    // discovery so a replacement cannot redirect this write to its workspace.
+    sessionMutationAuthorization?.assertCurrent();
     try {
       update = await updateWorkspaceFile(
         loaded.root,

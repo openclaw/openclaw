@@ -126,6 +126,28 @@ async function acquireLease(params: Record<string, unknown> = acquireParams) {
   return response.gateway_lease_id as string;
 }
 
+function spawnParamsFor(
+  gatewayLeaseId: string,
+  overrides: Partial<typeof sessionMetadata> & { task?: string } = {},
+) {
+  const { task, ...metadataOverrides } = overrides;
+  const metadata = {
+    ...sessionMetadata,
+    ...metadataOverrides,
+  };
+  return {
+    task: task ?? "verify metadata contract",
+    taskName: "verify-contract",
+    runtime: "subagent",
+    mode: "run",
+    agentId: "ai-engineer",
+    gateway_lease_id: gatewayLeaseId,
+    client_request_id: metadata.client_request_id,
+    idempotency_key: metadata.idempotency_key,
+    metadata,
+  };
+}
+
 describe("Agentic OS runtime contract v1", () => {
   beforeEach(async () => {
     runtimeStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-agentic-os-runtime-contract-"));
@@ -170,6 +192,29 @@ describe("Agentic OS runtime contract v1", () => {
       }),
       "conflicting allow lease client_lease_id",
     );
+  });
+
+  it("scopes allow lease client_lease_id replay by authenticated principal", async () => {
+    const first = payload(await invoke("subagents.allowLease.acquire", acquireParams, "device-a"));
+    const secondParams = {
+      ...acquireParams,
+      idempotency_key: "lease-idem-device-b",
+      run_id: "run-device-b",
+      transition_id: "transition-device-b",
+    };
+    const second = payload(await invoke("subagents.allowLease.acquire", secondParams, "device-b"));
+
+    expect(second.gateway_lease_id).not.toBe(first.gateway_lease_id);
+    expect(
+      payload(await invoke("subagents.allowLease.acquire", secondParams, "device-b"))
+        .gateway_lease_id,
+    ).toBe(second.gateway_lease_id);
+    expect(
+      payload(await invoke("subagents.allowLease.status", {}, "device-a")).leases,
+    ).toHaveLength(1);
+    expect(
+      payload(await invoke("subagents.allowLease.status", {}, "device-b")).leases,
+    ).toHaveLength(1);
   });
 
   it("requires operator.admin for connected allow lease acquire callers", async () => {
@@ -268,17 +313,7 @@ describe("Agentic OS runtime contract v1", () => {
 
   it("replays duplicate sessions_spawn and rejects conflicting reuse", async () => {
     const gatewayLeaseId = await acquireLease();
-    const spawnParams = {
-      task: "verify metadata contract",
-      taskName: "verify-contract",
-      runtime: "subagent",
-      mode: "run",
-      agentId: "ai-engineer",
-      gateway_lease_id: gatewayLeaseId,
-      client_request_id: "spawn-a",
-      idempotency_key: "spawn-idem-a",
-      metadata: sessionMetadata,
-    };
+    const spawnParams = spawnParamsFor(gatewayLeaseId);
     const accepted = payload(await invoke("sessions_spawn", spawnParams));
     expect(accepted.status).toBe("accepted");
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
@@ -295,6 +330,81 @@ describe("Agentic OS runtime contract v1", () => {
       await invoke("sessions_spawn", { ...spawnParams, task: "different task" }),
       "conflicting sessions_spawn idempotency_key",
     );
+    expectInvalid(
+      await invoke(
+        "sessions_spawn",
+        spawnParamsFor(gatewayLeaseId, {
+          client_request_id: "spawn-b",
+          idempotency_key: "spawn-idem-b",
+          task_digest: "sha256:spawn-b",
+          task: "second spawn must not reuse consumed lease",
+        }),
+      ),
+      "gateway_lease_id is not active",
+    );
+  });
+
+  it("reserves a one-shot allow lease against concurrent double spawn attempts", async () => {
+    const gatewayLeaseId = await acquireLease();
+    let acceptFirstSpawn: (() => void) | undefined;
+    spawnSubagentDirectMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          acceptFirstSpawn = () =>
+            resolve({
+              status: "accepted",
+              childSessionKey: "agent:ai-engineer:subagent:concurrent-child",
+              runId: "run-concurrent-child",
+              mode: "run",
+            });
+        }),
+    );
+
+    const firstSpawn = invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId));
+    await Promise.resolve();
+    const secondSpawn = await invoke(
+      "sessions_spawn",
+      spawnParamsFor(gatewayLeaseId, {
+        client_request_id: "spawn-b",
+        idempotency_key: "spawn-idem-b",
+        task_digest: "sha256:spawn-b",
+        task: "racing second spawn",
+      }),
+    );
+    expectInvalid(secondSpawn, "gateway_lease_id is already reserved or consumed");
+
+    acceptFirstSpawn?.();
+    const accepted = payload(await firstSpawn);
+    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:concurrent-child");
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back a reserved allow lease when the child spawn is rejected", async () => {
+    const gatewayLeaseId = await acquireLease();
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "rejected",
+      error: "synthetic spawn rejection",
+    } as never);
+    expectInvalid(await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)), "synthetic");
+
+    spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:ai-engineer:subagent:retry-child",
+      runId: "run-retry-child",
+      mode: "run",
+    });
+    const accepted = payload(
+      await invoke(
+        "sessions_spawn",
+        spawnParamsFor(gatewayLeaseId, {
+          client_request_id: "spawn-retry",
+          idempotency_key: "spawn-retry-idem",
+          task_digest: "sha256:spawn-retry",
+          task: "retry after rejected spawn",
+        }),
+      ),
+    );
+    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:retry-child");
   });
 
   it("persists lease, session, and idempotency authority in the canonical state database", async () => {
@@ -336,6 +446,80 @@ describe("Agentic OS runtime contract v1", () => {
     };
     const released = payload(await invoke("subagents.allowLease.release", releaseParams));
     expect(payload(await invoke("subagents.allowLease.release", releaseParams))).toEqual(released);
+  });
+
+  it("rejects release replay capacity failures before mutating the lease", async () => {
+    vi.resetModules();
+    const now = Date.now();
+    const gatewayLeaseId = "gateway-lease:capacity";
+    const owner = {
+      client_lease_id: "lease-capacity",
+      idempotency_key: "lease-capacity-idem",
+      run_id: "run-capacity",
+      phase: "phase-b",
+      transition_id: "transition-capacity",
+      agent_id: "ai-engineer",
+      requester_agent_id: "main",
+    };
+    const spawnOwner = {
+      client_lease_id: owner.client_lease_id,
+      run_id: owner.run_id,
+      phase: owner.phase,
+      transition_id: owner.transition_id,
+      agent_id: owner.agent_id,
+      requester_agent_id: owner.requester_agent_id,
+    };
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    store.saveAgenticOsRuntimeSnapshot({
+      leases: [
+        {
+          gatewayLeaseId,
+          fingerprint: "capacity-acquire-fingerprint",
+          acquireIdempotencyKey: owner.idempotency_key,
+          clientLeaseId: owner.client_lease_id,
+          owner,
+          spawnOwner,
+          authenticatedPrincipalId: "device-capacity",
+          acquireMetadata: {
+            metadata_contract_version: "v1",
+            normalized: { ...owner, ttl_ms: 60_000, gateway_lease_id: gatewayLeaseId },
+            raw_json: "{}",
+          },
+          created_at_ms: now,
+          expires_at_ms: now + 60_000,
+        },
+      ],
+      releaseReplays: Array.from({ length: 1_024 }, (_, index) => ({
+        releaseIdempotencyKey: `filled-release-${index}`,
+        fingerprint: `filled-fingerprint-${index}`,
+        response: { status: "released", gateway_lease_id: `gateway-lease:filled-${index}` },
+        createdAtMs: now,
+        authenticatedPrincipalId: "device-capacity",
+      })),
+      sessions: [],
+    });
+    const contract = await import("./agentic-os-runtime-contract.js");
+    ({ agenticOsRuntimeContractHandlers } = contract);
+
+    expectInvalid(
+      await invoke(
+        "subagents.allowLease.release",
+        {
+          ...spawnOwner,
+          release_idempotency_key: "release-capacity-new",
+          gateway_lease_id: gatewayLeaseId,
+        },
+        "device-capacity",
+      ),
+      "allow lease release replay capacity reached",
+    );
+    const status = payload(await invoke("subagents.allowLease.status", {}, "device-capacity"));
+    expect(status.leases).toEqual([
+      expect.objectContaining({
+        status: "active",
+        gateway_lease_id: gatewayLeaseId,
+      }),
+    ]);
   });
 
   it("includes launch controls in sessions_spawn replay fingerprints", async () => {
@@ -485,7 +669,44 @@ describe("Agentic OS runtime contract v1", () => {
   });
 
   it("caps distinct slow pending spawns atomically and fails the overflow request closed", async () => {
-    const gatewayLeaseId = await acquireLease();
+    vi.resetModules();
+    const now = Date.now();
+    const leases = Array.from({ length: 1_025 }, (_, index) => {
+      const owner = {
+        ...acquireParams,
+        client_lease_id: `lease-pending-${index}`,
+        idempotency_key: `lease-pending-idem-${index}`,
+      };
+      const spawnOwner = {
+        client_lease_id: owner.client_lease_id,
+        run_id: owner.run_id,
+        phase: owner.phase,
+        transition_id: owner.transition_id,
+        agent_id: owner.agent_id,
+        requester_agent_id: owner.requester_agent_id,
+      };
+      const gatewayLeaseId = `gateway-lease:pending-${index}`;
+      return {
+        gatewayLeaseId,
+        fingerprint: `pending-acquire-fingerprint-${index}`,
+        acquireIdempotencyKey: owner.idempotency_key,
+        clientLeaseId: owner.client_lease_id,
+        owner,
+        spawnOwner,
+        authenticatedPrincipalId: "internal",
+        acquireMetadata: {
+          metadata_contract_version: "v1",
+          normalized: { ...owner, ttl_ms: 60_000, gateway_lease_id: gatewayLeaseId },
+          raw_json: "{}",
+        },
+        created_at_ms: now,
+        expires_at_ms: now + 60_000,
+      };
+    });
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    store.saveAgenticOsRuntimeSnapshot({ leases, releaseReplays: [], sessions: [] });
+    const contract = await import("./agentic-os-runtime-contract.js");
+    ({ agenticOsRuntimeContractHandlers } = contract);
     let releasePending!: () => void;
     const pendingGate = new Promise<void>((resolve) => {
       releasePending = resolve;
@@ -504,7 +725,7 @@ describe("Agentic OS runtime contract v1", () => {
       task: `bounded pending ${index}`,
       runtime: "subagent",
       agentId: "ai-engineer",
-      gateway_lease_id: gatewayLeaseId,
+      gateway_lease_id: `gateway-lease:pending-${index}`,
       client_request_id: `spawn-pending-${index}`,
       idempotency_key: `spawn-pending-idem-${index}`,
       metadata: {

@@ -2,7 +2,10 @@ import { performance } from "node:perf_hooks";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { resolveSessionRoutingContract } from "../../config/sessions/main-session.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveSessionRoutingContract,
+} from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-timeline.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
@@ -35,16 +38,27 @@ function loadChatSendSessionContext(params: {
   const agentIdOverride = normalizeOptionalChatText(p.agentId);
   const clientRunId = p.idempotencyKey;
   const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
+  const runtimeConfig = context.getRuntimeConfig?.();
   const requestedAgentId = resolveRequestedChatAgentId({
-    cfg: context.getRuntimeConfig?.(),
+    cfg: runtimeConfig,
     requestedSessionKey: rawSessionKey,
     agentId: agentIdOverride,
   });
+  // Outside configured global scope, `global` + agentId is the shipped webchat
+  // alias for that agent's main thread. Resolve it before every store lookup so
+  // reconnect replay cannot create a parallel literal `global` transcript.
+  const sessionLoadKey =
+    runtimeConfig &&
+    runtimeConfig.session?.scope !== "global" &&
+    rawSessionKey.trim().toLowerCase() === "global" &&
+    requestedAgentId
+      ? resolveAgentMainSessionKey({ cfg: runtimeConfig, agentId: requestedAgentId })
+      : rawSessionKey;
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
     "gateway.chat_send.load_session",
-    () => loadSessionEntry(rawSessionKey, sessionLoadOptions),
+    () => loadSessionEntry(sessionLoadKey, sessionLoadOptions),
     {
       phase: "agent-turn",
       attributes: {
@@ -64,6 +78,7 @@ function loadChatSendSessionContext(params: {
     expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
   return {
     rawSessionKey,
+    sessionLoadKey,
     clientRunId,
     pendingChatSendKey,
     sessionLoadOptions,
