@@ -9,6 +9,7 @@ import {
   resolveOxfmtInvocation,
   runOxfmt,
 } from "../../scripts/format-docs.mjs";
+import { outputTail } from "../../scripts/lib/output-tail.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -150,5 +151,21 @@ describe("format-docs", () => {
     expect(chunkFilesForCommand(["docs/very-long-name.md"], ["--write"], 1)).toEqual([
       ["docs/very-long-name.md"],
     ]);
+  });
+});
+
+describe("outputTail UTF-8 safety", () => {
+  it("skips leading continuation bytes when the retained byte window splits a multibyte character", () => {
+    // "你好" (6 bytes) + 16380 x's = 16386 bytes, exceeding the 16 KiB cap.
+    // subarray(-16384) starts at byte 2 = 0xA0 (continuation of 你).
+    const bigText = "你好" + "x".repeat(16380);
+    const result = outputTail(bigText, 16 * 1024);
+    expect(result).not.toContain("�");
+    // The continuation byte is skipped; the tail starts with "好".
+    expect(result).toMatch(/^好x/);
+  });
+
+  it("passes through output that fits within the tail budget", () => {
+    expect(outputTail("hello world", 16 * 1024)).toBe("hello world");
   });
 });
