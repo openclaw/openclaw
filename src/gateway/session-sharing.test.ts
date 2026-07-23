@@ -5,7 +5,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   allowedSessionVisibilities,
-  authorizeSessionMutation,
+  resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
   filterDraftSessionsForClient,
   resolveSessionSharingRole,
@@ -169,16 +169,17 @@ describe("session sharing policy", () => {
         ["exec.approval.resolve", { id: "approval-1" }],
       ] as const) {
         expect(
-          authorizeSessionMutation({ client: outsider, method, requestParams, context }),
+          resolveSessionMutationAuthorization({ client: outsider, method, requestParams, context })
+            .error,
         ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       }
       expect(
-        authorizeSessionMutation({
+        resolveSessionMutationAuthorization({
           client: client({}),
           method: "chat.send",
           requestParams: { sessionKey: "agent:main:solo-draft" },
           context,
-        }),
+        }).error,
       ).toBeNull();
     });
   });
@@ -186,20 +187,20 @@ describe("session sharing policy", () => {
   it("fails closed when a required session mutation has no target", () => {
     const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never;
     expect(
-      authorizeSessionMutation({
+      resolveSessionMutationAuthorization({
         client: client({}),
         method: "sessions.reset",
         requestParams: {},
         context,
-      }),
+      }).error,
     ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     expect(
-      authorizeSessionMutation({
+      resolveSessionMutationAuthorization({
         client: client({ scopes: ["operator.admin"] }),
         method: "sessions.reset",
         requestParams: {},
         context,
-      }),
+      }).error,
     ).toBeNull();
   });
 

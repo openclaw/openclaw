@@ -409,7 +409,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
-      assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

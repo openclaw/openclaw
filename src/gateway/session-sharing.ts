@@ -383,15 +383,6 @@ function resolveSessionMutationTargets(params: {
     : undefined;
 }
 
-export function authorizeSessionMutation(params: {
-  client: GatewayClient | null;
-  method: string;
-  requestParams: unknown;
-  context: GatewayRequestContext;
-}): ErrorShape | null {
-  return resolveSessionMutationAuthorization(params).error;
-}
-
 export function resolveSessionMutationAuthorization(params: {
   client: GatewayClient | null;
   method: string;

@@ -926,6 +926,7 @@ export async function performGatewaySessionReset(params: {
   /** Trusted provenance for a reset that materializes a previously missing row. */
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   assertCurrent?: () => void;
+  assertAuthorizedInstance?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
   | {
@@ -1040,6 +1041,7 @@ export async function performGatewaySessionReset(params: {
     // lets aborted runs finish admission cleanup without deadlocking reset.
     prepare: async () => {
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1113,8 +1115,10 @@ export async function performGatewaySessionReset(params: {
         },
       );
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       // Cleanup below is destructive. Once it starts, finish rotating the same
       // session even if gateway ownership changes; otherwise runtime state can be
       // reset while the persisted session still points at the old conversation.
@@ -1180,6 +1184,7 @@ export async function performGatewaySessionReset(params: {
         : undefined;
 
       let createdNewEntry = false;
+      params.assertAuthorizedInstance?.();
       const boundaryEntry = loadSessionEntry(
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
@@ -1220,7 +1225,7 @@ export async function performGatewaySessionReset(params: {
           ],
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
-          params.assertCurrent?.();
+          params.assertAuthorizedInstance?.();
           createdNewEntry = currentEntry === undefined;
           if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
             if (currentEntry) {
