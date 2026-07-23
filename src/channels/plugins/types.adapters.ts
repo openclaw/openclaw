@@ -138,7 +138,7 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     (account: ResolvedAccount, cfg: OpenClawConfig) => string
   >;
   describeAccount?: ChannelAdapterCallback<
-    (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountStatus
+    (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshotInput
   >;
   resolveAllowFrom?: (params: {
     cfg: OpenClawConfig;
