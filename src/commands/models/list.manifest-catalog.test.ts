@@ -54,7 +54,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     vi.clearAllMocks();
   });
 
-  it("loads only static manifest catalog rows without a provider filter", async () => {
+  it("loads only static and refreshable manifest catalog rows without a provider filter", async () => {
     const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const index = { plugins: [], diagnostics: [] };
     const manifestRegistry = {
@@ -71,7 +71,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       loadStaticManifestCatalogRowsForList({
         cfg: {},
       }).map((row) => row.ref),
-    ).toEqual(["moonshot/kimi-k2.6"]);
+    ).toEqual(["moonshot/kimi-k2.6", "openrouter/auto"]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
       allowWorkspaceScopedCurrent: true,
       config: {},
