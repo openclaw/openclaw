@@ -7,9 +7,9 @@ import { vi } from "vitest";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
-export const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
+const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
 export const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
-export const OTEL_TEST_PROTOCOL = "http/protobuf";
+const OTEL_TEST_PROTOCOL = "http/protobuf";
 export const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 export const SPAN_ID = "00f067aa0ba902b7";
 export const CHILD_SPAN_ID = "1111111111111111";
