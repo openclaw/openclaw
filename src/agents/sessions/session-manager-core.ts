@@ -276,20 +276,7 @@ export class SessionManagerCore {
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;
-    const pathContainsNode = (startId: string | null, targetId: string): boolean => {
-      const seen = new Set<string>();
-      let currentId = startId;
-      while (currentId !== null && !seen.has(currentId)) {
-        if (currentId === targetId) {
-          return true;
-        }
-        seen.add(currentId);
-        currentId = this.logicalParentsById.has(currentId)
-          ? (this.logicalParentsById.get(currentId) ?? null)
-          : (this.byId.get(currentId)?.parentId ?? this.opaqueParentsById.get(currentId) ?? null);
-      }
-      return false;
-    };
+    const resetDescendantIds = new Set<string>();
     for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
         const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
@@ -306,11 +293,19 @@ export class SessionManagerCore {
             continue;
           }
           const crossesResetBoundary =
-            latestResetId !== undefined && !pathContainsNode(leafState.leafId, latestResetId);
+            latestResetId !== undefined &&
+            (leafState.leafId === null || !resetDescendantIds.has(leafState.leafId));
           const effectiveLeafState: typeof leafState = crossesResetBoundary
             ? { leafId: this.leafId, appendParentId: this.leafId }
             : leafState;
           this.opaqueParentsById.set(leafEntry.id, effectiveLeafState.leafId);
+          if (
+            latestResetId !== undefined &&
+            effectiveLeafState.leafId !== null &&
+            resetDescendantIds.has(effectiveLeafState.leafId)
+          ) {
+            resetDescendantIds.add(leafEntry.id);
+          }
           this.leafId = effectiveLeafState.leafId;
           this.appendParentId = effectiveLeafState.appendParentId;
           this.promptReleasedSideBranchParentId =
@@ -323,6 +318,13 @@ export class SessionManagerCore {
         const link = parseParentLinkedOpaqueEntry(opaqueRecord);
         if (link) {
           this.opaqueParentsById.set(link.id, link.parentId);
+          if (
+            latestResetId !== undefined &&
+            link.parentId !== null &&
+            resetDescendantIds.has(link.parentId)
+          ) {
+            resetDescendantIds.add(link.id);
+          }
           this.appendParentId = link.id;
           if (this.promptReleasedSideBranchParentId !== undefined) {
             this.promptReleasedSideBranchParentId = link.id;
@@ -337,7 +339,7 @@ export class SessionManagerCore {
       const crossesResetBoundary =
         latestResetId !== undefined &&
         !isSessionTranscriptSideAppendEntry(entry) &&
-        !pathContainsNode(entry.parentId, latestResetId);
+        (entry.parentId === null || !resetDescendantIds.has(entry.parentId));
       if (
         crossesResetBoundary ||
         !Object.hasOwn(entry, "parentId") ||
@@ -350,6 +352,19 @@ export class SessionManagerCore {
       this.byId.set(entry.id, entry);
       if (entry.type === "reset") {
         latestResetId = entry.id;
+        resetDescendantIds.clear();
+        resetDescendantIds.add(entry.id);
+      } else {
+        const logicalParentId = this.logicalParentsById.has(entry.id)
+          ? (this.logicalParentsById.get(entry.id) ?? null)
+          : entry.parentId;
+        if (
+          latestResetId !== undefined &&
+          logicalParentId !== null &&
+          resetDescendantIds.has(logicalParentId)
+        ) {
+          resetDescendantIds.add(entry.id);
+        }
       }
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {

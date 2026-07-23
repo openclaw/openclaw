@@ -161,23 +161,6 @@ function resolveCanonicalParentId<T>(
   return null;
 }
 
-function pathContainsNode<T>(
-  startId: string | null,
-  targetId: string,
-  byId: ReadonlyMap<string, SessionTranscriptTreeNode<T>>,
-): boolean {
-  const seen = new Set<string>();
-  let currentId = startId;
-  while (currentId !== null && !seen.has(currentId)) {
-    if (currentId === targetId) {
-      return true;
-    }
-    seen.add(currentId);
-    currentId = byId.get(currentId)?.parentId ?? null;
-  }
-  return false;
-}
-
 /**
  * Resolve transcript navigation state in file order.
  *
@@ -195,6 +178,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   let hasExplicitLeafUpdate = false;
   let hasInvalidLeafControl = false;
   let latestResetId: string | undefined;
+  const resetDescendantIds = new Set<string>();
   const invalidLeafControlIds = new Set<string>();
 
   for (const [index, entry] of entries.entries()) {
@@ -204,7 +188,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       leafId !== null &&
       explicitTreeEntry?.leafId !== undefined &&
       isSessionTranscriptLeafControl(entry) &&
-      !pathContainsNode(explicitTreeEntry.leafId, latestResetId, byId)
+      (explicitTreeEntry.leafId === null || !resetDescendantIds.has(explicitTreeEntry.leafId))
     ) {
       explicitTreeEntry = {
         ...explicitTreeEntry,
@@ -249,7 +233,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       const crossesResetBoundary =
         latestResetId !== undefined &&
         treeEntry.appendMode !== "side" &&
-        !pathContainsNode(treeEntry.parentId, latestResetId, byId);
+        (treeEntry.parentId === null || !resetDescendantIds.has(treeEntry.parentId));
       const logicalParentId = crossesResetBoundary
         ? leafId
         : treeEntry.appendMode !== "side" && canonicalParentIsStale
@@ -276,6 +260,14 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     byId.set(node.id, node);
     if (isRecord(entry) && entry.type === "reset") {
       latestResetId = node.id;
+      resetDescendantIds.clear();
+      resetDescendantIds.add(node.id);
+    } else if (
+      latestResetId !== undefined &&
+      node.parentId !== null &&
+      resetDescendantIds.has(node.parentId)
+    ) {
+      resetDescendantIds.add(node.id);
     }
     appendParentId = node.appendParentId;
     if (node.leafId !== undefined) {
