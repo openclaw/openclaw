@@ -314,11 +314,12 @@ describe("session-entry compaction budgeting", () => {
         reason: "new",
         ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
       },
-      ...postResetEntries.map((entry, index) => ({
-        ...entry,
-        id: `entry-${index + 2}`,
-        parentId: `entry-${index + 1}`,
-      })),
+      ...postResetEntries.map((entry, index) =>
+        Object.assign({}, entry, {
+          id: `entry-${index + 2}`,
+          parentId: `entry-${index + 1}`,
+        }),
+      ),
     ];
     const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 500 };
     const withoutPrelude = prepareCompaction(buildEntries(), settings);
