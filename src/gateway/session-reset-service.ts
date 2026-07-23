@@ -1220,6 +1220,7 @@ export async function performGatewaySessionReset(params: {
           ],
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
+          params.assertCurrent?.();
           createdNewEntry = currentEntry === undefined;
           if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
             if (currentEntry) {

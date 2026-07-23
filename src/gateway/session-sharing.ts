@@ -15,7 +15,11 @@ import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  SessionMutationAuthorization,
+} from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
   resolveFreshestSessionStoreMatchFromStoreKeys,
@@ -42,6 +46,24 @@ type SessionMutationTarget = {
   sessionKey: string;
   agentId?: string;
 };
+
+type AuthorizedSessionMutationTarget = SessionMutationTarget & {
+  resolved: Pick<
+    SessionSharingTarget,
+    "agentId" | "canonicalKey" | "storeKey" | "storePath"
+  > | null;
+  sessionId: string | null;
+};
+
+export class SessionMutationAuthorizationChangedError extends Error {
+  readonly error: ErrorShape;
+
+  constructor(error: ErrorShape) {
+    super(error.message);
+    this.name = "SessionMutationAuthorizationChangedError";
+    this.error = error;
+  }
+}
 
 const sharingSnapshotCache = new Map<string, SessionSharingSnapshot>();
 const sharingSnapshotAliases = new Map<string, string>();
@@ -163,14 +185,21 @@ export function authorizeResolvedSessionMutation(params: {
   if (!target) {
     return null;
   }
-  const visibility = resolveSessionVisibility(target.entry);
-  const role = resolveSessionSharingRole({ client: params.client, target });
+  return authorizeSessionSharingTarget({ client: params.client, target });
+}
+
+function authorizeSessionSharingTarget(params: {
+  client: GatewayClient | null;
+  target: SessionSharingTarget;
+}): ErrorShape | null {
+  const visibility = resolveSessionVisibility(params.target.entry);
+  const role = resolveSessionSharingRole({ client: params.client, target: params.target });
   return canMutateSession({ role, visibility })
     ? null
     : errorShape(ErrorCodes.INVALID_REQUEST, `session is ${visibility} for this connection`, {
         details: {
           code: "SESSION_PARTICIPATION_REQUIRED",
-          sessionKey: params.sessionKey,
+          sessionKey: params.target.canonicalKey,
           visibility,
         },
       });
@@ -360,8 +389,17 @@ export function authorizeSessionMutation(params: {
   requestParams: unknown;
   context: GatewayRequestContext;
 }): ErrorShape | null {
+  return resolveSessionMutationAuthorization(params).error;
+}
+
+export function resolveSessionMutationAuthorization(params: {
+  client: GatewayClient | null;
+  method: string;
+  requestParams: unknown;
+  context: GatewayRequestContext;
+}): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
   if (isGatewayAdmin(params.client)) {
-    return null;
+    return { error: null };
   }
   // Resolve runtime config at most once per request and only when a path needs it. The context
   // getter reloads/resolves gateway config, so non-session requests (the vast majority) must not
@@ -377,25 +415,102 @@ export function authorizeSessionMutation(params: {
   });
   if (!targetRefs) {
     if (REQUIRED_SESSION_TARGET_METHODS.has(params.method)) {
-      return errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
-        details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
-      });
+      return {
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
+          details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
+        }),
+      };
     }
-    return null;
+    return { error: null };
   }
   const cfg = getCfg();
+  const authorizedTargets: AuthorizedSessionMutationTarget[] = [];
   for (const targetRef of targetRefs) {
-    const error = authorizeResolvedSessionMutation({
+    const target = resolveSessionSharingTarget({
       cfg,
-      client: params.client,
       sessionKey: targetRef.sessionKey,
       agentId: targetRef.agentId,
     });
+    const error = target ? authorizeSessionSharingTarget({ client: params.client, target }) : null;
     if (error) {
-      return error;
+      return { error };
     }
+    authorizedTargets.push({
+      ...targetRef,
+      resolved: target
+        ? {
+            agentId: target.agentId,
+            canonicalKey: target.canonicalKey,
+            storeKey: target.storeKey,
+            storePath: target.storePath,
+          }
+        : null,
+      sessionId: target?.entry.sessionId?.trim() || null,
+    });
   }
-  return null;
+  return {
+    error: null,
+    authorization: (() => {
+      const assertTargetCurrent = (
+        targetRef: SessionMutationTarget,
+        expected: AuthorizedSessionMutationTarget | undefined,
+        currentCfg: OpenClawConfig,
+      ) => {
+        const current = resolveSessionSharingTarget({
+          cfg: currentCfg,
+          sessionKey: targetRef.sessionKey,
+          agentId: targetRef.agentId,
+        });
+        const sameResolvedTarget =
+          expected === undefined ||
+          (current === null
+            ? expected.resolved === null
+            : expected.resolved !== null &&
+              current.agentId === expected.resolved.agentId &&
+              current.canonicalKey === expected.resolved.canonicalKey &&
+              current.storeKey === expected.resolved.storeKey &&
+              current.storePath === expected.resolved.storePath &&
+              (current.entry.sessionId?.trim() || null) === expected.sessionId);
+        if (!sameResolvedTarget) {
+          throw new SessionMutationAuthorizationChangedError(
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `session changed before ${params.method}; retry the request`,
+              {
+                details: {
+                  code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                  method: params.method,
+                  sessionKey: targetRef.sessionKey,
+                },
+              },
+            ),
+          );
+        }
+        if (!current) {
+          return;
+        }
+        const error = authorizeSessionSharingTarget({ client: params.client, target: current });
+        if (error) {
+          throw new SessionMutationAuthorizationChangedError(error);
+        }
+      };
+      return {
+        assertCurrent: () => {
+          const currentCfg = params.context.getRuntimeConfig();
+          for (const authorized of authorizedTargets) {
+            assertTargetCurrent(authorized, authorized, currentCfg);
+          }
+        },
+        assertTargetCurrent: (targetRef: SessionMutationTarget) => {
+          const expected = authorizedTargets.find(
+            (target) =>
+              target.sessionKey === targetRef.sessionKey && target.agentId === targetRef.agentId,
+          );
+          assertTargetCurrent(targetRef, expected, params.context.getRuntimeConfig());
+        },
+      };
+    })(),
+  };
 }
 
 function sharingSnapshotKey(sessionKey: string, agentId?: string): string {
