@@ -1,15 +1,14 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { fetchChildSessionRows } from "../sessions/child-session-data.ts";
 import type { SessionCapability } from "../sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
+import { hydrateSwarmSessionRows, mergeSwarmSessionRows } from "./swarm-dashboard-roster.ts";
 import type { BoardSnapshot } from "./types.ts";
 import type { BoardViewSnapshot } from "./view-types.ts";
 
 const SWARM_TAB_ID = "builtin-swarm";
 const SWARM_WIDGET_NAME = "builtin:swarm";
-const SWARM_SESSION_PAGE_SIZE = 10_000;
 
 function readSwarmEnabled(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
@@ -35,41 +34,6 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   const agent = agentId ? (asNullableRecord(entries?.[agentId]) ?? listedAgent) : null;
   const agentEnabled = readSwarmEnabled(asNullableRecord(agent?.tools)?.swarm);
   return agentEnabled ?? globalEnabled ?? false;
-}
-
-function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
-  // Callers pass hydrated rows first and the current lifecycle-decorated page
-  // second, so equal persisted timestamps intentionally prefer the latter.
-  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
-}
-
-function mergeSwarmSessionRows(
-  childRows: readonly GatewaySessionRow[],
-  currentRows: readonly GatewaySessionRow[],
-): GatewaySessionRow[] {
-  const merged = new Map<string, GatewaySessionRow>();
-  for (const row of [...childRows, ...currentRows]) {
-    const current = merged.get(row.key);
-    if (!current || isNewerSessionRow(row, current)) {
-      merged.set(row.key, row);
-    }
-  }
-  return [...merged.values()];
-}
-
-async function hydrateSwarmSessionRows(params: {
-  sessions: SessionCapability;
-  parentKey: string;
-  currentRows: readonly GatewaySessionRow[];
-  isCurrent: () => boolean;
-}): Promise<GatewaySessionRow[] | null> {
-  const childRows = await fetchChildSessionRows({
-    sessions: params.sessions,
-    parentKey: params.parentKey,
-    isCurrent: params.isCurrent,
-    pageSize: SWARM_SESSION_PAGE_SIZE,
-  });
-  return childRows ? mergeSwarmSessionRows(params.currentRows, childRows) : null;
 }
 
 type SwarmHydrationParams = {
@@ -237,11 +201,4 @@ export function withSwarmWidget(
       )
     : [...snapshot.widgets, widget];
   return { ...snapshot, tabs, widgets };
-}
-
-if (import.meta.env.MODE === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.swarmDashboardTestApi")] = {
-    hydrateSwarmSessionRows,
-    mergeSwarmSessionRows,
-  };
 }

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionCapability, SessionListOptions } from "../sessions/index.ts";
-import { hydrateSwarmSessionRows, mergeSwarmSessionRows } from "./swarm-dashboard.test-support.ts";
+import { hydrateSwarmSessionRows, mergeSwarmSessionRows } from "./swarm-dashboard-roster.ts";
 import { isSwarmEnabledInConfig, SwarmRosterHydrator } from "./swarm-dashboard.ts";
 
 function row(index: number): GatewaySessionRow {
