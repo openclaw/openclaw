@@ -279,7 +279,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
   let sentIndependentBlockText = false;
-  let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
   let streamingCloseErroredForReply = false;
@@ -321,13 +320,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const flushStreamingCardUpdate = (combined: string) => {
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
+    void (async () => {
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
       if (streaming?.isActive()) {
         await streaming.update(combined);
       }
+    })().catch((error: unknown) => {
+      params.runtime.error?.(
+        `feishu[${account.accountId}]: streaming update failed: ${String(error)}`,
+      );
     });
   };
 
@@ -434,7 +437,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const resetStreamingState = () => {
     streaming = null;
     streamingStartPromise = null;
-    partialUpdateQueue = Promise.resolve();
     streamText = "";
     lastPartial = "";
     reasoningText = "";
@@ -449,7 +451,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      await partialUpdateQueue;
       if (streaming?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
@@ -478,7 +479,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      await partialUpdateQueue;
       if (streaming?.isActive()) {
         await streaming.discard();
       }
