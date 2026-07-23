@@ -7866,6 +7866,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## providers/appnz.md
+
+- Route: /providers/appnz
+- Headings:
+  - H2: Getting started
+  - H2: Model references
+  - H2: Notes
+  - H2: Related
+
 ## providers/arcee.md
 
 - Route: /providers/arcee

@@ -1495,6 +1495,7 @@
                   "providers/bedrock",
                   "providers/bedrock-mantle",
                   "providers/anthropic",
+                  "providers/appnz",
                   "providers/arcee",
                   "providers/azure-speech",
                   "providers/cerebras",

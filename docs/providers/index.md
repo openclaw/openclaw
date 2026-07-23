@@ -28,6 +28,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Amazon Bedrock](/providers/bedrock)
 - [Amazon Bedrock Mantle](/providers/bedrock-mantle)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
+- [app.nz (OpenAI-compatible gateway)](/providers/appnz)
 - [Arcee AI (Trinity models)](/providers/arcee)
 - [Azure Speech](/providers/azure-speech)
 - [Baseten (Inkling + Model APIs)](/providers/baseten)

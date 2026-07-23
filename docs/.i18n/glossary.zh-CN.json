@@ -80,6 +80,14 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "app.nz",
+    "target": "app.nz"
+  },
+  {
+    "source": "app.nz (OpenAI-compatible gateway)",
+    "target": "app.nz（OpenAI 兼容网关）"
+  },
+  {
     "source": "Mantis",
     "target": "Mantis"
   },
