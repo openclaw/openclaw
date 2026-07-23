@@ -206,7 +206,7 @@ export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
 
 type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 /** Notification handler registered on a Codex app-server client. */
