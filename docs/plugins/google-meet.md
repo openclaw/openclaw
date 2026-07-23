@@ -852,7 +852,7 @@ Agents use the `google_meet` tool:
 | `test_speech`           | Create/reuse a session, trigger a known phrase, return Chrome health                              |
 | `test_listen`           | Create/reuse an observe-only session, wait for caption/transcript movement                        |
 
-`test_speech` always forces `mode: "agent"` or `"bidi"` and fails if asked to run in `mode: "transcribe"`, because observe-only sessions cannot emit speech. Its `speechOutputVerified` result is based on realtime audio output bytes increasing during that call, so a reused session with older audio does not count as a fresh check.
+`test_speech` always forces `mode: "agent"` or `"bidi"` and fails if asked to run in `mode: "transcribe"`, because observe-only sessions cannot emit speech. `speechOutputVerified` requires both fresh realtime output bytes and fresh non-silent audio returning on the bridge's microphone capture path during that output. A reused session's older output or loopback signal does not count, and sink-byte growth alone no longer reports verified speech.
 
 For Chrome transports, `leave` keeps a reused user-owned tab open after clicking Meet's Leave call button. Tabs opened by OpenClaw are closed after departure.
 
@@ -910,6 +910,10 @@ Speaking on demand:
 | `providerConnected` / `realtimeReady`                                 | Realtime voice bridge state                                                                                            |
 | `lastInputAt` / `lastOutputAt`                                        | Last audio seen from/sent to the bridge                                                                                |
 | `audioOutputRouted` / `audioOutputDeviceLabel`                        | Whether the Meet tab's media output was actively routed to the bridge's BlackHole device                               |
+| `lastOutputLoopbackAt` / `outputLoopbackSignalBytes`                  | Fresh output whose waveform fingerprint was correlated on the BlackHole microphone capture path                        |
+| `lastOutputLoopbackCorrelation`                                       | Correlation score tying the captured signal to the current assistant-output generation                                 |
+| `outputGeneration` / `verifiedOutputGeneration`                       | Monotonic ids; equality means the current output, rather than an older utterance, passed loopback proof                |
+| `lastOutputLoopbackRms` / `lastOutputLoopbackPeak`                    | Audio-energy diagnostics for the latest verified loopback capture chunk                                                |
 | `lastSuppressedInputAt` / `suppressedInputBytes`                      | Loopback input ignored while assistant playback is active                                                              |
 
 ## Agent and bidi modes

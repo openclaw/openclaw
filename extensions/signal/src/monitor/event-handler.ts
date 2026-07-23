@@ -51,12 +51,7 @@ import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import {
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleep as delay,
-} from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -82,11 +77,7 @@ import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
-import {
-  removeReactionSignal,
-  sendReactionSignal,
-  type SignalReactionOpts,
-} from "../send-reactions.js";
+import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
@@ -172,33 +163,11 @@ function resolveSignalStatusReactionEmojis(
 async function finalizeSignalStatusReaction(params: {
   controller: StatusReactionController;
   outcome: "done" | "error";
-  hasFinalResponse: boolean;
-  removeAckAfterReply: boolean;
-  timing: typeof DEFAULT_TIMING;
 }): Promise<void> {
   if (params.outcome === "done") {
     await params.controller.setDone();
-    if (params.removeAckAfterReply) {
-      await delay(params.timing.doneHoldMs);
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-
-  await params.controller.setError();
-  if (params.hasFinalResponse) {
-    if (params.removeAckAfterReply) {
-      await delay(params.timing.errorHoldMs);
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-  if (params.removeAckAfterReply) {
-    await delay(params.timing.errorHoldMs);
+  } else {
+    await params.controller.setError();
   }
   await params.controller.restoreInitial();
 }
@@ -390,7 +359,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : {}),
     };
     const statusReactionRecipient = entry.isGroup ? "" : entry.senderRecipient;
-    let currentStatusReactionEmoji = ackReaction;
     const statusReactionController =
       statusReactionsConfig?.enabled === true &&
       signalReactionLevel.level !== "off" &&
@@ -406,19 +374,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                   emoji,
                   signalReactionOpts,
                 );
-                currentStatusReactionEmoji = emoji;
-              },
-              clearReaction: async () => {
-                if (!currentStatusReactionEmoji) {
-                  return;
-                }
-                await removeReactionSignal(
-                  statusReactionRecipient,
-                  statusReactionTimestamp,
-                  currentStatusReactionEmoji,
-                  signalReactionOpts,
-                );
-                currentStatusReactionEmoji = "";
               },
             },
             initialEmoji: ackReaction,
@@ -613,9 +568,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           void finalizeSignalStatusReaction({
             controller: statusReactionController,
             outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
-            hasFinalResponse,
-            removeAckAfterReply: false,
-            timing: statusReactionTiming,
           }).catch((err: unknown) => {
             logVerbose(`signal: status reaction finalize failed: ${String(err)}`);
           });

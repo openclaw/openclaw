@@ -15,6 +15,56 @@
   animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
 }
 
+openclaw-session-owner-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.session-owner-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--owner-hue) 52% 18% / 0.9);
+  border-radius: 999px;
+  background: hsl(var(--owner-hue) 58% 26%);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
+  color: white;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.session-owner-chip--row {
+  width: 16px;
+  height: 16px;
+  font-size: 8px;
+}
+
+.session-owner-chip--header {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+
+.sidebar-session-creator-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sidebar-session-creator-filter select {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  padding: 3px 22px 3px 6px;
+}
+
 .connect-splash__logo {
   width: 44px;
   height: 44px;
@@ -343,133 +393,6 @@
   stroke: currentColor;
   stroke-width: 2;
   stroke-linecap: round;
-}
-
-/* ===========================================
-   Connection Banner (gateway offline / reconnecting)
-   =========================================== */
-
-/* Fixed overlay lane under the topbar: connection flaps must not reflow the
-   page the way the old in-flow banner did, so the pill floats over content. */
-.connection-banner {
-  position: fixed;
-  top: calc(var(--shell-topbar-height, 44px) + 10px);
-  left: var(--shell-nav-width, 0px);
-  right: 0;
-  /* Above content, below the mobile nav drawer/backdrop (65+). */
-  z-index: 50;
-  display: flex;
-  justify-content: center;
-  padding: 0 16px;
-  pointer-events: none;
-}
-
-/* Neutral elevated surface; the amber status dot is the only color accent so
-   the pill reads as quiet system status, not a warning callout. */
-.connection-banner__pill {
-  pointer-events: auto;
-  display: inline-flex;
-  align-items: stretch;
-  min-width: 0;
-  max-width: 100%;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  backdrop-filter: blur(12px) saturate(1.2);
-  -webkit-backdrop-filter: blur(12px) saturate(1.2);
-  box-shadow: var(--shadow-lg);
-  font-size: 13px;
-  line-height: 1;
-  animation: connection-banner-enter 0.25s var(--ease-out);
-}
-
-@keyframes connection-banner-enter {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .connection-banner__pill {
-    animation: none;
-  }
-}
-
-.connection-banner__dot {
-  width: 7px;
-  height: 7px;
-  align-self: center;
-  margin-left: 14px;
-  border-radius: var(--radius-full);
-  background: var(--warn);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
-  animation: pulse-subtle 2s ease-in-out infinite;
-  flex-shrink: 0;
-}
-
-.connection-banner__title {
-  align-self: center;
-  margin-left: 9px;
-  padding: 10px 0;
-  color: var(--text-strong);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.connection-banner__state {
-  align-self: center;
-  margin-left: 7px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-/* Announced by the role="status" region and mirrored in the pill tooltip;
-   too long to keep visible in the compact pill. */
-.connection-banner__sr-hint {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-/* Text action behind a hairline divider so the pill stays a single surface
-   instead of a capsule-inside-a-capsule. */
-.connection-banner__retry {
-  margin-left: 12px;
-  padding: 0 14px;
-  border: none;
-  border-left: 1px solid var(--border);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 12.5px;
-  font-weight: 500;
-  white-space: nowrap;
-  transition: background var(--duration-fast) var(--ease-out);
-}
-
-.connection-banner__retry:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.connection-banner__retry:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-@media (max-width: 640px) {
-  .connection-banner__state {
-    display: none;
-  }
 }
 
 /* ===========================================
@@ -1766,7 +1689,7 @@
    yields to /btw by collapsing to its one-line pill. */
 .chat-observer-hud {
   position: absolute;
-  top: clamp(44px, 5vh, 52px);
+  top: 0;
   right: 12px;
   z-index: 29;
   border: 1px solid var(--border);
@@ -5573,6 +5496,12 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   color: var(--muted);
+}
+
+.session-row-badge--queued {
+  gap: 2px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-row-badge--pull-request[data-pull-request-state="open"],

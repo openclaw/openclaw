@@ -434,6 +434,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.entries.*.reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.6-sol` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
+- `contextTokens`: optional agent-wide cap. It can lower the effective budget of a larger model but cannot raise a model above its configured or discovered `contextTokens`. To opt one direct OpenAI model into its larger native window, set `models.providers.openai.models[].contextWindow` and `contextTokens` for that model; see [OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
   - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
@@ -1274,7 +1275,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     responsePrefix: "🦞", // or "auto"
     ackReaction: "👀",
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
-    removeAckAfterReply: false,
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
       debounceMs: 500,
@@ -1320,16 +1320,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
-- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Signal, Telegram, WhatsApp, and iMessage.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Discord, unset keeps status reactions enabled when ack reactions are active.
   On Slack, Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
   Slack uses its native assistant thread status and rotating loading messages for progress by default, while keeping the configured ack reaction static.
-- `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
-  `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
-  `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.
-  Telegram only allows a fixed reaction set, so unsupported configured emoji fall back
-  to the nearest supported status variant for that chat.
 
 ### Queue
 

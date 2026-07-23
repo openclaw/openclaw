@@ -275,6 +275,25 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
+  it("extracts only localizable usage descriptions from Apple plists", () => {
+    const entries = extractNativeI18nCandidates(
+      "apple",
+      "apps/ios/Fixture/Info.plist",
+      `<plist><dict>
+        <key>CFBundleDisplayName</key>
+        <string>OpenClaw Fixture</string>
+        <key>NSCameraUsageDescription</key>
+        <string>OpenClaw uses the camera to scan setup codes &amp; documents.</string>
+        <key>OpenClawFixtureValue</key>
+        <string>Runtime configuration value</string>
+      </dict></plist>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual([
+      "OpenClaw uses the camera to scan setup codes & documents.",
+    ]);
+  });
+
   it("respects non-translatable Android collections and retains lowercase choices", () => {
     const entries = extractNativeI18nCandidates(
       "android",

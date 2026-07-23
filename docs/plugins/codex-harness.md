@@ -236,11 +236,134 @@ that need pre-prompt assembly; generic CLI backends, including `codex-cli`,
 do not provide that host capability.
 
 For Codex-backed agents, `/compact` starts native Codex app-server
-compaction on the bound thread. OpenClaw does not wait for completion,
-impose an OpenClaw timeout, restart the shared app-server, or fall back to a
-context-engine or public OpenAI summarizer. If the native Codex thread
-binding is missing or stale, the command fails closed instead of silently
-switching compaction backends.
+compaction on the bound thread and waits for its terminal result. The shared
+`agents.defaults.compaction.timeoutSeconds` budget applies; on timeout,
+OpenClaw asks Codex to interrupt the native turn and keeps the per-thread fence
+until termination is confirmed. It never falls back to a context engine or
+public OpenAI summarizer. If the native Codex thread binding is missing or
+stale, the command fails closed instead of silently switching compaction
+backends.
+
+### Direct API long context
+
+Codex subscription and direct OpenAI API traffic are separate contracts. The
+live ChatGPT/Codex catalog commonly exposes a `272000` token model window,
+while OpenAI documents a `1050000` token Platform API window and `128000`
+maximum output for GPT-5.5 and GPT-5.6. Reserving the full output allowance
+leaves a derived `922000` token input budget. Requests above `272000` input
+tokens use OpenAI's higher long-context pricing.
+
+Start from a complete Codex model catalog compatible with the installed Codex
+version. For each direct GPT-5.5 or GPT-5.6 entry that should use long context,
+preserve the rest of the descriptor and set:
+
+```json
+{
+  "context_window": 922000,
+  "max_context_window": 922000,
+  "auto_compact_token_limit": 700000
+}
+```
+
+Codex applies its normal 95% effective-window reserve to the `922000` catalog
+value, so it reports about `875900` usable tokens. Compacting at `700000`
+leaves `175900` tokens before that effective guard and `222000` before the
+provider-safe input allowance. This larger margin is deliberate: Codex checks
+already-recorded context before adding the next user message and context
+updates, so the threshold must cover one large incoming turn as well as tools,
+instructions, serialization, and the compaction turn itself.
+
+For standalone Codex CLI or Desktop use, a command-auth custom provider can
+read the API key from a system keychain or secret manager while the normal
+ChatGPT login remains available for connectors:
+
+```toml
+model = "gpt-5.6-terra"
+model_provider = "openai_api_direct"
+model_context_window = 922000
+model_auto_compact_token_limit = 700000
+model_auto_compact_token_limit_scope = "total"
+model_catalog_json = "/absolute/path/to/models-api-1m.json"
+
+[model_providers.openai_api_direct]
+name = "OpenAI API direct"
+base_url = "https://api.openai.com/v1"
+wire_api = "responses"
+requires_openai_auth = false
+
+[model_providers.openai_api_direct.auth]
+command = "/absolute/path/to/read-openai-inference-key"
+timeout_ms = 5000
+refresh_interval_ms = 300000
+```
+
+The auth helper must print only the key to stdout. Do not put it in TOML.
+
+For the OpenClaw Codex app-server harness, keep the default agent-scoped Codex
+home and let OpenClaw inject an `openai` API-key profile. Pass the catalog and
+context limits as native Codex app-server arguments:
+
+```json5
+{
+  auth: {
+    order: {
+      openai: ["openai:api-key"],
+    },
+  },
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            args: [
+              "app-server",
+              "--listen",
+              "stdio://",
+              "-c",
+              'model_catalog_json="/absolute/path/to/models-api-1m.json"',
+              "-c",
+              "model_context_window=922000",
+              "-c",
+              "model_auto_compact_token_limit=700000",
+              "-c",
+              "model_auto_compact_token_limit_scope=total",
+            ],
+          },
+        },
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: "openai/gpt-5.6-terra",
+      models: {
+        "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
+      },
+    },
+  },
+}
+```
+
+Replace `openai:api-key` with the actual API-key profile id if needed. The
+agent-scoped app-server receives only that prepared key; the operator's native
+`~/.codex` ChatGPT login, plugins, connectors, and thread store remain
+untouched. Codex app-server `0.144.6` does not attach a command-auth custom
+provider's bearer on app-server turns, so use the injected API-key path above
+rather than `homeScope: "user"` for this route.
+
+After changing the catalog or app-server arguments, restart the Gateway and
+start a fresh chat. Existing native threads preserve their recorded provider
+and model settings. Verify the runtime with `/status` and `/codex status`, then
+send a harmless direct API turn before starting a long session.
+
+<Warning>
+Long context is deliberately opt-in. OpenAI bills the entire request at 2×
+input and 1.5× output rates once input exceeds `272000` tokens. The API remains
+authoritative for access, actual limits, and billing. See
+[OpenAI model limits](https://developers.openai.com/api/docs/models/compare) and
+[API pricing](https://developers.openai.com/api/docs/pricing).
+</Warning>
 
 The rest of this page covers deployment shape, fail-closed routing, guardian
 approval policy, native Codex plugins, and Computer Use. For full option
@@ -262,8 +385,10 @@ Then check Codex app-server state:
 ```text
 /codex status
 /codex models
+/codex binding
 ```
 
+`/codex binding` reports the attached native thread and current model settings.
 `/codex status` reports app-server connectivity, account, rate limits, MCP
 servers, and skills. `/codex models` lists the live Codex app-server catalog
 for the harness and account. If `/status` is surprising, see

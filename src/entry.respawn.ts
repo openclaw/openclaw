@@ -152,11 +152,11 @@ export function buildCliRespawnPlan(
     !hasNodeRuntimeOption({ env, execArgv, option: OPENSSL_CA_FLAG })
   ) {
     // Node loads the macOS Keychain off-thread on the first TLS import, then joins
-    // that worker during shutdown. One-shot CLIs use the file-backed CA store instead;
+    // that worker during shutdown. One-shot CLIs use Node's bundled public roots;
     // an explicit --use-system-ca remains the opt-in for Keychain-only trust.
     childEnv.NODE_USE_SYSTEM_CA = "0";
     if (!hasNodeRuntimeOption({ env, execArgv, option: BUNDLED_CA_FLAG })) {
-      childExecArgv.unshift(OPENSSL_CA_FLAG);
+      childExecArgv.unshift(BUNDLED_CA_FLAG);
     }
     needsRespawn = true;
   }

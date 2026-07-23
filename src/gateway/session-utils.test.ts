@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -224,6 +225,18 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionEventFields({ sessionRow: row }).swarmGroupId).toBe(
       "swarm:agent:main:parent:turn-42",
     );
+  });
+
+  test("emits a tombstone when a session has no current control owner", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:child-without-owner",
+      entry: {} as SessionEntry,
+    });
+
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).controlOwnerSessionKey).toBeNull();
   });
 
   test("projects only unexpired agent status", () => {
@@ -1546,7 +1559,7 @@ describe("gateway session utils", () => {
       });
       writeAcpSessionMetaForMigration({
         sessionKey: legacyAcpKey,
-        sessionId: "sess-acp-repair",
+        lifecycleRevision: undefined,
         meta: {
           backend: "acpx",
           agent: "claude",
@@ -1787,7 +1800,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("resolveGatewaySessionStoreTarget reads a retired legacy store without provisioning SQLite", async () => {
+  test("resolveGatewaySessionStoreTarget ignores a retired legacy store without provisioning SQLite", async () => {
     await withStateDirEnv("session-utils-retired-legacy-", async ({ stateDir }) => {
       const retiredSessionsDir = path.join(stateDir, "agents", "retired", "sessions");
       const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
@@ -1813,7 +1826,12 @@ describe("gateway session utils", () => {
       });
 
       expect(target.storePath).toBe(retiredStorePath);
-      expect(target.store["agent:retired:main"]?.sessionId).toBe("sess-retired-legacy");
+      expect(target.store).toEqual({});
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath, {
+        agentId: "retired",
+      }).path;
+      expect(sqlitePath).toBeDefined();
+      expect(fs.existsSync(sqlitePath!)).toBe(false);
       expect(fs.readdirSync(retiredSessionsDir)).toEqual(["sessions.json"]);
     });
   });

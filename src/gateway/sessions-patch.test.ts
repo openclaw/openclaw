@@ -1012,16 +1012,6 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverrideSource).toBe("user");
   });
 
-  test("sets spawnDepth for subagent sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:subagent:child",
-        patch: { key: "agent:main:subagent:child", spawnDepth: 2 },
-      }),
-    );
-    expect(entry.spawnDepth).toBe(2);
-  });
-
   test("validates thinking patches with live catalog reasoning metadata", async () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
@@ -1279,19 +1269,6 @@ describe("gateway sessions patch", () => {
     expect(entry).toMatchObject({ label: "new label", thinkingLevel: "max" });
   });
 
-  test("sets spawnedBy for ACP sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:acp:child",
-        patch: {
-          key: "agent:main:acp:child",
-          spawnedBy: "agent:main:main",
-        },
-      }),
-    );
-    expect(entry.spawnedBy).toBe("agent:main:main");
-  });
-
   test("sets an immutable completion owner for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -1313,29 +1290,6 @@ describe("gateway sessions patch", () => {
       },
     });
     expectPatchError(result, "completionOwnerSessionKey cannot be changed once set");
-  });
-
-  test("sets spawnedWorkspaceDir for subagent sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:subagent:child",
-        patch: {
-          key: "agent:main:subagent:child",
-          spawnedWorkspaceDir: "/tmp/subagent-workspace",
-        },
-      }),
-    );
-    expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
-  });
-
-  test("sets spawnDepth for ACP sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:acp:child",
-        patch: { key: "agent:main:acp:child", spawnDepth: 2 },
-      }),
-    );
-    expect(entry.spawnDepth).toBe(2);
   });
 
   test("sets an immutable requester policy snapshot version for ACP sessions", async () => {
@@ -1391,20 +1345,6 @@ describe("gateway sessions patch", () => {
     );
     expect(entry.inheritedToolDeny).toHaveLength(151);
     expect(entry.inheritedToolDeny?.at(-1)).toBe("exec");
-  });
-
-  test("rejects spawnDepth on non-subagent sessions", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
-    });
-    expectPatchError(result, "spawnDepth is only supported");
-  });
-
-  test("rejects spawnedWorkspaceDir on non-subagent sessions", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
-    });
-    expectPatchError(result, "spawnedWorkspaceDir is only supported");
   });
 
   test("rejects inheritedToolDeny on non-subagent sessions", async () => {

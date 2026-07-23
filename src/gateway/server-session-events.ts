@@ -93,6 +93,7 @@ function buildGatewaySessionSnapshot(params: {
   const session = params.includeSession
     ? {
         ...buildGatewaySessionEventRow(sessionRow),
+        createdActor: sessionRow.createdActor ?? null,
         thinkingLevel: sessionRow.thinkingLevel ?? null,
       }
     : undefined;

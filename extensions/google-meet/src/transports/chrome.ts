@@ -1,6 +1,7 @@
 // Google Meet plugin module implements chrome behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  createMeetingRealtimeEngineBindings,
   createLocalMeetingRealtimeAudioTransport,
   createNodeMeetingRealtimeAudioTransport,
   leaveMeetingWithBrowser,
@@ -10,19 +11,11 @@ import {
   resolveLocalMeetingBrowserRequest,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeToolCallParams,
-  type MeetingRuntimePlatform,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  consultOpenClawAgentForGoogleMeet,
-  handleGoogleMeetRealtimeConsultToolCall,
-  resolveGoogleMeetRealtimeTools,
-} from "../agent-consult.js";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
@@ -44,12 +37,6 @@ import type {
   GoogleMeetTranscriptSnapshot,
 } from "./types.js";
 
-const GOOGLE_MEET_RUNTIME_PLATFORM = {
-  displayName: GOOGLE_MEET_PLATFORM_ADAPTER.displayName,
-  logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,
-  sessionIdPrefix: GOOGLE_MEET_PLATFORM_ADAPTER.id,
-} satisfies MeetingRuntimePlatform;
-
 type ChromeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
   inputCommand: string[];
   outputCommand: string[];
@@ -60,34 +47,6 @@ type ChromeNodeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
   nodeId: string;
   bridgeId: string;
 };
-
-function createGoogleMeetRealtimeEngineBindings(params: {
-  config: GoogleMeetConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  logger: RuntimeLogger;
-}) {
-  return {
-    platform: GOOGLE_MEET_RUNTIME_PLATFORM,
-    consultAgent: (consult: MeetingAgentConsultParams) =>
-      consultOpenClawAgentForGoogleMeet({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        ...consult,
-      }),
-    tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
-    handleToolCall: (call: MeetingRealtimeToolCallParams) =>
-      handleGoogleMeetRealtimeConsultToolCall({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        ...call,
-      }),
-  };
-}
 
 export async function assertBlackHole2chAvailable(params: {
   runtime: PluginRuntime;
@@ -192,14 +151,18 @@ export async function launchChromeMeet(params: {
     const transport = createLocalMeetingRealtimeAudioTransport({
       inputCommand: params.config.chrome.audioInputCommand,
       outputCommand: params.config.chrome.audioOutputCommand,
+      audioFormat: params.config.chrome.audioFormat,
       bargeInInputCommand: params.config.chrome.bargeInInputCommand,
       bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
       bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
       bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
       logger: params.logger,
-      logScope: GOOGLE_MEET_RUNTIME_PLATFORM.logScope,
+      logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,
     });
-    const bindings = createGoogleMeetRealtimeEngineBindings(params);
+    const bindings = createMeetingRealtimeEngineBindings({
+      platform: GOOGLE_MEET_PLATFORM_ADAPTER,
+      ...params,
+    });
     const engine =
       params.mode === "agent"
         ? await startMeetingAgentRealtimeEngine({
@@ -584,12 +547,16 @@ export async function launchChromeMeetOnNode(params: {
       runtime: params.runtime,
       nodeId,
       bridgeId: result.bridgeId,
+      audioFormat: params.config.chrome.audioFormat,
       logger: params.logger,
       commandName: GOOGLE_MEET_NODE_COMMAND,
-      logScope: GOOGLE_MEET_RUNTIME_PLATFORM.logScope,
+      logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
     });
-    const bindings = createGoogleMeetRealtimeEngineBindings(params);
+    const bindings = createMeetingRealtimeEngineBindings({
+      platform: GOOGLE_MEET_PLATFORM_ADAPTER,
+      ...params,
+    });
     const engine =
       params.mode === "agent"
         ? await startMeetingAgentRealtimeEngine({

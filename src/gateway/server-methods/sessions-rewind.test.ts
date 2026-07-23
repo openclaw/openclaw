@@ -58,9 +58,12 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   listSessionEntries,
+  loadSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { sessionsHandlers } from "./sessions.js";
+import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:rewind-handler";
@@ -140,8 +143,12 @@ type MessageCutMethod =
   | "sessions.fork"
   | "sessions.rewind";
 
-async function invoke(method: MessageCutMethod, entryId?: string) {
-  const respond = vi.fn() as unknown as RespondFn;
+async function invoke(
+  method: MessageCutMethod,
+  entryId?: string,
+  client: GatewayClient | null = null,
+) {
+  const respond = vi.fn();
   await expectDefined(
     sessionsHandlers[method],
     `${method} handler`,
@@ -155,9 +162,9 @@ async function invoke(method: MessageCutMethod, entryId?: string) {
           ? {}
           : { entryId }),
     },
-    respond,
+    respond: respond as unknown as RespondFn,
     context: context(),
-    client: null,
+    client,
     isWebchatConnect: () => false,
   });
   return respond;
@@ -209,11 +216,35 @@ describe("session message-cut methods", () => {
   });
 
   it("returns editor text for rewind and a new key for fork", async () => {
-    const fork = await invoke("sessions.fork", "user-entry");
+    const profileId = "profile-fork-creator";
+    const fork = await invoke("sessions.fork", "user-entry", {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId,
+        displayName: "Fork Operator",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    } as GatewayClient);
     expect(fork).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ editorText: "edit me", sessionKey: expect.any(String) }),
       undefined,
+    );
+    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+    expect(forkKey).toBeTruthy();
+    const forkEntry = loadSessionEntry({ agentId: "main", sessionKey: forkKey ?? "" });
+    expect(forkEntry).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: profileId },
+      createdAt: expect.any(Number),
+    });
+    expect(listSessionStateEventsSince(forkKey ?? "", "main", 0, 20).events).toContainEqual(
+      expect.objectContaining({
+        kind: "created",
+        actorType: "human",
+        actorId: profileId,
+      }),
     );
 
     const rewind = await invoke("sessions.rewind", "user-entry");

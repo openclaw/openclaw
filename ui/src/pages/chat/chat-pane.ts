@@ -52,7 +52,11 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import {
+  readPresenceEntries,
+  resolveCurrentSelfUser,
+  type PresencePayload,
+} from "../../app/user-profile.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -64,7 +68,9 @@ import {
 import "../../components/modal-dialog.ts";
 import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { icons } from "../../components/icons.ts";
+import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
@@ -181,12 +187,8 @@ import {
   saveRouteSessionSettings,
   type ChatPageHost,
 } from "./chat-state.ts";
-import {
-  renderChat,
-  renderChatResizableDivider,
-  resetChatViewState,
-  type ChatProps,
-} from "./chat-view.ts";
+import { resetChatViewState } from "./chat-view-state.ts";
+import { renderChat, renderChatResizableDivider, type ChatProps } from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
@@ -196,6 +198,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
@@ -443,6 +446,7 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private headerRenameValue = "";
   @litState() private headerPlatform: string | null = null;
   @litState() private headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @litState() private presencePayload: PresencePayload | undefined;
   @litState() private boardCommandDock: {
     sessionKey: string;
     tabId: string;
@@ -930,9 +934,10 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    // Close old-session portals and listener-owning popovers before the next
-    // render detaches their DOM and makes owner-scoped cleanup impossible.
-    resetChatThreadPresentationState(this.paneId, this);
+    // Close old-session listener owners before the next render detaches their
+    // DOM; thread-global portals and caches are reset separately.
+    dismissConfirmedActionPopovers(this);
+    resetChatThreadPresentationState(this.paneId);
     this.sessionDiscussionOpenUrls.clear();
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
@@ -2357,6 +2362,10 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (event.event === "presence") {
+          const presence = readPresenceEntries(event.payload);
+          this.presencePayload = presence ? { presence } : undefined;
+        }
         if (state) {
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
@@ -2489,8 +2498,10 @@ class ChatPane extends OpenClawLightDomElement {
     }
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
+    this.presencePayload = undefined;
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId, this);
+    dismissConfirmedActionPopovers(this);
+    resetChatViewState(this.paneId);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
@@ -2609,6 +2620,12 @@ class ChatPane extends OpenClawLightDomElement {
     const wasConnected = state.connected;
     const sourceChanged = state.client !== snapshot.client || wasConnected !== snapshot.connected;
     const clientChanged = this.connectedClient !== snapshot.client;
+    if (!snapshot.connected) {
+      this.presencePayload = undefined;
+    } else if (clientChanged || !wasConnected) {
+      const presence = readPresenceEntries(snapshot.hello?.snapshot);
+      this.presencePayload = presence ? { presence } : undefined;
+    }
     if (sourceChanged) {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
@@ -3124,7 +3141,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
       state.sidebarContent.sessionKey === sessionKey;
-    const label = t("chat.sessionDiscussion.show");
+    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return html`
       <openclaw-tooltip .content=${label}>
         <button
@@ -3132,7 +3149,7 @@ class ChatPane extends OpenClawLightDomElement {
           type="button"
           aria-label=${label}
           aria-pressed=${String(active)}
-          @click=${() => state.handleOpenSidebar(content)}
+          @click=${() => (active ? state.handleCloseSidebar() : state.handleOpenSidebar(content))}
         >
           ${icons.messageSquare}
         </button>
@@ -3195,6 +3212,11 @@ class ChatPane extends OpenClawLightDomElement {
       mergedChrome: this.mergedChrome,
       title: this.paneTitle,
       session: row,
+      showOwnerChip:
+        (
+          this.state?.sessionsResult?.creators ??
+          listSessionCreators(this.state?.sessionsResult?.sessions ?? [])
+        ).length >= 2,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,
@@ -3217,6 +3239,22 @@ class ChatPane extends OpenClawLightDomElement {
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      presence:
+        !catalog &&
+        hasSessionPresenceViewers(
+          this.presencePayload,
+          this.context.gateway.snapshot.client?.instanceId,
+          this.state?.sessionKey ?? "",
+        )
+          ? html`<openclaw-viewer-facepile
+              class="chat-pane__presence"
+              .presencePayload=${this.presencePayload}
+              .selfInstanceId=${this.context.gateway.snapshot.client?.instanceId}
+              .sessionKey=${this.state?.sessionKey}
+              .maxVisible=${4}
+              variant="session"
+            ></openclaw-viewer-facepile>`
+          : nothing,
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
         this.persistBoardSessionView({ face });
       }),
@@ -3431,6 +3469,7 @@ class ChatPane extends OpenClawLightDomElement {
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
+      queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
@@ -3442,6 +3481,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkVideoPending: state.realtimeTalkVideoPending,
       realtimeTalkCameraError: state.realtimeTalkCameraError,
       connected: state.connected,
+      offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
@@ -3690,6 +3730,10 @@ class ChatPane extends OpenClawLightDomElement {
         }
         state.handleCloseSidebar();
       },
+      imageLightbox: state.imageLightbox,
+      onRequestOpenImage: state.beginImageOpen,
+      onOpenImage: state.handleOpenImage,
+      onCloseImage: state.handleCloseImage,
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,

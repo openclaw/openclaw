@@ -187,7 +187,6 @@ describe("dead config keys", () => {
     "logging.redactSensitive",
     "commands.useAccessGroups",
     "gateway.controlUi.allowInsecureAuth",
-    "gateway.controlUi.dangerouslyDisableDeviceAuth",
     "discovery.wideArea.enabled",
     "cloudWorkers.profiles.default.lifetime",
     "mcp.servers.docs.workingDirectory",

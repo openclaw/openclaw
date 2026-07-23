@@ -3,8 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import type { PresenceViewer } from "./viewer-facepile.ts";
-import "./viewer-facepile.ts";
+import { hasSessionPresenceViewers, type PresenceViewer } from "./viewer-facepile.ts";
 
 type ViewerAvatarElement = HTMLElement & {
   user: PresenceViewer | null;
@@ -165,4 +164,23 @@ it("keeps session facepiles as plain non-interactive avatar clusters", async () 
   });
   expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
   expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
+});
+
+it("detects only other viewers watching the requested session", () => {
+  const payload = {
+    presence: [
+      {
+        instanceId: "self-instance",
+        user: { id: "self", name: "Self" },
+        watchedSessions: ["agent:main:active"],
+      },
+      {
+        instanceId: "alice-instance",
+        user: { id: "alice", name: "Alice" },
+        watchedSessions: ["agent:main:other"],
+      },
+    ],
+  };
+  expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:active")).toBe(false);
+  expect(hasSessionPresenceViewers(payload, "self-instance", "agent:main:other")).toBe(true);
 });

@@ -14,6 +14,7 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
@@ -188,6 +189,14 @@ function collectConfiguredRuntimePluginWarnings(params: {
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(idInput: string): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginsEnableCommandUnlocked(idInput),
+  );
+}
+
+async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
@@ -235,6 +244,14 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
 
 /** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsDisableCommand(idInput: string): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginsDisableCommandUnlocked(idInput),
+  );
+}
+
+async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 

@@ -17,6 +17,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import {
+  readCodexCliActiveApiKey,
+  type CodexCliApiKeyCredential,
+} from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
@@ -95,6 +99,7 @@ import {
   type SetupInferenceAuthOption,
   type SetupInferenceManualProvider,
 } from "./setup-inference-auth-options.js";
+import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -126,6 +131,8 @@ export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferen
 
 export type SetupInferenceCandidate = {
   kind: SetupInferenceKind;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   detail: string;
   modelRef: string;
@@ -319,6 +326,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
@@ -371,14 +379,17 @@ function invalidSetupConfigError(snapshot: {
 }
 
 function resolveCandidatePresentation(
-  kind: SetupInferenceKind,
+  candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
   authChoices: readonly ProviderAuthChoiceMetadata[],
-): Pick<SetupInferenceCandidate, "icon" | "website"> {
+): Pick<SetupInferenceCandidate, "brandId" | "icon" | "website"> {
   const choice = authChoices.find(
-    (candidate) =>
-      candidate.choiceId === kind || candidate.deprecatedChoiceIds?.includes(kind) === true,
+    (entry) =>
+      entry.choiceId === candidate.kind ||
+      entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
+  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
   return {
+    ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),
     ...(choice?.website ? { website: choice.website } : {}),
   };
@@ -514,7 +525,7 @@ export async function detectSetupInference(
     Object.assign(
       candidate,
       { recommended: false as const },
-      resolveCandidatePresentation(candidate.kind, authChoices),
+      resolveCandidatePresentation(candidate, authChoices),
     ),
   );
   const configuredModel = candidates.find(
@@ -578,6 +589,7 @@ export async function detectSetupInference(
           return Object.assign(
             {
               kind: toProviderAutoSetupKind(choice.choiceId),
+              brandId: choice.providerId,
               label: choice.choiceLabel,
               detail: candidate.detail?.trim() || "available locally",
               modelRef: candidate.modelRef,
@@ -1063,6 +1075,7 @@ async function buildTestPlan(params: {
   isCancelled?: () => boolean;
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
+  codexCliApiKey?: CodexCliApiKeyCredential;
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
@@ -1289,6 +1302,40 @@ async function buildTestPlan(params: {
         return modelRef;
       }
       const ref = parseRef(modelRef);
+      if (params.codexCliApiKey) {
+        const preparedAuth = prepareManualAuthForActivation({
+          baseConfig: cfg,
+          preparedConfig: cfg,
+          profiles: [
+            {
+              profileId: "openai:codex-cli-api-key",
+              credential: params.codexCliApiKey,
+            },
+          ],
+          selectedProfileId: "openai:codex-cli-api-key",
+          modelRef,
+          providerId: ref.provider,
+        });
+        return {
+          runner: "embedded",
+          ...ref,
+          modelRef,
+          agentHarnessRuntimeOverride: "codex",
+          config: preparedAuth.config,
+          agentId: "openclaw",
+          routeAgentId: resolveDefaultAgentId(preparedAuth.config),
+          agentDir: params.agentDir,
+          cleanupBundleMcpOnRunEnd: true,
+          authProfileId: preparedAuth.selectedProfileId,
+          persistModelRef: modelRef,
+          manualAuth: {
+            profiles: preparedAuth.profiles,
+            runtimeConfigBase: cfg,
+            sourceConfigBase: params.sourceCfg,
+            configPatch: createMergePatch(cfg, preparedAuth.config),
+          },
+        };
+      }
       return {
         runner: "embedded",
         ...ref,
@@ -1609,23 +1656,26 @@ async function runProviderManualSecretMethod(params: {
 export async function activateSetupInference(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  const codexCliApiKey = resolveCodexCliSetupApiKey(params);
   try {
-    const result = await activateSetupInferenceUnredacted(params);
+    const result = await activateSetupInferenceUnredacted(params, codexCliApiKey ?? undefined);
     if (result.ok) {
       return {
         ...result,
         lines: await Promise.all(
-          result.lines.map((line) => redactSetupInferenceError(line, params.apiKey)),
+          result.lines.map((line) =>
+            redactSetupInferenceError(line, params.apiKey, codexCliApiKey?.key),
+          ),
         ),
       };
     }
     return {
       ...result,
-      error: await redactSetupInferenceError(result.error, params.apiKey),
+      error: await redactSetupInferenceError(result.error, params.apiKey, codexCliApiKey?.key),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redacted = await redactSetupInferenceError(message, params.apiKey);
+    const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
     if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
@@ -1645,6 +1695,7 @@ export async function activateSetupInference(
 
 async function activateSetupInferenceUnredacted(
   params: ActivateSetupInferenceParams,
+  codexCliApiKey?: CodexCliApiKeyCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
   const readSnapshot =
@@ -1692,6 +1743,7 @@ async function activateSetupInferenceUnredacted(
       ...(params.kind === "provider-auth"
         ? { isRemoteProviderAuth: params.surface === "gateway" }
         : {}),
+      ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
     });
     if ("error" in plan) {
@@ -2403,9 +2455,24 @@ async function activateSetupInferenceUnredacted(
   }
 }
 
-async function redactSetupInferenceError(message: string, apiKey?: string): Promise<string> {
+function resolveCodexCliSetupApiKey(
+  params: ActivateSetupInferenceParams,
+): CodexCliApiKeyCredential | null {
+  if (params.kind !== "codex-cli") {
+    return null;
+  }
+  const reader = params.deps?.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey;
+  return reader({ allowKeychainPrompt: true });
+}
+
+async function redactSetupInferenceError(
+  message: string,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
   const secrets = new Set(
-    [apiKey, apiKey?.trim()].filter((value): value is string => Boolean(value)),
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
   );
   let redacted = message;
   for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {
@@ -2634,6 +2701,8 @@ export async function verifySetupInferenceConfig(params: {
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
   authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
+  /** Explicit isolated agent directory for staged onboarding verification. */
+  agentDir?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -2680,7 +2749,9 @@ export async function verifySetupInferenceConfig(params: {
         error: builtPlan.error,
       };
     }
-    let plan: SetupInferenceTestPlan = builtPlan;
+    let plan: SetupInferenceTestPlan = params.agentDir
+      ? { ...builtPlan, agentDir: params.agentDir }
+      : builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
       const selectedProfile = plan.authProfileId
         ? params.authProfiles.find((profile) => profile.profileId === plan.authProfileId)
