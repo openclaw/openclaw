@@ -135,6 +135,35 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
   } as Model;
 }
 
+/** Keeps native Codex thread bindings reusable while omitting OpenClaw tools and search. */
+export function withPersistentCodexTestToolPolicy(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  const modelCompat =
+    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
+  return {
+    ...params,
+    disableTools: false,
+    model: {
+      ...params.model,
+      compat: { ...modelCompat, supportsTools: false },
+    },
+    config: {
+      ...params.config,
+      tools: {
+        ...params.config?.tools,
+        web: {
+          ...params.config?.tools?.web,
+          search: {
+            ...params.config?.tools?.web?.search,
+            enabled: false,
+          },
+        },
+      },
+    },
+  };
+}
+
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
 export function createClientHarness() {
   const stdout = new PassThrough();

@@ -21,6 +21,7 @@ import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
+  withPersistentCodexTestToolPolicy,
 } from "./test-support.js";
 
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
@@ -47,7 +48,7 @@ function runCodexAppServerAttempt(
     (codexAppServerClientFactoryForTest
       ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
       : undefined);
-  return runCodexAppServerAttemptImpl(params, {
+  return runCodexAppServerAttemptImpl(withPersistentCodexTestToolPolicy(params), {
     ...options,
     bindingStore: testCodexAppServerBindingStore,
     ...(clientFactory ? { clientFactory } : {}),
@@ -71,7 +72,6 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel(AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider),
     thinkLevel: "medium",
-    disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
