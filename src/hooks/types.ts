@@ -17,6 +17,12 @@ export type OpenClawHookMetadata = {
   events: string[];
   /** Optional export name (default: "default") */
   export?: string;
+  /**
+   * Overrides the source-level default enable mode for this hook. A bundled hook
+   * can set "explicit-opt-in" to ship disabled-by-default (users enable it via
+   * `openclaw hooks enable <name>`) instead of inheriting the bundled "default-on".
+   */
+  defaultEnableMode?: "default-on" | "explicit-opt-in";
   os?: string[];
   requires?: {
     bins?: string[];

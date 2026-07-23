@@ -124,6 +124,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: command-logger details
   - H3: compaction-notifier details
   - H3: boot-md details
+  - H3: auto-continue details
   - H2: Plugin hooks
   - H2: Configuration
   - H2: CLI reference

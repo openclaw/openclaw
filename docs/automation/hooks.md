@@ -62,6 +62,7 @@ hook that never runs is diagnosable.
 | `session:compact:before` | Before compaction summarizes history                       |
 | `session:compact:after`  | After compaction completes                                 |
 | `session:patch`          | When session properties are modified                       |
+| `session:aborted`        | After the stuck-session watchdog hard-aborts a run         |
 | `agent:bootstrap`        | Before workspace bootstrap files are injected              |
 | `gateway:startup`        | After channels start and hooks are loaded                  |
 | `gateway:shutdown`       | When gateway shutdown begins                               |
@@ -113,6 +114,13 @@ Detailed documentation goes here.
 | `hookKey`  | Config key override (defaults to the hook name)      |
 | `homepage` | Docs URL shown by `openclaw hooks info`              |
 | `install`  | Installation methods                                 |
+
+`defaultEnableMode` (`"default-on"` or `"explicit-opt-in"`) lets a hook ship with
+a different default than its source: a bundled or managed hook can declare
+`"explicit-opt-in"` so it stays off until `openclaw hooks enable <name>`. It is
+read only for bundled and managed hooks. Workspace hooks are untrusted local code
+and always require explicit opt-in, and plugin hooks are enabled by their own
+install step, so the field is ignored for both.
 
 ### Handler implementation
 
@@ -227,6 +235,7 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 | command-logger        | `command`                                         | Logs all commands to `~/.openclaw/logs/commands.log`           |
 | compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts/ends |
 | boot-md               | `gateway:startup`                                 | Runs `BOOT.md` when the gateway starts                         |
+| auto-continue         | `session:aborted`                                 | Resumes a run the stuck-session watchdog aborted (opt-in)      |
 
 Enable any bundled hook:
 
@@ -278,6 +287,14 @@ Sends short status messages into the current conversation when OpenClaw starts a
 ### boot-md details
 
 Runs `BOOT.md` at gateway startup for each configured agent scope, if the file exists in that agent's resolved workspace.
+
+<a id="auto-continue"></a>
+
+### auto-continue details
+
+Disabled by default. When the stuck-session watchdog hard-aborts an embedded run, the run would otherwise go silent: queued progress is dropped and the agent never resumes on its own. With `auto-continue` enabled, the `session:aborted` event re-injects a short continuation instruction and wakes a fresh turn so an autonomous run picks its work loop back up. Resumes are capped at 3 per session per 30 minutes, and the gateway logs an `auto-continue` event both when it queues a continuation and when a session exhausts that budget. Enable with `openclaw hooks enable auto-continue`.
+
+The continuation rides the heartbeat: it is queued as a system event and delivered by the next heartbeat turn. The agent therefore needs a heartbeat cadence (`agents.defaults.heartbeat.every`) - with heartbeats disabled the continuation is queued and never delivered.
 
 ## Plugin hooks
 

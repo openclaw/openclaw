@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
   waitForEmbeddedAgentRunEnd: vi.fn(),
   getDiagnosticSessionActivitySnapshot: vi.fn(),
+  triggerInternalHook: vi.fn(),
   diag: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -69,6 +70,16 @@ vi.mock("../process/command-queue.js", () => ({
   resetCommandLane: mocks.resetCommandLane,
 }));
 
+vi.mock("../hooks/internal-hooks.js", () => ({
+  triggerInternalHook: mocks.triggerInternalHook,
+  createInternalHookEvent: (
+    type: string,
+    action: string,
+    sessionKey: string,
+    context: Record<string, unknown> = {},
+  ) => ({ type, action, sessionKey, context, timestamp: new Date(), messages: [] }),
+}));
+
 vi.mock("./diagnostic-runtime.js", () => ({
   diagnosticLogger: mocks.diag,
 }));
@@ -109,6 +120,8 @@ function resetMocks() {
   mocks.waitForEmbeddedAgentRunEnd.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReset();
   mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
+  mocks.triggerInternalHook.mockReset();
+  mocks.triggerInternalHook.mockResolvedValue(undefined);
   mocks.diag.debug.mockReset();
   mocks.diag.warn.mockReset();
 }
@@ -814,5 +827,44 @@ describe("stuck session recovery", () => {
     }
     resolveWait(true);
     await first;
+  });
+
+  it("emits a session:aborted hook event when it aborts a real run", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      allowActiveAbort: true,
+    });
+
+    expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(mocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "aborted",
+        sessionKey: "agent:main:main",
+        context: expect.objectContaining({ reason: "stuck_recovery", sessionId: "session-1" }),
+      }),
+    );
+  });
+
+  it("does not emit a session:aborted hook event when only releasing a lane", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 2,
+    });
+
+    expect(mocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 });
