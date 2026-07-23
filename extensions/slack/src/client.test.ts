@@ -24,7 +24,7 @@ let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
 let clearSlackWriteClientCacheForTest: typeof import("./client.js").clearSlackWriteClientCacheForTest;
-let resolveSlackProxyDispatcher: typeof import("./client.js").resolveSlackProxyDispatcher;
+let resolveSlackProxyDispatcher: typeof import("./client-options.js").resolveSlackProxyDispatcher;
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
 let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETRY_OPTIONS;
@@ -96,6 +96,7 @@ function writeTempCa(contents: string): string {
 
 beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
+  ({ resolveSlackProxyDispatcher } = await import("./client-options.js"));
   ({
     createSlackWebClient,
     createSlackStartupAuthClient,
@@ -104,7 +105,6 @@ beforeAll(async () => {
     createSlackTokenCacheKey,
     getSlackWriteClient,
     clearSlackWriteClientCacheForTest,
-    resolveSlackProxyDispatcher,
     resolveSlackWebClientOptions,
     resolveSlackWriteClientOptions,
     SLACK_DEFAULT_RETRY_OPTIONS,

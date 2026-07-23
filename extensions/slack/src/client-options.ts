@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 
-export type SlackProxyDispatcher = ReturnType<typeof createHttp1EnvHttpProxyAgent>;
+type SlackProxyDispatcher = ReturnType<typeof createHttp1EnvHttpProxyAgent>;
 export type SlackLookupClientOptions = Pick<WebClientOptions, "fetch" | "slackApiUrl" | "timeout">;
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
