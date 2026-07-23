@@ -7,6 +7,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
+import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -122,8 +123,16 @@ const modelCatalogRuntimeLoader = createLazyImportLoader(
 const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
-function normalizeRuntimeModelRef(provider: string, model: string) {
-  return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
+function normalizeRuntimeModelRef(provider: string, model: string, cfg?: OpenClawConfig) {
+  const normalized = normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
+  const canonicalProvider = cfg
+    ? resolveCliRuntimeCanonicalProvider({
+        runtime: normalized.provider,
+        config: cfg,
+        includeSetupRegistry: true,
+      })
+    : undefined;
+  return canonicalProvider ? { ...normalized, provider: canonicalProvider } : normalized;
 }
 
 function loadPreparedModelCatalogRuntime() {
@@ -343,6 +352,7 @@ export async function createModelSelectionState(params: {
     const normalizedOverride = normalizeRuntimeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
+      cfg,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     const overrideAllowed = visibilityPolicy.allowsKey(key);
@@ -432,6 +442,7 @@ export async function createModelSelectionState(params: {
     const normalizedStoredOverride = normalizeRuntimeModelRef(
       storedOverride.provider || defaultProvider,
       storedOverride.model,
+      cfg,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
     if (visibilityPolicy.allowsKey(key)) {
