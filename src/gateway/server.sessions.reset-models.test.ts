@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -28,6 +29,11 @@ type ResetSessionEntry = {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   parentSessionKey?: string;
+  createdVia?: string;
+  createdActor?: { type: string; id?: string };
+  createdAt?: number;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+  previousSessionId?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: string;
@@ -83,6 +89,35 @@ type ModelResetEntry = Pick<
 >;
 type ResolvedSessionModel = { modelProvider: string; model: string };
 type SessionEntryOverrides = NonNullable<Parameters<typeof sessionStoreEntry>[1]>;
+
+test("sessions.reset stamps provenance when it materializes a missing row", async () => {
+  await createSessionStoreDir();
+  const reset = await directSessionReq<{ entry: ResetSessionEntry }>(
+    "sessions.reset",
+    { key: "agent:main:subagent:missing" },
+    {
+      client: {
+        authenticatedUserProfile: { profileId: "profile-reset-creator" },
+      } as never,
+    },
+  );
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject({
+    createdVia: "operator",
+    createdActor: { type: "human", id: "profile-reset-creator" },
+    createdAt: expect.any(Number),
+  });
+  expect(
+    listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20).events,
+  ).toContainEqual(
+    expect.objectContaining({
+      kind: "created",
+      actorType: "human",
+      actorId: "profile-reset-creator",
+    }),
+  );
+});
 
 const ownedChildMetadata = {
   chatType: "group",
@@ -523,6 +558,15 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       "subagent:child": sessionStoreEntry("sess-owned-child", {
         sessionFile: customSessionFile,
         ...ownedChildMetadata,
+        forkedFromParent: undefined,
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+        createdAt: 1_000,
+        forkSource: {
+          sessionKey: "agent:main:root",
+          sessionId: "root-session",
+          entryId: "root-entry",
+        },
       }),
     },
   });
@@ -535,9 +579,31 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
 
   expect(reset.ok).toBe(true);
   expectOwnedChildMetadata(reset.payload?.entry);
+  expect(reset.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+    createdAt: 1_000,
+    forkSource: {
+      sessionKey: "agent:main:root",
+      sessionId: "root-session",
+      entryId: "root-entry",
+    },
+    previousSessionId: "sess-owned-child",
+  });
 
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath }) as
     | ResetSessionEntry
     | undefined;
   expectOwnedChildMetadata(stored);
+  expect(stored).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+    createdAt: 1_000,
+    forkSource: {
+      sessionKey: "agent:main:root",
+      sessionId: "root-session",
+      entryId: "root-entry",
+    },
+    previousSessionId: "sess-owned-child",
+  });
 });

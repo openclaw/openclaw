@@ -26,7 +26,12 @@ describe("internal session effects", () => {
 
       expect(target.sessionKey).toMatch(/^agent:main:internal-session-effects:run_with_space-/);
       expect(target.sessionId).toMatch(/^internal-session-effects-run_with_space-/);
-      expect(loadExactSessionEntry(target)?.entry.sessionId).toBe(target.sessionId);
+      expect(loadExactSessionEntry(target)?.entry).toMatchObject({
+        sessionId: target.sessionId,
+        createdVia: "internal",
+        createdActor: { type: "system" },
+        createdAt: expect.any(Number),
+      });
       expect(listSessionEntries({ storePath })).toEqual([]);
       await expect(loadTranscriptEvents(target)).resolves.toEqual([
         expect.objectContaining({ id: target.sessionId, type: "session" }),

@@ -19,7 +19,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
   protected readonly patchSession = async (
     session: SidebarRecentSession,
     patch: SidebarSessionPatch,
-    scope: SidebarSessionMutationScope | null = this.beginSessionMutation(),
+    scope: SidebarSessionMutationScope | null = this.sessionData.beginSessionMutation(),
   ): Promise<SidebarSessionMutationResult> => {
     if (!scope) {
       return "stale";
@@ -27,12 +27,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
     try {
       const patched = await scope.sessions.patch(session.key, patch, { agentId });
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
       if (!patched) {
         if (scope.sessions.state.error) {
-          this.publishSessionMutationError(scope, scope.sessions.state.error);
+          this.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
         }
         return "failed";
       }
@@ -42,6 +42,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       // pinnedAt), so it retires the slot too.
       if (patch.pinned === false || (patch.archived === true && session.pinned)) {
         this.pruneSidebarSessionEntry(session.key);
+      }
+      if (this.sidebarSessionStatusFilter() !== "active") {
+        await this.sessionData.refreshSidebarSessions(agentId);
+        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return "stale";
+        }
       }
       if (patch.archived !== true || !session.active) {
         return "completed";
@@ -57,10 +63,10 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       );
       return "completed";
     } catch (error) {
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
-      this.publishSessionMutationError(scope, error);
+      this.sessionData.publishSessionMutationError(scope, error);
       return "failed";
     }
   };
@@ -68,7 +74,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
   protected async patchSessions(
     rows: readonly SidebarRecentSession[],
     patch: SidebarSessionPatch,
-    scope: SidebarSessionMutationScope | null = this.beginSessionMutation(),
+    scope: SidebarSessionMutationScope | null = this.sessionData.beginSessionMutation(),
   ): Promise<SidebarSessionMutationResult> {
     if (!scope) {
       return "stale";
@@ -89,12 +95,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
   }
 
   protected async archiveSessionWithUndo(session: SidebarRecentSession) {
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const result = await this.patchSession(session, { archived: true }, scope);
-    if (result !== "completed" || !this.isSessionMutationScopeCurrent(scope)) {
+    if (result !== "completed" || !this.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     showToast({
@@ -107,7 +113,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
   }
 
   private async archiveSessionsWithUndo(rows: readonly SidebarRecentSession[]) {
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -121,7 +127,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         archived.push({ session, pinned: session.pinned });
       }
     }
-    if (archived.length === 0 || !this.isSessionMutationScopeCurrent(scope)) {
+    if (archived.length === 0 || !this.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     showToast({
@@ -138,7 +144,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
     scope: SidebarSessionMutationScope,
   ) {
-    if (!this.isSessionMutationScopeCurrent(scope)) {
+    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     let restoredActiveKey: string | null = null;
@@ -155,7 +161,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         restoredActiveKey = session.key;
       }
     }
-    if (restoredActiveKey && this.isSessionMutationScopeCurrent(scope)) {
+    if (restoredActiveKey && this.sessionData.isSessionMutationScopeCurrent(scope)) {
       this.replaceCurrentSession(restoredActiveKey);
     }
   }
@@ -168,7 +174,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
       return;
     }
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -178,10 +184,17 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
           key: row.key,
           agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
           deleteTranscript: true,
+          ...(row.archived === true ? { archivedOnly: true } : {}),
         })),
       );
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
+      }
+      if (this.sidebarSessionStatusFilter() !== "active") {
+        await this.sessionData.refreshSidebarSessions(scope.selectedAgentId);
+        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
       }
       if (result.preservedWorktrees.length > 0) {
         window.alert(
@@ -190,7 +203,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
             branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
           }),
         );
-        if (!this.isSessionMutationScopeCurrent(scope)) {
+        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
       }
@@ -207,10 +220,10 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         );
       }
       if (result.errors.length > 0) {
-        this.publishSessionMutationError(scope, result.errors.join("; "));
+        this.sessionData.publishSessionMutationError(scope, result.errors.join("; "));
       }
     } catch (error) {
-      this.publishSessionMutationError(scope, error);
+      this.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
@@ -233,7 +246,11 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         this.createSessionGroup(rows);
         break;
       case "toggle-archived":
-        void this.archiveSessionsWithUndo(rows);
+        if (rows.every((row) => row.archived === true)) {
+          void this.patchSessions(rows, { archived: false });
+        } else {
+          void this.archiveSessionsWithUndo(rows.filter((row) => row.archived !== true));
+        }
         break;
       case "delete":
         void this.deleteSessionsBatch(rows);
@@ -244,7 +261,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
   }
 
   protected async forkSession(session: SidebarRecentSession) {
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -255,19 +272,19 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         fork: true,
         agentId,
       });
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
       if (key) {
         this.selectSession(key);
       } else {
-        this.publishSessionMutationError(
+        this.sessionData.publishSessionMutationError(
           scope,
           scope.sessions.state.error ?? t("newSession.createFailed"),
         );
       }
     } catch (error) {
-      this.publishSessionMutationError(scope, error);
+      this.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
@@ -279,7 +296,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     ) {
       return;
     }
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -290,12 +307,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         { key: session.key, agentId },
         { timeoutMs: 10 * 60_000 },
       );
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
       await scope.sessions.refreshReplacement(agentId);
     } catch (error) {
-      this.publishSessionMutationError(scope, error);
+      this.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
@@ -303,7 +320,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
       return;
     }
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -312,9 +329,16 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       const outcome = await scope.sessions.delete(session.key, {
         agentId,
         deleteTranscript: true,
+        ...(session.archived === true ? { archivedOnly: true } : {}),
       });
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
+      }
+      if (this.sidebarSessionStatusFilter() !== "active") {
+        await this.sessionData.refreshSidebarSessions(agentId);
+        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+          return;
+        }
       }
       // Dirty/unpushed checkouts survive deletion; offer explicit removal.
       if (outcome.worktreePreserved) {
@@ -324,7 +348,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
             t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
           )
         ) {
-          if (!this.isSessionMutationScopeCurrent(scope)) {
+          if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
             return;
           }
           try {
@@ -333,9 +357,9 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
               force: true,
             });
           } catch (error) {
-            this.publishSessionMutationError(scope, error);
+            this.sessionData.publishSessionMutationError(scope, error);
           }
-          if (!this.isSessionMutationScopeCurrent(scope)) {
+          if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
             return;
           }
         }
@@ -353,7 +377,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         }),
       );
     } catch (error) {
-      this.publishSessionMutationError(scope, error);
+      this.sessionData.publishSessionMutationError(scope, error);
     }
   }
 

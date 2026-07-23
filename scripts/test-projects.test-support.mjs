@@ -474,15 +474,19 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   [
     ".github/workflows/ci-build-artifacts-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-arm-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-testbox.yml",
-    ["test/scripts/changed-lanes.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/changed-lanes.test.ts",
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/ci.yml",
@@ -713,7 +717,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".github/actions/ensure-base-commit/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+    [
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",
@@ -788,6 +796,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-env-var-count.mjs", ["test/scripts/check-env-var-count.test.ts"]],
+  ["scripts/check-env-var-count.d.mts", ["test/scripts/check-env-var-count.test.ts"]],
+  ["config/env-var-count-budget.txt", ["test/scripts/check-env-var-count.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [
     "scripts/check-native-state-schema-version.mjs",
@@ -1102,6 +1113,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/github/resolve-openclaw-ref.sh", ["test/scripts/resolve-openclaw-ref.test.ts"]],
   ["scripts/ci-hydrate-testbox-env.sh", ["test/scripts/ci-hydrate-testbox-env.test.ts"]],
+  ["scripts/install-trufflehog.sh", ["test/scripts/install-trufflehog.test.ts"]],
   [
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
@@ -1294,6 +1306,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  ["scripts/live-docker-stage-private-sdk-exports.mjs", ["test/scripts/live-docker-stage.test.ts"]],
   [
     "scripts/lib/local-heavy-check-runtime.d.mts",
     ["test/scripts/local-heavy-check-runtime.test.ts"],
@@ -1392,6 +1405,29 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/release-upgrade-baseline.test.ts",
       "test/scripts/android-version.test.ts",
       "test/scripts/ios-version.test.ts",
+      "test/scripts/upgrade-survivor-baselines.test.ts",
+      "test/scripts/upgrade-survivor-config-recipe.test.ts",
+    ],
+  ],
+  [
+    "scripts/lib/release-version.mjs",
+    [
+      "test/release-version.test.ts",
+      "test/npm-publish-plan.test.ts",
+      "test/openclaw-npm-release-check.test.ts",
+      "test/openclaw-npm-postpublish-verify.test.ts",
+      "test/plugin-npm-release.test.ts",
+      "test/plugin-clawhub-release.test.ts",
+      "test/scripts/android-version.test.ts",
+      "test/scripts/android-pin-version.test.ts",
+      "test/scripts/docker-release-policy.test.ts",
+      "test/scripts/ios-version.test.ts",
+      "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+      "test/scripts/openclaw-npm-publish.test.ts",
+      "test/scripts/release-preflight.test.ts",
+      "test/scripts/release-prepare.test.ts",
+      "test/scripts/release-upgrade-baseline.test.ts",
+      "test/scripts/release-version.test.ts",
       "test/scripts/upgrade-survivor-baselines.test.ts",
       "test/scripts/upgrade-survivor-config-recipe.test.ts",
     ],
@@ -1723,10 +1759,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/browser-cdp-snapshot.test.ts",
       "test/scripts/e2e-helper-env-limits.test.ts",
     ],
-  ],
-  [
-    "scripts/e2e/channel-plugin-trust-docker.sh",
-    ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-projects.test.ts"],
   ],
   [
     "scripts/e2e/config-reload-source-docker.sh",
@@ -2221,6 +2253,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/lib/local-build-metadata-paths.d.mts", "scripts/lib/local-build-metadata-paths.mjs"],
   ["scripts/lib/local-build-metadata.d.mts", "scripts/lib/local-build-metadata.mjs"],
   ["scripts/lib/plugin-sdk-entries.d.mts", "scripts/lib/plugin-sdk-entries.mjs"],
+  ["scripts/lib/release-version.d.mts", "scripts/lib/release-version.mjs"],
   ["scripts/lib/vitest-local-scheduling.d.mts", "scripts/lib/vitest-local-scheduling.mjs"],
   ["scripts/run-node.d.mts", "scripts/run-node.mjs"],
   ["scripts/stage-bundled-plugin-runtime.d.mts", "scripts/stage-bundled-plugin-runtime.mjs"],
@@ -3658,17 +3691,9 @@ function resolveK8sManifestTargets(changedPath) {
 function resolveParallelsToolingTestTargets(changedPath) {
   if (
     !/^scripts\/e2e\/parallels\/[^/]+\.ts$/u.test(changedPath) &&
-    !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
+    !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath)
   ) {
     return null;
-  }
-  if (
-    /^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) ||
-    /^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
-  ) {
-    return ["test/scripts/parallels-lib-helpers.test.ts"];
   }
   const targets = ["test/scripts/parallels-smoke-model.test.ts"];
   if (

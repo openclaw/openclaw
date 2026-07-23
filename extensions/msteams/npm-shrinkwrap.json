@@ -12,7 +12,8 @@
         "@microsoft/teams.api": "2.0.13",
         "@microsoft/teams.apps": "2.0.13",
         "express": "5.2.1",
-        "typebox": "1.3.3"
+        "typebox": "1.3.3",
+        "zod": "4.4.3"
       },
       "peerDependencies": {
         "openclaw": ">=2026.7.2"
@@ -318,14 +319,40 @@
       "license": "MIT"
     },
     "node_modules/axios": {
-      "version": "1.16.0",
-      "resolved": "https://registry.npmjs.org/axios/-/axios-1.16.0.tgz",
-      "integrity": "sha512-6hp5CwvTPlN2A31g5dxnwAX0orzM7pmCRDLnZSX772mv8WDqICwFjowHuPs04Mc8deIld1+ejhtaMn5vp6b+1w==",
+      "version": "1.18.0",
+      "resolved": "https://registry.npmjs.org/axios/-/axios-1.18.0.tgz",
+      "integrity": "sha512-E32NzpYKp++W7XRe52rHiXV2ehxmh3wbdgO7MHeFM+vqxLBYHzt0ElkiImtOBxtOmyp0yoC8C6uESVV84Y2/hw==",
       "license": "MIT",
       "dependencies": {
         "follow-redirects": "^1.16.0",
         "form-data": "^4.0.5",
+        "https-proxy-agent": "^5.0.1",
         "proxy-from-env": "^2.1.0"
+      }
+    },
+    "node_modules/axios/node_modules/agent-base": {
+      "version": "6.0.2",
+      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
+      "integrity": "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==",
+      "license": "MIT",
+      "dependencies": {
+        "debug": "4"
+      },
+      "engines": {
+        "node": ">= 6.0.0"
+      }
+    },
+    "node_modules/axios/node_modules/https-proxy-agent": {
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz",
+      "integrity": "sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==",
+      "license": "MIT",
+      "dependencies": {
+        "agent-base": "6",
+        "debug": "4"
+      },
+      "engines": {
+        "node": ">= 6"
       }
     },
     "node_modules/body-parser": {
@@ -1706,6 +1733,15 @@
       "resolved": "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
       "integrity": "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==",
       "license": "ISC"
+    },
+    "node_modules/zod": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
     }
   }
 }

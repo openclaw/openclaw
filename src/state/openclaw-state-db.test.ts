@@ -137,8 +137,12 @@ const LEGACY_AMBIENT_WATCH_PREFIX = "ambient-group-watch:";
 
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
   ambientTarget: string;
+  bomTarget: string;
+  bomWatcherSessionKey: string;
+  corruptTarget: string;
   databasePath: string;
   explicitTarget: string;
+  replacementWatcherSessionKey: string;
   watcherSessionKey: string;
 } {
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -147,8 +151,13 @@ function seedLegacySessionWatchCursorSchema(stateDir: string): {
 
   const watcherSessionKey = "agent:main:main";
   const ambientTarget = "agent:main:telegram:group:ambient";
+  const bomTarget = "agent:main:telegram:group:bom";
+  const bomWatcherSessionKey = "﻿agent:main:bom-watcher";
+  const corruptTarget = "agent:main:telegram:group:corrupt";
   const explicitTarget = "agent:main:subagent:explicit";
+  const replacementWatcherSessionKey = "�";
   const markerKey = `${LEGACY_AMBIENT_WATCH_PREFIX}${Buffer.from(watcherSessionKey, "utf8").toString("hex")}`;
+  const bomMarkerKey = `${LEGACY_AMBIENT_WATCH_PREFIX}${Buffer.from(bomWatcherSessionKey, "utf8").toString("hex")}`;
   const orphanMarkerKey = `${LEGACY_AMBIENT_WATCH_PREFIX}${Buffer.from("agent:main:orphan", "utf8").toString("hex")}`;
   const { DatabaseSync } = requireNodeSqlite();
   const legacy = new DatabaseSync(databasePath);
@@ -185,13 +194,26 @@ function seedLegacySessionWatchCursorSchema(stateDir: string): {
     `);
     insert.run(watcherSessionKey, ambientTarget, 7, 8, 9, 200);
     insert.run(watcherSessionKey, explicitTarget, 3, 4, 5, 300);
+    insert.run(bomWatcherSessionKey, bomTarget, 10, 11, 12, 500);
+    insert.run(replacementWatcherSessionKey, corruptTarget, 13, 14, 15, 600);
     insert.run(markerKey, ambientTarget, 7, 7, 7, 400);
+    insert.run(bomMarkerKey, bomTarget, 10, 10, 10, 800);
+    insert.run(`${LEGACY_AMBIENT_WATCH_PREFIX}ff`, corruptTarget, 13, 13, 13, 900);
     insert.run(orphanMarkerKey, "agent:main:telegram:group:orphan", 1, 1, 1, 100);
     insert.run(`${LEGACY_AMBIENT_WATCH_PREFIX}not-hex`, ambientTarget, 1, 1, 1, 100);
   } finally {
     legacy.close();
   }
-  return { ambientTarget, databasePath, explicitTarget, watcherSessionKey };
+  return {
+    ambientTarget,
+    bomTarget,
+    bomWatcherSessionKey,
+    corruptTarget,
+    databasePath,
+    explicitTarget,
+    replacementWatcherSessionKey,
+    watcherSessionKey,
+  };
 }
 
 type PlacementConstraintProbe = {
@@ -1118,7 +1140,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        "Migrated shared state session watch cursors → provenance column (1 ambient, 3 sentinels removed)",
+        "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
     });
@@ -1152,6 +1174,24 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         provenance: "ambient-group",
         updated_at: 400,
       },
+      {
+        watcher_session_key: seeded.bomWatcherSessionKey,
+        target_session_key: seeded.bomTarget,
+        last_seen_sequence: 10,
+        notified_sequence: 11,
+        material_sequence: 12,
+        provenance: "ambient-group",
+        updated_at: 800,
+      },
+      {
+        watcher_session_key: seeded.replacementWatcherSessionKey,
+        target_session_key: seeded.corruptTarget,
+        last_seen_sequence: 13,
+        notified_sequence: 14,
+        material_sequence: 15,
+        provenance: "explicit",
+        updated_at: 600,
+      },
     ]);
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
@@ -1180,9 +1220,37 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([
       { target_session_key: seeded.explicitTarget, provenance: "explicit" },
       { target_session_key: seeded.ambientTarget, provenance: "ambient-group" },
+      { target_session_key: seeded.bomTarget, provenance: "ambient-group" },
+      { target_session_key: seeded.corruptTarget, provenance: "explicit" },
     ]);
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+  });
+
+  it("detects schema migrations committed in an uncheckpointed WAL", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const opened = openOpenClawStateDatabase(options);
+    const databasePath = opened.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        PRAGMA user_version = 2;
+        UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
+      `);
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "strict-tables-v3",
+        path: databasePath,
+      });
+    } finally {
+      writer.close();
+    }
   });
 
   it("rejects a placement turn claim tuple without an owner", () => {
@@ -2247,6 +2315,50 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       .all() as Array<{ name?: unknown }>;
 
     expect(columns.map((column) => column.name)).toContain("startup_reason");
+  });
+
+  it("adds and backfills Claw package update timestamps in existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    database.db
+      .prepare(
+        "INSERT INTO claw_package_refs (" +
+          "agent_id, package_kind, package_source, package_ref, package_version, " +
+          "package_integrity, schema_version, claw_name, package_status, relationship, origin, independent_owner, installed_at_ms, updated_at_ms" +
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "incident",
+        "plugin",
+        "clawhub",
+        "@owner/audit",
+        "2.0.1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "openclaw.clawPackageRef.v1",
+        "incident-claw",
+        "complete",
+        "referenced",
+        "claw-introduced",
+        0,
+        1234,
+        5678,
+      );
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE claw_package_refs DROP COLUMN updated_at_ms");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      reopened.db.prepare("SELECT installed_at_ms, updated_at_ms FROM claw_package_refs").get(),
+    ).toEqual({ installed_at_ms: 1234, updated_at_ms: 1234 });
   });
 
   it("adds worker bootstrap lifecycle columns to existing state databases", () => {

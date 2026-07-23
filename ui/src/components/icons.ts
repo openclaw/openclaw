@@ -27,6 +27,14 @@ export const icons = {
       <line x1="6" x2="6" y1="20" y2="16" />
     </svg>
   `,
+  layoutDashboard: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="9" x="3" y="3" rx="1" />
+      <rect width="7" height="5" x="14" y="3" rx="1" />
+      <rect width="7" height="9" x="14" y="12" rx="1" />
+      <rect width="7" height="5" x="3" y="16" rx="1" />
+    </svg>
+  `,
   coins: html`
     <svg viewBox="0 0 24 24">
       <circle cx="8" cy="8" r="6" />
@@ -303,6 +311,7 @@ export const icons = {
   `,
   arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
   arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
+  chevronUp: html` <svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" /></svg> `,
   arrowLeft: html`
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />

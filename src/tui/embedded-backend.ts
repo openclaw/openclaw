@@ -76,6 +76,7 @@ import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -599,7 +600,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
       opts.sessionKey,
       loadOptions,
     );
@@ -786,6 +787,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const result = await createGatewaySession({
       cfg,
       ...opts,
+      creation: { via: "operator", actor: { type: "human" } },
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),

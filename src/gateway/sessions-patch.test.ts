@@ -1012,16 +1012,6 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverrideSource).toBe("user");
   });
 
-  test("sets spawnDepth for subagent sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:subagent:child",
-        patch: { key: "agent:main:subagent:child", spawnDepth: 2 },
-      }),
-    );
-    expect(entry.spawnDepth).toBe(2);
-  });
-
   test("validates thinking patches with live catalog reasoning metadata", async () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
@@ -1279,40 +1269,44 @@ describe("gateway sessions patch", () => {
     expect(entry).toMatchObject({ label: "new label", thinkingLevel: "max" });
   });
 
-  test("sets spawnedBy for ACP sessions", async () => {
+  test("sets an immutable completion owner for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
         storeKey: "agent:main:acp:child",
         patch: {
           key: "agent:main:acp:child",
-          spawnedBy: "agent:main:main",
+          completionOwnerSessionKey: "agent:main:main",
         },
       }),
     );
-    expect(entry.spawnedBy).toBe("agent:main:main");
+    expect(entry.completionOwnerSessionKey).toBe("agent:main:main");
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: {
+        key: "agent:main:acp:child",
+        completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      },
+    });
+    expectPatchError(result, "completionOwnerSessionKey cannot be changed once set");
   });
 
-  test("sets spawnedWorkspaceDir for subagent sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        storeKey: "agent:main:subagent:child",
-        patch: {
-          key: "agent:main:subagent:child",
-          spawnedWorkspaceDir: "/tmp/subagent-workspace",
-        },
-      }),
-    );
-    expect(entry.spawnedWorkspaceDir).toBe("/tmp/subagent-workspace");
-  });
-
-  test("sets spawnDepth for ACP sessions", async () => {
+  test("sets an immutable requester policy snapshot version for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
         storeKey: "agent:main:acp:child",
-        patch: { key: "agent:main:acp:child", spawnDepth: 2 },
+        patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: 1 },
       }),
     );
-    expect(entry.spawnDepth).toBe(2);
+    expect(entry.inheritedToolPolicyVersion).toBe(1);
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: null },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion cannot be cleared once set");
   });
 
   test("sets inheritedToolDeny for ACP sessions", async () => {
@@ -1353,25 +1347,18 @@ describe("gateway sessions patch", () => {
     expect(entry.inheritedToolDeny?.at(-1)).toBe("exec");
   });
 
-  test("rejects spawnDepth on non-subagent sessions", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
-    });
-    expectPatchError(result, "spawnDepth is only supported");
-  });
-
-  test("rejects spawnedWorkspaceDir on non-subagent sessions", async () => {
-    const result = await runPatch({
-      patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
-    });
-    expectPatchError(result, "spawnedWorkspaceDir is only supported");
-  });
-
   test("rejects inheritedToolDeny on non-subagent sessions", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, inheritedToolDeny: ["exec"] },
     });
     expectPatchError(result, "inheritedToolDeny is only supported");
+  });
+
+  test("rejects inheritedToolPolicyVersion on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolPolicyVersion: 1 },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion is only supported");
   });
 
   test("rejects inheritedToolAllow on non-subagent sessions", async () => {

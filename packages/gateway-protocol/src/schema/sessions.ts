@@ -9,6 +9,73 @@ import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 
 export { SessionsCreateParamsSchema };
+export {
+  SessionCreatedActorSchema,
+  SessionRowSchema,
+  type SessionCreatedActor,
+  type SessionRow,
+} from "./sessions-row.js";
+
+export const SESSION_OBSERVER_HEALTH_VALUES = [
+  "on-track",
+  "grinding",
+  "stuck",
+  "waiting-on-user",
+  "wrapping-up",
+  "done",
+  "failed",
+] as const;
+
+/** Trajectory judgment produced for one observed agent session. */
+export const SessionObserverHealthSchema = Type.Union([
+  Type.Literal("on-track"),
+  Type.Literal("grinding"),
+  Type.Literal("stuck"),
+  Type.Literal("waiting-on-user"),
+  Type.Literal("wrapping-up"),
+  Type.Literal("done"),
+  Type.Literal("failed"),
+]);
+
+/** Completed and total step counts from the session's current plan. */
+export const SessionObserverPlanProgressSchema = closedObject({
+  completed: Type.Integer({ minimum: 0 }),
+  total: Type.Integer({ minimum: 0 }),
+});
+
+/** Live session status judgment broadcast to subscribed operator clients. */
+export const SessionObserverDigestSchema = closedObject({
+  sessionKey: NonEmptyString,
+  runId: Type.Optional(NonEmptyString),
+  revision: Type.Integer({ minimum: 1 }),
+  updatedAt: Type.Integer({ minimum: 0 }),
+  headline: Type.String({ minLength: 1, maxLength: 120 }),
+  assessment: Type.Optional(Type.String({ minLength: 1, maxLength: 320 })),
+  health: SessionObserverHealthSchema,
+  planProgress: Type.Optional(SessionObserverPlanProgressSchema),
+});
+
+/** Asks the observer about one session using its sanitized observation context. */
+export const SessionsObserverAskParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+});
+
+/** Ephemeral observer answer returned only to the requesting operator. */
+export const SessionsObserverAskResultSchema = closedObject({
+  answer: Type.String({ minLength: 1, maxLength: 600 }),
+  digestRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+
+/** Declares whether this connection currently renders session observer output. */
+export const SessionsObserverVisibilityParamsSchema = closedObject({
+  visible: Type.Boolean(),
+});
+
+/** Acknowledges a connection's observer visibility declaration. */
+export const SessionsObserverVisibilityResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
 
 /**
  * Session protocol schemas.
@@ -236,11 +303,16 @@ export const SessionsListParamsSchema = closedObject({
    */
   includeLastMessage: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),
+  /** Filter rows by their permanent creator identity. */
+  creatorId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
-  /** True lists archived sessions; false or omitted lists active sessions. */
-  archived: Type.Optional(Type.Boolean()),
+  /**
+   * True lists archived sessions; "all" lists archived and active;
+   * false or omitted lists active sessions.
+   */
+  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
 });
 
 /** Searches one agent's indexed session transcripts, optionally within selected sessions. */
@@ -405,16 +477,8 @@ export const SessionsPatchParamsSchema = closedObject({
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-  subagentRole: Type.Optional(
-    Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf"), Type.Null()]),
-  ),
-  subagentControlScope: Type.Optional(
-    Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
-  ),
+  completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),
@@ -693,6 +757,17 @@ export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
 export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
 export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
 export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
+export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
+export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
+export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
+export type SessionsObserverAskParams = Static<typeof SessionsObserverAskParamsSchema>;
+export type SessionsObserverAskResult = Static<typeof SessionsObserverAskResultSchema>;
+export type SessionsObserverVisibilityParams = Static<
+  typeof SessionsObserverVisibilityParamsSchema
+>;
+export type SessionsObserverVisibilityResult = Static<
+  typeof SessionsObserverVisibilityResultSchema
+>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

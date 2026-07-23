@@ -67,6 +67,7 @@ import {
   updateQueuedMessageForSession,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import {
   isTerminalFailureChatSendAck,
   type ChatSendAck,
@@ -108,6 +109,7 @@ import {
   formatTerminalChatSendAckError,
   chatMessagesContainQueuedSend,
   OFFLINE_QUEUE_STORAGE_ERROR,
+  preserveQueuedUserTurn,
   sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
   steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
   type SteerSendDependencies,
@@ -127,6 +129,8 @@ export type ChatHost = ChatInputHistoryState &
     chatQueue: ChatQueueItem[];
     chatQueueByScope?: Record<string, ChatQueueItem[]>;
     chatRunId: string | null;
+    chatRunStartup?: ChatRunStartupState | null;
+    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: { summary: string } | null;
@@ -811,6 +815,9 @@ async function sendQueuedChatMessage(
               hasAttachments ? attachments : undefined,
             ),
             timestamp: startedAt,
+            // Send identity keeps this optimistic turn on the same rendered
+            // bubble key as the pending row and the authoritative history copy.
+            __openclaw: { idempotencyKey: `${runId}:user` },
           },
         ];
       }
@@ -832,9 +839,13 @@ async function sendQueuedChatMessage(
         );
         void loadChatHistory(host as unknown as ChatState);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
+        const hasAlreadyAdoptedRun = host.chatRunId === ack.runId;
         const hasAlreadyAdoptedRunStream =
-          host.chatRunId === ack.runId && typeof host.chatStream === "string";
+          hasAlreadyAdoptedRun && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
+        if (!hasAlreadyAdoptedRun) {
+          host.chatRunStartup = null;
+        }
         // Gateway can deliver the first delta before the chat.send ACK resolves.
         // Preserve that adopted stream; resetting here makes first replies vanish
         // until a later delta or final event arrives.
@@ -1383,6 +1394,10 @@ async function readCurrentStoredChatHistory(
   }
   syncChatQueueFromStoredOutbox(host, currentOutbox);
   if (chatMessagesContainQueuedSend(history.messages, item)) {
+    // Server history owns the turn, but the visible transcript may not have
+    // reloaded yet; materialize the turn locally before dropping the queue row
+    // or the bubble vanishes until loadChatHistory below resolves.
+    preserveQueuedUserTurn(host, item);
     const removed = removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey);
     if (!removed) {
       return "blocked";

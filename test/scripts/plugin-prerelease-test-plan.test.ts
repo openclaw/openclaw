@@ -736,7 +736,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(runtimeToolCoverage.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "Enforce standard runtime tool coverage",
+          name: "Enforce core runtime tool coverage",
           run: expect.stringContaining("pnpm openclaw qa coverage"),
         }),
       ]),
@@ -744,9 +744,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(runtimeToolCoverage.steps).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: "Enforce standard runtime tool coverage",
+          name: "Enforce core runtime tool coverage",
           run: expect.stringContaining(
-            "--summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+            "--summary .artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
           ),
         }),
       ]),
