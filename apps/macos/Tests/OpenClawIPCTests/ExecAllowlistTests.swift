@@ -41,9 +41,10 @@ struct ExecAllowlistTests {
     }
 
     private static func hashedArgPattern(_ argv: [String]) -> String {
-        let nul = "\0"
         let arguments = Array(argv.dropFirst())
-        let subject = arguments.isEmpty ? nul + nul : arguments.joined(separator: nul) + nul
+        let subject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
         let digest = SHA256.hash(data: Data(subject.utf8))
         return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -231,6 +232,31 @@ struct ExecAllowlistTests {
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: approved) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: changed) == nil)
         #expect(entry.argPattern?.contains("trusted.example") == false)
+    }
+
+    @Test func `hashed arg pattern distinguishes zero args from empty args`() {
+        let executable = "/usr/bin/tool"
+        let zeroArgEntry = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: Self.hashedArgPattern([executable]))
+        let noArgs = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "tool",
+            cwd: nil,
+            argv: [executable])
+        let emptyArgs = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "tool",
+            cwd: nil,
+            argv: [executable, "", ""])
+
+        #expect(zeroArgEntry.argPattern != Self.hashedArgPattern([executable, "", ""]))
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: noArgs) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: emptyArgs) == nil)
     }
 
     @Test func `arg pattern does not discard redirect shaped direct argv literal`() {

@@ -118,9 +118,10 @@ enum ExecAllowlistMatcher {
     }
 
     private static func hashedArgPattern(argv: [String]) -> String {
-        let nul = "\0"
         let arguments = Array(argv.dropFirst())
-        let subject = arguments.isEmpty ? nul + nul : arguments.joined(separator: nul) + nul
+        let subject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
         let digest = SHA256.hash(data: Data(subject.utf8))
         return self.hashedArgPatternPrefix + digest.map { String(format: "%02x", $0) }.joined()
     }

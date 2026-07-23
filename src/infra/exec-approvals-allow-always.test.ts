@@ -415,6 +415,28 @@ describe("resolveAllowAlwaysPatterns", () => {
     ).toBeNull();
   });
 
+  it("keeps hashed arg patterns injective for empty argv tails", () => {
+    const tool = "/usr/bin/tool";
+    const resolution = makeMockExecutableResolution({
+      rawExecutable: tool,
+      resolvedPath: tool,
+      executableName: "tool",
+    });
+    const zeroArgsPattern = buildHashedArgPatternFromArgv([tool]);
+    const emptyArgsPattern = buildHashedArgPatternFromArgv([tool, "", ""]);
+
+    expect(zeroArgsPattern).not.toBe(emptyArgsPattern);
+    expect(
+      matchAllowlist([{ pattern: tool, argPattern: zeroArgsPattern }], resolution, [tool]),
+    ).toEqual({
+      pattern: tool,
+      argPattern: zeroArgsPattern,
+    });
+    expect(
+      matchAllowlist([{ pattern: tool, argPattern: zeroArgsPattern }], resolution, [tool, "", ""]),
+    ).toBeNull();
+  });
+
   it.each([
     {
       name: "empty PowerShell file argument",

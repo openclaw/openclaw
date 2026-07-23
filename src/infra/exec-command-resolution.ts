@@ -293,10 +293,17 @@ function renderGeneratedArgPatternSubject(argv: string[]): string {
   return argsSlice.length === 0 ? "\x00\x00" : argsSlice.join("\x00") + "\x00";
 }
 
+function renderGeneratedHashedArgPatternSubject(argv: string[]): string {
+  const argsSlice = argv.slice(1);
+  return `${argsSlice.length}\x00${argsSlice
+    .map((arg) => `${Buffer.byteLength(arg, "utf8")}\x00${arg}\x00`)
+    .join("")}`;
+}
+
 export function buildHashedArgPatternFromArgv(argv: string[]): string {
   const digest = crypto
     .createHash("sha256")
-    .update(renderGeneratedArgPatternSubject(argv), "utf8")
+    .update(renderGeneratedHashedArgPatternSubject(argv), "utf8")
     .digest("hex");
   return `${HASHED_ARG_PATTERN_PREFIX}${digest}`;
 }
