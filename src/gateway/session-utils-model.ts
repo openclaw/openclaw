@@ -97,7 +97,7 @@ export function resolveGatewaySessionThinkingDefault(params: {
   });
 }
 
-export function resolveSessionRowThinkingMetadata(params: {
+function resolveSessionRowThinkingMetadata(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider: string;
