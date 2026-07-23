@@ -1667,7 +1667,7 @@ process.on("SIGINT", shutdown);`,
   });
 
   it(
-    "cancels stalled initialize work when the last catalog waiter aborts",
+    "starts a fresh initialize when retrying immediately after the last waiter aborts",
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-connect-deadline-"));
@@ -1707,6 +1707,11 @@ process.on("SIGINT", shutdown);`,
 
         waiter.abort(new Error("catalog waiter aborted during initialize"));
         await expect(catalogPromise).rejects.toThrow("catalog waiter aborted during initialize");
+        expect(runtime.peekCatalog()).toBeNull();
+
+        // Retry before the abandoned connection has finished tearing down. The
+        // new generation must not adopt the already-aborted shared connect task.
+        const restartedCatalogPromise = runtime.getCatalog();
         await waitForPredicate(
           () => {
             try {
@@ -1719,9 +1724,8 @@ process.on("SIGINT", shutdown);`,
           "abandoned initialize process exit",
           LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
         );
-        expect(runtime.peekCatalog()).toBeNull();
 
-        const restartedCatalog = await runtime.getCatalog();
+        const restartedCatalog = await restartedCatalogPromise;
         const secondPid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
         expect(secondPid).not.toBe(firstPid);
         expect(restartedCatalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
