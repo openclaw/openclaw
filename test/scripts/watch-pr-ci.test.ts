@@ -116,7 +116,7 @@ describe("watch-pr-ci", () => {
 
   it("polls once more after the deadline-clamped final wait", async () => {
     let now = 0;
-    const waits = [];
+    const waits: number[] = [];
     let polls = 0;
     const result = await pollUntilDeadline({
       deadline: 1_000,
