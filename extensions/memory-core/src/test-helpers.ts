@@ -23,6 +23,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import {
+  __testing as shortTermPromotionTesting,
   normalizeShortTermPhaseSignalStore,
   normalizeShortTermRecallStore,
   type ShortTermRecallEntry,
@@ -112,6 +113,7 @@ async function writeRawShortTermStore(params: {
 export const shortTermTestState = {
   SHORT_TERM_RECALL_MAX_ENTRIES: 512,
   SHORT_TERM_RECALL_MAX_SNIPPET_CHARS: 800,
+  buildDreamingNarrativeLeadHead: shortTermPromotionTesting.buildDreamingNarrativeLeadHead,
   async readRecallStore(workspaceDir: string, nowIso: string) {
     const raw = await readShortTermStoreEntries<ShortTermRecallEntry>({
       namespace: SHORT_TERM_RECALL_NAMESPACE,
