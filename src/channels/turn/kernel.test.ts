@@ -720,7 +720,7 @@ describe("channel turn kernel", () => {
     });
   });
 
-  it("reports one failed message_sent with retained provider-visible partial delivery", async () => {
+  it("observes early finalization rejection before reporting partial delivery", async () => {
     let rejectFinalization!: (error: unknown) => void;
     const finalization = new Promise<{
       content: string;
@@ -729,7 +729,7 @@ describe("channel turn kernel", () => {
     }>((_resolve, reject) => {
       rejectFinalization = reject;
     });
-    void finalization.catch(() => undefined);
+    const catchSpy = vi.spyOn(finalization, "catch");
     const partialError = Object.assign(
       new Error("final edit failed", { cause: new Error("provider rejected edit") }),
       {
@@ -743,7 +743,9 @@ describe("channel turn kernel", () => {
     );
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       await params.dispatcherOptions.deliver({ text: "requested final" }, { kind: "final" });
+      expect(catchSpy).toHaveBeenCalledOnce();
       rejectFinalization(partialError);
+      await new Promise<void>((resolve) => setImmediate(resolve));
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
@@ -782,7 +784,6 @@ describe("channel turn kernel", () => {
     }>((_resolve, reject) => {
       rejectFinalization = reject;
     });
-    void finalization.catch(() => undefined);
     const dispatchError = new Error("stream close failed");
     const settlementError = Object.assign(new Error("static fallback failed"), {
       code: "CHANNEL_PARTIAL_DELIVERY",

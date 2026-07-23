@@ -31,7 +31,6 @@ import {
   isFeishuPartialReplyDeliveryError,
   mergeFeishuReplyDeliveryResults,
   noVisibleFeishuReplyDelivery,
-  withFeishuReplyFinalization,
   type FeishuReplyDeliveryResult,
   type FeishuReplyDeliveryResultWithFinalization,
   type FeishuReplyDeliverySource,
@@ -680,7 +679,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         ),
       );
     }
-    return withFeishuReplyFinalization(noVisibleFeishuReplyDelivery, finalization);
+    return { ...noVisibleFeishuReplyDelivery, finalization };
   };
 
   const discardStreamingPreview = async () => {

@@ -3071,8 +3071,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       const { options } = createDispatcherHarness({
         runtime: createRuntimeLogger(),
       });
-      await options.deliver({ text: "```md\nfirst\n```" }, { kind: "final" });
+      const firstDelivery = await options.deliver({ text: "```md\nfirst\n```" }, { kind: "final" });
+      const firstFinalization = expect(firstDelivery?.finalization).rejects.toThrow("close failed");
       await expect(options.onIdle?.()).rejects.toThrow("close failed");
+      await firstFinalization;
       await options.deliver({ text: "```md\nsecond\n```" }, { kind: "final" });
       await options.onIdle?.();
 

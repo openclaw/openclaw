@@ -380,6 +380,9 @@ export async function dispatchAssembledChannelTurn(
                       throw error;
                     }
                     if (result?.finalization) {
+                      // Finalization can reject while the buffered dispatcher is still unwinding.
+                      // Observe it now; settlement still awaits the original promise and its error.
+                      void result.finalization.catch(() => undefined);
                       pendingDeliveryAttempts.push({ payload: preparedPayload, info, result });
                     } else if (delivery.observeMessageSent) {
                       await settleChannelDeliveryAttempt({
