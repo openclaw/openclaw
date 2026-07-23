@@ -1,5 +1,6 @@
 // Matrix plugin module owns the doctor-only crypto snapshot import.
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -45,8 +46,20 @@ async function migrateLegacyMatrixIdbSnapshotLocked(params: {
   notices: string[];
   warnings: string[];
 }): Promise<void> {
-  const snapshot = readLegacyMatrixIdbSnapshotStateUnlocked(params.storageRootDir);
+  const sourcePath = path.join(params.storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
+  let snapshot: ReturnType<typeof readLegacyMatrixIdbSnapshotStateUnlocked>;
+  try {
+    snapshot = readLegacyMatrixIdbSnapshotStateUnlocked(params.storageRootDir);
+  } catch (err) {
+    params.warnings.push(
+      `Failed reading Matrix IndexedDB snapshot legacy source for ${params.storageRootDir}: ${String(err)}; left source in place`,
+    );
+    return;
+  }
   if (!snapshot) {
+    if (!fsSync.existsSync(sourcePath)) {
+      return;
+    }
     const archived = await archiveLegacyMatrixIdbSnapshot(params);
     params.warnings.push(
       archived

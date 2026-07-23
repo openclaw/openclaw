@@ -366,8 +366,9 @@ export function readLegacyMatrixIdbSnapshotStateUnlocked(
   if (!fs.existsSync(snapshotPath)) {
     return null;
   }
+  const data = fs.readFileSync(snapshotPath, "utf8");
   try {
-    return parseSnapshotPayload(fs.readFileSync(snapshotPath, "utf8"));
+    return parseSnapshotPayload(data);
   } catch {
     return null;
   }
