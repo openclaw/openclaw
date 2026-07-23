@@ -1584,7 +1584,7 @@ describe("runGatewayUpdate", () => {
     expect(calls.filter((call) => call === statusCommand)).toHaveLength(2);
     expect(calls).not.toContain("pnpm ui:build");
     expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} clean -fd`);
+    expect(calls).toContain(`git -C ${tempDir} clean -fd -e dist/control-ui/`);
     expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
     expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
   });

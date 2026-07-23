@@ -146,9 +146,17 @@ export async function runGitUpdate(params: {
       return;
     }
     await appendRecoveryStep("git rollback clean", ["git", "-C", gitRoot, "reset", "--hard"]);
-    // The preflight accepted only a completely clean checkout, so untracked
-    // paths created after mutation belong to the failed update and are safe to remove.
-    await appendRecoveryStep("git rollback clean untracked", ["git", "-C", gitRoot, "clean", "-fd"]);
+    // Preflight requires a clean checkout outside generated Control UI assets,
+    // so preserve that excluded directory while removing update-created paths.
+    await appendRecoveryStep("git rollback clean untracked", [
+      "git",
+      "-C",
+      gitRoot,
+      "clean",
+      "-fd",
+      "-e",
+      "dist/control-ui/",
+    ]);
     if (branch && branch !== "HEAD") {
       const checkedOut = await appendRecoveryStep("git rollback checkout", [
         "git",
