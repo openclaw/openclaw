@@ -1033,13 +1033,24 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
-function waitForChildExit(child: ChildProcess) {
+/**
+ * Capture a ChildProcess exit as a Promise, registering listeners immediately
+ * after spawn to avoid missing fast-exit events on some platforms (#104221).
+ */
+function captureChildExit(child: ChildProcess): Promise<number | null> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(child.exitCode);
   }
   return new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", resolve);
+    child.once("close", (code) => {
+      // "close" always fires after "exit". If "exit" was missed (fast exit
+      // before listener registration), "close" is the reliable fallback.
+      if (child.exitCode === null && child.signalCode === null) {
+        resolve(code ?? 0);
+      }
+    });
   });
 }
 
@@ -1359,9 +1370,12 @@ export async function recordProbeVideo(params: {
       ],
       { cwd: params.cwd, stdio: "inherit" },
     );
+    // Register exit listeners immediately after spawn to avoid missing
+    // fast-exit events on some platforms (#104221).
+    const exitPromise = captureChildExit(recording);
     await sleep(params.startDelayMs ?? 3_000);
     await params.runProbe();
-    const recordCode = await waitForChildExit(recording);
+    const recordCode = await exitPromise;
     if (recordCode !== 0) {
       throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
     }
