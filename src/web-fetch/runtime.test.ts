@@ -548,4 +548,38 @@ describe("web fetch runtime", () => {
 
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("thirdparty");
   });
+
+  // ── Own-property checks: Object.hasOwn() on fetch config objects ──
+
+  it("ignores proto-inherited 'provider' in fetch config resolution", () => {
+    const fetchCfg = Object.create({ provider: "firecrawl" });
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: { web: { fetch: fetchCfg } },
+      } as OpenClawConfig,
+      runtimeWebFetch: undefined,
+      sandboxed: false,
+      preferRuntimeProviders: true,
+    });
+
+    // No explicit provider was configured; should not resolve
+    expect(resolved).toBeNull();
+  });
+
+  it("resolves own 'provider' in fetch config", () => {
+    const thirdpartyProvider = createThirdPartyFetchProvider();
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([thirdpartyProvider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: { web: { fetch: { provider: "thirdparty" } } },
+      } as OpenClawConfig,
+      runtimeWebFetch: undefined,
+      sandboxed: false,
+      preferRuntimeProviders: true,
+    });
+
+    expect(resolved).not.toBeNull();
+    expect(requireResolvedWebFetch(resolved).provider.id).toBe("thirdparty");
+  });
 });

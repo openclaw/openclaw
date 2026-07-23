@@ -184,7 +184,7 @@ function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   const raw =
-    fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
+    fetch && Object.hasOwn(fetch, "maxCharsCap") && typeof fetch.maxCharsCap === "number"
       ? fetch.maxCharsCap
       : undefined;
   return resolveIntegerOption(raw, DEFAULT_FETCH_MAX_CHARS, { min: 100 });
@@ -192,7 +192,7 @@ function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
 
 function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
   const raw =
-    fetch && "maxResponseBytes" in fetch && typeof fetch.maxResponseBytes === "number"
+    fetch && Object.hasOwn(fetch, "maxResponseBytes") && typeof fetch.maxResponseBytes === "number"
       ? fetch.maxResponseBytes
       : undefined;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -858,13 +858,13 @@ export function createWebFetchTool(options?: {
       const providerCacheKey =
         normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
         normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
-        (executionFetch && "provider" in executionFetch
+        (executionFetch && Object.hasOwn(executionFetch, "provider")
           ? normalizeOptionalLowercaseString(executionFetch.provider)
           : undefined);
       const readabilityEnabled = resolveFetchReadabilityEnabled(executionFetch);
       const userAgent =
         (executionFetch &&
-          "userAgent" in executionFetch &&
+          Object.hasOwn(executionFetch, "userAgent") &&
           typeof executionFetch.userAgent === "string" &&
           executionFetch.userAgent) ||
         DEFAULT_FETCH_USER_AGENT;
