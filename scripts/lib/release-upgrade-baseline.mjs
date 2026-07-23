@@ -90,6 +90,7 @@ function readPublishedVersions(args) {
   }
   const raw = execFileSync("npm", ["view", "openclaw", "versions", "--json", "--silent"], {
     encoding: "utf8",
+    timeout: 30_000,
     stdio: ["ignore", "pipe", "inherit"],
   });
   const parsed = JSON.parse(raw);
