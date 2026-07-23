@@ -135,9 +135,6 @@ describe("check-deadcode-exports", () => {
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
     );
-    expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
-      "scripts/e2e/secret-provider-integrations.mjs",
-    );
   });
 
   it("audits executable code outside the main source trees", () => {

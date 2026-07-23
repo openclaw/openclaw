@@ -370,7 +370,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       themeMode: this.themeMode,
       agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
       agentApprovalCount: (agentId) =>
-        this.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ?? 0,
+        this.sessionData.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ?? 0,
       onFilterChange: (next) => {
         this.agentMenuFilter = next;
       },
@@ -428,7 +428,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
           .anchor=${menu}
           .trigger=${this.sessionMenuTrigger}
           .disabled=${!this.connected}
-          .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
+          .forkDisabled=${this.sessionData.sessionsLoading || session.modelSelectionLocked}
           .archiveAllowed=${archiveAllowed}
           .cloudWorkerStopAllowed=${Boolean(
             !batchRows &&

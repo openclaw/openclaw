@@ -578,7 +578,9 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.run).toContain("! grep -Fq '\"openai/gpt-5.6-luna\": {'");
     expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
     expect(runStep?.run).toContain('--model "$qa_model"');
-    expect(runStep?.run).toContain('pnpm --dir "$CANDIDATE_ROOT" openclaw qa telegram');
+    expect(runStep?.run).toContain("run_candidate_telegram_qa() (");
+    expect(runStep?.run).toContain("exec node ./dist/index.js qa telegram");
+    expect(runStep?.run).not.toContain('pnpm --dir "$CANDIDATE_ROOT" openclaw qa telegram');
     expect(runStep?.run).toContain(
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );

@@ -312,7 +312,7 @@ function renderSessionCatalogs(params: {
       }),
     onToggleSection: (sectionId) => host.toggleSection(sectionId),
     onToggleProjectGrouping: () => host.toggleCatalogProjectGrouping(),
-    onLoadMore: (catalogId) => void host.loadMoreSessionCatalog(catalogId),
+    onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
     onOpenNewSession: host.onOpenNewSession,
     onNavigate: host.onNavigate,
     catalogOpenTarget: snapshot.catalogOpenTarget,
@@ -388,14 +388,14 @@ export function renderSessionList(params: {
       @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
-      ${host.sessionMutationError
+      ${host.sessionData.sessionMutationError
         ? html`
             <div
               class="sidebar-session-error callout danger callout--dismissible"
               role="alert"
               data-sidebar-session-error
             >
-              <span class="callout__content">${host.sessionMutationError}</span>
+              <span class="callout__content">${host.sessionData.sessionMutationError}</span>
               <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                 <button
                   class="callout__dismiss"

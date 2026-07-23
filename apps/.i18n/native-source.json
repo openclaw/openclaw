@@ -15074,14 +15074,6 @@
       "id": "native.android.709aff840be1f167"
     },
     {
-      "kind": "plist-string",
-      "line": 8,
-      "path": "apps/ios/ActivityWidget/Info.plist",
-      "source": "OpenClaw Activity",
-      "surface": "apple",
-      "id": "native.apple.8f741d09cc1d5495"
-    },
-    {
       "kind": "ui-call",
       "line": 18,
       "path": "apps/ios/ActivityWidget/OpenClawLiveActivity.swift",
@@ -15200,14 +15192,6 @@
       "source": "Disconnected",
       "surface": "apple",
       "id": "native.apple.18d4f8a4eea7f930"
-    },
-    {
-      "kind": "plist-string",
-      "line": 8,
-      "path": "apps/ios/ShareExtension/Info.plist",
-      "source": "OpenClaw Share",
-      "surface": "apple",
-      "id": "native.apple.9168fcd110c3019a"
     },
     {
       "kind": "conditional-branch",

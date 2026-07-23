@@ -74,11 +74,11 @@ export abstract class AppSidebarSessionListElement
   }
 
   setVisibleSessionLimit(limit: number): void {
-    this.visibleSessionLimit = limit;
+    this.sessionData.setVisibleSessionLimit(limit);
   }
 
   dismissSessionMutationError(): void {
-    this.sessionMutationError = null;
+    this.sessionData.dismissSessionMutationError();
   }
 
   toggleCatalogProjectGrouping(): void {
@@ -108,8 +108,8 @@ export abstract class AppSidebarSessionListElement
     const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     const liveRows = [
-      ...(this.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionRowsByAgent).flat(),
+      ...(this.sessionData.sessionsResult?.sessions ?? []),
+      ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
     ];
     const sidebarRowsByKey = new Map<string, SidebarRecentSession>();
     for (const row of liveRows) {
@@ -136,11 +136,11 @@ export abstract class AppSidebarSessionListElement
         },
       }),
       catalogs: {
-        catalogs: this.sessionCatalogs,
+        catalogs: this.sessionData.sessionCatalogs,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
-        loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
+        loadingMoreCatalogIds: this.sessionData.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
         sidebarRowsByKey,

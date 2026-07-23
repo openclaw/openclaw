@@ -1,3 +1,4 @@
+import type { PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import { AppSidebarSessionProjectionElement } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -16,10 +17,10 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
   protected sessionCreatorFilterActive = false;
   sessionOwnershipVisible = false;
 
-  override updated() {
-    super.updated();
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
     const selectedId = this.sessionCreatorFilterId;
-    const creators = this.sessionsResult?.creators;
+    const creators = this.sessionData.sessionsResult?.creators;
     if (
       selectedId &&
       creators &&
@@ -44,7 +45,7 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
         pending.push(...row.children);
       }
     }
-    const completeFacet = creatorFacet ?? this.sessionsResult?.creators;
+    const completeFacet = creatorFacet ?? this.sessionData.sessionsResult?.creators;
     this.sessionCreatorOptions = listSessionCreators([
       ...(completeFacet ?? []).map((creator) => ({
         createdActor: { type: "human" as const, ...creator },
