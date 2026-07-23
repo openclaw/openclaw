@@ -59,9 +59,9 @@ function parseRedirectUri(redirectUri: string): {
     throw new Error(`Chutes OAuth redirect URI must be http:// (got ${redirectUri})`);
   }
   const hostname = url.hostname || "127.0.0.1";
-  if (hostname !== "localhost" && hostname !== "127.0.0.1" && hostname !== "::1") {
+  if (hostname !== "localhost" && hostname !== "::1" && !hostname.startsWith("127.")) {
     throw new Error(
-      `Chutes OAuth redirect hostname must be loopback (got ${hostname}). Use http://127.0.0.1:<port>/...`,
+      `Chutes OAuth redirect hostname must be a loopback address (got ${hostname}). Use http://127.0.0.1:<port>/...`,
     );
   }
   return {
