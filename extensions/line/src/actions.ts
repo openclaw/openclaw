@@ -5,6 +5,8 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 export type Action = messagingApi.Action;
 const LINE_ACTION_LABEL_LIMIT = 20;
 const LINE_ACTION_DATA_LIMIT = 300;
+const LINE_MESSAGE_ACTION_TEXT_LIMIT = 300;
+const lineMessageTextSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL_LIMIT): string {
   return truncateUtf16Safe(label, limit);
@@ -14,6 +16,19 @@ function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 
+function truncateLineMessageText(text: string): string {
+  let count = 0;
+  let output = "";
+  for (const { segment } of lineMessageTextSegmenter.segment(text)) {
+    if (count >= LINE_MESSAGE_ACTION_TEXT_LIMIT) {
+      break;
+    }
+    output += segment;
+    count += 1;
+  }
+  return output;
+}
+
 /**
  * Create a message action (sends text when tapped)
  */
@@ -21,7 +36,7 @@ export function messageAction(label: string, text?: string): Action {
   return {
     type: "message",
     label: truncateLineActionLabel(label),
-    text: text ?? label,
+    text: truncateLineMessageText(text ?? label),
   };
 }
 

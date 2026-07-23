@@ -61,6 +61,26 @@ describe("messageAction", () => {
       expect((action as { text: string }).text, testCase.name).toBe(testCase.expectedText);
     }
   });
+
+  it("truncates message text to LINE's 300 character action limit", () => {
+    const action = messageAction("Go", "x".repeat(301)) as { text: string };
+
+    expect(action.text).toHaveLength(300);
+  });
+
+  it("preserves 300 emoji graphemes in message text", () => {
+    const text = "\u{1f600}".repeat(300);
+    const action = messageAction("Go", text) as { text: string };
+
+    expect(action.text).toBe(text);
+  });
+
+  it("truncates message text to 300 graphemes", () => {
+    const grapheme = "e\u0301";
+    const action = messageAction("Go", grapheme.repeat(301)) as { text: string };
+
+    expect(action.text).toBe(grapheme.repeat(300));
+  });
 });
 
 describe("uriAction", () => {

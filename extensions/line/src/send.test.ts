@@ -94,6 +94,12 @@ const LINE_TEST_CFG = {
   },
 };
 
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function graphemeLength(text: string): number {
+  return Array.from(graphemeSegmenter.segment(text)).length;
+}
+
 function createCredentialBearingHttpUrl(): string {
   const url = new URL("http://example.com/image.jpg");
   url.username = ["line", "user"].join("-");
@@ -173,6 +179,43 @@ describe("LINE send helpers", () => {
     expect(item?.action.label).toBe("1234567890123456789");
     expect(item?.action.text).toBe(label);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
+  });
+
+  it("sends quick reply action text within LINE's 300 character limit", async () => {
+    await sendModule.pushTextMessageWithQuickReplies(
+      "line:user:U123",
+      "Pick one",
+      ["x".repeat(301)],
+      { cfg: LINE_TEST_CFG },
+    );
+
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
+      { messages: Array<{ quickReply?: { items?: Array<{ action?: { text?: string } }> } }> },
+    ];
+    const payload = expectDefined(firstCall[0], "LINE push payload");
+    const message = expectDefined(payload.messages[0], "LINE push message");
+    const quickReplyItem = expectDefined(message.quickReply?.items?.[0], "LINE quick reply item");
+
+    expect(quickReplyItem.action?.text).toHaveLength(300);
+  });
+
+  it("sends quick reply action text within LINE's 300 grapheme limit", async () => {
+    await sendModule.pushTextMessageWithQuickReplies(
+      "line:user:U123",
+      "Pick one",
+      ["\u{1f600}".repeat(301)],
+      { cfg: LINE_TEST_CFG },
+    );
+
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
+      { messages: Array<{ quickReply?: { items?: Array<{ action?: { text?: string } }> } }> },
+    ];
+    const payload = expectDefined(firstCall[0], "LINE push payload");
+    const message = expectDefined(payload.messages[0], "LINE push message");
+    const quickReplyItem = expectDefined(message.quickReply?.items?.[0], "LINE quick reply item");
+
+    expect(graphemeLength(quickReplyItem.action?.text ?? "")).toBe(300);
+    expect(quickReplyItem.action?.text).toBe("\u{1f600}".repeat(300));
   });
 
   it("pushes images via normalized LINE target", async () => {
