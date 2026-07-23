@@ -33,7 +33,7 @@ function nextChatRunOrderingSequence(): number {
 }
 
 /** Stamp a chat run registration with the process-local ordering metadata used for abort freshness checks. */
-export function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
+function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
   return {
     ...entry,
     registeredAtMs: Date.now(),
@@ -87,18 +87,18 @@ export type ChatRunPlanSnapshot = {
   explanation?: string;
 };
 
-export type ChatRunAgentTextState = {
+type ChatRunAgentTextState = {
   lastSentAt?: number;
   bufferedEvent?: BufferedAgentEvent;
 };
 
-export type ChatRunToolRecipientState = {
+type ChatRunToolRecipientState = {
   connIds: Set<string>;
   updatedAt: number;
   finalizedAt?: number;
 };
 
-export type ChatRunRecord = {
+type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;

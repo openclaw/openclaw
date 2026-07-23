@@ -15,7 +15,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-mark
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createChatRunState, type ChatRunRecord } from "../server-chat-state.js";
+import { createChatRunState } from "../server-chat-state.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -26,7 +26,10 @@ type TranscriptLine = {
   message?: Record<string, unknown>;
 };
 
-function createAbortTestRunState(entries: Array<[string, Partial<ChatRunRecord>]>) {
+type TestChatRunRecord =
+  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+
+function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
   const state = createChatRunState();
   for (const [runId, record] of entries) {
     Object.assign(state.getOrCreate(runId), record);

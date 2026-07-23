@@ -3,6 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createChatRunState } from "../server-chat-state.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -10,7 +11,6 @@ function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const chatAbortControllers = new Map();
-  const chatAbortedRuns = new Map();
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
 
@@ -18,7 +18,7 @@ function createMockContext() {
     broadcast,
     nodeSendToSession,
     chatAbortControllers,
-    chatAbortedRuns,
+    chatRunState: createChatRunState(),
     agentRunSeq,
     dedupe,
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
