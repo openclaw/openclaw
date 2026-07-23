@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
+const CI_RUN_TIMINGS_TIMEOUT_MS = 120_000;
 const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
 const RUN_JOBS_PAGE_SIZE = 20;
 const RUN_JOBS_MAX_PAGES = 25;
@@ -226,7 +227,7 @@ export function selectLatestMainPushCiRun(runs, headSha = null) {
 function getLatestCiRunId() {
   const raw = execPlainGh(
     ["run", "list", "--branch", "main", "--workflow", "CI", "--limit", "1", "--json", "databaseId"],
-    { encoding: "utf8" },
+    { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS },
   );
   const runs = JSON.parse(raw);
   const runId = runs[0]?.databaseId;
@@ -237,7 +238,7 @@ function getLatestCiRunId() {
 }
 
 function getRemoteMainSha() {
-  const raw = execFileSync("git", ["ls-remote", "origin", "main"], { encoding: "utf8" }).trim();
+  const raw = execFileSync("git", ["ls-remote", "origin", "main"], { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS, killSignal: "SIGKILL" }).trim();
   const [sha] = raw.split(/\s+/u);
   if (!sha) {
     throw new Error("Could not resolve origin/main");
@@ -260,7 +261,7 @@ function getLatestMainPushCiRunId() {
       "--json",
       "databaseId,headSha,event,status,conclusion",
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS },
   );
   const run = selectLatestMainPushCiRun(parseRunList(raw), headSha);
   if (!run?.databaseId) {
@@ -283,7 +284,7 @@ function listRecentSuccessfulCiRuns(limit) {
       "--json",
       "databaseId,headSha,status,conclusion",
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", timeout: CI_RUN_TIMINGS_TIMEOUT_MS },
   );
   return JSON.parse(raw)
     .filter((run) => run.status === "completed" && run.conclusion === "success")
@@ -297,7 +298,7 @@ function loadRun(runId) {
     runId,
     "--json",
     "status,conclusion,createdAt,updatedAt",
-  ]);
+  ], { timeout: CI_RUN_TIMINGS_TIMEOUT_MS });
   const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
   const pages = [];
   let totalCount = null;
@@ -307,7 +308,7 @@ function loadRun(runId) {
       "-X",
       "GET",
       `repos/${repository}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PAGE_SIZE}&page=${page}`,
-    ]);
+    ], { timeout: CI_RUN_TIMINGS_TIMEOUT_MS });
     pages.push(payload);
     const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
     totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
