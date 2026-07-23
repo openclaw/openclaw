@@ -3079,6 +3079,91 @@ describe("gateway.port out-of-range repair migrate", () => {
   });
 });
 
+describe("gateway.auth.rateLimit out-of-range repair migrate", () => {
+  it("removes a zero maxAttempts and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.maxAttempts (0). Must be a positive integer; the gateway will use the default 10.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes a zero windowMs and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 0 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.windowMs (0). Must be a positive integer; the gateway will use the default 60000ms.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes a zero lockoutMs and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { lockoutMs: 0 } } },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed invalid gateway.auth.rateLimit.lockoutMs (0). Must be a positive integer; the gateway will use the default 300000ms.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes a negative or fractional value", () => {
+    const negative = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: -5 } } },
+    });
+    expect(negative.changes.length).toBe(1);
+
+    const fractional = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { windowMs: 1.5 } } },
+    });
+    expect(fractional.changes.length).toBe(1);
+  });
+
+  it("preserves other rateLimit keys when removing one field", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0, exemptLoopback: false } } },
+    });
+
+    expect(res.config?.gateway).toEqual({
+      auth: { rateLimit: { exemptLoopback: false } },
+    });
+  });
+
+  it("preserves other auth keys when removing the whole rateLimit block", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { mode: "token", rateLimit: { maxAttempts: 0 } } },
+    });
+
+    expect(res.config?.gateway).toEqual({ auth: { mode: "token" } });
+  });
+
+  it("preserves valid rateLimit values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 5, windowMs: 30_000, lockoutMs: 60_000 } } },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("is idempotent for out-of-range values", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { auth: { rateLimit: { maxAttempts: 0, windowMs: 0 } } },
+    });
+    expect(first.changes.length).toBe(2);
+    expect(first.config).not.toHaveProperty("gateway");
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+});
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {

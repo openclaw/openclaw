@@ -60,9 +60,9 @@ export const GatewayConfigSchema = z
         allowTailscale: z.boolean().optional(),
         rateLimit: z
           .strictObject({
-            maxAttempts: z.number().optional(),
-            windowMs: z.number().optional(),
-            lockoutMs: z.number().optional(),
+            maxAttempts: z.number().int().min(1).optional(),
+            windowMs: z.number().int().min(1).optional(),
+            lockoutMs: z.number().int().min(1).optional(),
             exemptLoopback: z.boolean().optional(),
           })
           .optional(),
