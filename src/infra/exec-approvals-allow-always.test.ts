@@ -1590,7 +1590,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       platform: process.platform,
     });
-    expect(pnpmCwdInner.allowlistSatisfied).toBe(true);
+    expect(pnpmCwdInner.allowlistSatisfied).toBe(false);
 
     const npmInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm --loglevel=silent exec -- tsx ./run.ts",
@@ -1610,7 +1610,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       platform: process.platform,
     });
-    expect(npmCwdInner.allowlistSatisfied).toBe(true);
+    expect(npmCwdInner.allowlistSatisfied).toBe(false);
 
     const npmAliasInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm x -- tsx ./run.ts",

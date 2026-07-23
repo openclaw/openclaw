@@ -55,7 +55,10 @@ import {
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { resolveKnownPackageManagerExecInvocation } from "./package-manager-exec-wrapper.js";
+import {
+  hasKnownPackageManagerExecContextOptions,
+  resolveKnownPackageManagerExecInvocation,
+} from "./package-manager-exec-wrapper.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
   isDirectShellPositionalCarrierCommand,
@@ -318,6 +321,12 @@ function resolvePackageManagerTrustTargetArgv(
     }
     current = dispatchPlan.argv;
     const packageManagerExec = resolveKnownPackageManagerExecInvocation(current);
+    if (
+      packageManagerExec.kind === "unwrapped" &&
+      hasKnownPackageManagerExecContextOptions(current)
+    ) {
+      return { kind: "blocked" };
+    }
     if (packageManagerExec.kind === "unsafe-exec") {
       return { kind: "blocked" };
     }
