@@ -18,10 +18,7 @@ import { sha256Hex } from "./crypto-digest.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import { migrationDb } from "./state-migrations.meeting-transcripts-database.js";
-import {
-  readMeetingTranscriptMigrationDetectionState,
-  type LegacyMeetingTranscriptsDetection,
-} from "./state-migrations.meeting-transcripts-detection.js";
+import { readMeetingTranscriptMigrationDetectionState } from "./state-migrations.meeting-transcripts-detection.js";
 import {
   archiveLegacyMeetingTranscriptSnapshots,
   archiveDivergentMeetingTranscriptExport,
@@ -40,12 +37,10 @@ import {
   type LegacyMeetingTranscriptSnapshot,
 } from "./state-migrations.meeting-transcripts-files.js";
 import { verifyImportedMeetingTranscriptSnapshots } from "./state-migrations.meeting-transcripts-verify.js";
+import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
-export {
-  detectLegacyMeetingTranscripts,
-  type LegacyMeetingTranscriptsDetection,
-} from "./state-migrations.meeting-transcripts-detection.js";
+export { detectLegacyMeetingTranscripts } from "./state-migrations.meeting-transcripts-detection.js";
 
 function sourceKey(sourceDir: string): string {
   return `meeting-transcripts:${sha256Hex(path.resolve(sourceDir))}`;

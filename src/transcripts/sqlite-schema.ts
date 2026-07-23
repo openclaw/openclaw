@@ -7,7 +7,7 @@ import {
 } from "../state/openclaw-state-db.js";
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
-export const MEETING_TRANSCRIPTS_SCHEMA_SQL = `
+const MEETING_TRANSCRIPTS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
   session_id TEXT NOT NULL,
   started_at TEXT NOT NULL,

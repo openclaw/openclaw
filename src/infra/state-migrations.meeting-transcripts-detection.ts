@@ -4,14 +4,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isRecordedCanonicalTranscriptExport } from "./state-migrations.meeting-transcripts-files.js";
+import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 
-export type LegacyMeetingTranscriptsDetection = {
-  sourceDir: string;
-  hasLegacy: boolean;
-  pendingImportCount: number;
-};
-
-export type MeetingTranscriptMigrationDetectionState = {
+type MeetingTranscriptMigrationDetectionState = {
   exportOwnership: Map<string, { manifest: Record<string, string>; pending: ReadonlySet<string> }>;
   pendingImportCount: number;
 };
