@@ -179,7 +179,7 @@ export function createGrepToolDefinition(
         const stopChild = (dueToLimit = false) => {
           if (child && !childClosed && !child.nodeChildProcess.killed) {
             killedDueToLimit = dueToLimit;
-            child.nodeChildProcess.kill();
+            child.kill();
           }
         };
         const onAbort = () => {

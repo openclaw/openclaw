@@ -285,9 +285,8 @@ export function createFindToolDefinition(
             const lines: string[] = [];
 
             stopChild = () => {
-              const nodeChild = child.nodeChildProcess;
-              if (!nodeChild.killed) {
-                nodeChild.kill();
+              if (!child.nodeChildProcess.killed) {
+                child.kill();
               }
             };
 
