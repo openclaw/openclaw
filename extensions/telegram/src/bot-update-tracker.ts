@@ -125,7 +125,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     try {
       while (persistTargetUpdateId !== null) {
         const updateId = persistTargetUpdateId;
-        persistTargetUpdateId = null;
         try {
           await persist(updateId);
           if (
@@ -135,8 +134,12 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
             highestPersistedAcceptedUpdateId = updateId;
             pruneAcceptedUpdateIds();
           }
+          if (persistTargetUpdateId === updateId) {
+            persistTargetUpdateId = null;
+          }
         } catch (err) {
           options.onPersistError?.(err);
+          break;
         }
       }
     } finally {
@@ -306,7 +309,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       activeHandledUpdateKeys.set(key, true);
       return false;
     }
-    const skipped = recentUpdates.check(key);
+    const skipped = recentUpdates.peek(key);
     if (skipped) {
       skip(key);
     }
