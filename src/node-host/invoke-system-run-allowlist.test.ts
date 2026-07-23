@@ -111,6 +111,52 @@ describe("resolveSystemRunExecArgv", () => {
     expect(result).toEqual(["safe", "--version"]);
   });
 
+  it("fails closed for Windows opaque shell transports before inner argv rewrite", async () => {
+    const trustedExecutable = "C:\\trusted-bin\\safe-tool.exe";
+    const result = await resolveSystemRunExecArgv({
+      plannedAllowlistArgv: undefined,
+      argv: ["nu.exe", "--commands", "safe-tool arg"],
+      security: "allowlist",
+      approvals: resolveAllowlistApprovals(),
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      trustedSafeBinDirs: new Set(),
+      skillBins: [],
+      autoAllowSkills: false,
+      isWindows: true,
+      policy: {
+        approvedByAsk: false,
+        analysisOk: true,
+        allowlistSatisfied: true,
+      },
+      shellCommand: "safe-tool arg",
+      segments: [
+        {
+          raw: "safe-tool arg",
+          argv: ["safe-tool", "arg"],
+          resolution: {
+            execution: {
+              rawExecutable: "safe-tool",
+              resolvedPath: trustedExecutable,
+              executableName: "safe-tool.exe",
+            },
+            policy: {
+              rawExecutable: "safe-tool",
+              resolvedPath: trustedExecutable,
+              executableName: "safe-tool.exe",
+            },
+          },
+        },
+      ],
+      segmentSatisfiedBy: ["allowlist"],
+      authorizationPlan: undefined,
+      cwd: "C:\\workspace",
+      env: undefined,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("fails closed when the Windows shell execution plan is blocked", async () => {
     const result = await resolveWindowsShellExecArgv({
       raw: "safe --version",

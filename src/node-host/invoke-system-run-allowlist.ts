@@ -166,6 +166,19 @@ export async function resolveSystemRunExecArgv(params: {
   env: Record<string, string> | undefined;
 }): Promise<string[] | null> {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  const transportKind = params.shellCommand
+    ? resolvePosixShellInlineCommandTransportKind(params.argv)
+    : "none";
+  if (
+    params.security === "allowlist" &&
+    !params.policy.approvedByAsk &&
+    params.shellCommand &&
+    params.policy.analysisOk &&
+    params.policy.allowlistSatisfied &&
+    transportKind === "opaque"
+  ) {
+    return null;
+  }
   if (
     params.security === "allowlist" &&
     params.isWindows &&
@@ -193,10 +206,6 @@ export async function resolveSystemRunExecArgv(params: {
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied
   ) {
-    const transportKind = resolvePosixShellInlineCommandTransportKind(params.argv);
-    if (transportKind === "opaque") {
-      return null;
-    }
     if (
       transportKind !== "parseable" ||
       !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
