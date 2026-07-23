@@ -74,7 +74,7 @@ describe("transcripts tool", () => {
       expect(request.session).toMatchObject({
         source: {
           agentId: "research",
-          meetingUrl: "https://zoom.us/j/1234567890",
+          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
           providerId: "zoom",
         },
         metadata: { agentId: "research" },
@@ -104,6 +104,9 @@ describe("transcripts tool", () => {
     ).rejects.toThrow("ownership checked");
 
     expect(start).toHaveBeenCalledOnce();
+    await expect(storeFor(stateDir).readSession("owned-meeting")).resolves.toMatchObject({
+      source: { meetingUrl: "https://zoom.us/j/1234567890" },
+    });
   });
 
   it("keeps ownerless shipped sessions visible only to the main agent", async () => {

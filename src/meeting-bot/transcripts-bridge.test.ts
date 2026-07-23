@@ -211,14 +211,13 @@ describe("MeetingDurableTranscriptBridge", () => {
     expect(finalCapture).toHaveBeenCalledTimes(3);
   });
 
-  it("retries one subscriber without duplicating its durable base row", async () => {
+  it("detaches a failing subscriber without blocking durable rows", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
     tempDirs.push(stateDir);
     const current = session();
-    const onUtterance = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("subscriber store unavailable"))
-      .mockResolvedValueOnce();
+    const onUtterance = vi.fn(async () => {
+      throw new Error("subscriber store unavailable");
+    });
     const bridge = createMeetingDurableTranscriptBridge({
       logger: { warn: vi.fn() },
       options: { providerId: "google-meet", providerName: "Google Meet", stateDir },
@@ -233,17 +232,15 @@ describe("MeetingDurableTranscriptBridge", () => {
       onUtterance,
     });
 
-    await expect(bridge.ingest(current, [{ text: "retry subscriber" }])).rejects.toThrow(
-      "subscriber store unavailable",
-    );
-    await expect(bridge.ingest(current, [{ text: "retry subscriber" }])).resolves.toBeUndefined();
+    await expect(bridge.ingest(current, [{ text: "first" }])).resolves.toBeUndefined();
+    await expect(bridge.ingest(current, [{ text: "second" }])).resolves.toBeUndefined();
 
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     const stored = await store.readSession(current.id);
-    expect(await store.readUtterancesForSession(stored!)).toHaveLength(1);
-    expect(onUtterance).toHaveBeenCalledTimes(2);
+    expect(await store.readUtterancesForSession(stored!)).toHaveLength(2);
+    expect(onUtterance).toHaveBeenCalledOnce();
     await bridge.stop(current, async () => {});
   });
 
@@ -315,15 +312,17 @@ describe("MeetingDurableTranscriptBridge", () => {
     await bridge.stop(current, async () => {});
   });
 
-  it("retries a failed terminal subscriber notification", async () => {
+  it("does not let terminal subscriber notification block finalization", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
     tempDirs.push(stateDir);
     const current = session();
-    const onStatus = vi
-      .fn<() => Promise<void>>()
-      .mockResolvedValueOnce()
-      .mockRejectedValueOnce(new Error("terminal status unavailable"))
-      .mockResolvedValueOnce();
+    let statusCalls = 0;
+    const onStatus = vi.fn(() => {
+      statusCalls += 1;
+      if (statusCalls === 2) {
+        throw new Error("terminal status unavailable");
+      }
+    });
     const bridge = createMeetingDurableTranscriptBridge({
       logger: { warn: vi.fn() },
       options: { providerId: "zoom", providerName: "Zoom", stateDir },
@@ -339,12 +338,9 @@ describe("MeetingDurableTranscriptBridge", () => {
       onUtterance: vi.fn(),
     });
 
-    await expect(bridge.stop(current, async () => {})).rejects.toThrow(
-      "terminal status unavailable",
-    );
     await expect(bridge.stop(current, async () => {})).resolves.toBe(true);
 
-    expect(onStatus).toHaveBeenCalledTimes(3);
+    expect(onStatus).toHaveBeenCalledTimes(2);
   });
 
   it("queues detach behind a pending attachment replay", async () => {

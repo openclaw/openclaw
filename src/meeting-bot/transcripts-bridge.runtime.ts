@@ -3,6 +3,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type {
   TranscriptSessionDescriptor,
+  TranscriptSourceStatus,
   TranscriptStartRequest,
   TranscriptsStartResult,
   TranscriptsStopResult,
@@ -140,6 +141,27 @@ export function createMeetingDurableTranscriptBridge<
     );
   };
 
+  const notifySubscriberStatus = (subscriber: Subscriber, status: TranscriptSourceStatus) => {
+    if (!subscriber.onStatus) {
+      return;
+    }
+    try {
+      void Promise.resolve(subscriber.onStatus(status)).catch((error: unknown) => {
+        params.logger.warn(
+          `[meeting-transcripts] subscriber status failed session=${status.sessionId ?? "unknown"}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    } catch (error) {
+      params.logger.warn(
+        `[meeting-transcripts] subscriber status failed session=${status.sessionId ?? "unknown"}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+
   return {
     enabled: config.enabled,
     async start(session, capture) {
@@ -213,9 +235,24 @@ export function createMeetingDurableTranscriptBridge<
               id: `${subscriberSessionId}:${utterance.id ?? sequence}`,
               sessionId: subscriberSessionId,
             };
-            await subscriber.onUtterance(subscriberUtterance);
-            if (utterance.id) {
-              subscriber.deliveredUtteranceIds.add(utterance.id);
+            try {
+              await subscriber.onUtterance(subscriberUtterance);
+              if (utterance.id) {
+                subscriber.deliveredUtteranceIds.add(utterance.id);
+              }
+            } catch (error) {
+              subscribers.delete(subscriberSessionId);
+              params.logger.warn(
+                `[meeting-transcripts] detached failing subscriber session=${subscriberSessionId}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+              notifySubscriberStatus(subscriber, {
+                sessionId: subscriberSessionId,
+                active: false,
+                message: "Detached after transcript delivery failed.",
+                source: active.descriptor.source,
+              });
             }
           }
           active.utteranceCount += 1;
@@ -288,7 +325,7 @@ export function createMeetingDurableTranscriptBridge<
             if (subscriber.meetingSessionId !== session.id) {
               continue;
             }
-            await subscriber.onStatus?.({
+            notifySubscriberStatus(subscriber, {
               sessionId: subscriberSessionId,
               active: false,
               message: `${params.options.providerName} meeting capture ended.`,
@@ -392,7 +429,7 @@ export function createMeetingDurableTranscriptBridge<
         if (request.source.agentId !== current.agentId) {
           return { ok: false as const, error: "transcripts session belongs to another agent" };
         }
-        await current.onStatus?.({
+        notifySubscriberStatus(current, {
           sessionId: request.sessionId,
           active: false,
           message: `Detached from ${params.options.providerName} meeting capture.`,

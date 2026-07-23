@@ -94,13 +94,13 @@ export function createSessionId(): string {
 // share one persisted source descriptor.
 export function sourceFromParams(params: Record<string, unknown>): TranscriptSourceLocator {
   const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
-  return sanitizeTranscriptSourceLocator({
+  return {
     providerId,
     accountId: readStringParam(params, "accountId", { trim: true }),
     guildId: readStringParam(params, "guildId", { trim: true }),
     channelId: readStringParam(params, "channelId", { trim: true }),
     meetingUrl: readStringParam(params, "meetingUrl", { trim: true }),
-  });
+  };
 }
 
 export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
@@ -148,18 +148,18 @@ export async function startTranscripts(params: {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
   }
-  const source = {
+  const providerSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(source.providerId, params.ctx);
+  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
   if (!provider?.start) {
-    throw new Error(`transcripts provider ${source.providerId} cannot start live capture`);
+    throw new Error(`transcripts provider ${providerSource.providerId} cannot start live capture`);
   }
   const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
-    source,
+    source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
   };
@@ -175,7 +175,7 @@ export async function startTranscripts(params: {
     try {
       result = await provider.start({
         cfg: params.ctx.config,
-        session,
+        session: { ...session, source: providerSource },
         abortSignal: startupAbort.signal,
         startupWaitMs: params.startupWaitMs,
         onUtterance: async (utterance) => {

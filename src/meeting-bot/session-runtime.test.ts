@@ -371,8 +371,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     expect(captureTranscript).toHaveBeenCalledWith({ finalize: true });
   });
 
-  it("retries failed final delivery without retiring its stream cursor", async () => {
-    vi.useFakeTimers();
+  it("does not let subscriber delivery failure block meeting leave", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
     tempDirs.push(stateDir);
     const empty = { droppedLines: 0, epoch: "page-1", lines: [] };
@@ -381,7 +380,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
       epoch: "page-1",
       lines: [{ speaker: "Avery", text: "Final decision" }],
     };
-    const snapshots = [empty, final, final, final, final];
+    const snapshots = [empty, final];
     const releaseBrowserTab = vi.fn(async () => true);
     const { runtime } = createTestRuntime({
       captureTranscript: async () => snapshots.shift(),
@@ -400,12 +399,9 @@ describe("MeetingSessionRuntime durable transcripts", () => {
       url: "https://meeting.example/notes",
       agentId: "notes-agent",
     });
-    const onUtterance = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("subscriber unavailable"))
-      .mockRejectedValueOnce(new Error("subscriber unavailable"))
-      .mockRejectedValueOnce(new Error("subscriber unavailable"))
-      .mockResolvedValueOnce();
+    const onUtterance = vi.fn(async () => {
+      throw new Error("subscriber unavailable");
+    });
     await runtime.startTranscriptSource({
       session: {
         sessionId: "external-final",
@@ -422,7 +418,6 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     await expect(runtime.leave(session.id)).resolves.toMatchObject({ found: true });
     expect(session.state).toBe("ended");
     expect(releaseBrowserTab).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1_000);
 
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -432,7 +427,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     expect(await store.readSummary(stored!)).toMatchObject({
       summary: { utteranceCount: 1 },
     });
-    expect(onUtterance).toHaveBeenCalledTimes(4);
+    expect(onUtterance).toHaveBeenCalledOnce();
   });
 });
 

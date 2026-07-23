@@ -15,6 +15,7 @@ import {
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
+import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { AnyAgentTool } from "./common.js";
@@ -226,18 +227,18 @@ async function importTranscripts(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
-  const source = {
+  const providerSource = {
     ...sourceFromParams(params.rawParams),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
   };
-  const provider = resolveSourceProvider(source.providerId, params.ctx);
+  const provider = resolveSourceProvider(providerSource.providerId, params.ctx);
   if (!provider?.importTranscript) {
-    throw new Error(`transcripts provider ${source.providerId} cannot import transcripts`);
+    throw new Error(`transcripts provider ${providerSource.providerId} cannot import transcripts`);
   }
   const session: TranscriptSessionDescriptor = {
     sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
     title: readStringParam(params.rawParams, "title", { trim: true }),
-    source,
+    source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
     ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
@@ -249,7 +250,7 @@ async function importTranscripts(params: {
   await params.store.writeSession(session);
   const utterances = await provider.importTranscript({
     cfg: params.ctx.config,
-    session,
+    session: { ...session, source: providerSource },
     text: transcript,
     speakerLabel: readStringParam(params.rawParams, "speakerLabel", { trim: true }),
   });
