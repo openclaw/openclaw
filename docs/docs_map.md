@@ -6062,7 +6062,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Choose a plugin
   - H2: Choose a mode
   - H2: Prepare Chrome and audio
-  - H2: Enable the plugin
+  - H2: Install or disable plugins
   - H2: Verify and join
   - H2: Handle platform policy prompts
   - H2: Discord voice chat

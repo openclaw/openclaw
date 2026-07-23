@@ -193,6 +193,35 @@ describe("ApprovalPage", () => {
     expect(document.activeElement).toBe(page.querySelector("h1"));
   });
 
+  it("renders reviewer-only plugin detail in a preformatted block", async () => {
+    const approval = pendingApproval({
+      id: "plugin:approval-1",
+      urlPath: "/approve/plugin%3Aapproval-1",
+      presentation: {
+        kind: "plugin",
+        title: "Claude native tool: Bash",
+        description: '{"command":"printf …"}',
+        detail: '{"command":"printf \\\"line one\\nline two\\\""}',
+        severity: "warning",
+        pluginId: "claude-cli",
+        toolName: "Bash",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
+      approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
+    );
+  });
+
   it("keeps the selected decision named while a resolution is in flight", async () => {
     let resolveRequest!: (result: ApprovalResolveResult) => void;
     const pending = pendingApproval();

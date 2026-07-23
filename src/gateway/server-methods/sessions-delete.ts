@@ -42,7 +42,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionDeleteHandlers: GatewayRequestHandlers = {
-  "sessions.delete": async ({ req, params, respond, client, isWebchatConnect, context }) => {
+  "sessions.delete": async ({
+    req,
+    params,
+    respond,
+    client,
+    isWebchatConnect,
+    context,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -192,6 +200,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     if (!chatAbort) {
       throw new Error("chat.abort handler is not registered");
     }
+    sessionMutationAuthorization?.assertCurrent();
     await chatAbort({
       req,
       params: {
@@ -204,6 +213,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       context,
       client,
       isWebchatConnect,
+      ...(sessionMutationAuthorization ? { sessionMutationAuthorization } : {}),
     });
     if (abortResult?.ok === false) {
       respond(false, undefined, abortResult.error);
@@ -223,6 +233,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       scope: storePath,
       identities: deleteLifecycleIdentities,
       prepare: async () => {
+        sessionMutationAuthorization?.assertCurrent();
         const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
         deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
           preparedEntry,
@@ -268,6 +279,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           );
           return undefined;
         }
+        sessionMutationAuthorization?.assertCurrent();
         const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
           agentId: requestedAgentId,
         });
@@ -319,6 +331,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         });
         const postCleanupEntry = postCleanupTarget.entry;
+        sessionMutationAuthorization?.assertCurrent();
         if (
           !expectedLifecycleRevisionMatches(postCleanupEntry) ||
           !expectedSessionIdMatches(postCleanupEntry)

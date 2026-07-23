@@ -324,6 +324,12 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
 };
 
+/** Commit-time guard captured by the pre-dispatch session participation check. */
+export type SessionMutationAuthorization = {
+  assertCurrent: () => void;
+  assertTargetCurrent: (target: { sessionKey: string; agentId?: string }) => void;
+};
+
 /** Normalized method invocation options passed to registered handlers. */
 export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
@@ -332,6 +338,7 @@ export type GatewayRequestHandlerOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  sessionMutationAuthorization?: SessionMutationAuthorization;
 };
 
 /** Single gateway method implementation. */

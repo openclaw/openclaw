@@ -91,6 +91,7 @@ import {
   type BoardFace,
   type BoardSessionView,
 } from "../../lib/board/settings.ts";
+import type { SwarmRosterHydrator } from "../../lib/board/swarm-dashboard.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import {
@@ -492,7 +493,7 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly observerDigestHistory = new ObserverDigestHistory();
   private builtinBoardSnapshot: BoardViewSnapshot | null = null;
   private builtinBoardSnapshotBase: BoardSnapshot | null = null;
-  private builtinBoardSnapshotRequest = 0;
+  private swarmHydrator: SwarmRosterHydrator | null = null;
   private readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   private readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   private readonly sessionDiscussionProbes = new Set<string>();
@@ -623,7 +624,11 @@ class ChatPane extends OpenClawLightDomElement {
       )
       .watch(
         () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+        (runtimeConfig, notify) =>
+          runtimeConfig.subscribe(() => {
+            this.refreshBuiltinBoardSnapshot();
+            notify();
+          }),
       )
       .watch(
         () => this.resolveBoardProvider(),
@@ -1825,22 +1830,54 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    const request = ++this.builtinBoardSnapshotRequest;
-    const sessions = state.sessionsResult?.sessions ?? [];
-    void import("../../lib/board/builtin-dashboard.ts").then(({ withBuiltinDashboardWidgets }) => {
-      if (request !== this.builtinBoardSnapshotRequest) {
-        return;
-      }
-      const currentBase = this.resolveBoardProvider().snapshot$.value;
-      const sessionKey = this.resolveBoardSessionKey(currentBase.sessionKey);
-      this.builtinBoardSnapshotBase = currentBase;
-      this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
-        currentBase,
-        sessions,
-        this.observerDigestHistory.get(sessionKey),
-      );
-      this.requestUpdate();
-    });
+    const parentKey = this.resolveBoardSessionKey();
+    const sourceEpoch = state.connectionEpoch;
+    void import("../../lib/board/builtin-dashboard.ts").then(
+      ({ isSwarmEnabledInConfig, SwarmRosterHydrator, withBuiltinDashboardWidgets }) => {
+        if (
+          !this.state ||
+          this.state.connectionEpoch !== sourceEpoch ||
+          parentKey !== this.resolveBoardSessionKey()
+        ) {
+          return;
+        }
+        const swarmEnabled =
+          this.state.connected &&
+          isSwarmEnabledInConfig(
+            this.context.runtimeConfig?.state.configSnapshot?.config,
+            resolveAgentIdFromSessionKey(parentKey),
+          );
+        const applyRows = (rows: readonly GatewaySessionRow[], includeSwarm: boolean) => {
+          const base = this.resolveBoardProvider().snapshot$.value;
+          const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
+          this.builtinBoardSnapshotBase = base;
+          this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
+            base,
+            rows,
+            this.observerDigestHistory.get(sessionKey),
+            includeSwarm,
+          );
+          this.requestUpdate();
+        };
+        if (!swarmEnabled) {
+          this.swarmHydrator?.dispose();
+          this.swarmHydrator = null;
+          applyRows(this.state.sessionsResult?.sessions ?? [], false);
+          return;
+        }
+        this.swarmHydrator ??= new SwarmRosterHydrator();
+        this.swarmHydrator.update({
+          sessions: this.context.sessions,
+          parentKey,
+          sourceEpoch,
+          currentRows: () =>
+            this.state?.connectionEpoch === sourceEpoch
+              ? (this.state.sessionsResult?.sessions ?? [])
+              : [],
+          onRows: (rows) => applyRows(rows, true),
+        });
+      },
+    );
   }
 
   private recordObserverDigest(digest: SessionObserverDigest): void {
@@ -2614,6 +2651,8 @@ class ChatPane extends OpenClawLightDomElement {
       window.clearTimeout(this.headerCopiedTimer);
       this.headerCopiedTimer = null;
     }
+    this.swarmHydrator?.dispose();
+    this.swarmHydrator = null;
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.presencePayload = undefined;
@@ -2748,6 +2787,10 @@ class ChatPane extends OpenClawLightDomElement {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      this.swarmHydrator?.dispose();
+      this.swarmHydrator = null;
+      this.builtinBoardSnapshot = null;
+      this.builtinBoardSnapshotBase = null;
       this.taskSuggestionsRequestVersion += 1;
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();
@@ -3907,7 +3950,7 @@ class ChatPane extends OpenClawLightDomElement {
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
             snapshot: board.snapshot,
-            sessions: state.sessionsResult?.sessions ?? [],
+            sessions: this.swarmHydrator?.rows ?? state.sessionsResult?.sessions ?? [],
             observer: {
               activeRunId: observerRunId,
               digests: this.observerDigestHistory.get(

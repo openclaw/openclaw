@@ -21,7 +21,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
   authorizeResolvedSessionMutation,
-  authorizeSessionMutation,
+  resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
   filterDraftSessionsForClient,
   invalidateSessionSharingSnapshot,
@@ -427,12 +427,12 @@ describe("session sharing handlers", () => {
       const requestContext = context(vi.fn(), cfg);
 
       expect(
-        authorizeSessionMutation({
+        resolveSessionMutationAuthorization({
           client: memberClient,
           method: "board.action",
           requestParams: { ticket, agentId: "work" },
           context: requestContext,
-        }),
+        }).error,
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
 
       const { ticket: unscopedTicket } = createBoardViewTicket({
@@ -442,12 +442,12 @@ describe("session sharing handlers", () => {
         viewGeneration: "b".repeat(32),
       });
       expect(
-        authorizeSessionMutation({
+        resolveSessionMutationAuthorization({
           client: memberClient,
           method: "board.action",
           requestParams: { ticket: unscopedTicket, agentId: "work" },
           context: requestContext,
-        }),
+        }).error,
       ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     });
   });
@@ -488,12 +488,12 @@ describe("session sharing handlers", () => {
       ];
       const expectAccess = (allowed: boolean) => {
         for (const [method, requestParams] of mutations) {
-          const error = authorizeSessionMutation({
+          const error = resolveSessionMutationAuthorization({
             client: memberClient,
             method,
             requestParams,
             context: requestContext,
-          });
+          }).error;
           if (allowed) {
             expect(error, method).toBeNull();
           } else {
@@ -599,12 +599,12 @@ describe("session sharing handlers", () => {
         },
       );
       expect(
-        authorizeSessionMutation({
+        resolveSessionMutationAuthorization({
           client: identifiedClient("viewer"),
           method: "sessions.groups.delete",
           requestParams: { name: "Projects" },
           context: requestContext,
-        }),
+        }).error,
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       expect(
         await call("session.members.list", { sessionKey: restrictedKey }, requestContext, {
