@@ -580,7 +580,7 @@ describe("createInboundDebouncer", () => {
   });
 
   it("releases a pending decision before applying a later synchronous bypass", async () => {
-    const never = new Promise<InboundDebounceDecision>(() => undefined);
+    const never = new Promise<InboundDebounceDecision>(() => {});
     const calls: Array<string[]> = [];
     const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 10,
@@ -1048,6 +1048,7 @@ describe("createInboundDebouncer", () => {
       debounceMs: 50,
       maxTrackedKeys: 1,
       buildKey: (item) => item.key,
+      resolveDecision: async () => ({ action: "debounce" }),
       onFlush: async (items) => {
         calls.push(items.map((entry) => entry.id));
       },
@@ -1077,6 +1078,7 @@ describe("createInboundDebouncer", () => {
       debounceMs: 50,
       maxTrackedKeys: 1,
       buildKey: (item) => item.key,
+      resolveDecision: () => ({ action: "debounce" }),
       onFlush: async (items) => {
         const ids = items.map((entry) => entry.id).join(",");
         started.push(ids);
@@ -1102,6 +1104,9 @@ describe("createInboundDebouncer", () => {
       });
 
       const bufferedEnqueue = debouncer.enqueue({ key: "b", id: "3" });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
       const bufferedTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
         (call, index) => index >= callCountBeforeOverflow && call[1] === 50,
       );

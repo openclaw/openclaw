@@ -396,7 +396,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return enqueueResolved(item, key);
     }
     if (!canTrackKey(key)) {
-      return enqueueResolved(item, key, { action: "bypass" });
+      // Saturated keys bypass policy evaluation but still need a short-lived
+      // key chain so same-conversation work cannot run concurrently.
+      const generation = resolveKeyGeneration(key);
+      return enqueueKeyTask(key, async () => {
+        await runQueuedFlush(key, generation, [item]);
+      });
     }
     const generation = resolveKeyGeneration(key);
     const previous = decisionChains.get(key) ?? Promise.resolve();
