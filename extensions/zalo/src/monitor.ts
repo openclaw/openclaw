@@ -253,7 +253,7 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
       // The Bot API consumes each polled update on response. When shutdown
       // arrives while getUpdates is in-flight (the poll carries no abort
-      // signal and runs to its own 30 s timeout), still journal the update.
+      // signal and runs to its own 35 s timeout), still journal the update.
       // This is best-effort — getUpdates outlives the 5 s channel-stop
       // deadline, so the process may exit before the response lands. When
       // it does land, durable-after-stop admission accepts the append after
