@@ -379,7 +379,7 @@ Writes are compare-and-swap guarded: pass `--expected-revision <n>` to fail inst
 The agent can also update its own scratch: during a heartbeat turn, `heartbeat_respond` accepts an optional `scratch` string that fully replaces the monitor's scratch for future heartbeats.
 
 <Note>
-**Migrating from HEARTBEAT.md?** Run `openclaw doctor --fix`. Doctor imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, archives the original under the state directory (`backups/heartbeat-migration/`), and then removes the file. For one stable upgrade window, an unmigrated legacy file remains a read-only fallback when no scratch revision exists, with a Gateway warning directing you to Doctor; new workspaces and completed migrations use database scratch only.
+**Migrating from HEARTBEAT.md?** Run `openclaw doctor --fix`. Doctor imports each agent's workspace `HEARTBEAT.md` into the monitor's scratch, archives the original under the state directory (`backups/heartbeat-migration/`), and then removes the file. Runtime heartbeat instructions come from database scratch only.
 </Note>
 
 If scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If no scratch exists, the heartbeat still runs and the model decides what to do.
