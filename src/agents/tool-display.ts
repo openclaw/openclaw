@@ -4,12 +4,12 @@
  * Builds redacted labels and compact details from tool metadata without affecting execution semantics.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
   formatToolDetailText,
   formatDetailKey,
+  redactToolDisplayText,
   normalizeToolName,
   resolveToolVerbAndDetailForArgs,
 } from "./tool-display-common.js";
@@ -90,7 +90,7 @@ export function resolveToolDisplay(params: {
 
 /** Formats and redacts detail text for display. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
+  const detailRaw = display.detail ? redactToolDisplayText(display.detail) : undefined;
   return formatToolDetailText(detailRaw);
 }
 
