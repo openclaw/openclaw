@@ -355,6 +355,7 @@ async function finalizeLineInboundContext(params: {
     Provider: "line",
     Surface: "line",
     MessageSid: params.messageSid,
+    MessageType: params.event.type === "message" ? params.event.message.type : "postback",
     Timestamp: params.timestamp,
     ...mediaPayload,
     ...params.locationContext,

@@ -534,7 +534,10 @@ async function dispatchReplyFromConfigInner(
   const timestamp =
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
-    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+    normalizeOptionalString(ctx.MessageSidFull) ??
+    normalizeOptionalString(ctx.MessageSid) ??
+    normalizeOptionalString(ctx.MessageSidFirst) ??
+    normalizeOptionalString(ctx.MessageSidLast);
   const hookCtx = { ...ctx };
   const buildHookState = (sourceCtx: FinalizedMsgContext) => {
     const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
@@ -1747,6 +1750,8 @@ async function dispatchReplyFromConfigInner(
               () =>
                 hookRunner.runBeforeDispatch(
                   {
+                    messageId: hookContext.messageId,
+                    messageType: hookCtx.MessageType,
                     content: hookContext.content,
                     body: hookContext.bodyForAgent ?? hookContext.body,
                     channel: hookContext.channelId,
@@ -1761,6 +1766,8 @@ async function dispatchReplyFromConfigInner(
                     timestamp: hookContext.timestamp,
                   },
                   {
+                    messageId: hookContext.messageId,
+                    messageType: hookCtx.MessageType,
                     channelId: hookContext.channelId,
                     accountId: hookContext.accountId,
                     conversationId: inboundClaimContext.conversationId,
