@@ -58,9 +58,12 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
   params: {
     trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
     threshold?: number;
+    allowLegacyBetaEnvelope?: boolean;
   },
 ): OfficialExternalPluginCatalogEnvelopeVerificationResult {
-  const envelope = parseOfficialExternalPluginCatalogSignedEnvelope(raw);
+  const envelope = parseOfficialExternalPluginCatalogSignedEnvelope(raw, {
+    allowLegacyBetaEnvelope: params.allowLegacyBetaEnvelope === true,
+  });
   if (!envelope) {
     return {
       ok: false,
@@ -156,7 +159,10 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       };
 }
 
-function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
+function parseOfficialExternalPluginCatalogSignedEnvelope(
+  raw: unknown,
+  params: { allowLegacyBetaEnvelope: boolean },
+): {
   payloadType: string;
   payload: string;
   signatures: readonly Required<OfficialExternalPluginCatalogEnvelopeSignature>[];
@@ -186,8 +192,8 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
       typeof signature.sig === "string" &&
       signature.sig.trim().length > 0,
   );
-  // Beta releases briefly accepted this pre-DSSE field shape. Keep it as an
-  // all-or-nothing read path while every producer moves to the standard shape.
+  // Beta releases briefly persisted this pre-DSSE field shape. It remains an
+  // all-or-nothing snapshot read path only; live publishers must use DSSE.
   const legacySignatures =
     raw.schemaVersion === 1
       ? signatures
@@ -207,7 +213,12 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   if (standardSignatures.length > 0 && legacySignatures.length > 0) {
     return null;
   }
-  const parsedSignatures = standardSignatures.length > 0 ? standardSignatures : legacySignatures;
+  const parsedSignatures =
+    standardSignatures.length > 0
+      ? standardSignatures
+      : params.allowLegacyBetaEnvelope
+        ? legacySignatures
+        : [];
   if (parsedSignatures.length === 0) {
     return null;
   }

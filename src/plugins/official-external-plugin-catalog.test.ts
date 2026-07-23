@@ -136,6 +136,24 @@ function signedHostedCatalogFeed(params: {
   };
 }
 
+function toLegacyBetaSignedEnvelope(body: string): string {
+  const envelope = JSON.parse(body) as {
+    payloadType: string;
+    payload: string;
+    signatures: Array<{ keyid: string; sig: string }>;
+  };
+  return JSON.stringify({
+    payloadType: envelope.payloadType,
+    payload: envelope.payload,
+    schemaVersion: 1,
+    signatures: envelope.signatures.map((signature) => ({
+      keyId: signature.keyid,
+      algorithm: "ed25519",
+      signature: signature.sig,
+    })),
+  });
+}
+
 function signedCatalogConfig(publicKeyPem: string): HostedCatalogConfig {
   return {
     feeds: {
@@ -827,6 +845,38 @@ describe("official external plugin catalog", () => {
     if (rejectedSnapshot.source === "bundled-fallback") {
       expect(rejectedSnapshot.error).toContain("signed envelope is malformed");
     }
+  });
+
+  it("accepts beta envelopes only from persisted snapshots", async () => {
+    const signed = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/legacy-snapshot" }),
+    });
+    const legacyBody = toLegacyBetaSignedEnvelope(signed.body);
+    const catalogConfig = signedCatalogConfig(signed.publicKeyPem);
+
+    const live = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      fetchImpl: vi.fn(async () => new Response(legacyBody, { status: 200 })),
+      snapshotStore: null,
+    });
+
+    expect(live.source).toBe("bundled-fallback");
+    if (live.source === "bundled-fallback") {
+      expect(live.error).toContain("signed envelope is malformed");
+    }
+
+    const offline = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig,
+      offline: true,
+      snapshotStore: createInMemoryHostedCatalogSnapshotStore([
+        signedHostedCatalogSnapshot({ body: legacyBody }),
+      ]),
+    });
+
+    expect(offline.source).toBe("hosted-snapshot");
+    expect(offline.entries.map((entry) => entry.name)).toEqual(["@openclaw/legacy-snapshot"]);
   });
 
   it.each([

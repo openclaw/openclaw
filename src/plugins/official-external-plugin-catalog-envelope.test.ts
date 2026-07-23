@@ -238,7 +238,7 @@ describe("official external plugin catalog signed envelopes", () => {
     ).toMatchObject({ ok: true, signedBy: key.keyId });
   });
 
-  it("accepts the beta legacy field names without allowing mixed formats", () => {
+  it("accepts beta legacy field names only for persisted snapshots", () => {
     const key = createSigningKey("catalog-root");
     const envelope = signedEnvelope({ keys: [key] });
     const signature = envelope.signatures[0];
@@ -253,21 +253,34 @@ describe("official external plugin catalog signed envelopes", () => {
     };
     const trustedKeys = [{ keyId: key.keyId, publicKey: exportPublicKey(key) }];
 
+    const legacyEnvelope = {
+      ...envelope,
+      schemaVersion: 1,
+      signatures: [legacySignature],
+    };
+
     expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        {
-          ...envelope,
-          schemaVersion: 1,
-          signatures: [legacySignature],
-        },
-        { trustedKeys },
-      ),
+      verifyOfficialExternalPluginCatalogSignedEnvelope(legacyEnvelope, { trustedKeys }),
+    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(legacyEnvelope, {
+        trustedKeys,
+        allowLegacyBetaEnvelope: true,
+      }),
     ).toMatchObject({ ok: true, signedBy: key.keyId });
+    const mixedEnvelope = {
+      ...envelope,
+      schemaVersion: 1,
+      signatures: [signature, legacySignature],
+    };
     expect(
-      verifyOfficialExternalPluginCatalogSignedEnvelope(
-        { ...envelope, schemaVersion: 1, signatures: [signature, legacySignature] },
-        { trustedKeys },
-      ),
+      verifyOfficialExternalPluginCatalogSignedEnvelope(mixedEnvelope, { trustedKeys }),
+    ).toMatchObject({ ok: false, error: "invalid-envelope" });
+    expect(
+      verifyOfficialExternalPluginCatalogSignedEnvelope(mixedEnvelope, {
+        trustedKeys,
+        allowLegacyBetaEnvelope: true,
+      }),
     ).toMatchObject({ ok: false, error: "invalid-envelope" });
   });
 });

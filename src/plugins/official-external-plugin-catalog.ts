@@ -672,6 +672,7 @@ async function parseHostedCatalogFeedBody(params: {
   body: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
   verifiedAt: string;
+  allowLegacyBetaEnvelope?: boolean;
 }): Promise<{
   feed: OfficialExternalPluginCatalogFeed;
   trust?: HostedOfficialExternalPluginCatalogTrustState;
@@ -684,6 +685,7 @@ async function parseHostedCatalogFeedBody(params: {
     const verification = verifyOfficialExternalPluginCatalogSignedEnvelope(raw, {
       trustedKeys: params.verification.keys,
       threshold,
+      ...(params.allowLegacyBetaEnvelope ? { allowLegacyBetaEnvelope: true } : {}),
     });
     if (!verification.ok) {
       const invalidTimestampSequence =
@@ -768,6 +770,7 @@ async function loadHostedCatalogSnapshotResult(params: {
     body: params.snapshot.body,
     verification: params.verification,
     verifiedAt: params.snapshot.trust?.verifiedAt ?? params.snapshot.savedAt,
+    allowLegacyBetaEnvelope: true,
   });
   return {
     source: "hosted-snapshot",
@@ -1057,6 +1060,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
           body: currentSnapshot.body,
           verification: source.verification,
           verifiedAt: currentSnapshot.trust.verifiedAt,
+          allowLegacyBetaEnvelope: true,
         }).catch((err: unknown) => {
           if (err instanceof HostedCatalogFeedTimestampError) {
             return { feed: { sequence: err.sequence } };
