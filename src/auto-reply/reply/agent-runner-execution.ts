@@ -8,6 +8,7 @@ import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ChatRunStartupPhase } from "../../../packages/gateway-protocol/src/index.js";
 import { peekSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   formatRateLimitOrOverloadedErrorCopy,
   isContextOverflowError,
@@ -15,9 +16,18 @@ import {
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import {
+  LiveModelSwitchUnresolvedError,
+  LiveSessionModelSwitchError,
+} from "../../agents/live-model-switch-error.js";
+import {
+  clearLiveModelSwitchPending,
+  shouldSwitchToLiveModel,
+} from "../../agents/live-model-switch.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
+import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -57,6 +67,7 @@ import {
   type AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
@@ -282,6 +293,105 @@ async function runAgentTurnWithFallbackInternalWithRetryState(
       getActiveSessionEntry: params.getActiveSessionEntry,
       storePath: params.storePath,
     });
+
+  // Pre-flight a pending user-initiated `/model` switch BEFORE the first
+  // attempt. A `/model <target>` directive persists the override and sets
+  // `liveModelSwitchPending`, but the fresh run still seeds the OLD running
+  // model, and the mid-attempt live-switch throw only rebuilds the candidate
+  // chain when the target already sits inside the pre-switch chain. For a
+  // cross-provider switch (Anthropic -> OpenAI/Codex) the target is absent, so
+  // the switch used to degrade into a stale-chain exhaustion and surface a
+  // generic "Something went wrong". Committing the switch here builds the chain
+  // around the target from the very first attempt.
+  //
+  // Clear-flag semantics: the flag is cleared ONLY after (a) the target is
+  // resolved, (b) a non-empty candidate chain is built around it, and (c) the
+  // selection is applied to the run. If (a)/(b) fail we keep the flag and raise
+  // a precise, target-scoped error so the switch is retried next turn.
+  {
+    // Fail-safe: probing the pending flag reads the session store. A store/lock
+    // error here must not fail an otherwise-normal turn — degrade to the prior
+    // (no pre-flight) behavior, where the switch is retried on a later turn.
+    let pendingLiveSwitch: ReturnType<typeof shouldSwitchToLiveModel>;
+    try {
+      pendingLiveSwitch = shouldSwitchToLiveModel({
+        cfg: runtimeConfig,
+        sessionKey: params.sessionKey,
+        agentId: params.followupRun.run.agentId,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        currentProvider: fallbackProvider,
+        currentModel: fallbackModel,
+        currentAgentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+          provider: fallbackProvider,
+          entry: params.getActiveSessionEntry(),
+          cfg: runtimeConfig,
+        }),
+        currentAuthProfileId: params.followupRun.run.authProfileId,
+        currentAuthProfileIdSource: params.followupRun.run.authProfileIdSource,
+      });
+    } catch (probeErr) {
+      logVerbose(`live-switch pre-flight probe skipped: ${formatErrorMessage(probeErr)}`);
+      pendingLiveSwitch = undefined;
+    }
+    if (pendingLiveSwitch) {
+      let targetChain: ReturnType<typeof resolveModelCandidateChain> | undefined;
+      let resolveError: unknown;
+      try {
+        targetChain = resolveModelCandidateChain({
+          cfg: runtimeConfig,
+          provider: pendingLiveSwitch.provider,
+          model: pendingLiveSwitch.model,
+          fallbacksOverride: resolveModelFallbackOptions(effectiveRun, runtimeConfig)
+            .fallbacksOverride,
+        });
+      } catch (chainErr) {
+        resolveError = chainErr;
+      }
+      if (resolveError !== undefined || !targetChain || targetChain.length === 0) {
+        // Keep liveModelSwitchPending set (do NOT clear) and surface a precise,
+        // target-scoped failure instead of a generic runner error.
+        const unresolved = new LiveModelSwitchUnresolvedError(pendingLiveSwitch, resolveError);
+        params.replyOperation?.fail("run_failed", unresolved);
+        return {
+          kind: "final",
+          payload: markAgentRunFailureReplyPayload({
+            text: resolveExternalRunFailureTextForConversation({
+              text:
+                `⚠️ Could not switch to ${pendingLiveSwitch.provider}/${pendingLiveSwitch.model}. ` +
+                "The model selection is unchanged for now — try again or pick a different model.",
+              sessionCtx: params.sessionCtx,
+              isGenericRunnerFailure: false,
+              cfg: params.followupRun.run.config,
+            }),
+            isError: true,
+          }),
+        };
+      }
+      // Commit: apply the target to the run(s). applyLiveModelSwitchToRun nulls
+      // the auto-fallback primary probe and sets liveModelSwitchRuntimeEntry so
+      // the paired target runtime (e.g. codex) is used when resolving the
+      // harness.  Reuse the LiveSessionModelSwitchError shape as the carrier.
+      const switchCarrier = new LiveSessionModelSwitchError(pendingLiveSwitch);
+      applyLiveModelSwitchToRun(params.followupRun.run, switchCarrier);
+      if (runnableRun !== params.followupRun.run) {
+        applyLiveModelSwitchToRun(runnableRun, switchCarrier);
+      }
+      if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
+        applyLiveModelSwitchToRun(effectiveRun, switchCarrier);
+      }
+      fallbackProvider = pendingLiveSwitch.provider;
+      fallbackModel = pendingLiveSwitch.model;
+      fallbackCycleState.attemptedRuntimeProvider = fallbackProvider;
+      fallbackCycleState.attemptedRuntimeModel = fallbackModel;
+      // Clear strictly last: resolution + chain build + apply all succeeded.
+      await clearLiveModelSwitchPending({
+        cfg: runtimeConfig,
+        sessionKey: params.sessionKey,
+        agentId: params.followupRun.run.agentId,
+      });
+    }
+  }
 
   while (true) {
     try {

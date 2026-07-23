@@ -29,3 +29,32 @@ export class LiveSessionModelSwitchError extends Error {
     this.authProfileIdSource = selection.authProfileIdSource;
   }
 }
+
+/**
+ * Raised when a pending user-initiated `/model` switch cannot be committed
+ * because the target provider/model could not be resolved into a candidate
+ * chain (unknown provider, plugin/registry failure, secure-store read error).
+ *
+ * Carries the requested target so the reply is scoped to the model instead of a
+ * generic "Something went wrong". Because it is raised before the pending flag
+ * is cleared, `liveModelSwitchPending` survives and the switch is retried on the
+ * next user turn.
+ */
+export class LiveModelSwitchUnresolvedError extends Error {
+  provider: string;
+  model: string;
+  override cause?: unknown;
+
+  constructor(target: { provider: string; model: string }, cause?: unknown) {
+    super(
+      `Could not switch to ${target.provider}/${target.model}` +
+        (cause ? `: ${cause instanceof Error ? cause.message : String(cause)}` : ""),
+    );
+    this.name = "LiveModelSwitchUnresolvedError";
+    this.provider = target.provider;
+    this.model = target.model;
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
+  }
+}

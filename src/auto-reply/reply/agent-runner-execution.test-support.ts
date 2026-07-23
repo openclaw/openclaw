@@ -41,6 +41,9 @@ const state = vi.hoisted(() => ({
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
+  shouldSwitchToLiveModelMock: vi.fn(),
+  clearLiveModelSwitchPendingMock: vi.fn(),
+  resolveModelCandidateChainMock: vi.fn(),
 }));
 
 export const GENERIC_RUN_FAILURE_TEXT =
@@ -81,8 +84,14 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (params: unknown) => state.runCliAgentMock(params),
 }));
 
+vi.mock("../../agents/live-model-switch.js", () => ({
+  shouldSwitchToLiveModel: (params: unknown) => state.shouldSwitchToLiveModelMock(params),
+  clearLiveModelSwitchPending: (params: unknown) => state.clearLiveModelSwitchPendingMock(params),
+}));
+
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
+  resolveModelCandidateChain: (params: unknown) => state.resolveModelCandidateChainMock(params),
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
@@ -592,6 +601,18 @@ export function setupAgentRunnerExecutionTestState() {
     state.resolveCurrentTurnImagesMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
+    // Live-switch pre-flight defaults: no pending switch, chain echoes the
+    // requested target. Individual tests override these to drive a switch.
+    state.shouldSwitchToLiveModelMock.mockReset();
+    state.shouldSwitchToLiveModelMock.mockReturnValue(undefined);
+    state.clearLiveModelSwitchPendingMock.mockReset();
+    state.clearLiveModelSwitchPendingMock.mockResolvedValue(undefined);
+    state.resolveModelCandidateChainMock.mockReset();
+    state.resolveModelCandidateChainMock.mockImplementation(
+      (params: { provider: string; model: string }) => [
+        { provider: params.provider, model: params.model },
+      ],
+    );
     state.resolveCurrentTurnImagesMock.mockImplementation(
       async (params: { images?: unknown[]; imageOrder?: unknown[] }) => ({
         images: params.images,
