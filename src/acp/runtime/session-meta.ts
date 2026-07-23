@@ -163,8 +163,7 @@ function acpSessionRowMatchesEntry(
   return (
     row.session_id == null ||
     row.session_id === entry?.lifecycleRevision ||
-    // Rows written before reset boundaries stored the logical session id in this
-    // schema-neutral column. The next ACP metadata write rebinds them to the revision.
+    // Pre-boundary rows stored sessionId here; the next read rebinds them to the revision.
     (row.session_id === entry?.sessionId &&
       (entry?.sessionStartedAt === undefined || row.updated_at >= entry.sessionStartedAt))
   );
@@ -193,10 +192,7 @@ function resolveReadableAcpSessionRow(params: {
   return runOpenClawStateWriteTransaction(
     (database) => {
       const current = selectAcpSessionRow(database.db, row.session_key);
-      if (!current) {
-        return undefined;
-      }
-      if (current.session_id === lifecycleRevision || current.session_id == null) {
+      if (!current || current.session_id === lifecycleRevision || current.session_id == null) {
         return current;
       }
       if (current.session_id !== legacySessionId) {
@@ -213,7 +209,6 @@ function resolveReadableAcpSessionRow(params: {
       return { ...current, session_id: lifecycleRevision };
     },
     { env: params.env, path: params.databasePath },
-    { operationLabel: "acp.session-meta.rebind-legacy-lifecycle" },
   );
 }
 
