@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
+  listSessionEntries,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntry,
@@ -8,11 +9,15 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { loadGatewaySessionRow } from "../session-utils.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { sessionLog } from "./sessions-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 afterEach(() => {
@@ -149,45 +154,34 @@ describe("sessions.patch archive attribution", () => {
     });
   });
 
-  it("reverses only archive state when its audit cannot be appended", async () => {
+  it("archives through an alias with attribution", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKey = "agent:main:archive-audit-failure";
+      const canonicalKey = "agent:main:alias-happy-archive";
+      const aliasKey = "alias-happy-archive";
       await upsertSessionEntry(
-        { agentId: "main", sessionKey },
+        { agentId: "main", sessionKey: canonicalKey },
         {
-          sessionId: "session-archive-audit-failure",
+          sessionId: "session-canonical-happy-archive",
           updatedAt: 1,
-          pinnedAt: 2,
-          label: "original",
         },
       );
-      const append = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
-        .mockImplementationOnce(() => {
-          throw new Error("audit unavailable");
-        });
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: aliasKey },
+        { sessionId: "session-alias-happy-archive", updatedAt: 2 },
+      );
 
-      try {
-        await expect(
-          invokePatchSession(
-            { key: sessionKey, archived: true, label: "partial-success" },
-            client("profile-ada", "Ada"),
-          ),
-        ).rejects.toThrow("audit unavailable");
-      } finally {
-        append.mockRestore();
-      }
+      await patchSession({ key: aliasKey, archived: true }, client("profile-ada", "Ada"));
 
-      const restored = loadSessionEntry({ agentId: "main", sessionKey });
-      expect(restored?.archivedAt).toBeUndefined();
-      expect(restored?.archivedBy).toBeUndefined();
-      expect(restored?.pinnedAt).toBeUndefined();
-      expect(restored?.label).toBe("partial-success");
+      expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
+        archived: true,
+        archivedAt: expect.any(Number),
+        archivedBy: { type: "human", id: "profile-ada" },
+      });
     });
   });
 
-  it("reverses alias archive state without reviving a concurrently removed member", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("keeps an alias archive when its best-effort audit note fails", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const canonicalKey = "agent:main:alias-archive";
       const aliasKey = "alias-archive";
       const memberId = "profile-member";
@@ -216,25 +210,54 @@ describe("sessions.patch archive attribution", () => {
       expect(listSessionMembers(memberScope)).toEqual([
         { identityId: memberId, addedBy: "profile-owner", addedAt: 123 },
       ]);
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const readCandidateState = () => ({
+        entries: listSessionEntries({ agentId: "main" })
+          .filter(({ sessionKey }) => sessionKey === canonicalKey || sessionKey === aliasKey)
+          .toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
+        members: listSessionMembers(memberScope),
+      });
+      const readTotalChanges = () =>
+        (
+          database.db.prepare("SELECT total_changes() AS value").get() as {
+            value: number;
+          }
+        ).value;
+      let stateAtFailure: ReturnType<typeof readCandidateState> | undefined;
+      let changesAtFailure: number | undefined;
       const append = vi
         .spyOn(SessionManager.prototype, "appendMessage")
         .mockImplementationOnce(() => {
-          removeSessionMember(memberScope, memberId);
+          stateAtFailure = readCandidateState();
+          changesAtFailure = readTotalChanges();
           throw new Error("audit unavailable");
         });
+      const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
 
       try {
-        await expect(
-          invokePatchSession({ key: aliasKey, archived: true }, client("profile-ada", "Ada")),
-        ).rejects.toThrow("audit unavailable");
+        const responses = await invokePatchSession(
+          { key: aliasKey, archived: true },
+          client("profile-ada", "Ada"),
+        );
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.[0]).toBe(true);
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(
+            `sessions.patch: archived audit note failed for ${canonicalKey}; archive kept: audit unavailable`,
+          ),
+        );
       } finally {
         append.mockRestore();
+        warn.mockRestore();
       }
 
-      const restored = loadSessionEntry({ agentId: "main", sessionKey: canonicalKey });
-      expect(restored?.archivedAt).toBeUndefined();
-      expect(restored?.archivedBy).toBeUndefined();
-      expect(listSessionMembers(memberScope)).toEqual([]);
+      expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
+        archived: true,
+        archivedAt: expect.any(Number),
+        archivedBy: { type: "human", id: "profile-ada" },
+      });
+      expect(readCandidateState()).toEqual(stateAtFailure);
+      expect(readTotalChanges()).toBe(changesAtFailure);
     });
   });
 });

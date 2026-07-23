@@ -113,7 +113,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       patchModelCatalog = catalog;
       return catalog;
     };
-    let entryBeforePatch: NonNullable<typeof lifecycleEntry> | undefined;
+    let wasArchivedBeforePatch = false;
     const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
       const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
       const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
@@ -182,7 +182,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         storePath,
         resolveTarget: resolvePatchTarget,
         project: async ({ primaryKey, existingEntry, entries }) => {
-          entryBeforePatch = existingEntry ? structuredClone(existingEntry) : undefined;
+          wasArchivedBeforePatch = existingEntry?.archivedAt !== undefined;
           const projected = await projectSessionsPatchEntry({
             cfg,
             entries,
@@ -225,7 +225,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         }
         const archiveStateChanged =
           typeof p.archived === "boolean" &&
-          (entryBeforePatch?.archivedAt !== undefined) !== (result.entry.archivedAt !== undefined);
+          wasArchivedBeforePatch !== (result.entry.archivedAt !== undefined);
         if (!archiveStateChanged || !archiveActor) {
           return result;
         }
@@ -238,43 +238,17 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             now: Date.now(),
           });
         } catch (error) {
-          const rollbackArchived = entryBeforePatch?.archivedAt !== undefined;
-          const rollback = await applySessionPatchProjection({
-            agentId: target.agentId,
-            storePath,
-            resolveTarget: resolvePatchTarget,
-            project: async ({ primaryKey, existingEntry, entries }) => {
-              const projected = await projectSessionsPatchEntry({
-                cfg,
-                entries,
-                existingEntry,
-                storeKey: primaryKey,
-                agentId: requestedAgentId,
-                patch: { key: primaryKey, archived: rollbackArchived },
-                archivedBy: entryBeforePatch?.archivedBy,
-              });
-              if (!projected.ok) {
-                return projected;
-              }
-              if (entryBeforePatch?.archivedAt === undefined) {
-                delete projected.entry.archivedAt;
-              } else {
-                projected.entry.archivedAt = entryBeforePatch.archivedAt;
-              }
-              if (entryBeforePatch?.archivedBy === undefined) {
-                delete projected.entry.archivedBy;
-              } else {
-                projected.entry.archivedBy = entryBeforePatch.archivedBy;
-              }
-              return projected;
-            },
-          });
-          if (!rollback.ok) {
-            sessionLog.error(
-              `sessions.patch: failed to restore archive state for ${canonicalKey}: ${rollback.error.message}`,
-            );
-          }
-          throw error;
+          // The "<name> archived/unarchived this" system note is best-effort. The archive
+          // state (archivedAt/archivedBy) is the durable outcome and is already committed; if
+          // the note append fails (rare) keep the archive and log rather than reversing it.
+          // Reversing raced concurrent membership/pin changes and is not worth the complexity
+          // for this non-security lifecycle toggle — visibility changes, a real access
+          // boundary, still roll back on audit failure.
+          sessionLog.warn(
+            `sessions.patch: ${action} audit note failed for ${canonicalKey}; archive kept: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
         return result;
       },
