@@ -20,6 +20,8 @@ import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
+  isOAuthRefreshDead,
+  isSameOAuthRefreshGrant,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -169,11 +171,15 @@ function hasManagedProviderOAuth(
   store: AuthProfileStore,
   providerConfig: ExternalCliSyncProvider,
 ): boolean {
+  // Dead-marked credentials no longer count as managed: their refresh grant
+  // was permanently rejected, so the bootstrapOnly gate must reopen for a
+  // fresh external CLI login instead of wedging the provider forever.
   return Object.values(store.profiles).some(
     (credential) =>
       credential?.type === "oauth" &&
       listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
-      hasInlineOAuthTokenMaterial(credential),
+      hasInlineOAuthTokenMaterial(credential) &&
+      !isOAuthRefreshDead(credential),
   );
 }
 
@@ -195,14 +201,25 @@ export function readExternalCliBootstrapCredential(params: {
   if (
     provider.bootstrapOnly &&
     !params.allowInlineOAuthTokenMaterial &&
-    hasInlineOAuthTokenMaterial(params.credential)
+    hasInlineOAuthTokenMaterial(params.credential) &&
+    !isOAuthRefreshDead(params.credential)
   ) {
     return null;
   }
-  return normalizeExternalCliCredentialProvider(
+  const imported = normalizeExternalCliCredentialProvider(
     provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
     params.credential.provider,
   );
+  // Loop prevention: a dead slot may only re-seed from a DIFFERENT grant.
+  // Re-adopting the same dead refresh token would just fail refresh again.
+  if (
+    imported &&
+    isOAuthRefreshDead(params.credential) &&
+    isSameOAuthRefreshGrant(params.credential, imported)
+  ) {
+    return null;
+  }
+  return imported;
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
@@ -347,7 +364,8 @@ export function resolveExternalCliAuthProfiles(
       if (
         providerConfig.bootstrapOnly &&
         existingOAuth &&
-        hasInlineOAuthTokenMaterial(existingOAuth)
+        hasInlineOAuthTokenMaterial(existingOAuth) &&
+        !isOAuthRefreshDead(existingOAuth)
       ) {
         log.debug("kept local oauth over external cli bootstrap-only provider", {
           profileId,
@@ -379,6 +397,19 @@ export function resolveExternalCliAuthProfiles(
         existingOAuth?.provider ?? providerConfig.provider,
       );
       if (!creds) {
+        continue;
+      }
+      // Loop prevention: a dead slot may only re-seed from a DIFFERENT grant;
+      // re-adopting the same dead refresh token would just fail refresh again.
+      if (
+        existingOAuth &&
+        isOAuthRefreshDead(existingOAuth) &&
+        isSameOAuthRefreshGrant(existingOAuth, creds)
+      ) {
+        log.debug("skipped external cli bootstrap: same dead refresh grant", {
+          profileId,
+          provider: providerConfig.provider,
+        });
         continue;
       }
       if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {

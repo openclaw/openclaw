@@ -197,6 +197,12 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     if (expires !== undefined) {
       normalized.expires = expires;
     }
+    // Dead-refresh tombstones must survive reload or the external CLI re-seed
+    // gate closes again on the next auth store read.
+    const refreshDeadAt = normalizeExpiryField(entry.refreshDeadAt);
+    if (refreshDeadAt !== undefined) {
+      normalized.refreshDeadAt = refreshDeadAt;
+    }
     return normalized;
   }
   return entry as Partial<AuthProfileCredential>;
