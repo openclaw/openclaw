@@ -5,7 +5,6 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptStartRequest,
   TranscriptsStartResult,
-  TranscriptStopRequest,
   TranscriptsStopResult,
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
