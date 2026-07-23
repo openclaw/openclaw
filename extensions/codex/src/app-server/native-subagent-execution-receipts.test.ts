@@ -59,4 +59,64 @@ describe("projectCodexNativeExecutionReceipts", () => {
       commandFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
     });
   });
+
+  it.each([
+    {
+      label: "dynamic deploy with success=false",
+      item: {
+        id: "dynamic-deploy-failed",
+        type: "dynamicToolCall",
+        status: "completed",
+        tool: "deploy_site",
+        success: false,
+      },
+      kind: "deploy",
+    },
+    {
+      label: "MCP deploy with an error payload",
+      item: {
+        id: "mcp-deploy-failed",
+        type: "mcpToolCall",
+        status: "completed",
+        server: "sites",
+        tool: "deploy_site",
+        error: { message: "deployment failed" },
+      },
+      kind: "deploy",
+    },
+    {
+      label: "commit command with error status",
+      item: {
+        id: "commit-failed",
+        type: "commandExecution",
+        status: "ERROR",
+        command: "git commit -m lifecycle",
+        exitCode: 0,
+      },
+      kind: "commit",
+    },
+    ...(["blocked", "cancelled", "canceled"] as const).map((status) => ({
+      label: `test command with ${status} status`,
+      item: {
+        id: `tests-${status}`,
+        type: "commandExecution",
+        status,
+        command: "pnpm test",
+        exitCode: 0,
+      },
+      kind: "tests",
+    })),
+  ])("never projects ok artifact evidence for $label", ({ item, kind }) => {
+    const receipts = projectCodexNativeExecutionReceipts(item);
+
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        kind,
+        status: "error",
+      }),
+    ]);
+    expect(receipts).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ status: "ok" })]),
+    );
+  });
 });

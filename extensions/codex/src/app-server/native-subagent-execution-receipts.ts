@@ -141,10 +141,16 @@ export function projectCodexNativeExecutionReceipts(
 }
 
 function isFailedItem(item: JsonObject): boolean {
-  const status = readString(item, "status");
+  const status = readString(item, "status")?.toLowerCase();
   return (
     status === "failed" ||
     status === "declined" ||
+    status === "error" ||
+    status === "blocked" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    item.success === false ||
+    item.error != null ||
     (typeof item.exitCode === "number" && item.exitCode !== 0)
   );
 }
