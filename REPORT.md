@@ -23,10 +23,9 @@ Implemented the complete drafts UX on top of the landed ownership, visibility, m
 - `src/gateway/server/ws-connection/connect-hello.ts`
 - `src/gateway/server.sessions.create.test.ts`
 - `src/gateway/server.auth.default-token.suite.ts`
-- `dist/protocol.schema.json`
 - `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
 
-The Kotlin generators ran successfully; their tracked outputs were byte-identical. `dist/protocol.schema.json` is normally ignored, but was force-added because the task explicitly required committing it.
+The Kotlin generators ran successfully; their tracked outputs were byte-identical. `dist/protocol.schema.json` is generated locally by protocol checks but remains ignored and untracked, matching `origin/main`.
 
 ### Control UI
 
@@ -117,7 +116,7 @@ All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c
 ### Protocol and localization
 
 - `pnpm protocol:gen`
-  - Exit 0; wrote `dist/protocol.schema.json`.
+  - Exit 0; wrote the local ignored `dist/protocol.schema.json` without adding it to Git.
 - `pnpm protocol:gen:swift`
   - Exit 0; wrote `GatewayModels.swift`.
 - `pnpm protocol:gen:kotlin`
@@ -137,7 +136,7 @@ All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c
   - The normal invocation delegated to Testbox `tbx_01ky7qadfw9ew7vz9rwggqpbb2`, which remained queued without an IP for about three minutes. It was explicitly stopped; no remote code command ran.
   - Trusted-source fallback command: `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed`.
   - Final exit 0.
-  - Because the requested tracked `dist/protocol.schema.json` is an unknown changed surface, the gate ran all lanes: ratchets/guards, formatting, Plugin SDK API/boundaries, database-first guard, full project typecheck, all oxlint shards, and import cycles.
+  - The earlier all-lanes run included the mistakenly tracked `dist/protocol.schema.json`; cleanup verification reruns this gate with the ignored artifact removed from the branch.
   - Final line: `Import cycle check: 0 runtime value cycle(s).`
   - A loaded-host lint run first timed out while generating Plugin SDK root shims at 300 seconds. `OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS=600000 ... prepare-extension-package-boundary-artifacts.mjs` completed the same generator without weakening it; the standard final gate then reported all boundary artifacts `fresh; skipping` and passed lint.
 
@@ -146,7 +145,7 @@ All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c
 - Full feature command: `.agents/skills/autoreview/scripts/autoreview --mode uncommitted --stream-engine-output`.
   - Accepted finding: loaded session creators were an invalid proxy for Gateway identities. Fixed by adding canonical `sessionSharingIdentityCount`, with handshake and browser coverage.
   - Final source pass: no findings; explanation explicitly confirmed atomic visibility, policy/identity gating, sidebar treatment, and promotion reuse.
-  - Rejected as out of scope: pre-existing issues surfaced only because the entire normally ignored generated JSON schema became a new tracked file (artifact query scope, targetless abort, existing `sessions.create` field dependencies, Talk `callId`, ClawHub target exclusivity, and cron pacing bounds). None is introduced by the two W4 schema additions.
+  - Cleanup branch review finding: REPORT.md still claimed the ignored schema should be committed. The report was corrected to match `origin/main` tracking policy.
 - Final focused correction command used the same helper with an explicit prompt to review only `ui/src/e2e/session-ownership.e2e.test.ts` and treat untracked `SPEC.md` as context.
   - Exit 0: `autoreview clean: no accepted/actionable findings reported`, overall confidence 0.97.
 
@@ -154,14 +153,14 @@ All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c
 
 Implementation diff before adding this report, grouped by role and excluding generated/docs from production:
 
-| Group                  |  Added | Deleted |
-| ---------------------- | -----: | ------: |
-| Production             |    175 |      18 |
-| Tests and test support |    423 |       1 |
-| Generated JSON/Swift   | 67,775 |       0 |
-| Docs                   |      5 |       1 |
+| Group                  | Added | Deleted |
+| ---------------------- | ----: | ------: |
+| Production             |   175 |      18 |
+| Tests and test support |   423 |       1 |
+| Generated Swift        |     4 |       0 |
+| Docs                   |     5 |       1 |
 
-The generated total is dominated by the explicitly required, newly tracked `dist/protocol.schema.json` (67,771 lines). Non-generated production growth is the additive protocol policy/create contract plus the complete UI workflow.
+The generated total contains only the tracked Swift protocol model. The JSON schema is deliberately excluded because it is ignored and untracked on `origin/main`.
 
 ## Commits
 
