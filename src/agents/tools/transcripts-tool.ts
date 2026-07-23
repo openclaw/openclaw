@@ -105,12 +105,12 @@ async function summarizeAndPersist(params: {
     maxUtterances: params.config.maxUtterances,
   });
   const summary = summarizeTranscripts({ session: params.session, utterances });
-  const summaryPath = await params.store.writeSummary(summary, params.session);
+  const intendedSummaryPath = await params.store.writeSummary(summary, params.session);
   try {
-    await params.store.materializeSessionArtifacts(params.session, "all");
-    return { summary, summaryPath };
+    const artifacts = await params.store.materializeSessionArtifacts(params.session, "all");
+    return { summary, summaryPath: artifacts.summaryPath };
   } catch (error) {
-    return { summary, summaryPath, summaryExportError: String(error) };
+    return { summary, intendedSummaryPath, summaryExportError: String(error) };
   }
 }
 
@@ -186,19 +186,21 @@ async function stopTranscripts(params: {
   } else {
     await params.store.updateStopped(sessionSelector, stoppedAt);
   }
-  const { summaryPath, summary, summaryExportError } = await summarizeAndPersist({
-    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
-    store: params.store,
-    session: stoppedSession,
-  });
+  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+    await summarizeAndPersist({
+      config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+      store: params.store,
+      session: stoppedSession,
+    });
   return toolText(
-    `Transcripts stopped: ${sessionId}\nSummary: ${summaryPath}${summaryExportError ? `\nExport warning: ${summaryExportError}` : ""}`,
+    `Transcripts stopped: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {
       sessionId,
       ...(providerStopError ? { providerStopError } : {}),
       ...(summaryExportError ? { summaryExportError } : {}),
+      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
       summary,
-      summaryPath,
+      ...(summaryPath ? { summaryPath } : {}),
     },
   );
 }
@@ -234,19 +236,21 @@ async function importTranscripts(params: {
   for (const utterance of utterances) {
     await params.store.appendUtteranceForSession(session, utterance);
   }
-  const { summaryPath, summary, summaryExportError } = await summarizeAndPersist({
-    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
-    store: params.store,
-    session,
-  });
+  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+    await summarizeAndPersist({
+      config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+      store: params.store,
+      session,
+    });
   return toolText(
-    `Transcript imported: ${session.sessionId}\nSummary: ${summaryPath}${summaryExportError ? `\nExport warning: ${summaryExportError}` : ""}`,
+    `Transcript imported: ${session.sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {
       sessionId: session.sessionId,
       utteranceCount: utterances.length,
       ...(summaryExportError ? { summaryExportError } : {}),
+      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
       summary,
-      summaryPath,
+      ...(summaryPath ? { summaryPath } : {}),
     },
   );
 }
@@ -264,18 +268,20 @@ async function summarizeExisting(params: {
   if (!entry) {
     throw new Error(`transcripts session not found: ${sessionId}`);
   }
-  const { summaryPath, summary, summaryExportError } = await summarizeAndPersist({
-    config: params.config,
-    store: params.store,
-    session: entry.session,
-  });
+  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+    await summarizeAndPersist({
+      config: params.config,
+      store: params.store,
+      session: entry.session,
+    });
   return toolText(
-    `Transcripts summarized: ${sessionId}\nSummary: ${summaryPath}${summaryExportError ? `\nExport warning: ${summaryExportError}` : ""}`,
+    `Transcripts summarized: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {
       sessionId,
       ...(summaryExportError ? { summaryExportError } : {}),
+      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
       summary,
-      summaryPath,
+      ...(summaryPath ? { summaryPath } : {}),
     },
   );
 }
