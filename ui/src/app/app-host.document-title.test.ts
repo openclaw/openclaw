@@ -41,7 +41,7 @@ describe("OpenClaw shell document title", () => {
     return {
       gateway: {
         snapshot: {
-          connected: options.connected ?? true,
+          phase: (options.connected ?? true) ? "connected" : "reconnecting",
           assistantAgentId: options.assistantAgentId ?? null,
         },
         connection: { gatewayUrl: "ws://gateway.test" },
