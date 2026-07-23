@@ -71,13 +71,15 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
       },
     )
     .then((pluginDecision) => {
-      const decision = pluginDecision ?? defaultDecision;
-      if (decision.action !== "debounce") {
-        return decision;
+      if (!pluginDecision) {
+        return defaultDecision;
+      }
+      if (pluginDecision.action !== "debounce") {
+        return pluginDecision;
       }
       const requestedMs =
-        typeof decision.debounceMs === "number" && Number.isFinite(decision.debounceMs)
-          ? Math.max(0, Math.trunc(decision.debounceMs))
+        typeof pluginDecision.debounceMs === "number" && Number.isFinite(pluginDecision.debounceMs)
+          ? Math.max(0, Math.trunc(pluginDecision.debounceMs))
           : params.defaultDebounceMs;
       return {
         action: "debounce" as const,

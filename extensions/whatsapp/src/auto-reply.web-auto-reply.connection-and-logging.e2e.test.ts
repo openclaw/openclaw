@@ -1110,6 +1110,9 @@ describe("web auto-reply connection", () => {
   it("caps plugin debounce windows that may join rich batches", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
+    setLoadConfigMock({
+      messages: { inbound: { debounceMs: 600_000 } },
+    } as OpenClawConfig);
     inboundDebounceHookMocks.hasHooks.mockReturnValue(true);
     inboundDebounceHookMocks.runInboundDebounce.mockResolvedValue({
       action: "debounce",
@@ -1149,7 +1152,7 @@ describe("web auto-reply connection", () => {
     expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
       expect.objectContaining({
         debounceKey: "custom:rich-message",
-        defaultAction: "bypass",
+        defaultAction: "debounce",
         conversationKind: "group",
         message: { hasMedia: true, hasLocation: false, hasQuote: false },
       }),
@@ -1179,6 +1182,20 @@ describe("web auto-reply connection", () => {
       }),
       expect.any(Object),
     );
+
+    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValueOnce(undefined);
+    await expect(
+      capture.getLastOptions()?.resolveDebounceDecision?.({
+        ...msg,
+        event: { id: "text-default-1" },
+        debounceKey: "custom:text-default",
+        payload: { body: "keep channel default" },
+      }),
+    ).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 600_000,
+    });
+    resetLoadConfigMock();
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {
