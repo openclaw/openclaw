@@ -68,6 +68,7 @@ describe("wrapper classification", () => {
     { token: "elvish", dispatch: false, shell: true },
     { token: "mksh", dispatch: false, shell: true },
     { token: "nu", dispatch: false, shell: true },
+    { token: "nu.exe", dispatch: false, shell: true },
     { token: "osh", dispatch: false, shell: true },
     { token: "pwsh.exe", dispatch: false, shell: true },
     { token: "tcsh", dispatch: false, shell: true },

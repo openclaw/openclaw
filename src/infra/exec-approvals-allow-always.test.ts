@@ -835,7 +835,7 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
-  it.each(["csh", "tcsh", "mksh", "yash", "nu", "xonsh", "elvish", "osh"])(
+  it.each(["csh", "tcsh", "mksh", "yash", "nu", "nu.exe", "xonsh", "elvish", "osh"])(
     "prevents allowlist bypass for %s inline shell payloads",
     async (shellName) => {
       if (process.platform === "win32") {
@@ -845,7 +845,7 @@ $0 \\"$1\\"" touch {marker}`,
       const shell = makeExecutable(dir, shellName);
       makeExecutable(dir, "id");
       const env = makePathEnv(dir);
-      const commandFlag = shellName === "nu" ? "--commands" : "-c";
+      const commandFlag = shellName === "nu" || shellName === "nu.exe" ? "--commands" : "-c";
       const result = await evaluateShellAllowlistWithAuthorization({
         command: `${shell} ${commandFlag} 'id > marker'`,
         allowlist: [{ pattern: shell, source: "allow-always" }],

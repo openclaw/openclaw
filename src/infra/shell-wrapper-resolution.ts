@@ -62,8 +62,10 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
   return Array.from(expanded);
 }
 
-export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
-export const POSIX_PARSEABLE_SHELL_WRAPPERS = new Set(POSIX_PARSEABLE_SHELL_WRAPPER_NAMES);
+export const POSIX_SHELL_WRAPPERS = new Set(withWindowsExeAliases(POSIX_SHELL_WRAPPER_NAMES));
+export const POSIX_PARSEABLE_SHELL_WRAPPERS = new Set(
+  withWindowsExeAliases(POSIX_PARSEABLE_SHELL_WRAPPER_NAMES),
+);
 export const POWERSHELL_WRAPPERS = new Set(withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES));
 
 const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
