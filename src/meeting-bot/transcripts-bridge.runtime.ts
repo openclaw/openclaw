@@ -27,6 +27,8 @@ type ActiveCapture<TSession extends MeetingSessionRecord> = {
   descriptor: TranscriptSessionDescriptor;
   finalCaptureError?: string;
   finalCaptureFailedAt?: string;
+  initialized: boolean;
+  polling: boolean;
   runCapture(task: () => Promise<void>): Promise<void>;
   session: TSession;
   timer?: ReturnType<typeof setInterval>;
@@ -170,16 +172,6 @@ export function createMeetingDurableTranscriptBridge<
           return;
         }
         const descriptor = descriptorForSession(session, params.options);
-        try {
-          await store.writeSession(descriptor);
-        } catch (error) {
-          params.logger.warn(
-            `[meeting-transcripts] could not start durable capture session=${session.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          return;
-        }
         let captureQueue = Promise.resolve();
         const runCapture = async (task: () => Promise<void>) => {
           const result = captureQueue.catch(() => {}).then(task);
@@ -192,21 +184,49 @@ export function createMeetingDurableTranscriptBridge<
         const active: ActiveCapture<TSession> = {
           closing: false,
           descriptor,
+          initialized: false,
+          polling: false,
           runCapture,
           session,
           utteranceCount: 0,
         };
+        captures.set(session.id, active);
+        // Start and stop share runLifecycle(session.id), so teardown cannot mark
+        // this published capture closing while initialization awaits.
+        try {
+          await store.writeSession(descriptor);
+          active.initialized = true;
+        } catch (error) {
+          params.logger.warn(
+            `[meeting-transcripts] could not start durable capture session=${session.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
         const timer = setInterval(() => {
+          // This is polling, not an edge-triggered notification: a skipped tick is
+          // followed within CAPTURE_INTERVAL_MS, and stop queues a final snapshot.
+          if (active.polling || active.closing) {
+            return;
+          }
+          active.polling = true;
           void active
             .runCapture(capture)
-            .catch((error: unknown) => reportCaptureError(session.id, error));
+            .catch((error: unknown) => reportCaptureError(session.id, error))
+            .finally(() => {
+              active.polling = false;
+            });
         }, CAPTURE_INTERVAL_MS);
         timer.unref?.();
         active.timer = timer;
-        captures.set(session.id, active);
-        await active
-          .runCapture(capture)
-          .catch((error: unknown) => reportCaptureError(session.id, error));
+        active.polling = true;
+        try {
+          await active
+            .runCapture(capture)
+            .catch((error: unknown) => reportCaptureError(session.id, error));
+        } finally {
+          active.polling = false;
+        }
       });
     },
     async ingest(session, lines) {
@@ -275,6 +295,18 @@ export function createMeetingDurableTranscriptBridge<
       if (!active) {
         return false;
       }
+      let initializationError: Error | undefined;
+      if (!active.initialized) {
+        try {
+          await store.writeSession(active.descriptor);
+          active.initialized = true;
+        } catch (error) {
+          initializationError =
+            error instanceof Error
+              ? error
+              : new Error("could not initialize durable transcript session", { cause: error });
+        }
+      }
       let deliveryError: MeetingTranscriptDeliveryError | undefined;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
@@ -298,6 +330,9 @@ export function createMeetingDurableTranscriptBridge<
       }
       if (deliveryError) {
         throw deliveryError;
+      }
+      if (initializationError !== undefined) {
+        throw initializationError;
       }
       const finalCaptureError = active.finalCaptureError;
       const stoppedAt = new Date().toISOString();

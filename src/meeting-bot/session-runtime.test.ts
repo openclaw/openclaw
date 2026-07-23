@@ -367,7 +367,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     });
     await runtime.leave(session.id);
 
-    expect(captureTranscript).toHaveBeenCalledOnce();
+    expect(captureTranscript).toHaveBeenCalledTimes(2);
     expect(captureTranscript).toHaveBeenCalledWith({ finalize: true });
   });
 
