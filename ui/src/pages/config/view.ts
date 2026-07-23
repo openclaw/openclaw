@@ -42,7 +42,7 @@ import {
   canonicalLobsterLook,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
-import { highlightJsonHtml } from "../../components/markdown.ts";
+import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
