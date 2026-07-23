@@ -19,9 +19,13 @@ afterEach(() => {
 });
 
 function mockClawtributorsFixture({
+  contributorLogin = "octo",
+  contributorName = "Octo",
   ensureLogins = [],
   runGh,
 }: {
+  contributorLogin?: string;
+  contributorName?: string;
   ensureLogins?: string[];
   runGh?: GhRunner;
 } = {}) {
@@ -54,9 +58,9 @@ function mockClawtributorsFixture({
     }),
   }));
   const contributor = {
-    login: "octo",
-    name: "Octo",
-    html_url: "https://github.com/octo",
+    login: contributorLogin,
+    name: contributorName,
+    html_url: `https://github.com/${contributorLogin}`,
     avatar_url: "https://avatars.githubusercontent.com/u/1?v=4",
     contributions: 3,
   };
@@ -129,6 +133,24 @@ async function importUpdateClawtributors() {
 }
 
 describe("update-clawtributors", () => {
+  it("generates fixed-size, escaped markup for every visible contributor", async () => {
+    const fixture = mockClawtributorsFixture({
+      contributorLogin: "future-user",
+      contributorName: 'Future & "Friends" <Team>',
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await importUpdateClawtributors();
+
+    expect(fixture.readWrittenReadme()).toContain(
+      '<a href="https://github.com/future-user"><img src="https://avatars.githubusercontent.com/u/1?v=4&s=48" width="48" height="48" alt="Future &amp; &quot;Friends&quot; &lt;Team&gt;"></a>',
+    );
+  });
+
   it("bounds every GitHub CLI lookup", async () => {
     const fixture = mockClawtributorsFixture({ ensureLogins: ["extra"] });
     vi.stubGlobal(
