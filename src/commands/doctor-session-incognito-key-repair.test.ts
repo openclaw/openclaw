@@ -36,33 +36,26 @@ describe("doctor reserved incognito session key repair", () => {
     const baseLegacyKey = "agent:main:dashboard:legacy-incognito-collision";
     const newKey = `${baseLegacyKey}-1`;
     try {
+      const entryJson = JSON.stringify({
+        sessionId: "session-old",
+        parentSessionKey: oldKey,
+        spawnedBy: oldKey,
+        completionOwnerSessionKey: oldKey,
+        forkSource: { sessionKey: oldKey, sessionId: "source" },
+        compactionCheckpoints: [{ checkpointId: "checkpoint", sessionKey: oldKey }],
+        systemPromptReport: { source: "run", generatedAt: 1, sessionKey: oldKey },
+        pluginExtensions: { test: { label: oldKey } },
+      });
       database.db
         .prepare(
-          "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES (?, ?, 'conversation', 1, 1, ?, ?)",
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by, fork_source_session_key) VALUES (?, ?, ?, 1, ?, ?, ?)",
+        )
+        .run(oldKey, "session-old", entryJson, oldKey, oldKey, oldKey);
+      database.db
+        .prepare(
+          "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES (?, ?, 'conversation', 1, 1, ?, ?)",
         )
         .run("session-old", oldKey, oldKey, oldKey);
-      database.db
-        .prepare(
-          "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
-        )
-        .run(
-          oldKey,
-          "session-old",
-          JSON.stringify({
-            sessionId: "session-old",
-            parentSessionKey: oldKey,
-            completionOwnerSessionKey: oldKey,
-            forkSource: { sessionKey: oldKey, sessionId: "source" },
-            compactionCheckpoints: [{ checkpointId: "checkpoint", sessionKey: oldKey }],
-            systemPromptReport: { source: "run", generatedAt: 1, sessionKey: oldKey },
-            pluginExtensions: { test: { label: oldKey } },
-          }),
-        );
-      database.db
-        .prepare(
-          "INSERT INTO session_routes (session_key, session_id, updated_at) VALUES (?, ?, 1)",
-        )
-        .run(oldKey, "session-old");
       database.db
         .prepare(
           "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('conversation-1', 'webchat', 'default', 'direct', 'peer', 'peer', '{}', 1, 1)",
@@ -85,14 +78,18 @@ describe("doctor reserved incognito session key repair", () => {
         .run("a".repeat(43), oldKey, JSON.stringify([baseLegacyKey]));
       secondaryDatabase.db
         .prepare(
-          "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES ('session-work', 'agent:work:dashboard:regular', 'conversation', 1, 1, ?, ?)",
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key, spawned_by) VALUES ('agent:work:dashboard:regular', 'session-work', ?, 1, ?, ?)",
         )
-        .run(oldKey, oldKey);
+        .run(
+          JSON.stringify({ sessionId: "session-work", completionOwnerSessionKey: oldKey }),
+          oldKey,
+          oldKey,
+        );
       secondaryDatabase.db
         .prepare(
-          "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES ('agent:work:dashboard:regular', 'session-work', ?, 1)",
+          "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, parent_session_key, spawned_by) VALUES ('session-work', 'agent:work:dashboard:regular', 'conversation', 1, 1, ?, ?)",
         )
-        .run(JSON.stringify({ sessionId: "session-work", completionOwnerSessionKey: oldKey }));
+        .run(oldKey, oldKey);
       stateDatabase.db
         .prepare(
           "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 1)",
@@ -118,6 +115,11 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO board_widgets (session_key, name, tab_id, content_kind, html, sha256, view_generation, revision, size_w, size_h, position, created_by, created_at, updated_at) VALUES (?, 'widget-1', 'tab-1', 'html', X'00', 'sha', 'view-1', 1, 1, 1, 0, 'user', 1, 1)",
         )
         .run(oldKey);
+      database.db
+        .prepare(
+          "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, 'member-1', 'owner-1', 1)",
+        )
+        .run(oldKey);
 
       expect(repairReservedIncognitoSessionKeys({ apply: false, cfg: {}, env })).toEqual({
         found: 1,
@@ -130,12 +132,21 @@ describe("doctor reserved incognito session key repair", () => {
 
       expect(
         database.db
-          .prepare("SELECT session_key, parent_session_key, spawned_by FROM sessions")
+          .prepare(
+            "SELECT session_key, parent_session_key, spawned_by, fork_source_session_key FROM session_nodes",
+          )
+          .get(),
+      ).toEqual({
+        session_key: newKey,
+        parent_session_key: newKey,
+        spawned_by: newKey,
+        fork_source_session_key: newKey,
+      });
+      expect(
+        database.db
+          .prepare("SELECT session_key, parent_session_key, spawned_by FROM session_windows")
           .get(),
       ).toEqual({ session_key: newKey, parent_session_key: newKey, spawned_by: newKey });
-      expect(database.db.prepare("SELECT session_key FROM session_routes").get()).toEqual({
-        session_key: newKey,
-      });
       expect(
         database.db.prepare("SELECT source_session_key FROM conversation_deliveries").get(),
       ).toEqual({ source_session_key: newKey });
@@ -146,6 +157,9 @@ describe("doctor reserved incognito session key repair", () => {
         session_key: newKey,
       });
       expect(database.db.prepare("SELECT session_key FROM board_widgets").get()).toEqual({
+        session_key: newKey,
+      });
+      expect(database.db.prepare("SELECT session_key FROM session_members").get()).toEqual({
         session_key: newKey,
       });
       expect(stateDatabase.db.prepare("SELECT session_key FROM session_state_heads").get()).toEqual(
@@ -170,16 +184,18 @@ describe("doctor reserved incognito session key repair", () => {
         audience_session_keys_json: JSON.stringify([baseLegacyKey]),
       });
       expect(
-        secondaryDatabase.db.prepare("SELECT parent_session_key, spawned_by FROM sessions").get(),
+        secondaryDatabase.db
+          .prepare("SELECT parent_session_key, spawned_by FROM session_windows")
+          .get(),
       ).toEqual({ parent_session_key: newKey, spawned_by: newKey });
       const secondaryEntry = secondaryDatabase.db
-        .prepare("SELECT entry_json FROM session_entries")
+        .prepare("SELECT entry_json FROM session_nodes")
         .get() as { entry_json: string };
       expect(JSON.parse(secondaryEntry.entry_json)).toMatchObject({
         completionOwnerSessionKey: newKey,
       });
       const entry = database.db
-        .prepare("SELECT session_key, entry_json FROM session_entries")
+        .prepare("SELECT session_key, entry_json FROM session_nodes")
         .get() as { session_key: string; entry_json: string };
       expect(entry.session_key).toBe(newKey);
       expect(JSON.parse(entry.entry_json)).toMatchObject({
@@ -215,24 +231,24 @@ describe("doctor reserved incognito session key repair", () => {
     const resumedKey = "agent:main:dashboard:legacy-incognito-interrupted-resumed";
     database.db
       .prepare(
-        "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-old', ?, 'conversation', 1, 1)",
-      )
-      .run(oldKey);
-    database.db
-      .prepare(
-        "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, 'session-old', ?, 1)",
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'session-old', ?, 1)",
       )
       .run(oldKey, JSON.stringify({ sessionId: "session-old" }));
     database.db
       .prepare(
-        "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-new', ?, 'conversation', 1, 1)",
+        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-old', ?, 'conversation', 1, 1)",
       )
-      .run(newCollisionKey);
+      .run(oldKey);
     database.db
       .prepare(
-        "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, 'session-new', ?, 1)",
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'session-new', ?, 1)",
       )
       .run(newCollisionKey, JSON.stringify({ sessionId: "session-new" }));
+    database.db
+      .prepare(
+        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('session-new', ?, 'conversation', 1, 1)",
+      )
+      .run(newCollisionKey);
     stateDatabase.db
       .prepare(
         "INSERT INTO state_leases (scope, lease_key, owner, payload_json, created_at, updated_at) VALUES ('doctor-session-key-migration', 'reserved-incognito-v1', 'openclaw-doctor', ?, 1, 1)",
@@ -259,7 +275,7 @@ describe("doctor reserved incognito session key repair", () => {
     });
     expect(
       database.db
-        .prepare("SELECT session_key FROM sessions ORDER BY session_key")
+        .prepare("SELECT session_key FROM session_nodes ORDER BY session_key")
         .all()
         .map((row) => (row as { session_key: string }).session_key),
     ).toEqual([resumedKey, "agent:main:dashboard:legacy-incognito-new"].toSorted());

@@ -183,13 +183,13 @@ function listReservedIncognitoKeys(database: DatabaseSync): string[] {
   const keys = new Set<string>();
   for (const row of executeSqliteQuerySync(
     database,
-    db.selectFrom("sessions").select("session_key"),
+    db.selectFrom("session_nodes").select("session_key"),
   ).rows) {
     keys.add(row.session_key);
   }
   for (const row of executeSqliteQuerySync(
     database,
-    db.selectFrom("session_entries").select("session_key"),
+    db.selectFrom("session_windows").select("session_key"),
   ).rows) {
     keys.add(row.session_key);
   }
@@ -209,8 +209,21 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
   collect(
     executeSqliteQuerySync(
       database,
-      db.selectFrom("sessions").select(["session_key", "parent_session_key", "spawned_by"]),
+      db.selectFrom("session_windows").select(["session_key", "parent_session_key", "spawned_by"]),
     ).rows.flatMap((row) => [row.session_key, row.parent_session_key, row.spawned_by]),
+  );
+  collect(
+    executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom("session_nodes")
+        .select(["session_key", "parent_session_key", "spawned_by", "fork_source_session_key"]),
+    ).rows.flatMap((row) => [
+      row.session_key,
+      row.parent_session_key,
+      row.spawned_by,
+      row.fork_source_session_key,
+    ]),
   );
   collect(
     executeSqliteQuerySync(
@@ -218,21 +231,9 @@ function collectOccupiedSessionKeys(database: DatabaseSync): Set<string> {
       db.selectFrom("conversation_deliveries").select("source_session_key"),
     ).rows.map((row) => row.source_session_key),
   );
-  collect(
-    executeSqliteQuerySync(
-      database,
-      db.selectFrom("session_routes").select("session_key"),
-    ).rows.map((row) => row.session_key),
-  );
-  collect(
-    executeSqliteQuerySync(
-      database,
-      db.selectFrom("session_entries").select("session_key"),
-    ).rows.map((row) => row.session_key),
-  );
   for (const row of executeSqliteQuerySync(
     database,
-    db.selectFrom("session_entries").select("entry_json"),
+    db.selectFrom("session_nodes").select("entry_json"),
   ).rows) {
     try {
       collectSessionEntryKeyFields(JSON.parse(row.entry_json), keys);
@@ -265,36 +266,57 @@ function updateSessionKeyColumns(database: DatabaseSync, rename: ReservedKeyRena
     executeSqliteQuerySync(database, query);
   update(
     db
-      .updateTable("sessions")
+      .updateTable("session_windows")
       .set({ session_key: rename.to })
       .where("session_key", "=", rename.from),
   );
   update(
     db
-      .updateTable("sessions")
+      .updateTable("session_windows")
       .set({ parent_session_key: rename.to })
       .where("parent_session_key", "=", rename.from),
   );
   update(
-    db.updateTable("sessions").set({ spawned_by: rename.to }).where("spawned_by", "=", rename.from),
+    db
+      .updateTable("session_windows")
+      .set({ spawned_by: rename.to })
+      .where("spawned_by", "=", rename.from),
   );
   update(
     db
-      .updateTable("session_routes")
+      .updateTable("session_nodes")
       .set({ session_key: rename.to })
       .where("session_key", "=", rename.from),
   );
   update(
     db
-      .updateTable("session_entries")
-      .set({ session_key: rename.to })
-      .where("session_key", "=", rename.from),
+      .updateTable("session_nodes")
+      .set({ parent_session_key: rename.to })
+      .where("parent_session_key", "=", rename.from),
+  );
+  update(
+    db
+      .updateTable("session_nodes")
+      .set({ spawned_by: rename.to })
+      .where("spawned_by", "=", rename.from),
+  );
+  update(
+    db
+      .updateTable("session_nodes")
+      .set({ fork_source_session_key: rename.to })
+      .where("fork_source_session_key", "=", rename.from),
   );
   update(
     db
       .updateTable("conversation_deliveries")
       .set({ source_session_key: rename.to })
       .where("source_session_key", "=", rename.from),
+  );
+  update(
+    db
+      .updateTable("session_members")
+      .set({ session_key: rename.to })
+      .where("session_key", "=", rename.from),
   );
   update(
     db
@@ -329,7 +351,7 @@ function rewriteSessionEntryJsonReferences(
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
   const rows = executeSqliteQuerySync(
     database,
-    db.selectFrom("session_entries").select(["session_key", "entry_json"]),
+    db.selectFrom("session_nodes").select(["session_key", "entry_json"]),
   ).rows;
   for (const row of rows) {
     let parsed: unknown;
@@ -346,7 +368,7 @@ function rewriteSessionEntryJsonReferences(
     executeSqliteQuerySync(
       database,
       db
-        .updateTable("session_entries")
+        .updateTable("session_nodes")
         .set({ entry_json: entryJson })
         .where("session_key", "=", row.session_key),
     );

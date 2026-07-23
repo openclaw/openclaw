@@ -1852,8 +1852,9 @@ runtime contract:
   `patchSessionEntry`, `deleteSessionEntry`, and `listSessionEntries`.
 - Whole-store rewrite helpers, file writers, queue tests, alias pruning, and
   legacy-key deletion parameters are gone from runtime.
-- Deprecated root-package compatibility exports still adapt canonical
-  `sessions.json` paths onto the SQLite row APIs.
+- Deprecated root-package compatibility exports delegate to the doctor-only
+  `sessions.json` importer through 2026-10-12; Plugin SDK compatibility reads
+  continue to project canonical SQLite rows.
 - `sessions.json` parsing remains only in doctor migration/import code and
   doctor tests.
 - Runtime lifecycle fallback reads SQLite transcript headers, not JSONL first

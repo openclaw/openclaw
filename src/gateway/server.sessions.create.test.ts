@@ -89,7 +89,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     });
     expect(
       openedIncognitoDatabase.db
-        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
         .get(key),
     ).toEqual({ session_key: key });
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.incognito).toBe(true);
@@ -101,7 +101,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     });
     expect(
       persistentDatabase.db
-        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
         .get(key),
     ).toBeUndefined();
 
@@ -178,9 +178,9 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     });
     expect(
       persistentDatabase.db
-        .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
+        .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
         .get(durableSubagentKey),
-    ).toEqual({ session_id: "durable-subagent" });
+    ).toEqual({ current_session_id: "durable-subagent" });
 
     const deleted = await directSessionReq<{ archived: string[]; deleted: boolean }>(
       "sessions.delete",
@@ -197,7 +197,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     });
-    for (const table of ["session_entries", "sessions", "transcript_events"] as const) {
+    for (const table of ["session_nodes", "session_windows", "transcript_events"] as const) {
       expect(incognitoDatabase.db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
         count: 0,
       });
@@ -221,7 +221,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
     expect(resetRematerialized.payload).toMatchObject({ deleted: true });
     expect(
       openedIncognitoDatabase.db
-        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
         .get(key),
     ).toBeUndefined();
 
@@ -256,21 +256,21 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
       },
     });
     const durableCollisionKey = "agent:main:dashboard:incognito-durable-collision";
+    const durableCollisionUpdatedAt = Date.now();
     persistentDatabase.db
       .prepare(
-        "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-      )
-      .run("durable-collision", durableCollisionKey, "conversation", Date.now(), Date.now());
-    persistentDatabase.db
-      .prepare(
-        "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, 'durable-collision', ?, ?)",
       )
       .run(
         durableCollisionKey,
-        "durable-collision",
-        JSON.stringify({ sessionId: "durable-collision", updatedAt: Date.now() }),
-        Date.now(),
+        JSON.stringify({ sessionId: "durable-collision", updatedAt: durableCollisionUpdatedAt }),
+        durableCollisionUpdatedAt,
       );
+    persistentDatabase.db
+      .prepare(
+        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES ('durable-collision', ?, 'conversation', ?, ?)",
+      )
+      .run(durableCollisionKey, durableCollisionUpdatedAt, durableCollisionUpdatedAt);
     const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
       agentId: "main",
       key: durableCollisionKey,
@@ -386,7 +386,7 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
     });
     expect(
       persistentDatabase.db
-        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
         .get(sessionKey),
     ).toBeUndefined();
   } finally {

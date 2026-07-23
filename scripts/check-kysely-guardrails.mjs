@@ -42,6 +42,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-registry.ts",
     "src/state/openclaw-agent-db-schema-helpers.ts",
     "src/state/openclaw-agent-db-schema.ts",
+    "src/state/openclaw-agent-db-session-nodes-migration.ts",
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",

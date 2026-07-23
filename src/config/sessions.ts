@@ -19,7 +19,7 @@ export {
   resolveSessionEntryCandidateTarget,
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
-export * from "./sessions/store.js";
+export { resolveSessionStoreEntry } from "./sessions/store-entry.js";
 export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-file.js";

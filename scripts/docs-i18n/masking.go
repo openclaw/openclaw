@@ -161,6 +161,50 @@ func maskedListMarkerPlaceholders(mapping map[string]string) map[string]string {
 	return placeholders
 }
 
+func normalizeMaskedListMarkerSpacing(source, translated string, listPlaceholders map[string]string) string {
+	type replacement struct {
+		start int
+		end   int
+		value string
+	}
+	replacements := make([]replacement, 0, len(listPlaceholders))
+	for placeholder := range listPlaceholders {
+		sourcePosition := strings.Index(source, placeholder)
+		translatedPosition := strings.Index(translated, placeholder)
+		if sourcePosition < 0 || translatedPosition < 0 {
+			continue
+		}
+		sourceStart := markdownWhitespaceRunStart(source, sourcePosition)
+		translatedStart := markdownWhitespaceRunStart(translated, translatedPosition)
+		sourceSpacing := source[sourceStart:sourcePosition]
+		if translated[translatedStart:translatedPosition] == sourceSpacing {
+			continue
+		}
+		replacements = append(replacements, replacement{
+			start: translatedStart,
+			end:   translatedPosition,
+			value: sourceSpacing,
+		})
+	}
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start > replacements[j].start })
+	for _, item := range replacements {
+		translated = translated[:item.start] + item.value + translated[item.end:]
+	}
+	return translated
+}
+
+func markdownWhitespaceRunStart(text string, position int) int {
+	for position > 0 {
+		switch text[position-1] {
+		case ' ', '\t', '\r', '\n':
+			position--
+		default:
+			return position
+		}
+	}
+	return position
+}
+
 func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]string) string {
 	ranges := markdownListMarkerRanges(text)
 	if len(ranges) == 0 {

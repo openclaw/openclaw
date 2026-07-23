@@ -1865,6 +1865,7 @@ export async function runHeartbeatOnce(opts: {
       persistHeartbeatOutcome({
         agentId,
         sessionKey,
+        storePath,
         runSessionKey,
         response: heartbeatToolResponse,
         taskNames: dueHeartbeatTasks.map((task) => task.name),

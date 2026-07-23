@@ -689,14 +689,13 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     const hasSessionEntries = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_entries'")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'")
       .get();
     const rows = hasSessionEntries
       ? db
           .prepare(
-            `SELECT se.session_key AS key, sr.session_id, se.entry_json AS value_json
-             FROM session_entries AS se
-             INNER JOIN session_routes AS sr ON sr.session_key = se.session_key`,
+            `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
+             FROM session_nodes`,
           )
           .all()
       : db

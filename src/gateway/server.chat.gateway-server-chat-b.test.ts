@@ -22,7 +22,6 @@ import {
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
@@ -3719,86 +3718,6 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       clearConfigCache();
       await removeTempDir(sessionDir);
-    }
-  });
-
-  test("chat.send keeps distinct sends independent when a session ID appears during the first turn", async () => {
-    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
-    const dispatchRelease = createDeferred();
-    try {
-      const storePath = path.join(sessionDir, "sessions.json");
-      testState.sessionStorePath = storePath;
-      await writeSessionStore({ entries: {} });
-      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const context = createDirectChatContext();
-      dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
-      const { chatHandlers } = await import("./server-methods/chat.js");
-      const callSend = (id: string, idempotencyKey: string) => {
-        const params = {
-          sessionKey: "main",
-          message: "create this session once",
-          idempotencyKey,
-        };
-        return expectDefined(
-          chatHandlers["chat.send"],
-          'chatHandlers["chat.send"] test invariant',
-        )({
-          req: { type: "req", id, method: "chat.send", params },
-          params,
-          client: null,
-          isWebchatConnect: () => false,
-          respond: ((ok, payload, error) => {
-            responses.push({ id, ok, payload, error });
-          }) as RespondFn,
-          context,
-        });
-      };
-
-      const first = Promise.resolve(callSend("first", "idem-new-session-a"));
-      await waitForFast(() => {
-        expect(responses[0]).toEqual({
-          id: "first",
-          ok: true,
-          payload: expect.objectContaining({
-            runId: "idem-new-session-a",
-            status: "started",
-          }),
-          error: undefined,
-        });
-      }, FAST_WAIT_OPTS);
-      await fs.writeFile(
-        storePath,
-        JSON.stringify({
-          main: {
-            sessionId: "sess-created-during-run",
-            updatedAt: Date.now(),
-          },
-        }),
-        "utf8",
-      );
-      invalidateSessionStoreCache(storePath);
-
-      const duplicate = Promise.resolve(callSend("duplicate", "idem-new-session-b"));
-      await waitForFast(() => {
-        expect(responses.at(-1)).toEqual({
-          id: "duplicate",
-          ok: true,
-          payload: expect.objectContaining({ runId: "idem-new-session-b", status: "started" }),
-          error: undefined,
-        });
-      }, FAST_WAIT_OPTS);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-
-      dispatchRelease.resolve();
-      await Promise.all([first, duplicate]);
-      await waitForFast(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
-      }, FAST_WAIT_OPTS);
-    } finally {
-      dispatchRelease.resolve();
-      dispatchInboundMessageMock.mockReset();
-      testState.sessionStorePath = undefined;
-      clearConfigCache();
     }
   });
 

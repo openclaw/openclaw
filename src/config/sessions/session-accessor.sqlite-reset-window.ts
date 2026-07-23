@@ -13,7 +13,7 @@ import type { SessionTranscriptProjectionState } from "./session-transcript-inde
 type ResetWindowDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_transcript_active_events"
-  | "session_transcript_generations"
+  | "transcript_rewrite_watermarks"
   | "transcript_event_identities"
   | "transcript_events"
 >;
@@ -112,7 +112,7 @@ function readTranscriptGeneration(projection: ResetWindowProjection): string | u
   return executeSqliteQueryTakeFirstSync(
     projection.database.db,
     getResetWindowKysely(projection.database)
-      .selectFrom("session_transcript_generations")
+      .selectFrom("transcript_rewrite_watermarks")
       .select("generation")
       .where("session_id", "=", projection.resolved.sessionId),
   )?.generation;

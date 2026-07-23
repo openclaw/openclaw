@@ -809,6 +809,21 @@ func TestEscapeUnexpectedMarkdownListMarkersPreservesFencedExamples(t *testing.T
 	}
 }
 
+func TestNormalizeMaskedListMarkerSpacingRestoresSourceWhitespace(t *testing.T) {
+	t.Parallel()
+
+	first := "__OC_I18N_000001__"
+	second := "__OC_I18N_000002__"
+	markers := map[string]string{first: "- ", second: "  - "}
+	source := "Intro.\n\n" + first + "First\n  continuation\n" + second + "Second\n"
+	translated := "Einleitung. " + first + "Erste\n  Fortsetzung\n\n\n" + second + "Zweite\n"
+	want := "Einleitung.\n\n" + first + "Erste\n  Fortsetzung\n" + second + "Zweite\n"
+
+	if got := normalizeMaskedListMarkerSpacing(source, translated, markers); got != want {
+		t.Fatalf("unexpected normalized spacing:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranslatedInlineCode(t *testing.T) {
 	t.Parallel()
 

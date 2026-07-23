@@ -2361,6 +2361,8 @@ export const en: TranslationMap = {
     toolRuns: "{count} runs",
     identity: {
       title: "Identity",
+      menuLabel: "Identity menu",
+      menuButtonLabel: "Identity and app menu for {name}",
       description: "Your profile on this gateway.",
       loading: "Loading your identity…",
       profileUnavailable: "Your identity profile could not be loaded.",

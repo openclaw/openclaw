@@ -91,9 +91,6 @@ describe("AppSidebar viewer presence", () => {
       createSessions("main", ["agent:main:main", "agent:main:work"]),
     );
     sidebar.connected = true;
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-
     gatewayHarness.publishEvent("presence", {
       presence: [
         {
@@ -174,10 +171,6 @@ describe("AppSidebar viewer presence", () => {
       "Self User",
     );
     expect(identityChip?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
-    identityChip?.click();
-    expect(onNavigate).toHaveBeenCalledWith("profile", {
-      hash: "#settings-profile-identity",
-    });
 
     const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
