@@ -109,11 +109,12 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return [WRITE_SCOPE];
   }
-  const record = params as { incognito?: unknown; parentSessionKey?: unknown };
+  const record = params as { incognito?: unknown; key?: unknown; parentSessionKey?: unknown };
   // Incognito creation and inheritance expose process-only session state; cwd and
   // execNode target privileged host resources. All require operator.admin.
   if (
     record.incognito === true ||
+    (typeof record.key === "string" && isIncognitoSessionKey(record.key)) ||
     (typeof record.parentSessionKey === "string" &&
       isIncognitoSessionKey(record.parentSessionKey)) ||
     Object.hasOwn(params, "cwd") ||

@@ -189,8 +189,11 @@ function authorizeIncognitoSessionTarget(params: {
   if (!incognito) {
     return null;
   }
+  if (isGatewayAdmin(params.client)) {
+    return null;
+  }
   const identity = gatewayClientSessionCreator(params.client);
-  if (!identity || params.target?.entry.createdActor?.id === identity.id) {
+  if (!identity) {
     return null;
   }
   return incognitoSessionNotFound(params.sessionKey);
@@ -704,7 +707,7 @@ export function canReceiveSessionEvent(params: {
   return params.sessionKeys.every((sessionKey) => {
     const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
     return (
-      (!snapshot.incognito && snapshot.visibility !== "draft") || snapshot.creatorId === identity.id
+      !snapshot.incognito && (snapshot.visibility !== "draft" || snapshot.creatorId === identity.id)
     );
   });
 }
@@ -721,7 +724,7 @@ export function filterDraftSessionsForClient(params: {
     Object.entries(params.store).filter(([sessionKey, entry]) => {
       const owner = entry.createdActor?.id === identity.id;
       const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
-      return owner || (!incognito && resolveSessionVisibility(entry) !== "draft");
+      return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
     }),
   );
 }

@@ -131,7 +131,8 @@ describe("session sharing handlers", () => {
         { sessionId: "session-main", updatedAt: 1 },
       );
       const viewer = identifiedClient("viewer@example.com");
-      const owner = identifiedClient("owner@example.com");
+      const admin = soloClient();
+      admin.connect.scopes = ["operator.admin"];
       const listFor = async (client: GatewayClient) => {
         const responses: Parameters<RespondFn>[] = [];
         await sessionReadHandlers["sessions.list"]?.({
@@ -167,7 +168,10 @@ describe("session sharing handlers", () => {
       const hidden = await listFor(viewer);
       expect(hidden?.path).toBe(before?.path);
       expect(hidden?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
-      const visible = await listFor(owner);
+      const creator = await listFor(identifiedClient("owner@example.com"));
+      expect(creator?.path).toBe(before?.path);
+      expect(creator?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
+      const visible = await listFor(admin);
       expect(visible?.sessions?.some((session) => session.key === incognitoKey)).toBe(true);
       expect(visible?.path).not.toBe(before?.path);
     });

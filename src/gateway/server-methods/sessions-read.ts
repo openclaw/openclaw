@@ -391,8 +391,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           ? sessions
           : sessions.filter(
               (session) =>
-                (!session.incognito && session.visibility !== "draft") ||
-                session.sharingRole === "owner",
+                !session.incognito &&
+                (session.visibility !== "draft" || session.sharingRole === "owner"),
             );
         return {
           ...result,

@@ -343,9 +343,14 @@ describe("method scope resolution", () => {
   });
 
   it("requires admin for incognito session creation and inheritance", () => {
+    const incognitoKey = "agent:main:dashboard:incognito-parent";
     for (const params of [
       { agentId: "main", incognito: true },
-      { parentSessionKey: "agent:main:dashboard:incognito-parent" },
+      { key: incognitoKey },
+      { parentSessionKey: incognitoKey },
+      { parentSessionKey: incognitoKey, fork: true },
+      { parentSessionKey: incognitoKey, spawnDepth: 1 },
+      { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
     ]) {
       expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
         "operator.admin",

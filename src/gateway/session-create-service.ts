@@ -305,6 +305,8 @@ export async function createGatewaySession(params: {
   initialEntry?: TrustedInitialSessionEntry;
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
+  /** Admitted operator scopes; omitted only by trusted in-process callers. */
+  requestingOperatorScopes?: readonly string[];
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
@@ -536,6 +538,19 @@ export async function createGatewaySession(params: {
   const parentIncognito =
     parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
   const incognito = params.incognito === true || parentIncognito;
+  if (
+    incognito &&
+    params.requestingOperatorScopes !== undefined &&
+    !params.requestingOperatorScopes.includes(ADMIN_SCOPE)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `incognito sessions require gateway scope: ${ADMIN_SCOPE}`,
+      ),
+    };
+  }
   if (incognito && canonicalParentSessionKey && !parentIncognito) {
     return {
       ok: false,

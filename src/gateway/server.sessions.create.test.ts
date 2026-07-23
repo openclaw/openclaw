@@ -395,6 +395,39 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
   }
 });
 
+test("createGatewaySession rechecks admin scope after incognito inheritance resolves", async () => {
+  await createSessionStoreDir();
+  try {
+    const { createGatewaySession } = await import("./session-create-service.js");
+    const parent = await directSessionReq<{ key?: string }>("sessions.create", {
+      agentId: "main",
+      incognito: true,
+    });
+    const parentSessionKey = requireNonEmptyString(parent.payload?.key, "incognito parent key");
+    const base = {
+      cfg: getRuntimeConfig(),
+      agentId: "main",
+      parentSessionKey,
+      commandSource: "test",
+    };
+
+    await expect(
+      createGatewaySession({ ...base, requestingOperatorScopes: ["operator.write"] }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "incognito sessions require gateway scope: operator.admin",
+      },
+    });
+    await expect(
+      createGatewaySession({ ...base, requestingOperatorScopes: ["operator.admin"] }),
+    ).resolves.toMatchObject({ ok: true, entry: { incognito: true } });
+  } finally {
+    closeOpenClawAgentDatabasesForTest();
+  }
+});
+
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
@@ -446,6 +479,20 @@ test("incognito operator RPCs treat identityless connections as owner-equivalent
       ok: false,
       error: { message: "missing scope: operator.admin" },
     });
+    for (const params of [
+      { parentSessionKey: sessionKey },
+      { parentSessionKey: sessionKey, fork: true },
+      { parentSessionKey: sessionKey, spawnDepth: 1 },
+      { parentSessionKey: sessionKey, succeedsParent: false, emitCommandHooks: true },
+    ]) {
+      await expect(rpcReq(writer.ws, "sessions.create", params)).resolves.toMatchObject({
+        ok: false,
+        error: { message: "missing scope: operator.admin" },
+      });
+    }
+    await expect(
+      rpcReq(admin.ws, "sessions.create", { parentSessionKey: sessionKey }),
+    ).resolves.toMatchObject({ ok: true, payload: { entry: { incognito: true } } });
 
     await expect(rpcReq(reader.ws, "sessions.get", { key: sessionKey })).resolves.toMatchObject({
       ok: true,
