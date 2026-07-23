@@ -192,6 +192,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("cdp=https://browserless.example.com/?token=***");
   });
 
+  it("masks assistant-media capability tickets in URL query strings", () => {
+    const input =
+      "serve https://gateway.example/media/asset?mediaTicket=v1.eyJzIjoiYSJ9.abcdef1234567890sig&safe=value";
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).not.toContain("v1.eyJzIjoiYSJ9.abcdef1234567890sig");
+    expect(output).toContain("mediaTicket=");
+    expect(output).toContain("safe=value");
+  });
+
   it("masks standalone lowercase token assignments in diagnostic output", () => {
     const input = "matrix access_token=abcdef1234567890ghij next";
     const output = redactSensitiveText(input, { mode: "tools" });
