@@ -1592,6 +1592,16 @@ $0 \\"$1\\"" touch {marker}`,
     });
     expect(pnpmCwdInner.allowlistSatisfied).toBe(false);
 
+    const pnpmAllowBuildInner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm dlx --allow-build=tsx tsx ./run.ts",
+      allowlist: [hashedInnerEntry],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(pnpmAllowBuildInner.allowlistSatisfied).toBe(false);
+
     const npmInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm --loglevel=silent exec -- tsx ./run.ts",
       allowlist: [hashedInnerEntry],

@@ -284,7 +284,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
         ? hasLeadingContextOption(argv, (subcommandIdx ?? 0) + 1, {
             optionsWithValue: PNPM_DLX_OPTIONS_WITH_VALUE,
             flagOptions: new Set(),
-            contextOptionsWithValue: new Set(["--package", "-p"]),
+            contextOptionsWithValue: new Set(["--allow-build", "--package", "-p"]),
           })
         : false;
     }
