@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
@@ -20,6 +20,7 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 function extractMessageId(payload: unknown): string | undefined {
@@ -93,6 +94,15 @@ export async function messageCommand(
     );
   }
   const action = actionMatch as ChannelMessageActionName;
+  const requestedAgentId = normalizeOptionalString(opts.agent);
+  const agentId = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : resolveDefaultAgentId(cfg);
+  if (!listAgentIds(cfg).includes(agentId)) {
+    throw new Error(
+      `Unknown agent id "${requestedAgentId}". Use ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
+  }
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
@@ -104,7 +114,7 @@ export async function messageCommand(
       action,
       params: opts,
       deps: outboundDeps,
-      agentId: resolveDefaultAgentId(cfg),
+      agentId,
       senderIsOwner: opts.senderIsOwner !== false,
       conversationReadOrigin: "direct-operator",
       gateway: {

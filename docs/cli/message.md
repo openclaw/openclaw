@@ -83,6 +83,16 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 
 ### Send
 
+Use `--agent <id>` to select the configured agent that owns the destination
+session transcript. If omitted, OpenClaw uses the configured default agent.
+This matters when another agent sends through the CLI and later replies should
+retain that agent's conversation context.
+
+```bash
+openclaw message send --agent ops --channel whatsapp \
+  --target 120363000000000000@g.us --message "Was the replacement delivered?"
+```
+
 ```bash
 openclaw message send --channel discord \
   --target channel:123 --message "hi" --reply-to 456

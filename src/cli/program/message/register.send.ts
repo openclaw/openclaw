@@ -14,7 +14,8 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
             .option(
               "-m, --message <text>",
               "Message body (required unless --media or --presentation is set)",
-            ),
+            )
+            .option("--agent <id>", "Agent that owns the destination session"),
         )
         .option(
           "--media <path-or-url>",
