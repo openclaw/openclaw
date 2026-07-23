@@ -432,24 +432,60 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
   relativeDirs: string[];
   recoveryRoot: string;
 }): Promise<void> {
+  const moves: Array<{ source: string; destination: string }> = [];
+  const sourceDirs = new Set<string>();
   for (const relativeDir of params.relativeDirs) {
     const sourceDir = path.join(params.sourceRoot, relativeDir);
+    if (relativeDir !== ".") {
+      sourceDirs.add(sourceDir);
+    }
     const destinationDir = path.join(params.recoveryRoot, relativeDir);
     for (const name of TRANSCRIPT_EXPORT_FILE_NAMES) {
       const source = path.join(sourceDir, name);
       if (!(await optionalRegularFile(source))) {
         continue;
       }
-      await fs.mkdir(destinationDir, { recursive: true });
-      await fs.rename(source, path.join(destinationDir, name));
-    }
-    if (relativeDir !== ".") {
-      await fs.rmdir(sourceDir).catch((error: unknown) => {
-        if (!(isRecord(error) && error.code === "ENOTEMPTY")) {
+      const destination = path.join(destinationDir, name);
+      try {
+        await fs.lstat(destination);
+        throw new Error(`partial transcript recovery destination already exists: ${destination}`);
+      } catch (error) {
+        if (!(isRecord(error) && error.code === "ENOENT")) {
           throw error;
         }
-      });
+      }
+      moves.push({ source, destination });
     }
+  }
+  for (const destinationDir of new Set(moves.map((move) => path.dirname(move.destination)))) {
+    await fs.mkdir(destinationDir, { recursive: true });
+  }
+  const moved: Array<{ source: string; destination: string }> = [];
+  try {
+    for (const move of moves) {
+      await fs.rename(move.source, move.destination);
+      moved.push(move);
+    }
+  } catch (error) {
+    const rollbackErrors: string[] = [];
+    for (const move of moved.toReversed()) {
+      try {
+        await fs.rename(move.destination, move.source);
+      } catch (rollbackError) {
+        rollbackErrors.push(String(rollbackError));
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new Error(
+        `partial transcript recovery failed and rollback was incomplete; inspect ${params.recoveryRoot}: ${String(error)}; rollback errors: ${rollbackErrors.join("; ")}`,
+      );
+    }
+    throw error;
+  }
+  // Artifact moves are already committed; empty-directory cleanup is best effort
+  // so an unremovable harmless directory cannot hide the reported recovery move.
+  for (const sourceDir of [...sourceDirs].toSorted((a, b) => b.length - a.length)) {
+    await fs.rmdir(sourceDir).catch(() => undefined);
   }
 }
 

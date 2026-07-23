@@ -354,6 +354,39 @@ describe("meeting transcript Doctor migration", () => {
     ).resolves.toBeDefined();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "preflights every partial artifact before moving any source",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+      const externalDir = tempDirs.make("openclaw-meeting-transcripts-external-");
+      const partialDir = path.join(stateDir, "transcripts", "2026-07-01", "partial-invalid");
+      await fs.mkdir(partialDir, { recursive: true });
+      await fs.writeFile(path.join(partialDir, "summary.md"), "keep me\n");
+      await fs.writeFile(path.join(externalDir, "transcript.jsonl"), '{"text":"outside"}\n');
+      await fs.symlink(
+        path.join(externalDir, "transcript.jsonl"),
+        path.join(partialDir, "transcript.jsonl"),
+      );
+      const detected = detectLegacyMeetingTranscripts({
+        stateDir,
+        doctorOnlyStateMigrations: true,
+      });
+
+      const result = await migrateLegacyMeetingTranscripts({
+        detected,
+        env: databaseEnv(stateDir),
+        stateDir,
+        now: () => Date.parse("2026-07-02T00:00:00.000Z"),
+      });
+
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("regular file");
+      await expect(fs.readFile(path.join(partialDir, "summary.md"), "utf8")).resolves.toBe(
+        "keep me\n",
+      );
+    },
+  );
+
   it("rolls back when a session appears between verification and archive", async () => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
     const sourceDir = await seedLegacySession({ stateDir, sessionId: "verified" });
