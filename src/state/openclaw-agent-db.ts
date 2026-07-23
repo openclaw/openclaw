@@ -413,7 +413,7 @@ export function runOpenClawAgentWriteTransaction<T>(
         if (!enteredNestedTransaction) {
           // Permission failure must roll back with the write. Repairing after
           // COMMIT could make callers retry a transaction already durable in SQLite.
-          if (!isIncognitoOpenClawAgentSqlitePath(database.path, options)) {
+          if (!incognitoDatabases.has(database)) {
             ensureOpenClawAgentDatabasePermissions(database.path, options);
           }
         }
@@ -474,11 +474,10 @@ function evictLruAgentDatabaseHandles(): void {
       if (database.db.isTransaction) {
         continue;
       }
-      if (
-        isIncognitoOpenClawAgentSqlitePath(pathname, {
-          agentId: database.agentId,
-        })
-      ) {
+      // Classification is recorded at open; re-deriving the sentinel path here
+      // would consult process.env and can misclassify explicit-env opens,
+      // letting LRU eviction destroy a live in-memory incognito session.
+      if (incognitoDatabases.has(database)) {
         continue;
       }
       // Registry rows are durable discovery metadata; only explicit disposal
@@ -560,7 +559,7 @@ export function disposeOpenClawAgentDatabaseByPath(
   if (!database || database.path !== resolvedPath) {
     return false;
   }
-  if (isIncognitoOpenClawAgentSqlitePath(resolvedPath, { agentId: database.agentId })) {
+  if (incognitoDatabases.has(database)) {
     return closeOpenClawAgentDatabaseByPath(resolvedPath);
   }
   try {
