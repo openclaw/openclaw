@@ -2085,7 +2085,7 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    expect(completePatterns).toEqual([{ pattern: "/usr/bin/tool" }]);
+    expect(completePatterns).toEqual([{ pattern: "/usr/bin/tool", argPattern: "^ok\x00$" }]);
     let allowlist = allowlistEntries(dir, "worker");
     expect(allowlist.map((entry) => entry.pattern)).toEqual([
       "/usr/bin/tool",
