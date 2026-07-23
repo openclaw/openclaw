@@ -371,6 +371,10 @@ export async function readScratch(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     findJobOrThrow(state, id);
+    // Scratch intentionally opens the process-global state DB, matching every
+    // other cron store write in this service (see saveCronJobsStore); threading
+    // injected state-db options through CronServiceState is a service-wide
+    // refactor that must move jobs and scratch together, not scratch alone.
     return readCronJobScratchState(state.deps.storePath, id);
   });
 }
