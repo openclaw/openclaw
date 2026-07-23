@@ -440,7 +440,10 @@ describe("sessions.abort agent scope", () => {
           reason: "abort",
         }),
         new Set(["conn-1"]),
-        expect.objectContaining({ dropIfSlow: true }),
+        {
+          dropIfSlow: true,
+          sessionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
+        },
       );
     } finally {
       weixinOperation.complete();
