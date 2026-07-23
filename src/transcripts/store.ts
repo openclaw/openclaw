@@ -91,6 +91,20 @@ export class TranscriptsStore {
     return new Set(rows.map((row) => `${row.session_id}\0${row.session_started_at}`));
   }
 
+  private hasSummary(database: OpenClawStateDatabase, row: MeetingTranscriptSessionRow): boolean {
+    return Boolean(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        meetingTranscriptDb(database.db)
+          .selectFrom("meeting_transcript_summaries")
+          .select("session_id")
+          .where("session_id", "=", row.session_id)
+          .where("session_started_at", "=", row.started_at)
+          .limit(1),
+      ),
+    );
+  }
+
   private readExportOwnership(session: TranscriptSessionDescriptor): {
     manifest: Record<string, string>;
     pending: Set<string>;
@@ -434,7 +448,13 @@ export class TranscriptsStore {
       );
     }
     const row = rows[0];
-    return row ? this.entryFromRow(row, this.readSummaryKeys(database)) : undefined;
+    if (!row) {
+      return undefined;
+    }
+    const summaryKeys = this.hasSummary(database, row)
+      ? new Set([`${row.session_id}\0${row.started_at}`])
+      : new Set<string>();
+    return this.entryFromRow(row, summaryKeys);
   }
 
   async appendUtteranceForSession(
