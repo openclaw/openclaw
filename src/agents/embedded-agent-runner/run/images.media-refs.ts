@@ -155,6 +155,6 @@ export function selectMediaImageRefs(params: {
       remainingExisting -= 1;
       return [];
     }
-    return [refs[index]];
+    return [undefined];
   });
 }

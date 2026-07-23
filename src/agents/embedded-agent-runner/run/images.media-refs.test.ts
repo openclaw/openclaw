@@ -138,6 +138,29 @@ describe("fact-carried image references", () => {
     }
   });
 
+  it("fails an exact inline slot whose image block is missing", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
+    const imagePath = path.join(workspaceDir, "stale.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "inspect",
+        media: [{ path: imagePath, contentType: "image/png" }],
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        imageOrder: ["inline"],
+        workspaceOnly: true,
+      });
+
+      expect(result.loadedCount).toBe(0);
+      expect(result.failedMediaCount).toBe(1);
+      expect(result.images).toEqual([]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("hydrates a fact whose only local identity is a file URL", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-file-url-"));
     const imagePath = path.join(workspaceDir, "photo.png");
