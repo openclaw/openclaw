@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 
-export type VitestWorkerMarkers = {
+type VitestWorkerMarkers = {
   tinypoolState?: unknown;
   vitestWorker?: unknown;
 };
@@ -61,7 +61,7 @@ function isVitestWorker(
   );
 }
 
-export function requestExitAfterSystemCaCliCompletion(
+function requestExitAfterSystemCaCliCompletion(
   runtime: RuntimeEnv = defaultRuntime,
   params: {
     env?: NodeJS.ProcessEnv;
@@ -120,7 +120,7 @@ export function requestExitAfterOneShotOutput(
   return true;
 }
 
-export function flushExitAfterOneShotOutput(
+function flushExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
   env: NodeJS.ProcessEnv = process.env,
   markers: VitestWorkerMarkers = resolveVitestWorkerMarkers(),
