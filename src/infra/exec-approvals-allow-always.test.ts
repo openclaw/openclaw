@@ -1387,6 +1387,54 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("matches POSIX shell-script allow-always entries with hashed argv patterns", () => {
+    const { dir, script, env, safeBins } = createShellScriptFixture();
+    makeExecutable(dir, "bash");
+    const platform = "linux";
+    const analysis = analyzeArgvCommand({
+      argv: ["bash", script, "allowed"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    const expectedArgPattern = buildHashedArgPatternFromArgv([script, "allowed"]);
+    expect(entries).toEqual([{ pattern: script, argPattern: expectedArgPattern }]);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
+
+    const changedArgAnalysis = analyzeArgvCommand({
+      argv: ["bash", script, "changed"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    const denied = evaluateExecAllowlist({
+      analysis: changedArgAnalysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
+  });
+
   it("matches package-manager exec allow-always entries by inner executable", async () => {
     if (process.platform === "win32") {
       return;
@@ -1396,6 +1444,11 @@ $0 \\"$1\\"" touch {marker}`,
     const tsxPath = makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
+    const hashedInnerEntry = {
+      pattern: tsxPath,
+      source: "allow-always" as const,
+      argPattern: buildHashedArgPatternFromArgv([tsxPath, "./run.ts"]),
+    };
 
     const staleOuter = await evaluateShellAllowlistWithAuthorization({
       command: "pnpm exec -- tsx ./run.ts",
@@ -1407,9 +1460,19 @@ $0 \\"$1\\"" touch {marker}`,
     });
     expect(staleOuter.allowlistSatisfied).toBe(false);
 
-    const inner = await evaluateShellAllowlistWithAuthorization({
+    const staleInner = await evaluateShellAllowlistWithAuthorization({
       command: "pnpm exec -- tsx ./run.ts",
       allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(staleInner.allowlistSatisfied).toBe(false);
+
+    const inner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm exec -- tsx ./run.ts",
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,
@@ -1419,7 +1482,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const pnpmCwdInner = await evaluateShellAllowlistWithAuthorization({
       command: "pnpm -C ./package exec -- tsx ./run.ts",
-      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,
@@ -1429,7 +1492,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const npmInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm --loglevel=silent exec -- tsx ./run.ts",
-      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,
@@ -1439,7 +1502,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const npmCwdInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm -C ./package exec -- tsx ./run.ts",
-      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,
@@ -1449,7 +1512,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const npmAliasInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm x -- tsx ./run.ts",
-      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,
@@ -1459,7 +1522,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const chainedInner = await evaluateShellAllowlistWithAuthorization({
       command: "pnpm exec -- npm x -- tsx ./run.ts",
-      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,
@@ -1469,7 +1532,7 @@ $0 \\"$1\\"" touch {marker}`,
 
     const yarnInner = await evaluateShellAllowlistWithAuthorization({
       command: "yarn exec -- tsx ./run.ts",
-      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      allowlist: [hashedInnerEntry],
       safeBins,
       cwd: dir,
       env,

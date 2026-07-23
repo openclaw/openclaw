@@ -534,7 +534,6 @@ function resolveSegmentAllowlistMatch(params: {
       matchExecutionResolution ?? executionResolution,
     ),
     allowLegacyGeneratedPathOnly:
-      packageManagerTargetArgv !== undefined ||
       resolveKnownPackageManagerExecInvocation(matchArgv).kind === "not-exec",
   });
   const shellPositionalArgvCandidatePath =
@@ -1136,9 +1135,6 @@ function buildScriptArgPatternFromArgv(
   cwd?: string,
   platform?: string | null,
 ): string | undefined {
-  if (!isWindowsPlatform(platform ?? process.platform)) {
-    return undefined;
-  }
   const scriptBase = normalizeLowercaseStringOrEmpty(path.basename(scriptPath));
   const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
   const resolveArgPath = (arg: string): string =>
@@ -1150,6 +1146,9 @@ function buildScriptArgPatternFromArgv(
     );
   }
   const scriptArgs = scriptIdx !== -1 ? argv.slice(scriptIdx + 1) : [];
+  if (!isWindowsPlatform(platform ?? process.platform)) {
+    return buildHashedArgPatternFromArgv([scriptPath, ...scriptArgs]);
+  }
   const normalized = scriptArgs.map((a) => a.replace(/\//g, "\\"));
   if (normalized.length === 0) {
     return "^\x00\x00$";
