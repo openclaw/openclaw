@@ -155,13 +155,8 @@ function buildRoutedOperations(
     .toSorted()
     .map((id) => {
       const effectProfile = effectProfiles.get(id);
-      return {
+      const operation: CliCatalogListRoutedOperation = {
         id,
-        ...(effectProfile?.risk ? { risk: effectProfile.risk } : {}),
-        ...(effectProfile?.confirmationRequired !== undefined
-          ? { confirmationRequired: effectProfile.confirmationRequired }
-          : {}),
-        ...(effectProfile?.effectMode ? { effectMode: effectProfile.effectMode } : {}),
         sourceKind: "route-policy" as const,
         discoveryMode: "route-policy" as const,
         visibility: ["audit", "operator", "policy"] as const,
@@ -169,6 +164,18 @@ function buildRoutedOperations(
           .filter((route) => route.routeId === id)
           .map((route) => route.commandPath),
       };
+      if (effectProfile?.risk) {
+        Object.assign(operation, { risk: effectProfile.risk });
+      }
+      if (effectProfile?.confirmationRequired !== undefined) {
+        Object.assign(operation, {
+          confirmationRequired: effectProfile.confirmationRequired,
+        });
+      }
+      if (effectProfile?.effectMode) {
+        Object.assign(operation, { effectMode: effectProfile.effectMode });
+      }
+      return operation;
     });
 }
 

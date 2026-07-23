@@ -43,7 +43,7 @@ export function buildPluginCatalogCommands(
       .filter((descriptor) => !isHiddenDescriptor(descriptor))
       .map((descriptor) => {
         const commandPath = [...entry.parentPath, descriptor.name];
-        return {
+        const command: CliCatalogPluginCommand = {
           pluginId: entry.pluginId,
           commandPath,
           parentPath: entry.parentPath,
@@ -53,19 +53,24 @@ export function buildPluginCatalogCommands(
           description: descriptor.description,
           hasSubcommands: descriptor.hasSubcommands,
           hidden: false as const,
-          ...(descriptor.effectProfile?.risk ? { risk: descriptor.effectProfile.risk } : {}),
-          ...(descriptor.effectProfile?.confirmationRequired !== undefined
-            ? { confirmationRequired: descriptor.effectProfile.confirmationRequired }
-            : {}),
-          ...(descriptor.effectProfile?.effectMode
-            ? { effectMode: descriptor.effectProfile.effectMode }
-            : {}),
           commandHints: [commandPath.join(" ")],
           sourceKind: "plugin" as const,
           sourceId: `${entry.pluginId}:${commandPath.join(" ")}`,
           discoveryMode: "plugin-descriptor" as const,
           visibility: defaultVisibility(descriptor),
         };
+        if (descriptor.effectProfile?.risk) {
+          Object.assign(command, { risk: descriptor.effectProfile.risk });
+        }
+        if (descriptor.effectProfile?.confirmationRequired !== undefined) {
+          Object.assign(command, {
+            confirmationRequired: descriptor.effectProfile.confirmationRequired,
+          });
+        }
+        if (descriptor.effectProfile?.effectMode) {
+          Object.assign(command, { effectMode: descriptor.effectProfile.effectMode });
+        }
+        return command;
       });
     const commandOnly = (entry.commands ?? [])
       .filter((command) => !descriptorNames.has(command))
