@@ -2,6 +2,8 @@
 
 Implementation commit: `083482ea654 feat(sessions): attribute archive transitions`
 
+Alias-rollback follow-up: `14230f2e84a fix(sessions): restore alias layout after archive audit failure`
+
 ## Files changed
 
 Session state and mutation:
@@ -182,3 +184,69 @@ The shared audit extraction is nearly LOC-neutral by moving the former sharing-o
 - No ignored `dist/protocol.schema.json` was force-added; it was generated and checked, while current repository policy leaves `dist/` untracked.
 - No push, PR, changelog edit, `scripts/pr`, or live Gateway mutation was performed.
 - `origin/main` advanced during the long validation window. The branch is intentionally left for the reviewer to rebase as requested.
+
+## Alias-complete rollback follow-up
+
+The first rollback restored only the canonical primary entry after an audit append failure. That was logically complete for the archive fields but not layout-complete: `applySessionPatchProjection` removes every non-primary alias candidate while canonicalizing the freshest row.
+
+The follow-up captures the exact raw `session_entries` rows for every candidate key, plus `session_members` rows that SQLite cascades when an alias entry is removed. On audit failure it deletes the projected candidate set and reinserts the snapshot in one SQLite write transaction, preserving raw `entry_json`, `session_id`, `updated_at`, `status`, alias keys, and memberships. It then emits the inverse session identity diff, matching the forward projection notification path. `sessions.changed` remains post-audit and therefore is never emitted for the failed archive.
+
+The visibility rollback was checked separately. It is alias-safe for its narrower mutation because it patches `current.storeKey` in place and never runs candidate canonicalization; copying that path alone would not have repaired archive rollback.
+
+Follow-up files:
+
+- `src/config/sessions/session-accessor.types.ts`
+- `src/config/sessions/session-accessor.lifecycle.ts`
+- `src/config/sessions/session-accessor.sqlite-projection.ts`
+- `src/config/sessions/session-accessor.sqlite.ts`
+- `src/config/sessions/session-accessor.ts`
+- `src/gateway/server-methods/sessions-mutations.ts`
+- `src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts`
+
+Follow-up proof:
+
+```text
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts -- --reporter=verbose
+Test Files 1 passed
+Tests 4 passed
+The alias case passed in 2834ms and asserted exact raw entry/member row equality.
+[test] passed 1 Vitest shard in 52.88s (exit 0)
+
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/sessions-patch.test.ts -- -t 'attributes the archive transition|does not fabricate archive attribution' --reporter=verbose
+Test Files 1 passed
+Tests 2 passed, 84 skipped
+[test] passed 1 Vitest shard in 33.06s (exit 0)
+
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/sessions-patch.test.ts -- -t 'atomically snapshots prior selection for agent model patches' --reporter=verbose
+Test Files 1 passed
+Tests 1 passed, 85 skipped
+[test] passed 1 Vitest shard in 38.39s (exit 0)
+
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json
+exit 0 (no diagnostics)
+
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json
+exit 0 (no diagnostics)
+
+OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- src/config/sessions/session-accessor.lifecycle.ts src/config/sessions/session-accessor.sqlite-projection.ts src/config/sessions/session-accessor.sqlite.ts src/config/sessions/session-accessor.ts src/config/sessions/session-accessor.types.ts src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/server-methods/sessions-mutations.ts
+lanes=core, coreTests
+format, core/core-test typechecks, changed-file lint, database-first guard, runtime sidecar loader guard, import-cycle guard, webhook and pairing guards passed
+exit 0
+
+.agents/skills/autoreview/scripts/autoreview --mode uncommitted --engine codex
+trufflehog: clean
+autoreview clean: no accepted/actionable findings reported
+overall: patch is correct (0.97)
+```
+
+The first full local `sessions-patch.test.ts` attempt passed 85/86 tests; the unrelated agent-model snapshot test timed out under severe host contention after 120 seconds. Its isolated retry passed in 27.8 seconds, and the two archive projection cases passed independently. The first delegated `check:changed --staged` attempt also stopped before feature lanes because the current trusted-workflow checkout used env budget 525 while this reviewer-owned branch uses 529. The branch-relative local trusted-source fallback above passed; the follow-up adds no environment variables.
+
+Follow-up LOC from `git show --numstat 14230f2e84a`:
+
+```text
+prod 154 added, 15 deleted, net +139
+test 96 added, 1 deleted, net +95
+total 250 added, 16 deleted, net +234
+```
+
+No push, PR, changelog edit, protocol change, schema-version bump, or `CLAUDE.md` edit was performed.
