@@ -29,7 +29,7 @@ function utf8ByteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
-export const QQBOT_FORMAT_CAPABILITIES = {
+const QQBOT_FORMAT_CAPABILITIES = {
   mechanism: "markdown",
   constructs: {
     bold: "native",

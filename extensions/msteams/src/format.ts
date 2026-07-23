@@ -14,7 +14,7 @@ const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}[\]()#+\-.!|>~]/gu;
 const MARKDOWN_ENTITY_RE = /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/giu;
 const TOKEN_END = "\u{E002}";
 
-export const MSTEAMS_FORMAT_CAPABILITIES = {
+const MSTEAMS_FORMAT_CAPABILITIES = {
   mechanism: "markdown",
   constructs: {
     bold: "native",
