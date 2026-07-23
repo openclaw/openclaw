@@ -7835,6 +7835,42 @@ describe("handleAbortChat", () => {
     });
   });
 
+  it.each([
+    {
+      name: "clears queues for a per-sender agent main session",
+      scope: "per-sender",
+      expected: {
+        key: "agent:work:main",
+        agentId: "work",
+        clearQueued: true,
+      },
+    },
+    {
+      name: "keeps a global-scope agent main alias on the compatible request",
+      scope: "global",
+      expected: {
+        key: "agent:work:main",
+        agentId: "work",
+      },
+    },
+  ])("$name", async ({ scope, expected }) => {
+    const request = vi.fn(async () => ({ abortedRunId: null, status: "aborted" }));
+    const sessionKey = "agent:work:main";
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: null,
+      sessionKey,
+      agentsList: { defaultId: "main", mainKey: "main", scope },
+      sessionsResult: createSessionsResult([
+        row(sessionKey, { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", expected);
+  });
+
   it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
     "clears the typed stop command %s after aborting the active run",
     async (message) => {

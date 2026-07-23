@@ -10,7 +10,9 @@ import {
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  isUiSelectedGlobalSessionKey,
+  isUiGlobalScopeConfigured,
+  isUiGlobalSessionKey,
+  resolveUiGlobalAliasAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -149,8 +151,16 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
-function queuedSessionAbortParams(sessionKey: string): { clearQueued?: true } {
-  return isUiSelectedGlobalSessionKey(sessionKey) ? {} : { clearQueued: true };
+function queuedSessionAbortParams(
+  host: SessionScopeHost,
+  sessionKey: string,
+): { clearQueued?: true } {
+  // Agent main aliases reach the global stream only in global scope.
+  // Per-sender main sessions own queues that a full stop must clear explicitly.
+  const isGlobalSession =
+    isUiGlobalSessionKey(sessionKey) ||
+    (isUiGlobalScopeConfigured(host) && resolveUiGlobalAliasAgentId(host, sessionKey) !== null);
+  return isGlobalSession ? {} : { clearQueued: true };
 }
 
 type ChatAbortOptions = { preserveDraft?: boolean };
@@ -191,7 +201,7 @@ function currentChatAbortIntent(
     runId,
     sessionKey: state.sessionKey,
     ...scopedAgentParamsForSession(state, state.sessionKey),
-    ...(runId ? {} : queuedSessionAbortParams(state.sessionKey)),
+    ...(runId ? {} : queuedSessionAbortParams(state, state.sessionKey)),
   };
 }
 
