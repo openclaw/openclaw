@@ -31,6 +31,7 @@ import {
   readTranscriptMutationStateInTransaction,
   writeSessionRoute,
 } from "./session-accessor.sqlite-transcript-state.js";
+import { invalidateSessionStoreCache } from "./store-cache.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -310,6 +311,7 @@ export function deleteSqliteSessionEntryRows(
     database.db,
     db.deleteFrom("session_entries").where("session_key", "=", sessionKey),
   );
+  invalidateSessionStoreCache(database.path);
 }
 
 export function deleteSqliteLifecycleTargetRows(
@@ -394,6 +396,7 @@ export function deleteLegacySessionEntryRows(
       db.deleteFrom("session_entries").where("session_key", "=", legacyKey),
     );
   }
+  invalidateSessionStoreCache(database.path);
 }
 
 // session_members is an additive sharing surface with a lazy ensure, so a DB
@@ -528,6 +531,7 @@ export function writeSessionEntry(
         }),
       ),
   );
+  invalidateSessionStoreCache(database.path);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

@@ -63,10 +63,16 @@ import {
   parseSqliteSessionEntryJson as parseSessionEntryRow,
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import {
+  isSessionStoreCacheEnabled,
+  readSessionStoreCache,
+  writeSessionStoreCache,
+} from "./store-cache.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -128,12 +134,84 @@ export function resolveSqliteSessionKeyBySessionId(
 }
 
 /** Lists session entries from the additive SQLite session store. */
-export function listSqliteSessionEntries(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
-): SessionEntrySummary[] {
+export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return listSqliteSessionEntriesFromDatabase(database);
+  const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+
+  // Cache hit: derive both light and full results from cached entries
+  if (isSessionStoreCacheEnabled()) {
+    const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
+    if (cached) {
+      let entries = Object.entries(cached)
+        .filter(([key]) => !isInternalSessionEffectsKey(key))
+        .map(([sessionKey, entry]) => {
+          if (scope.light) {
+            const {
+              systemPromptReport: _systemPromptReport,
+              skillsSnapshot: _skillsSnapshot,
+              ...lightEntry
+            } = entry;
+            return { sessionKey, entry: lightEntry as SessionEntry };
+          }
+          return { sessionKey, entry: structuredClone(entry) };
+        });
+      if (scope.offset) {
+        entries = entries.slice(scope.offset);
+      }
+      if (scope.limit) {
+        entries = entries.slice(0, scope.limit);
+      }
+      return entries;
+    }
+  }
+
+  // Cache miss — query SQL
+  const db = getSessionKysely(database.db);
+  let query = db
+    .selectFrom("session_entries")
+    .select(["session_key", "entry_json", "session_id", "updated_at"])
+    .orderBy("session_key", "asc");
+
+  if (scope.limit) {
+    query = query.limit(scope.limit);
+  }
+  if (scope.offset) {
+    query = query.offset(scope.offset);
+  }
+
+  const rows = executeSqliteQuerySync(database.db, query).rows;
+  const result: SessionEntrySummary[] = [];
+  const storeRecord: Record<string, SessionEntry> = {};
+
+  for (const row of rows) {
+    if (isInternalSessionEffectsKey(row.session_key)) {
+      continue;
+    }
+    const entry = parseSessionEntryRow(row);
+    if (!entry) {
+      continue;
+    }
+    // Store full entry for cache; return stripped entry for light callers
+    storeRecord[row.session_key] = entry;
+    if (scope.light) {
+      const {
+        systemPromptReport: _systemPromptReport,
+        skillsSnapshot: _skillsSnapshot,
+        ...lightEntry
+      } = entry;
+      result.push({ sessionKey: row.session_key, entry: lightEntry as SessionEntry });
+    } else {
+      result.push({ sessionKey: row.session_key, entry });
+    }
+  }
+
+  // Only cache unpaginated (complete) loads so the cache always has the full store
+  if (!scope.limit && !scope.offset && isSessionStoreCacheEnabled()) {
+    writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
+  }
+
+  return result;
 }
 
 /**
@@ -142,17 +220,17 @@ export function listSqliteSessionEntries(
  * acceptable degradation (health snapshots) or hides real state (migration detection).
  */
 export function listSqliteSessionEntriesReadOnly(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => listSqliteSessionEntriesFromDatabase(database),
+    (database) => listSqliteSessionEntriesFromDatabase(database, scope.light),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
 }
 
-function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
+function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }, light?: boolean) {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -167,7 +245,18 @@ function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
         return undefined;
       }
       const entry = parseSessionEntryRow(row);
-      return entry ? { sessionKey: row.session_key, entry } : undefined;
+      if (!entry) {
+        return undefined;
+      }
+      if (light) {
+        const {
+          systemPromptReport: _systemPromptReport,
+          skillsSnapshot: _skillsSnapshot,
+          ...lightEntry
+        } = entry;
+        return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
+      }
+      return { sessionKey: row.session_key, entry };
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
 }
