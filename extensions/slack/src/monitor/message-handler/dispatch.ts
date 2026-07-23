@@ -54,6 +54,7 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
@@ -586,9 +587,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
 
+  let sessionStreamingMode: unknown;
+  const streamSessionKey = prepared.ctxPayload.SessionKey ?? route.sessionKey;
+  if (streamSessionKey) {
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      sessionStreamingMode = getSessionEntry({
+        agentId: route.agentId,
+        readConsistency: "latest",
+        storePath,
+        sessionKey: streamSessionKey,
+      })?.streamingMode;
+    } catch (err) {
+      logVerbose(`slack stream mode session lookup failed: ${String(err)}`);
+    }
+  }
   const slackStreaming = resolveSlackStreamingConfig({
     streaming: account.config.streaming,
     nativeStreaming: resolveChannelStreamingNativeTransport(account.config),
+    sessionStreamingMode,
   });
   const streamThreadHint =
     forcedReplyThreadTs ??
@@ -1492,13 +1509,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const useNativeProgressStreaming = useStreaming && slackStreaming.mode === "progress";
   const progressDraftActive = Boolean(draftStream) || useNativeProgressStreaming;
   const previewToolProgressEnabled =
-    progressDraftActive && resolveChannelStreamingPreviewToolProgress(account.config);
+    progressDraftActive &&
+    resolveChannelStreamingPreviewToolProgress(account.config, true, slackStreaming.mode);
   let shouldYieldDraftProgress: () => boolean = () => false;
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {
       draftStreamActive: Boolean(draftStream) || useNativeProgressStreaming,
       previewToolProgressEnabled,
       previewStreamingEnabled,
+      mode: slackStreaming.mode,
     });
   let previewToolProgressSuppressed = false;
   let legacyPreviewToolProgressLines: ChannelProgressDraftLine[] = [];

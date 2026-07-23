@@ -520,6 +520,16 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("registers stream mode as a first-class options command", () => {
+    const stream = requireChatCommand("stream");
+    expect(stream.nativeName).toBe("stream");
+    expect(stream.nativeAliases).toEqual(["streaming"]);
+    expect(stream.textAliases).toEqual(["/stream", "/streaming"]);
+    expect(stream.category).toBe("options");
+    const modeArg = requireCommandArg(stream, "mode");
+    expect(modeArg.choices).toEqual(["status", "off", "partial", "block", "progress", "default"]);
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);

@@ -782,9 +782,10 @@ export function getChannelStreamingConfigObject(
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = true,
+  mode?: StreamingMode,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  if (resolveChannelPreviewStreamMode(entry, "partial") === "progress") {
+  if ((mode ?? resolveChannelPreviewStreamMode(entry, "partial")) === "progress") {
     return (
       asBoolean(config?.progress?.toolProgress) ??
       asBoolean(config?.preview?.toolProgress) ??
@@ -797,9 +798,10 @@ export function resolveChannelStreamingPreviewToolProgress(
 export function resolveChannelStreamingProgressCommentary(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue = false,
+  mode?: StreamingMode,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+  if ((mode ?? resolveChannelPreviewStreamMode(entry, "partial")) !== "progress") {
     return false;
   }
   const progress = asObjectRecord(config?.progress);
@@ -834,12 +836,13 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     draftStreamActive?: boolean;
     previewToolProgressEnabled?: boolean;
     previewStreamingEnabled?: boolean;
+    mode?: StreamingMode;
   },
 ): boolean {
   if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
     return false;
   }
-  const mode = resolveChannelPreviewStreamMode(entry, "off");
+  const mode = options?.mode ?? resolveChannelPreviewStreamMode(entry, "off");
   if (mode === "off") {
     return false;
   }
@@ -861,7 +864,12 @@ export function resolveChannelStreamingNativeTransport(
 export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: "off" | "partial",
+  options?: { sessionMode?: unknown },
 ): StreamingMode {
+  const sessionMode = parsePreviewStreamingMode(options?.sessionMode);
+  if (sessionMode) {
+    return sessionMode;
+  }
   // Scalar `streaming` (mode string or boolean) is rejected by every bundled
   // channel schema and doctor-migrated to streaming.mode; the read here stays
   // only for external SDK plugin configs that predate the nested shape.

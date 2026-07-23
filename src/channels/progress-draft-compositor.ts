@@ -155,9 +155,9 @@ export function createChannelProgressDraftCompositor(params: {
       .map((line) => line.replace(/^_(.*)_$/su, "$1"))
       .join("\n");
   const previewToolProgressEnabled =
-    params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
+    params.active && resolveChannelStreamingPreviewToolProgress(params.entry, true, params.mode);
   const commentaryProgressEnabled =
-    params.active && resolveChannelStreamingProgressCommentary(params.entry);
+    params.active && resolveChannelStreamingProgressCommentary(params.entry, false, params.mode);
   const thinkingProgressEnabled =
     params.active && (params.reasoningGate ?? previewToolProgressEnabled);
   const suppressDefaultToolProgressMessages =
@@ -165,6 +165,7 @@ export function createChannelProgressDraftCompositor(params: {
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
       draftStreamActive: true,
       previewToolProgressEnabled,
+      mode: params.mode,
     });
   let progressSuppressed = false;
   let lines: ChannelProgressDraftCompositorLine[] = [];

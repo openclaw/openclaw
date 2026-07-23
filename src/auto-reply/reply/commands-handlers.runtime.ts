@@ -34,6 +34,7 @@ import {
   handleRestartCommand,
   handleSendPolicyCommand,
   handleSessionCommand,
+  handleStreamCommand,
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
@@ -75,6 +76,7 @@ const commandHandlersById = {
   restart: handleRestartCommand,
   "send-policy": handleSendPolicyCommand,
   session: handleSessionCommand,
+  stream: handleStreamCommand,
   "skill-usage": handleSkillCommandUsage,
   status: handleStatusCommand,
   steer: handleSteerCommand,

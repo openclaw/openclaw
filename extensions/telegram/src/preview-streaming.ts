@@ -7,7 +7,10 @@ import {
 export function resolveTelegramPreviewStreamMode(
   params: {
     streaming?: unknown;
+    sessionStreamingMode?: unknown;
   } = {},
 ): StreamingMode {
-  return resolveChannelPreviewStreamMode(params, "partial");
+  return resolveChannelPreviewStreamMode(params, "partial", {
+    sessionMode: params.sessionStreamingMode,
+  });
 }

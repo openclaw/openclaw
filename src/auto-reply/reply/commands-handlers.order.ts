@@ -10,6 +10,7 @@ export const commandHandlerOrder = [
   "activation",
   "send-policy",
   "fast",
+  "stream",
   "usage",
   "session",
   "restart",

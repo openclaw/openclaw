@@ -166,6 +166,13 @@ top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 | `block`    | Preview updates in chunked/appended steps                             |
 | `progress` | Progress/status preview during generation, final answer at completion |
 
+Authorized senders can use `/stream status|off|partial|block|progress|default`
+on Telegram, Discord, and Slack to set a preview mode for the current session.
+The session override wins over channel config until `/stream default` removes
+it. `/streaming` is an alias, and text commands also accept `final` as an alias
+for the canonical `off` mode. Other channels report that the command is
+unsupported and do not save an override.
+
 `streaming.mode: "block"` is a preview-streaming mode for edit-capable
 channels such as Discord and Telegram; it does not by itself enable channel
 block delivery there. Use `streaming.block.enabled` for normal block replies.

@@ -275,6 +275,8 @@ export type ChannelCapabilities = {
   };
   nativeCommands?: boolean;
   blockStreaming?: boolean;
+  /** Channel honors the per-session preview-streaming override set by `/stream`. */
+  previewStreamingSessionOverride?: boolean;
 };
 
 export type ChannelSecurityDmPolicy = {
