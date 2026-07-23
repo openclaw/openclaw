@@ -1629,6 +1629,16 @@ $0 \\"$1\\"" touch {marker}`,
     });
     expect(pnpmAllowBuildInner.allowlistSatisfied).toBe(false);
 
+    const pnpmPostDlxCwdInner = await evaluateShellAllowlistWithAuthorization({
+      command: "pnpm dlx -C ./package tsx ./run.ts",
+      allowlist: [hashedInnerEntry],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(pnpmPostDlxCwdInner.allowlistSatisfied).toBe(false);
+
     const pnpmLeadingAllowBuildInner = await evaluateShellAllowlistWithAuthorization({
       command: "pnpm --allow-build=tsx dlx tsx ./run.ts",
       allowlist: [hashedInnerEntry],

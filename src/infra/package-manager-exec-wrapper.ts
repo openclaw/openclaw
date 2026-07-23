@@ -359,9 +359,10 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
       const subcommandIdx = findFirstNonOptionIndex(argv, 1, leadingOptions);
       return argv[subcommandIdx ?? -1] === "dlx"
         ? hasLeadingContextOption(argv, (subcommandIdx ?? 0) + 1, {
-            optionsWithValue: PNPM_DLX_OPTIONS_WITH_VALUE,
-            flagOptions: new Set(),
+            ...leadingOptions,
             contextOptionsWithValue: PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
+            contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
+            contextFlagOptions: new Set(["--recursive", "--workspace-root", "-r", "-w"]),
           })
         : false;
     }
