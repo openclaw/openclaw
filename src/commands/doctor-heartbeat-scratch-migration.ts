@@ -203,6 +203,17 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     claimPath,
     restore,
     release: async () => {
+      // A holder of an already-open descriptor can still mutate the claimed
+      // inode; re-verify the bytes so release never deletes an unseen edit.
+      const finalBytes = await readRegularFile({
+        filePath: claimPath,
+        maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+      });
+      if (hashCronScratchSource(utf8Decoder.decode(finalBytes.buffer)) !== source.sha256) {
+        const error = new Error("HEARTBEAT.md changed while the migration claim was held");
+        await restore(error);
+        throw error;
+      }
       await fs.unlink(claimPath);
     },
   };
@@ -350,10 +361,14 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // Precondition pass first: operator-owned scratch (different content or an
     // explicit unset tombstone) blocks the whole group before the file is
     // touched, so nothing is claimed or committed for a source that must stay.
+    // The revision seen here is also the CAS token for the later write, so a
+    // concurrent edit in between surfaces as a conflict, never an overwrite.
     let blocked = false;
+    const plannedRevisionByJobId = new Map<string, number>();
     for (const [agentId, monitor] of agents) {
       const state = readCronJobScratchState(storePath, monitor.id, { env });
       const current = state.scratch;
+      plannedRevisionByJobId.set(monitor.id, state.currentRevision);
       if (state.currentRevision > 0 && !current) {
         warnings.push(
           `Agent "${agentId}" scratch was explicitly unset; ${shortenHomePath(source.path)} was left unchanged.`,
@@ -371,6 +386,18 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       }
     }
     if (blocked) {
+      continue;
+    }
+
+    // Archive before the claim rename: if doctor dies mid-claim, the content is
+    // already durable under the state backups instead of only at a hidden
+    // .doctor-importing-* path nothing rescans.
+    try {
+      await archiveSource({ agentId: agents[0]![0], source, env });
+    } catch (error) {
+      warnings.push(
+        `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+      );
       continue;
     }
 
@@ -397,7 +424,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
             storePath,
             jobId: monitor.id,
             content: source.content,
-            expectedRevision: state.currentRevision,
+            expectedRevision: plannedRevisionByJobId.get(monitor.id) ?? state.currentRevision,
             sourceSha256: source.sha256,
             options: { env },
           });
@@ -432,7 +459,8 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       continue;
     }
     try {
-      await archiveSource({ agentId: agents[0]![0], source, env });
+      // release() re-verifies and restores the claim itself when the bytes
+      // changed, so no extra restore is needed on this failure path.
       await claim.release();
       changes.push(...groupChanges);
     } catch (error) {
@@ -440,11 +468,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       warnings.push(
         `${shortenHomePath(source.path)} was migrated but not removed: ${errorMessage(error)}. Rerun doctor to retry safely.`,
       );
-      try {
-        await claim.restore(error);
-      } catch (restoreError) {
-        warnings.push(errorMessage(restoreError));
-      }
     }
   }
 

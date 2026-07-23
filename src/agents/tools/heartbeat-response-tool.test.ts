@@ -94,7 +94,7 @@ describe("createHeartbeatResponseTool", () => {
     expect(JSON.stringify(result.content)).not.toContain(scratch);
     expect(JSON.stringify(details)).not.toContain(scratch);
     expect(result.content).toEqual([
-      expect.objectContaining({ text: expect.stringContaining('"scratchUpdated": true') }),
+      expect.objectContaining({ text: expect.stringContaining('"scratchPending": true') }),
     ]);
   });
 

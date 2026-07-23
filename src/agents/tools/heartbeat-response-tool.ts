@@ -89,7 +89,12 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
             status: "recorded",
             ...publicResponse,
             ...(scratch !== undefined
-              ? { scratchUpdated: true, scratchBytes: Buffer.byteLength(scratch, "utf8") }
+              ? {
+                  // Persistence is a runner-side CAS after the turn; do not claim
+                  // success here. A lost race is logged and retryable next beat.
+                  scratchPending: true,
+                  scratchBytes: Buffer.byteLength(scratch, "utf8"),
+                }
               : {}),
           },
           null,
