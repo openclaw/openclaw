@@ -1,9 +1,9 @@
-import { z } from "zod";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
 
 type MSTeamsCloud = "Public" | "USGov" | "USGovDoD" | "China";
 
