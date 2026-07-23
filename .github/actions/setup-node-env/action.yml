@@ -389,8 +389,9 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
         if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&
           [ "$sticky_snapshot_matches" != "true" ]; then
-          # A mounted stale tree can make a normal frozen install report "Already up to date".
-          # Only the canonical writer may rebuild the shared modules directory in place.
+          # Pnpm can trust stale hidden install metadata even with --force. Clear only
+          # the writer-owned modules tree; the warmed store remains on the sticky disk.
+          find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
           install_args+=(--force)
         fi
         run_pnpm_install() {
