@@ -37,6 +37,7 @@ function optionValue(args, name, fallback = "") {
 function git(repoRoot, args) {
   return execFileSync("git", ["-C", repoRoot, ...args], {
     encoding: "utf8",
+    timeout: 10_000,
     env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" },
   }).trim();
 }
