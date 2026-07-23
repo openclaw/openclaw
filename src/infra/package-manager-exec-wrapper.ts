@@ -228,6 +228,58 @@ function hasLeadingContextOption(
   return false;
 }
 
+function hasContextOptionBeforeTerminator(
+  argv: string[],
+  startIdx: number,
+  params: {
+    optionsWithValue: ReadonlySet<string>;
+    caseSensitiveOptionsWithValue?: ReadonlySet<string>;
+    flagOptions: ReadonlySet<string>;
+    contextOptionsWithValue: ReadonlySet<string>;
+    contextCaseSensitiveOptionsWithValue?: ReadonlySet<string>;
+    contextFlagOptions?: ReadonlySet<string>;
+  },
+): boolean {
+  let idx = startIdx;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      return false;
+    }
+    if (!token.startsWith("-")) {
+      idx += 1;
+      continue;
+    }
+    const parsedOption = parseInlineOptionToken(token);
+    const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
+    if (
+      params.contextCaseSensitiveOptionsWithValue?.has(parsedOption.name) ||
+      params.contextOptionsWithValue.has(flag) ||
+      params.contextFlagOptions?.has(flag)
+    ) {
+      return true;
+    }
+    if (params.caseSensitiveOptionsWithValue?.has(parsedOption.name)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (params.optionsWithValue.has(flag)) {
+      idx += token.includes("=") ? 1 : 2;
+      continue;
+    }
+    if (params.flagOptions.has(flag)) {
+      idx += 1;
+      continue;
+    }
+    idx += 1;
+  }
+  return false;
+}
+
 export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolean {
   const executable = normalizePackageManagerExecToken(argv[0] ?? "");
   switch (executable) {
@@ -249,7 +301,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
       }
       const subcommandIdx = findFirstNonOptionIndex(argv, 1, leadingOptions);
       return subcommandIdx !== null && NPM_EXEC_SUBCOMMANDS.has(argv[subcommandIdx] ?? "")
-        ? hasLeadingContextOption(argv, subcommandIdx + 1, {
+        ? hasContextOptionBeforeTerminator(argv, subcommandIdx + 1, {
             optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
             caseSensitiveOptionsWithValue: new Set(["-C"]),
             flagOptions: NPM_EXEC_FLAG_OPTIONS,

@@ -166,6 +166,8 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     "exec --workspace=a --",
     "exec --prefix ./package --",
     "exec -C ./package --",
+    "exec tsx ./run.ts --workspace=a",
+    "exec tsx ./run.ts -C ./package",
     "x --workspaces --",
   ])("keeps npm post-subcommand context approvals one-shot: %s", async (npmExec) => {
     const dir = makeTempDir();

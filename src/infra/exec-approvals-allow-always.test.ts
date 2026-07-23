@@ -1632,6 +1632,16 @@ $0 \\"$1\\"" touch {marker}`,
     });
     expect(npmPostExecWorkspaceInner.allowlistSatisfied).toBe(false);
 
+    const npmTailWorkspaceInner = await evaluateShellAllowlistWithAuthorization({
+      command: "npm exec tsx ./run.ts --workspace=a",
+      allowlist: [hashedInnerEntry],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(npmTailWorkspaceInner.allowlistSatisfied).toBe(false);
+
     const npmAliasInner = await evaluateShellAllowlistWithAuthorization({
       command: "npm x -- tsx ./run.ts",
       allowlist: [hashedInnerEntry],
