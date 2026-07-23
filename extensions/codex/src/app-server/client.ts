@@ -8,6 +8,7 @@ import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-ha
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import type { CodexDynamicToolBridgeTiming } from "./dynamic-tool-execution.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -846,6 +847,7 @@ export class CodexAppServerClient {
     try {
       const result = await this.runServerRequestHandlers(request);
       if (result !== undefined) {
+        logDynamicToolBridgeTimingIfPresent(result);
         this.writeMessage({ id: request.id, result });
         return;
       }
@@ -981,6 +983,54 @@ function defaultServerRequestResponse(
     };
   }
   return {};
+}
+
+function hasDynamicToolBridgeTiming(
+  value: JsonValue,
+): value is JsonValue & { bridgeTiming: CodexDynamicToolBridgeTiming } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "bridgeTiming" in value &&
+    typeof (value as { bridgeTiming?: unknown }).bridgeTiming === "object" &&
+    (value as { bridgeTiming?: unknown }).bridgeTiming !== null
+  );
+}
+
+/**
+ * Reads the hidden phase timing a dynamic tool response carries (see
+ * `withDynamicToolBridgeTiming`) and logs the full request-received ->
+ * tool-execute -> response-sent breakdown at the transport write boundary,
+ * the last point before Codex ever sees the response. Non-enumerable, so it
+ * never reaches the wire; this is the only place it is read and reported.
+ */
+function logDynamicToolBridgeTimingIfPresent(result: JsonValue): void {
+  if (!hasDynamicToolBridgeTiming(result)) {
+    return;
+  }
+  const timing = result.bridgeTiming;
+  const responseSentAt = Date.now();
+  embeddedAgentLog.info("codex dynamic tool bridge timing", {
+    tool: timing.toolName,
+    requestReceivedAt: timing.requestReceivedAt,
+    toolExecuteStartAt: timing.toolExecuteStartAt,
+    toolExecuteEndAt: timing.toolExecuteEndAt,
+    responseSentAt,
+    // Repairable-transport estimate: request-received -> dispatch start.
+    bridgeInboundMs: Math.max(0, timing.toolExecuteStartAt - timing.requestReceivedAt),
+    // Actual OpenClaw tool execution time, not bridge overhead.
+    toolExecuteMs: Math.max(0, timing.toolExecuteEndAt - timing.toolExecuteStartAt),
+    // Repairable-transport estimate: tool done -> response written to Codex's stdin.
+    bridgeOutboundMs: Math.max(0, responseSentAt - timing.toolExecuteEndAt),
+    // Sum of the two bridge legs above, excluding tool execution time.
+    bridgeTotalMs: Math.max(
+      0,
+      responseSentAt -
+        timing.requestReceivedAt -
+        (timing.toolExecuteEndAt - timing.toolExecuteStartAt),
+    ),
+  });
 }
 
 function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {

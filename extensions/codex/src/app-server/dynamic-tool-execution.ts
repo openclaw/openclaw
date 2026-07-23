@@ -34,6 +34,20 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+/**
+ * Phase timestamps (epoch ms) spanning the OpenClaw side of one Codex dynamic
+ * tool round trip: the `item/tool/call` request arriving from Codex, the
+ * OpenClaw tool execution window, and (attached separately at the transport
+ * write boundary) the response being sent back. Used to distinguish tool
+ * execution time from bridge/transport overhead; never serialized to Codex.
+ */
+export type CodexDynamicToolBridgeTiming = {
+  toolName: string;
+  requestReceivedAt: number;
+  toolExecuteStartAt: number;
+  toolExecuteEndAt: number;
+};
+
 /** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 /** Hard cap for per-call Codex dynamic tool timeout overrides. */
@@ -328,6 +342,23 @@ export function toCodexDynamicToolProtocolResponse(
     contentItems: response.contentItems,
     success: response.success,
   };
+}
+
+/**
+ * Attaches non-enumerable bridge phase timing to a protocol response so it
+ * survives the return path to the app-server transport write boundary
+ * without ever reaching Codex (JSON.stringify skips non-enumerable props).
+ */
+export function withDynamicToolBridgeTiming<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  timing: CodexDynamicToolBridgeTiming,
+): T {
+  Object.defineProperty(response, "bridgeTiming", {
+    configurable: true,
+    enumerable: false,
+    value: timing,
+  });
+  return response;
 }
 
 /** Adds async-started progress details when a tool result continues out of band. */

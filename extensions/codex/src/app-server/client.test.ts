@@ -6,6 +6,10 @@ import {
   isCodexAppServerApprovalRequest,
   isCodexAppServerIndeterminateTransportError,
 } from "./client.js";
+import {
+  type CodexDynamicToolBridgeTiming,
+  withDynamicToolBridgeTiming,
+} from "./dynamic-tool-execution.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -173,6 +177,58 @@ describe("CodexAppServerClient", () => {
       },
     ]);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("logs dynamic tool bridge phase timing without ever serializing it to Codex", async () => {
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const timing: CodexDynamicToolBridgeTiming = {
+      toolName: "memory_search",
+      requestReceivedAt: 1_000,
+      toolExecuteStartAt: 1_010,
+      toolExecuteEndAt: 1_090,
+    };
+    harness.client.addRequestHandler(() =>
+      withDynamicToolBridgeTiming({ contentItems: [], success: true }, timing),
+    );
+
+    harness.send({ id: 1, method: "item/tool/call", params: {} });
+
+    await vi.waitFor(() => expect(harness.writes).toHaveLength(1));
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as {
+      id?: number;
+      result?: Record<string, unknown>;
+    };
+    expect(outbound.id).toBe(1);
+    expect(outbound.result).toEqual({ contentItems: [], success: true });
+    expect(harness.writes[0]).not.toContain("bridgeTiming");
+
+    const call = info.mock.calls.find(
+      ([message]) => message === "codex dynamic tool bridge timing",
+    );
+    expect(call).toBeDefined();
+    const metadata = call?.[1] as
+      | {
+          tool?: string;
+          requestReceivedAt?: number;
+          toolExecuteStartAt?: number;
+          toolExecuteEndAt?: number;
+          responseSentAt?: number;
+          bridgeInboundMs?: number;
+          toolExecuteMs?: number;
+          bridgeOutboundMs?: number;
+          bridgeTotalMs?: number;
+        }
+      | undefined;
+    expect(metadata?.tool).toBe("memory_search");
+    expect(metadata?.bridgeInboundMs).toBe(10);
+    expect(metadata?.toolExecuteMs).toBe(80);
+    expect(metadata?.bridgeOutboundMs).toBeGreaterThanOrEqual(0);
+    expect(metadata?.responseSentAt).toBeGreaterThanOrEqual(timing.toolExecuteEndAt);
+    expect(metadata?.bridgeTotalMs).toBe(
+      (metadata?.bridgeInboundMs ?? 0) + (metadata?.bridgeOutboundMs ?? 0),
+    );
   });
 
   it("preserves JSON-RPC error codes", async () => {

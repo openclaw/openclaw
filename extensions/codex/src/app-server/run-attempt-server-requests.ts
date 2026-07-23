@@ -15,6 +15,7 @@ import {
   shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
+  withDynamicToolBridgeTiming,
 } from "./dynamic-tool-execution.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -66,6 +67,7 @@ export function createCodexAttemptServerRequestController(
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
+    receivedAtMs: number,
   ) => {
     const turnId = turnIdRef.current;
     const projector = projectorRef.current;
@@ -152,6 +154,7 @@ export function createCodexAttemptServerRequestController(
         toolCallId: call.callId,
         name: call.tool,
         arguments: call.arguments,
+        requestReceivedAt: receivedAtMs,
       });
       projector?.recordDynamicToolCall({
         callId: call.callId,
@@ -245,7 +248,14 @@ export function createCodexAttemptServerRequestController(
             presentationOnly: true,
           });
         }
-        const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
+        const toolExecuteEndAt = Date.now();
+        const toolDurationMs = Math.max(0, toolExecuteEndAt - toolStartedAt);
+        withDynamicToolBridgeTiming(protocolResponse, {
+          toolName: call.tool,
+          requestReceivedAt: receivedAtMs,
+          toolExecuteStartAt: toolStartedAt,
+          toolExecuteEndAt,
+        });
         trajectoryRecorder?.recordEvent("tool.result", {
           threadId: call.threadId,
           turnId: call.turnId,
@@ -253,6 +263,14 @@ export function createCodexAttemptServerRequestController(
           name: call.tool,
           success: protocolResponse.success,
           contentItems: protocolResponse.contentItems,
+          requestReceivedAt: receivedAtMs,
+          toolExecuteStartAt: toolStartedAt,
+          toolExecuteEndAt,
+          // Repairable-transport estimate: request-received -> dispatch start.
+          // Excludes actual tool execution (toolDurationMs) and the
+          // dispatch/write time captured separately at the transport write
+          // boundary (see client.ts's bridge timing log).
+          bridgeInboundMs: Math.max(0, toolStartedAt - receivedAtMs),
         });
         recordCodexDynamicToolResult(projector, call, response, protocolResponse);
         if (shouldEmitDynamicToolProgress) {
