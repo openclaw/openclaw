@@ -421,7 +421,85 @@ export function resolveExecApprovalsTranscriptPath(): string {
     : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
 }
 
-function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
+let lastGoodExecApprovals: ExecApprovalsFile | null = null;
+let execApprovalsTransientWarnedAtMs = 0;
+
+function rememberGoodExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
+  lastGoodExecApprovals = file;
+  return file;
+}
+
+function isTransientExecApprovalsReadError(cause: unknown): boolean {
+  // Only a lost lock race is provably transient: the store was readable a
+  // moment ago and a bounded wait simply expired. Everything else that lands
+  // in the read catch (symlinked/non-file paths, permission errors, malformed
+  // content, stale owners) keeps the fail-closed contract.
+  return (cause as { code?: unknown } | null)?.code === "file_lock_timeout";
+}
+
+/**
+ * Serves the last successfully-read approvals policy when a read lost the
+ * bounded wait for the approvals file lock. Concurrent execs race on that
+ * lock; treating a lost race as a policy failure turns into sporadic
+ * fail-closed denials while the store is valid the whole time. All other
+ * failures — and any failure before the first successful read — still fail
+ * closed via createFailClosedExecApprovalsFallback.
+ */
+function resolveTransientExecApprovalsFallback(cause: unknown): ExecApprovalsFile {
+  if (lastGoodExecApprovals && isTransientExecApprovalsReadError(cause)) {
+    const nowMs = Date.now();
+    if (nowMs - execApprovalsTransientWarnedAtMs >= 60_000) {
+      execApprovalsTransientWarnedAtMs = nowMs;
+      const reason = cause instanceof Error ? cause.message : "unknown cause";
+      try {
+        console.error(
+          `[exec-approvals] approvals lock wait expired; serving last-known-good policy: ${reason}`,
+        );
+      } catch {
+        // Console failures must not affect policy resolution.
+      }
+    }
+    return lastGoodExecApprovals;
+  }
+  return createFailClosedExecApprovalsFallback(cause);
+}
+
+let execApprovalsFailClosedWarnedAtMs = 0;
+
+function warnExecApprovalsFailClosed(cause: unknown): void {
+  // Rate-limit to once a minute: the fallback is hit on every exec while the
+  // store stays unreadable, and the point is one actionable line, not a flood.
+  const nowMs = Date.now();
+  if (nowMs - execApprovalsFailClosedWarnedAtMs < 60_000) {
+    return;
+  }
+  execApprovalsFailClosedWarnedAtMs = nowMs;
+  let target = "";
+  try {
+    const filePath = resolveExecApprovalsPath();
+    target = ` store=${filePath} (also check its .lock sidecar for a dead holder)`;
+  } catch {
+    // Path resolution may itself be the failing step; still emit the warning.
+  }
+  let reason = "unknown cause";
+  if (cause instanceof Error) {
+    reason = cause.message;
+  } else if (typeof cause === "string") {
+    reason = cause;
+  } else if (cause !== undefined) {
+    try {
+      reason = JSON.stringify(cause) ?? reason;
+    } catch {
+      // Keep the generic reason when the cause cannot be stringified.
+    }
+  }
+  console.error(
+    `[exec-approvals] approvals store unreadable; failing closed (every exec now denies with security=deny): ${reason}${target}`,
+  );
+}
+
+function createFailClosedExecApprovalsFallback(cause?: unknown): ExecApprovalsFile {
+  warnExecApprovalsFailClosed(cause);
   return normalizeExecApprovals({
     version: 1,
     defaults: {
@@ -500,16 +578,18 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
 }
 
 function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
+  let cause: unknown = "persisted exec-approvals content failed validation";
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isValidPersistedExecApprovals(parsed)) {
-      return normalizeExecApprovals(parsed);
+      return rememberGoodExecApprovals(normalizeExecApprovals(parsed));
     }
-  } catch {
+  } catch (err) {
     // A partial Windows fallback write is existing state, not a missing policy.
+    cause = err;
   }
   // Never let malformed persisted state inherit permissive product defaults.
-  return createFailClosedExecApprovalsFallback();
+  return createFailClosedExecApprovalsFallback(cause);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
@@ -710,7 +790,7 @@ function readExecApprovalsSnapshotFromPath(filePath: string): ExecApprovalsSnaps
       path: filePath,
       exists: false,
       raw: null,
-      file: normalizeExecApprovals({ version: 1, agents: {} }),
+      file: rememberGoodExecApprovals(normalizeExecApprovals({ version: 1, agents: {} })),
       hash: hashExecApprovalsRaw(null),
     };
   }
@@ -1062,18 +1142,19 @@ function loadExecApprovalsUnlocked(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
   try {
     return readExecApprovalsSnapshotFromPath(filePath).file;
-  } catch {
-    return createFailClosedExecApprovalsFallback();
+  } catch (err) {
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {
   try {
     return withExecApprovalsReadLockSync(resolveExecApprovalsPath(), loadExecApprovalsUnlocked);
-  } catch {
+  } catch (err) {
     // A busy, malformed, or unreadable approvals store must never restore the
-    // permissive defaults while another process is revoking access.
-    return createFailClosedExecApprovalsFallback();
+    // permissive defaults while another process is revoking access; a
+    // last-known-good policy (never the permissive defaults) may stand in.
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
@@ -1082,10 +1163,10 @@ export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
     return await withExecApprovalsReadLock(resolveExecApprovalsPath(), async () =>
       loadExecApprovalsUnlocked(),
     );
-  } catch {
+  } catch (err) {
     // Match the synchronous reader's fail-closed contract while allowing
     // same-process async writers to finish instead of rejecting valid state.
-    return createFailClosedExecApprovalsFallback();
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
@@ -1520,7 +1601,7 @@ function readExecApprovalsForNoPersistenceUnlocked(filePath: string): ExecApprov
     if (err instanceof UnsafeExecApprovalsPathError) {
       throw err;
     }
-    return createFailClosedExecApprovalsFallback();
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
