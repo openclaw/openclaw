@@ -189,6 +189,30 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it("persists bun x approvals against the inner executable", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "bun");
+    const tsxPath = makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "bun x tsx ./run.ts";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "patterns",
+      commandText: command,
+      patterns: [expect.objectContaining({ pattern: tsxPath })],
+    });
+  });
+
   it("persists chained package-manager exec approvals against the final inner executable", async () => {
     const dir = makeTempDir();
     for (const executable of ["pnpm", "npm"]) {
@@ -304,6 +328,77 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     }
     const env = makePathEnv(dir);
     const command = "npm x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it("keeps bun x shell carriers one-shot", async () => {
+    const dir = makeTempDir();
+    for (const executable of ["bun", "sh", "echo"]) {
+      makeExecutable(dir, executable);
+    }
+    const env = makePathEnv(dir);
+    const command = "bun x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it("keeps bun x carriers behind space-valued globals one-shot", async () => {
+    const dir = makeTempDir();
+    for (const executable of ["bun", "sh", "echo"]) {
+      makeExecutable(dir, executable);
+    }
+    const env = makePathEnv(dir);
+    const command = "bun -c x sh -c 'echo warmup-ok'";
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
+  it("keeps bun space-valued cwd selector forms out of inner persistence", async () => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "bun");
+    makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = "bun --cwd ./pkg x tsx ./run.ts";
     const plan = await planShellAuthorization({ command, cwd: dir, env });
 
     const decision = resolveAllowAlwaysPersistenceDecision({

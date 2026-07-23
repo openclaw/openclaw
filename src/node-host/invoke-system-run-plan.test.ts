@@ -628,6 +628,14 @@ describe("hardenApprovedExecutionPaths", () => {
       expectedArgvIndex: 2,
     },
     {
+      name: "bun x tsx file",
+      argv: ["bun", "x", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 3,
+      binNames: ["bun", "tsx"],
+    },
+    {
       name: "npm exec tsx file",
       argv: ["npm", "exec", "--", "tsx", "./run.ts"],
       scriptName: "run.ts",

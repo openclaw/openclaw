@@ -1023,6 +1023,102 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("rejects stale bun allow-always entries for x shell carriers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const bunPath = makeExecutable(dir, "bun");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "bun x sh -c 'id > marker'",
+      allowlist: [{ pattern: bunPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale bun allow-always entries when a space-valued global puts x in dispatch position", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const bunPath = makeExecutable(dir, "bun");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "bun -c x sh -c 'id > marker'",
+      allowlist: [{ pattern: bunPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects stale bun allow-always entries when unknown globals precede x", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const bunPath = makeExecutable(dir, "bun");
+    makeExecutable(dir, "sh");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: "bun --unknown-global-option x sh -c 'id > marker'",
+      allowlist: [{ pattern: bunPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentAllowlistEntries).toEqual([null]);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("rejects stale package-manager allow-always entries for chained shell carriers", async () => {
     if (process.platform === "win32") {
       return;
@@ -1391,6 +1487,39 @@ $0 \\"$1\\"" touch {marker}`,
       platform: process.platform,
     });
     expect(yarnInner.allowlistSatisfied).toBe(true);
+
+    const bunPath = makeExecutable(dir, "bun");
+    const bunStaleOuter = await evaluateShellAllowlistWithAuthorization({
+      command: "bun x tsx ./run.ts",
+      allowlist: [{ pattern: bunPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(bunStaleOuter.allowlistSatisfied).toBe(false);
+
+    const bunInner = await evaluateShellAllowlistWithAuthorization({
+      command: "bun x tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(bunInner.allowlistSatisfied).toBe(true);
+
+    // "--cwd ./pkg" makes "./pkg" bun's selected command, not "x", so the
+    // inner-executable entry must not authorize this form.
+    const bunCwdSelector = await evaluateShellAllowlistWithAuthorization({
+      command: "bun --cwd ./pkg x tsx ./run.ts",
+      allowlist: [{ pattern: tsxPath, source: "allow-always" }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(bunCwdSelector.allowlistSatisfied).toBe(false);
   });
 
   it("prevents allow-always bypass for sandbox-exec wrapper chains", async () => {

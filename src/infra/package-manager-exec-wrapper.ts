@@ -27,6 +27,46 @@ const NPM_EXEC_FLAG_OPTIONS = new Set([
 
 const NPM_EXEC_SUBCOMMANDS = new Set(["exec", "x"]);
 
+// Only "x" is package exec for bun; "run"/file operands are runtime script
+// invocations and "exec" is a shell-string carrier, so neither may unwrap.
+const BUN_EXEC_SUBCOMMANDS = new Set(["x"]);
+
+// Shared with node-host script-operand hardening (invoke-system-run-plan),
+// which models bun as consuming a separate value for these globals.
+export const BUN_OPTIONS_WITH_VALUE = new Set([
+  "--backend",
+  "--bunfig",
+  "--conditions",
+  "--config",
+  "--console-depth",
+  "--cwd",
+  "--define",
+  "--elide-lines",
+  "--env-file",
+  "--extension-order",
+  "--filter",
+  "--hot",
+  "--inspect",
+  "--inspect-brk",
+  "--inspect-wait",
+  "--install",
+  "--jsx-factory",
+  "--jsx-fragment",
+  "--jsx-import-source",
+  "--loader",
+  "--origin",
+  "--port",
+  "--preload",
+  "--smol",
+  "--tsconfig-override",
+  "-c",
+  "-e",
+  "-p",
+  "-r",
+]);
+
+const BUN_FLAG_OPTIONS = new Set(["--bun", "--silent", "-b"]);
+
 export const PNPM_OPTIONS_WITH_VALUE = new Set([
   "--config",
   "--dir",
@@ -345,6 +385,88 @@ function unwrapNpmExecInvocation(argv: string[]): string[] | null {
   return unwrapDirectPackageExecInvocation(["npx", ...tail]);
 }
 
+// Two dispatch models exist for a bun global option with a space-separated
+// value: bun's root selector has been observed to skip dash tokens without
+// consuming values, while this repo's shipped script-operand model
+// (node-host invoke-system-run-plan) consumes values for the known globals in
+// BUN_OPTIONS_WITH_VALUE. Unwrap only when both models select the same "x"
+// token; any form whose dispatch depends on the model fails closed.
+function resolveBunExecInvocation(argv: string[]): PackageManagerExecInvocation {
+  const conservative = (fromIdx: number): PackageManagerExecInvocation =>
+    containsSubcommandToken(argv.slice(fromIdx), BUN_EXEC_SUBCOMMANDS)
+      ? { kind: "unsafe-exec" }
+      : { kind: "not-exec" };
+
+  // Selector model A: skip every dash token without consuming values.
+  let selectedA: { token: string; idx: number } | null = null;
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (token === "--") {
+      // Neither model defines selection past "--"; fail closed if x follows.
+      return conservative(idx + 1);
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    selectedA = { token, idx };
+    break;
+  }
+
+  // Selector model B: known valued globals consume their separate value,
+  // known flags skip; an unknown dash token has unknown arity in this model,
+  // so selection cannot proceed deterministically.
+  let selectedB: { token: string; idx: number } | null = null;
+  let idx = 1;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (token === "--") {
+      return conservative(idx + 1);
+    }
+    if (token.startsWith("-")) {
+      if (token.includes("=")) {
+        idx += 1;
+        continue;
+      }
+      const flag = normalizeOptionFlag(token);
+      if (BUN_OPTIONS_WITH_VALUE.has(flag)) {
+        idx += 2;
+        continue;
+      }
+      if (BUN_FLAG_OPTIONS.has(flag)) {
+        idx += 1;
+        continue;
+      }
+      return conservative(idx + 1);
+    }
+    selectedB = { token, idx };
+    break;
+  }
+
+  const xA = selectedA !== null && BUN_EXEC_SUBCOMMANDS.has(selectedA.token);
+  const xB = selectedB !== null && BUN_EXEC_SUBCOMMANDS.has(selectedB.token);
+  if (!xA && !xB) {
+    return { kind: "not-exec" };
+  }
+  if (!xA || !xB || selectedA === null || selectedB === null || selectedA.idx !== selectedB.idx) {
+    return { kind: "unsafe-exec" };
+  }
+  const tail = argv.slice(selectedA.idx + 1);
+  if (tail[0] === "--") {
+    return tail.length > 1 ? { kind: "unwrapped", argv: tail.slice(1) } : { kind: "unsafe-exec" };
+  }
+  // Tail parsing delegates to the shared bunx path so "bun x" and "bunx"
+  // accept and reject identical forms (unknown tail options fail closed).
+  const unwrapped = unwrapDirectPackageExecInvocation(["bunx", ...tail]);
+  return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
+}
+
 function unwrapYarnDlxInvocation(argv: string[]): string[] | null {
   let idx = 0;
   while (idx < argv.length) {
@@ -441,6 +563,9 @@ export function resolveKnownPackageManagerExecInvocation(
     case "bunx": {
       const unwrapped = unwrapDirectPackageExecInvocation(argv);
       return unwrapped ? { kind: "unwrapped", argv: unwrapped } : { kind: "unsafe-exec" };
+    }
+    case "bun": {
+      return resolveBunExecInvocation(argv);
     }
     case "pnpm": {
       const unwrapped = unwrapPnpmExecInvocation(argv);
