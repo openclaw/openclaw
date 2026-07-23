@@ -151,6 +151,7 @@ export async function launchChromeMeet(params: {
     const transport = createLocalMeetingRealtimeAudioTransport({
       inputCommand: params.config.chrome.audioInputCommand,
       outputCommand: params.config.chrome.audioOutputCommand,
+      audioFormat: params.config.chrome.audioFormat,
       bargeInInputCommand: params.config.chrome.bargeInInputCommand,
       bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
       bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
@@ -546,6 +547,7 @@ export async function launchChromeMeetOnNode(params: {
       runtime: params.runtime,
       nodeId,
       bridgeId: result.bridgeId,
+      audioFormat: params.config.chrome.audioFormat,
       logger: params.logger,
       commandName: GOOGLE_MEET_NODE_COMMAND,
       logScope: GOOGLE_MEET_PLATFORM_ADAPTER.logScope,

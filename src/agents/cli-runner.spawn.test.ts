@@ -593,7 +593,48 @@ describe("runCliAgent spawn path", () => {
     await expect(executePreparedCliRun(context)).rejects.toThrow(
       "paired-node Claude CLI sessions do not support attachments or images",
     );
+    context.params.imagePrompt = undefined;
+    context.params.media = [{ path: "/tmp/hydratable.png", kind: "image" }];
+    await expect(executePreparedCliRun(context)).rejects.toThrow(
+      "paired-node Claude CLI sessions do not support attachments or images",
+    );
     expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("allows non-hydratable image facts on a text-only node turn", async () => {
+    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
+      params.onProgress(
+        [
+          JSON.stringify({ type: "system", subtype: "init", session_id: "node-text-only" }),
+          JSON.stringify({ type: "result", session_id: "node-text-only", result: "ok" }),
+          "",
+        ].join("\n"),
+      );
+      return {
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+      };
+    });
+    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+    const context = buildPreparedCliRunContext({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      runId: "run-node-text-only-media-facts",
+      prompt: "already described",
+      sessionEntry: {
+        sessionId: "openclaw-session",
+        updatedAt: 1,
+        execHost: "node",
+        execNode: "node-a",
+      },
+    });
+    context.params.media = [
+      { kind: "image" },
+      { kind: "image", url: "https://example.test/described.png" },
+    ];
+
+    await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
+    expect(invokeNode).toHaveBeenCalledOnce();
   });
 
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {

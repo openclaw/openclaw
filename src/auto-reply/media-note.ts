@@ -131,12 +131,20 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
+function collectDescribedImageAttachmentIndices(ctx: MsgContext): Set<number> {
+  return new Set(
+    ctx.MediaUnderstanding?.flatMap((output) =>
+      output.kind === "image.description" ? [output.attachmentIndex] : [],
+    ) ?? [],
+  );
+}
+
 type InboundMediaNoteProjection = {
   text?: string;
   media: MediaFact[];
 };
 
-/** Formats prompt-visible attachment text and retains the facts represented by it. */
+/** Formats prompt-visible attachment text and retains facts that still need native hydration. */
 export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
@@ -196,14 +204,22 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
     return { media: [] };
   }
   const facts = resolveMediaFacts(ctx);
+  const describedImageIndices = collectDescribedImageAttachmentIndices(ctx);
   const media = normalizeMediaFacts(
-    entries.map((entry) => ({
-      ...facts[entry.index],
-      path: entry.path,
-      url: entry.url,
-      contentType: entry.type,
-    })),
+    entries.map((entry) =>
+      Object.assign({}, facts[entry.index], {
+        path: entry.path,
+        url: entry.url,
+        contentType: entry.type,
+      }),
+    ),
   );
+  for (const [position, entry] of entries.entries()) {
+    const fact = media[position];
+    if (fact && describedImageIndices.has(entry.index)) {
+      fact.hydrationSuppressed = true;
+    }
+  }
   if (entries.length === 1) {
     return {
       text: formatMediaAttachedLine({

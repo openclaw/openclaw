@@ -28,11 +28,11 @@ import {
   renderSidebarMoreMenu,
   renderSidebarNavRoute,
 } from "./app-sidebar-nav-menus.ts";
-import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
@@ -40,9 +40,10 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import { SessionOrganizerController } from "./session-organizer-controller.ts";
 
 /** Popup ownership and stateless menu-renderer wiring. */
-export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElement {
+export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigationElement {
   @state() protected customizeMenuPosition: { x: number; y: number } | null = null;
   @state() protected moreMenuPosition: { x: number; y: number } | null = null;
   @state() sessionMenu: SidebarSessionMenuState | null = null;
@@ -52,6 +53,40 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() protected agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() protected agentMenuFilter = "";
+
+  readonly sessionOrganizer = new SessionOrganizerController(this);
+
+  get collapsedSessionSections(): ReadonlySet<string> {
+    return this.sessionOrganizer.collapsedSessionSections;
+  }
+
+  get draggingSessionKey(): string | null {
+    return this.sessionOrganizer.draggingSessionKey;
+  }
+
+  get draggingSessionGroup(): string | null {
+    return this.sessionOrganizer.draggingSessionGroup;
+  }
+
+  get sessionDropTarget(): string | null {
+    return this.sessionOrganizer.sessionDropTarget;
+  }
+
+  get sessionGroupDropTarget() {
+    return this.sessionOrganizer.sessionGroupDropTarget;
+  }
+
+  get sessionListRemovalDrop(): boolean {
+    return this.sessionOrganizer.sessionListRemovalDrop;
+  }
+
+  protected get draggingSidebarEntry(): string | null {
+    return this.sessionOrganizer.draggingSidebarEntry;
+  }
+
+  protected get sidebarZoneDropTarget() {
+    return this.sessionOrganizer.sidebarZoneDropTarget;
+  }
 
   private customizeMenuTrigger: HTMLElement | null = null;
   private moreMenuTrigger: HTMLElement | null = null;
@@ -448,7 +483,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
           }}
           .onAction=${(action: SessionMenuAction) => {
             if (batchRows) {
-              this.runBatchSessionAction(action, batchRows, allUnread);
+              void this.sessionOrganizer.runBatchSessionAction(action, batchRows, allUnread);
               return;
             }
             switch (action.kind) {
@@ -462,42 +497,42 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 openEditor(action.editor, action.path);
                 break;
               case "toggle-pin":
-                void this.patchSession(session, { pinned: !session.pinned });
+                void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
                 break;
               case "set-icon":
-                void this.patchSession(session, { icon: action.icon });
+                void this.sessionOrganizer.patchSession(session, { icon: action.icon });
                 break;
               case "toggle-unread":
-                void this.patchSession(session, { unread: !session.unread });
+                void this.sessionOrganizer.patchSession(session, { unread: !session.unread });
                 break;
               case "rename":
-                this.renameSession(session);
+                void this.sessionOrganizer.renameSession(session);
                 break;
               case "fork":
-                void this.forkSession(session);
+                void this.sessionOrganizer.forkSession(session);
                 break;
               case "workboard":
                 break;
               case "move-to-group":
                 if (action.category === null || session.category !== action.category) {
-                  this.assignSessionCategory(session, action.category);
+                  void this.sessionOrganizer.assignSessionCategory(session, action.category);
                 }
                 break;
               case "new-group":
-                this.createSessionGroup([session]);
+                void this.sessionOrganizer.createSessionGroup([session]);
                 break;
               case "toggle-archived":
                 if (session.archived) {
-                  void this.patchSession(session, { archived: false });
+                  void this.sessionOrganizer.patchSession(session, { archived: false });
                 } else {
-                  void this.archiveSessionWithUndo(session);
+                  void this.sessionOrganizer.archiveSessionWithUndo(session);
                 }
                 break;
               case "stop-cloud-worker":
-                void this.stopCloudWorker(session);
+                void this.sessionOrganizer.stopCloudWorker(session);
                 break;
               case "delete":
-                void this.deleteSession(session);
+                void this.sessionOrganizer.deleteSession(session);
                 break;
             }
           }}
@@ -516,13 +551,13 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeSessionGroupMenu({ restoreFocus: true });
         switch (action) {
           case "rename-group":
-            this.renameSessionGroupFromMenu(group);
+            void this.sessionOrganizer.renameSessionGroupFromMenu(group);
             break;
           case "new-group":
-            this.createSessionGroup();
+            void this.sessionOrganizer.createSessionGroup();
             break;
           case "delete-group":
-            this.deleteSessionGroupFromMenu(group);
+            void this.sessionOrganizer.deleteSessionGroupFromMenu(group);
             break;
         }
       },
@@ -545,7 +580,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       statusFilter: this.sessionsStatusFilter,
       showCron: this.sessionsShowCron,
       onGroupingChange: (grouping) => {
-        this.setSessionsGrouping(grouping);
+        this.sessionOrganizer.setSessionsGrouping(grouping);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onSortModeChange: (mode) => {
@@ -553,11 +588,11 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onStatusFilterChange: (statusFilter) => {
-        this.setSessionsStatusFilter(statusFilter);
+        this.sessionOrganizer.setSessionsStatusFilter(statusFilter);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onShowCronChange: (show) => {
-        this.setSessionsShowCron(show);
+        this.sessionOrganizer.setSessionsShowCron(show);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onClose: (restoreFocus) => {

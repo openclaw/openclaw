@@ -25,7 +25,7 @@ describe("AppSidebar session ownership", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    expect(sidebar.sessionsResult?.creators).toHaveLength(2);
+    expect(sidebar.sessionData.sessionsResult?.creators).toHaveLength(2);
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(1);
     const select = sidebar.querySelector<HTMLSelectElement>(
@@ -131,7 +131,7 @@ describe("AppSidebar session ownership", () => {
     ];
 
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -166,6 +166,7 @@ describe("AppSidebar session ownership", () => {
         ],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
@@ -216,7 +217,7 @@ describe("AppSidebar session ownership", () => {
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -243,6 +244,7 @@ describe("AppSidebar session ownership", () => {
         ],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 

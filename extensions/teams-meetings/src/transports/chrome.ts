@@ -159,6 +159,7 @@ async function startLocalAudioBridge(params: {
   const transport = createLocalMeetingRealtimeAudioTransport({
     inputCommand: params.config.chrome.audioInputCommand,
     outputCommand: params.config.chrome.audioOutputCommand,
+    audioFormat: params.config.chrome.audioFormat,
     bargeInInputCommand: params.config.chrome.bargeInInputCommand,
     bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
     bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
@@ -389,6 +390,7 @@ export async function launchTeamsMeetingOnNode(params: {
       runtime: params.runtime,
       nodeId,
       bridgeId: result.bridgeId,
+      audioFormat: params.config.chrome.audioFormat,
       logger: params.logger,
       commandName: TEAMS_MEETINGS_NODE_COMMAND,
       logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
