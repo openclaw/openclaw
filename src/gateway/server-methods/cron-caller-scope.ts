@@ -111,6 +111,14 @@ export function cronJobMatchesDeclarationScope(params: {
     return cronJobMatchesCallerScope(params);
   }
 
+  // Declarative convergence preserves the matched job's owner, so account identity must be part
+  // of selection or a same-key declaration can mutate another account's authority envelope.
+  if (
+    normalizeAccountId(params.job.owner?.accountId) !==
+    normalizeAccountId(params.input.owner?.accountId)
+  ) {
+    return false;
+  }
   const inputOwnerSessionKey = params.input.owner?.sessionKey;
   const inputOwnerAgentId =
     params.input.owner?.agentId ?? parseAgentIdFromSessionRef(inputOwnerSessionKey);

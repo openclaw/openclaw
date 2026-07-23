@@ -1246,6 +1246,42 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
+  it("scopes operator declaration convergence by normalized owner account", async () => {
+    const owner = {
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "work",
+    };
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ declarationKey: "daily-report", owner }),
+    );
+
+    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
+    expect(
+      matchesExisting?.(
+        createCronJob({ declarationKey: "daily-report", owner: { ...owner, accountId: "WORK" } }),
+      ),
+    ).toBe(true);
+    expect(
+      matchesExisting?.(
+        createCronJob({
+          declarationKey: "daily-report",
+          owner: { ...owner, accountId: "personal" },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      matchesExisting?.(
+        createCronJob({
+          declarationKey: "daily-report",
+          owner: { agentId: owner.agentId, sessionKey: owner.sessionKey },
+        }),
+      ),
+    ).toBe(false);
+    expectCronSuccess(respond);
+  });
+
   it("returns the published declarative cron.add result shape", async () => {
     const context = createCronContext();
     const job = createCronJob({ declarationKey: "daily-report" });
