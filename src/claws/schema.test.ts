@@ -332,6 +332,167 @@ describe("readClawManifestFile", () => {
     expect(result.source.byteLength).toBeGreaterThan(0);
   });
 
+  it("reads a human-authored CLAW.md package through the same manifest schema", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-");
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({
+        name: "@acme/github-triage",
+        version: "3.2.1",
+        openclaw: { claw: "CLAW.md" },
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(root, "CLAW.md"),
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent:",
+        "  id: triage",
+        "workspace: {}",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+        "",
+        "# GitHub Triage",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(root);
+
+    expect(result).toMatchObject({
+      ok: true,
+      manifest: { schemaVersion: 1, agent: { id: "triage" } },
+      source: { kind: "package", name: "@acme/github-triage", version: "3.2.1" },
+    });
+    if (!result.ok) {
+      throw new Error("expected package to parse");
+    }
+    expect(result.source).not.toHaveProperty("manifestFormatPath");
+  });
+
+  it("accepts a UTF-8 BOM and includes its bytes in snapshot integrity", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-bom-");
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({
+        name: "@acme/github-triage",
+        version: "3.2.1",
+        openclaw: { claw: "CLAW.md" },
+      }),
+      "utf8",
+    );
+    const raw =
+      "\uFEFF" +
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent:",
+        "  id: triage",
+        "workspace: {}",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+      ].join("\n");
+    await writeFile(join(root, "CLAW.md"), raw, "utf8");
+
+    const result = await readClawManifestFile(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected BOM-prefixed CLAW.md to parse");
+    }
+    expect(result.manifest.agent.id).toBe("triage");
+    expect(result.source).toMatchObject({
+      integrityKind: "development-snapshot",
+      byteLength: expect.any(Number),
+    });
+
+    await writeFile(join(root, "CLAW.md"), raw.slice(1), "utf8");
+    const withoutBom = await readClawManifestFile(root);
+    expect(withoutBom.ok).toBe(true);
+    if (!withoutBom.ok) {
+      throw new Error("expected CLAW.md without BOM to parse");
+    }
+    expect(withoutBom.source.integrity).not.toBe(result.source.integrity);
+  });
+
+  it("rejects CLAW.md without YAML frontmatter", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-invalid-");
+    const path = join(root, "CLAW.md");
+    await writeFile(path, "# Missing manifest\n", "utf8");
+
+    const result = await readClawManifestFile(path);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "missing_claw_frontmatter" }),
+    );
+  });
+
+  it.each([
+    ["anchor", "agent: &agent { id: triage }"],
+    ["alias", "agent: { id: &id triage, name: *id }"],
+    ["merge key", "agent: { <<: { id: triage } }"],
+    ["explicit tag", "agent: { id: !!str triage }"],
+  ])("rejects CLAW.md YAML %s", async (_label, declaration) => {
+    const root = tempDirs.make("openclaw-claw-markdown-alias-");
+    const path = join(root, "CLAW.md");
+    await writeFile(
+      path,
+      [
+        "---",
+        "schemaVersion: 1",
+        declaration,
+        "workspace: {}",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "unsupported_claw_yaml_feature" }),
+    );
+  });
+
+  it("hashes original CLAW.md bytes rather than decoded text", async () => {
+    const root = tempDirs.make("openclaw-claw-markdown-original-bytes-");
+    const path = join(root, "CLAW.md");
+    const frontmatter = Buffer.from(
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent: { id: triage }",
+        "workspace: {}",
+        "packages: []",
+        "mcpServers: {}",
+        "cronJobs: []",
+        "---",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x80])]));
+    const first = await readClawManifestFile(path);
+    await writeFile(path, Buffer.concat([frontmatter, Buffer.from([0x81])]));
+    const second = await readClawManifestFile(path);
+
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) {
+      throw new Error("expected CLAW.md bodies to parse");
+    }
+    expect(second.source.integrity).not.toBe(first.source.integrity);
+  });
+
   it("synthesizes explicit development identity for a standalone manifest", async () => {
     const root = tempDirs.make("openclaw-claw-development-");
     const path = join(root, "demo.claw.json");
@@ -430,6 +591,46 @@ describe("readClawManifestFile", () => {
       expect.objectContaining({ code: "workspace_sources_too_large" }),
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the declared CLAW.md path when it is an in-package symlink",
+    async () => {
+      const root = tempDirs.make("openclaw-claw-markdown-link-");
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({
+          name: "@acme/github-triage",
+          version: "3.2.1",
+          openclaw: { claw: "CLAW.md" },
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "manifest.json"),
+        [
+          "---",
+          "schemaVersion: 1",
+          "agent:",
+          "  id: triage",
+          "workspace: {}",
+          "packages: []",
+          "mcpServers: {}",
+          "cronJobs: []",
+          "---",
+        ].join("\n"),
+        "utf8",
+      );
+      await symlink("manifest.json", join(root, "CLAW.md"));
+
+      const result = await readClawManifestFile(root);
+
+      expect(result).toMatchObject({
+        ok: true,
+        manifest: { agent: { id: "triage" } },
+        source: { manifestPath: await realpath(join(root, "manifest.json")) },
+      });
+    },
+  );
 
   it("rejects package manifests that escape the package root", async () => {
     const parent = tempDirs.make("openclaw-claw-escape-");
@@ -574,7 +775,7 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks agent, configured workspace, MCP, and cron collisions", async () => {
+  it("blocks agent, configured workspace, and MCP collisions", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
@@ -584,7 +785,6 @@ describe("buildClawAddPlan", () => {
         existingAgentIds: ["github-triage"],
         existingWorkspacePaths: [workspace],
         existingMcpServerNames: ["github"],
-        existingCronJobIds: ["weekday-triage"],
       },
     });
 
@@ -594,9 +794,8 @@ describe("buildClawAddPlan", () => {
       "package_install_unavailable",
       "package_install_unavailable",
       "mcp_server_collision",
-      "cron_job_collision",
     ]);
-    expect(plan.summary.blockedActions).toBe(8);
+    expect(plan.summary.blockedActions).toBe(7);
   });
 
   it("canonicalizes a missing workspace through an existing aliased parent", async () => {
@@ -619,6 +818,29 @@ describe("buildClawAddPlan", () => {
 
     expect(plan.agent.workspace).toBe(canonicalWorkspace);
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
+  });
+
+  it("plans reuse for an exact existing MCP server", async () => {
+    const { source, workspace } = await createPlanSource();
+    const manifest = requireManifest();
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      context: {
+        workspace,
+        existingMcpServers: { github: manifest.mcpServers.github! },
+      },
+    });
+
+    expect(plan.blockers.map((item) => item.code)).not.toContain("mcp_server_collision");
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "github",
+        blocked: false,
+        details: expect.objectContaining({ expectedState: "present-exact" }),
+      }),
+    );
   });
 
   it("uses an explicit unused agent id for every derived action", async () => {
@@ -715,7 +937,6 @@ describe("buildClawAddPlan", () => {
     expect(workspaceFileActions.every((action) => action.blocked)).toBe(true);
     expect(workspaceFileActions.every((action) => !Object.hasOwn(action, "digest"))).toBe(true);
   });
-
   it("binds plan integrity to the source and planned mutations", async () => {
     const { source, workspace } = await createPlanSource();
     const first = await buildClawAddPlan({

@@ -44,8 +44,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/openai-chat-tools/client.mjs!",
   "scripts/e2e/lib/openai-chat-tools/write-config.mjs!",
   "scripts/e2e/lib/package-git-fixture.mjs!",
-  "scripts/e2e/lib/parallels-package/build-info-commit.mjs!",
-  "scripts/e2e/lib/parallels-package/log-progress-extract.mjs!",
   "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs!",
   "scripts/e2e/lib/plugin-update/registry-server.mjs!",
   "scripts/e2e/lib/plugins/npm-registry-server.mjs!",
@@ -129,7 +127,6 @@ const rootEntries = [
   "src/tasks/task-registry-control.runtime.ts!",
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
-  "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
@@ -464,8 +461,6 @@ const config = {
         "src/types.ts!",
         "src/harness/messages.ts!",
         "src/harness/env/kill-tree.ts!",
-        "src/harness/compaction.ts!",
-        "src/harness/branch-summarization.ts!",
         "src/harness/prompt-template-arguments.ts!",
         "src/harness/utils/truncate.ts!",
       ],
@@ -587,7 +582,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/speech-core": {
-      entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
+      entry: ["runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
       project: ["**/*.ts!"],
       ignoreDependencies: ["openclaw"],
     },

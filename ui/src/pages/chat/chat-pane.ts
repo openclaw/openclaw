@@ -28,7 +28,11 @@ import type {
   ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionMembersListResult,
+  SessionVisibility,
+} from "../../api/types.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import {
   applicationContext,
@@ -52,7 +56,11 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import {
+  readPresenceEntries,
+  resolveCurrentSelfUser,
+  type PresencePayload,
+} from "../../app/user-profile.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -66,6 +74,7 @@ import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { icons } from "../../components/icons.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
@@ -82,6 +91,7 @@ import {
   type BoardFace,
   type BoardSessionView,
 } from "../../lib/board/settings.ts";
+import type { SwarmRosterHydrator } from "../../lib/board/swarm-dashboard.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import {
@@ -154,11 +164,12 @@ import {
   applySelectedSessionProjection,
   dismissChatError,
   resolveAssistantAttachmentAuthToken,
+  SessionParticipationTracker,
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
+import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   switchChatFastMode,
@@ -183,7 +194,7 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { renderChat, renderChatResizableDivider, type ChatProps } from "./chat-view.ts";
+import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderCatalogTerminalButton } from "./components/catalog-terminal-button.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import {
@@ -206,6 +217,11 @@ import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
+import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+import {
+  renderChatSessionSharing,
+  type ChatSessionSharingState,
+} from "./components/chat-session-sharing.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -441,6 +457,9 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private headerRenameValue = "";
   @litState() private headerPlatform: string | null = null;
   @litState() private headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @litState() private presencePayload: PresencePayload | undefined;
+  @litState() private sessionSharingStates = new Map<string, ChatSessionSharingState>();
+  private readonly sessionParticipationTracker = new SessionParticipationTracker();
   @litState() private boardCommandDock: {
     sessionKey: string;
     tabId: string;
@@ -475,7 +494,7 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly observerDigestHistory = new ObserverDigestHistory();
   private builtinBoardSnapshot: BoardViewSnapshot | null = null;
   private builtinBoardSnapshotBase: BoardSnapshot | null = null;
-  private builtinBoardSnapshotRequest = 0;
+  private swarmHydrator: SwarmRosterHydrator | null = null;
   private readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   private readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   private readonly sessionDiscussionProbes = new Set<string>();
@@ -483,6 +502,113 @@ class ChatPane extends OpenClawLightDomElement {
   private headerRenameInitialValue = "";
   private headerRenameSessionKey = "";
   private headerCopiedTimer: number | null = null;
+
+  private setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
+    this.sessionSharingStates = new Map(this.sessionSharingStates).set(cacheKey, state);
+  }
+
+  private sessionSharingAgentId(sessionKey: string): string | undefined {
+    if (sessionKey !== "global") {
+      return parseAgentSessionKey(sessionKey)?.agentId;
+    }
+    return this.state ? resolveChatAgentId(this.state) : undefined;
+  }
+
+  private sessionSharingCacheKey(sessionKey: string): string {
+    return `${this.sessionSharingAgentId(sessionKey) ?? ""}\0${sessionKey}`;
+  }
+
+  private async loadSessionSharing(row: GatewaySessionRow, force = false): Promise<void> {
+    const state = this.state;
+    if (!state?.connected || !state.client) {
+      return;
+    }
+    const cacheKey = this.sessionSharingCacheKey(row.key);
+    const current = this.sessionSharingStates.get(cacheKey);
+    if (current?.loading && !force) {
+      return;
+    }
+    // Sharing data (membership + paired identities) is connection-scoped. A
+    // gateway/account change bumps the generation and clears this cache, so a
+    // request that resolves after the switch must be dropped rather than
+    // overwrite the new connection's menu with the previous account's data.
+    const generation = this.connectionGeneration;
+    this.setSessionSharingState(cacheKey, { ...current, loading: true, error: undefined });
+    try {
+      const result = await state.client.request<SessionMembersListResult>("session.members.list", {
+        sessionKey: row.key,
+        ...(this.sessionSharingAgentId(row.key)
+          ? { agentId: this.sessionSharingAgentId(row.key) }
+          : {}),
+      });
+      if (this.connectionGeneration !== generation) {
+        return;
+      }
+      this.setSessionSharingState(cacheKey, { loading: false, result });
+    } catch (error) {
+      if (this.connectionGeneration !== generation) {
+        return;
+      }
+      this.setSessionSharingState(cacheKey, { loading: false, error: String(error) });
+    }
+  }
+
+  private async setSessionVisibility(
+    row: GatewaySessionRow,
+    visibility: SessionVisibility,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state?.connected || !state.client || visibility === row.visibility) {
+      return;
+    }
+    try {
+      await state.client.request("session.visibility.set", {
+        sessionKey: row.key,
+        visibility,
+        ...(this.sessionSharingAgentId(row.key)
+          ? { agentId: this.sessionSharingAgentId(row.key) }
+          : {}),
+      });
+      await this.context.sessions.refreshReplacement(this.sessionSharingAgentId(row.key));
+      await this.loadSessionSharing(row, true);
+    } catch (error) {
+      const cacheKey = this.sessionSharingCacheKey(row.key);
+      this.setSessionSharingState(cacheKey, {
+        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+        loading: false,
+        error: String(error),
+      });
+    }
+  }
+
+  private async setSessionMember(
+    row: GatewaySessionRow,
+    identityId: string,
+    member: boolean,
+  ): Promise<void> {
+    const state = this.state;
+    if (!state?.connected || !state.client) {
+      return;
+    }
+    try {
+      await state.client.request(member ? "session.members.add" : "session.members.remove", {
+        sessionKey: row.key,
+        identityId,
+        ...(this.sessionSharingAgentId(row.key)
+          ? { agentId: this.sessionSharingAgentId(row.key) }
+          : {}),
+      });
+      await this.loadSessionSharing(row, true);
+      await this.context.sessions.refreshReplacement(this.sessionSharingAgentId(row.key));
+    } catch (error) {
+      const cacheKey = this.sessionSharingCacheKey(row.key);
+      this.setSessionSharingState(cacheKey, {
+        ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+        loading: false,
+        error: String(error),
+      });
+    }
+  }
 
   constructor() {
     super();
@@ -499,7 +625,11 @@ class ChatPane extends OpenClawLightDomElement {
       )
       .watch(
         () => this.context?.runtimeConfig,
-        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+        (runtimeConfig, notify) =>
+          runtimeConfig.subscribe(() => {
+            this.refreshBuiltinBoardSnapshot();
+            notify();
+          }),
       )
       .watch(
         () => this.resolveBoardProvider(),
@@ -572,7 +702,7 @@ class ChatPane extends OpenClawLightDomElement {
       !state?.connected ||
       !client ||
       this.connectedClient !== client ||
-      !context.gateway.snapshot.connected ||
+      context.gateway.snapshot.phase !== "connected" ||
       context.gateway.snapshot.client !== client
     ) {
       return null;
@@ -595,7 +725,7 @@ class ChatPane extends OpenClawLightDomElement {
       scope.state.connected &&
       scope.state.client === scope.client &&
       this.connectedClient === scope.client &&
-      scope.context.gateway.snapshot.connected &&
+      scope.context.gateway.snapshot.phase === "connected" &&
       scope.context.gateway.snapshot.client === scope.client &&
       this.connectionGeneration === scope.generation
     );
@@ -1627,7 +1757,7 @@ class ChatPane extends OpenClawLightDomElement {
           ...acquireBoardProviderForSession(
             key,
             client,
-            gateway.connected,
+            gateway.phase === "connected",
             canPinWidgets,
             canPinMcpApps,
             canMutate,
@@ -1640,7 +1770,7 @@ class ChatPane extends OpenClawLightDomElement {
           key,
           client,
           true,
-          gateway.connected,
+          gateway.phase === "connected",
           canPinWidgets,
           canPinMcpApps,
           canMutate,
@@ -1654,7 +1784,7 @@ class ChatPane extends OpenClawLightDomElement {
       sessionKey,
       client,
       available,
-      gateway?.connected ?? false,
+      gateway?.phase === "connected",
       canPinWidgets,
       canPinMcpApps,
       canMutate,
@@ -1672,7 +1802,12 @@ class ChatPane extends OpenClawLightDomElement {
     const enabled = isWorkboardEnabledInConfigSnapshot(
       this.context?.runtimeConfig?.state.configSnapshot,
     );
-    if (!board.hasBoard || board.face !== "dashboard" || !enabled || !gateway?.connected) {
+    if (
+      !board.hasBoard ||
+      board.face !== "dashboard" ||
+      !enabled ||
+      gateway?.phase !== "connected"
+    ) {
       return null;
     }
     const client = gateway.client;
@@ -1701,22 +1836,54 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
-    const request = ++this.builtinBoardSnapshotRequest;
-    const sessions = state.sessionsResult?.sessions ?? [];
-    void import("../../lib/board/builtin-dashboard.ts").then(({ withBuiltinDashboardWidgets }) => {
-      if (request !== this.builtinBoardSnapshotRequest) {
-        return;
-      }
-      const currentBase = this.resolveBoardProvider().snapshot$.value;
-      const sessionKey = this.resolveBoardSessionKey(currentBase.sessionKey);
-      this.builtinBoardSnapshotBase = currentBase;
-      this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
-        currentBase,
-        sessions,
-        this.observerDigestHistory.get(sessionKey),
-      );
-      this.requestUpdate();
-    });
+    const parentKey = this.resolveBoardSessionKey();
+    const sourceEpoch = state.connectionEpoch;
+    void import("../../lib/board/builtin-dashboard.ts").then(
+      ({ isSwarmEnabledInConfig, SwarmRosterHydrator, withBuiltinDashboardWidgets }) => {
+        if (
+          !this.state ||
+          this.state.connectionEpoch !== sourceEpoch ||
+          parentKey !== this.resolveBoardSessionKey()
+        ) {
+          return;
+        }
+        const swarmEnabled =
+          this.state.connected &&
+          isSwarmEnabledInConfig(
+            this.context.runtimeConfig?.state.configSnapshot?.config,
+            resolveAgentIdFromSessionKey(parentKey),
+          );
+        const applyRows = (rows: readonly GatewaySessionRow[], includeSwarm: boolean) => {
+          const base = this.resolveBoardProvider().snapshot$.value;
+          const sessionKey = this.resolveBoardSessionKey(base.sessionKey);
+          this.builtinBoardSnapshotBase = base;
+          this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
+            base,
+            rows,
+            this.observerDigestHistory.get(sessionKey),
+            includeSwarm,
+          );
+          this.requestUpdate();
+        };
+        if (!swarmEnabled) {
+          this.swarmHydrator?.dispose();
+          this.swarmHydrator = null;
+          applyRows(this.state.sessionsResult?.sessions ?? [], false);
+          return;
+        }
+        this.swarmHydrator ??= new SwarmRosterHydrator();
+        this.swarmHydrator.update({
+          sessions: this.context.sessions,
+          parentKey,
+          sourceEpoch,
+          currentRows: () =>
+            this.state?.connectionEpoch === sourceEpoch
+              ? (this.state.sessionsResult?.sessions ?? [])
+              : [],
+          onRows: (rows) => applyRows(rows, true),
+        });
+      },
+    );
   }
 
   private recordObserverDigest(digest: SessionObserverDigest): void {
@@ -2022,7 +2189,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.connected &&
       this.connectedClient === client &&
       context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.connected &&
+      context.gateway.snapshot.phase === "connected" &&
       this.connectionGeneration === connectionGeneration;
     if (!canCreateChatSession(state)) {
       state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
@@ -2356,6 +2523,10 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (event.event === "presence") {
+          const presence = readPresenceEntries(event.payload);
+          this.presencePayload = presence ? { presence } : undefined;
+        }
         if (state) {
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
@@ -2486,8 +2657,11 @@ class ChatPane extends OpenClawLightDomElement {
       window.clearTimeout(this.headerCopiedTimer);
       this.headerCopiedTimer = null;
     }
+    this.swarmHydrator?.dispose();
+    this.swarmHydrator = null;
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
+    this.presencePayload = undefined;
     this.announceCommandPaletteTarget(null);
     dismissConfirmedActionPopovers(this);
     resetChatViewState(this.paneId);
@@ -2607,24 +2781,40 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const wasConnected = state.connected;
-    const sourceChanged = state.client !== snapshot.client || wasConnected !== snapshot.connected;
+    const sourceChanged =
+      state.client !== snapshot.client || wasConnected !== (snapshot.phase === "connected");
     const clientChanged = this.connectedClient !== snapshot.client;
+    if (snapshot.phase !== "connected") {
+      this.presencePayload = undefined;
+    } else if (clientChanged || !wasConnected) {
+      const presence = readPresenceEntries(snapshot.hello?.snapshot);
+      this.presencePayload = presence ? { presence } : undefined;
+    }
     if (sourceChanged) {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      this.swarmHydrator?.dispose();
+      this.swarmHydrator = null;
+      this.builtinBoardSnapshot = null;
+      this.builtinBoardSnapshotBase = null;
       this.taskSuggestionsRequestVersion += 1;
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
       this.sessionDiscussionStates.clear();
       this.sessionDiscussionOpenUrls.clear();
+      this.sessionParticipationTracker.reset();
+      // A new gateway/account owns its own membership + identity data; drop the
+      // previous connection's sharing cache so a stale loading entry cannot
+      // suppress the fresh load or leak the prior account's identities.
+      this.sessionSharingStates = new Map();
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
     state.client = snapshot.client;
-    state.connected = snapshot.connected;
+    state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     if (sourceChanged && state.sidebarContent?.kind === "session-discussion") {
@@ -2633,7 +2823,7 @@ class ChatPane extends OpenClawLightDomElement {
       // re-probe below restores the action for the new source.
       state.handleCloseSidebar();
     }
-    if (sourceChanged && snapshot.connected && state.sessionKey) {
+    if (sourceChanged && snapshot.phase === "connected" && state.sessionKey) {
       // Reconnects clear the probed states above; re-probe the active session
       // so source-owned affordances reappear without a manual session switch.
       void this.probeSessionDiscussion(state.sessionKey);
@@ -2643,11 +2833,11 @@ class ChatPane extends OpenClawLightDomElement {
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
     state.browserPanelAvailable =
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "browser.request") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
@@ -2671,7 +2861,7 @@ class ChatPane extends OpenClawLightDomElement {
       }
     }
     state.assistantName = this.context.config.current.assistantIdentity.name;
-    if (!snapshot.connected) {
+    if (snapshot.phase !== "connected") {
       if (wasConnected) {
         const currentSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
@@ -3124,7 +3314,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
       state.sidebarContent.sessionKey === sessionKey;
-    const label = t("chat.sessionDiscussion.show");
+    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return html`
       <openclaw-tooltip .content=${label}>
         <button
@@ -3132,7 +3322,7 @@ class ChatPane extends OpenClawLightDomElement {
           type="button"
           aria-label=${label}
           aria-pressed=${String(active)}
-          @click=${() => state.handleOpenSidebar(content)}
+          @click=${() => (active ? state.handleCloseSidebar() : state.handleOpenSidebar(content))}
         >
           ${icons.messageSquare}
         </button>
@@ -3222,9 +3412,39 @@ class ChatPane extends OpenClawLightDomElement {
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      presence:
+        !catalog &&
+        hasSessionPresenceViewers(
+          this.presencePayload,
+          this.context.gateway.snapshot.client?.instanceId,
+          this.state?.sessionKey ?? "",
+        )
+          ? html`<openclaw-viewer-facepile
+              class="chat-pane__presence"
+              .presencePayload=${this.presencePayload}
+              .selfInstanceId=${this.context.gateway.snapshot.client?.instanceId}
+              .sessionKey=${this.state?.sessionKey}
+              .maxVisible=${4}
+              variant="session"
+            ></openclaw-viewer-facepile>`
+          : nothing,
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
         this.persistBoardSessionView({ face });
       }),
+      sharingControl:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.visibility.set") === true
+          ? renderChatSessionSharing({
+              session: row,
+              state: row
+                ? this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))
+                : undefined,
+              onOpen: () => row && void this.loadSessionSharing(row),
+              onVisibilityChange: (visibility) =>
+                row && void this.setSessionVisibility(row, visibility),
+              onMemberChange: (identityId, member) =>
+                row && void this.setSessionMember(row, identityId, member),
+            })
+          : nothing,
       boardDockAction: renderBoardDockMenu(
         board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
         board.face,
@@ -3328,6 +3548,15 @@ class ChatPane extends OpenClawLightDomElement {
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
+    const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
+      catalog: catalogKey !== null,
+      listLoading: state.sessionsLoading,
+      sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
+      session: selectedSession,
+    });
+    const disabledReason = sessionParticipationBlocked
+      ? t("chat.sessionSharing.readOnlyNotice")
+      : null;
     // Never flash "view-only" while metadata loads; after loading, anything short
     // of a continuable session (failed lookups too) explains the disabled composer.
     const catalogDisabledReason =
@@ -3392,7 +3621,7 @@ class ChatPane extends OpenClawLightDomElement {
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending: state.chatSending,
-      canAbort: hasAbortableSessionRun(state),
+      canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
       waitingApproval: state.waitingApprovalStatuses.size > 0,
@@ -3408,7 +3637,7 @@ class ChatPane extends OpenClawLightDomElement {
       // Unconditional: catalog chats never render the HUD (observerHudReady is
       // forced false), and a hide/show from any surface must reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
-      gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
+      gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
         this.requestUpdate();
@@ -3436,6 +3665,7 @@ class ChatPane extends OpenClawLightDomElement {
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
+      queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
@@ -3450,8 +3680,10 @@ class ChatPane extends OpenClawLightDomElement {
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
-      canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
-      disabledReason: catalogDisabledReason,
+      canSend: catalogKey
+        ? this.catalogSession?.canContinue === true
+        : !selectedSessionArchived && !sessionParticipationBlocked,
+      disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
           ? {
@@ -3462,13 +3694,14 @@ class ChatPane extends OpenClawLightDomElement {
           : undefined,
       error: state.lastError,
       runError: catalogKey ? null : (state.chatRunError ?? null),
-      inlineApproval,
+      inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,
       approvalErrors: approvalSnapshot?.approvalErrors,
       approvalNowMs: approvalSnapshot?.approvalNowMs,
-      onApprovalDecision: overlays
-        ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
-        : undefined,
+      onApprovalDecision:
+        overlays && !sessionParticipationBlocked
+          ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
+          : undefined,
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
@@ -3609,10 +3842,14 @@ class ChatPane extends OpenClawLightDomElement {
         state.chatError = message;
         state.requestUpdate?.();
       },
-      onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
+      onAbort: sessionParticipationBlocked
+        ? undefined
+        : () => void state.handleAbortChat({ preserveDraft: true }),
       onQueueRemove: state.removeQueuedMessage,
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
-      onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
+      onQueueSteer: sessionParticipationBlocked
+        ? undefined
+        : (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
       onSideQuestion: (command, displayQuestion, onSendRejected) =>
         void state.handleSendChat(command, {
@@ -3720,7 +3957,7 @@ class ChatPane extends OpenClawLightDomElement {
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
             snapshot: board.snapshot,
-            sessions: state.sessionsResult?.sessions ?? [],
+            sessions: this.swarmHydrator?.rows ?? state.sessionsResult?.sessions ?? [],
             observer: {
               activeRunId: observerRunId,
               digests: this.observerDigestHistory.get(

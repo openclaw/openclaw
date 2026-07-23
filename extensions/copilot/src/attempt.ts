@@ -15,6 +15,7 @@ import {
   embeddedAgentLog,
   getModelProviderRequestTransport,
   isHostScopedAgentToolActive,
+  projectAgentHarnessTranscriptMessageForDisplay,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
@@ -1245,25 +1246,34 @@ export async function runCopilotAttempt(
     if (syntheticUserText !== tailUserText || index !== tailUserIndex) {
       return message;
     }
-    return attachCopilotMirrorIdentity(
-      { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
-      `${input.runId}:prompt`,
-    );
+    return projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: input.trigger === "memory",
+      message: attachCopilotMirrorIdentity(
+        { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
+        `${input.runId}:prompt`,
+      ),
+    });
   });
   const syntheticUser: AgentMessage | undefined =
     syntheticUserText && syntheticUserText !== tailUserText
-      ? attachCopilotMirrorIdentity(
-          {
-            role: "user",
-            content: syntheticUserText,
-            timestamp: now(),
-            idempotencyKey: `${input.runId}:user`,
-          } as unknown as AgentMessage,
-          `${input.runId}:prompt`,
-        )
+      ? projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: input.trigger === "memory",
+          message: attachCopilotMirrorIdentity(
+            {
+              role: "user",
+              content: syntheticUserText,
+              timestamp: now(),
+              idempotencyKey: `${input.runId}:user`,
+            } as unknown as AgentMessage,
+            `${input.runId}:prompt`,
+          ),
+        })
       : undefined;
   const taggedLastAssistant = lastAssistant
-    ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
+    ? projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: input.trigger === "memory",
+        message: attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`),
+      })
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
     ...currentTurnMessages,
@@ -1739,6 +1749,7 @@ async function resolvePromptImages(
     model: resolveImageCapabilityModel(params),
     existingImages: Array.isArray(params.images) ? params.images : undefined,
     imageOrder: Array.isArray(params.imageOrder) ? params.imageOrder : undefined,
+    media: Array.isArray(params.media) ? params.media : undefined,
     config: params.config,
     workspaceOnly: context.workspaceOnly,
     localRoots,

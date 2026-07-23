@@ -6,6 +6,7 @@ import {
   runAgentHarnessLlmOutputHook,
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   unsubscribeCodexThreadBestEffort,
@@ -234,7 +235,13 @@ export async function startCodexAttemptTurn(
         ctx: hookContext,
         hookRunner,
       });
-      if (!state.timedOut) {
+      const bindingReleased = isIncognitoSessionKey(params.sessionKey)
+        ? await bindingStore.mutate(bindingIdentity, {
+            kind: "clear",
+            threadId: resourceState.thread.threadId,
+          })
+        : true;
+      if (!state.timedOut && bindingReleased) {
         await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,

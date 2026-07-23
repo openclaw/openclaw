@@ -793,6 +793,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
     ]);
   });
@@ -830,6 +831,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
     expect(plan.omittedUnsupportedLanes).toEqual([
       "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+      "published-upgrade-survivor-2026.6.11-meeting-transcripts-sqlite",
     ]);
   });
 
@@ -867,6 +869,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(plan.omittedUnsupportedLanes).toEqual([
       "published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge",
+      "published-upgrade-survivor-2026.6.11-meeting-transcripts-sqlite",
     ]);
   });
 
@@ -882,7 +885,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes).toEqual([]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(11);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor-2026.6.11");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-2026.6.11-versioned-runtime-deps",
@@ -927,7 +930,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(10);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(11);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-versioned-runtime-deps",
@@ -1061,6 +1064,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
       "published-upgrade-survivor-2026.4.22",
       "published-upgrade-survivor-2026.4.22-acpx-openclaw-tools-bridge",
@@ -1070,6 +1074,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.22-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.22-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.22-tilde-log-path",
+      "published-upgrade-survivor-2026.4.22-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.22-versioned-runtime-deps",
       "published-upgrade-survivor-2026.4.21",
       "published-upgrade-survivor-2026.4.21-feishu-channel",
@@ -1078,6 +1083,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.21-configured-plugin-installs",
       "published-upgrade-survivor-2026.4.21-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.21-tilde-log-path",
+      "published-upgrade-survivor-2026.4.21-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.4.21-versioned-runtime-deps",
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
@@ -1086,6 +1092,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
       "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",
+      "published-upgrade-survivor-2026.3.13-meeting-transcripts-sqlite",
       "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
     ]);
   });

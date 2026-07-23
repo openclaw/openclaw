@@ -17,6 +17,17 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
+  it("adds incognito only when the draft toggle is on", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private task",
+        incognito: true,
+        worktree: false,
+      }),
+    ).toEqual({ agentId: "main", message: "private task", incognito: true });
+  });
+
   it("includes initial-message attachments", () => {
     const attachments = [
       { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },

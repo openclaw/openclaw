@@ -52,7 +52,7 @@ import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
-import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
@@ -302,7 +302,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       accountId,
       ctx,
       isInternalTextSlashCommandTurn,
-      pluginBoundMediaFieldsPromise,
+      pluginBoundMediaPromise,
       queuedFollowupOwnerKey,
       replyOptionImages,
       replyOptionMedia,
@@ -393,7 +393,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
-            applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
+            applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
             if (replyContextFieldsPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
             }

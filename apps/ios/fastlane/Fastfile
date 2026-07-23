@@ -38,6 +38,13 @@ REQUIRED_SCREENSHOT_FAMILIES = {
   "iPhone" => /iPhone/,
   "13-inch iPad" => /iPad (Air|Pro) 13-inch/
 }.freeze
+REQUIRED_IOS_SCREENSHOT_NAMES = [
+  "01-control-connected",
+  "02-chat-connected",
+  "03-agent-connected",
+  "04-settings-connected"
+].freeze
+PNG_SIGNATURE = "\x89PNG\r\n\x1A\n".b.freeze
 PUBLIC_METADATA_FILENAMES = [
   "description.txt",
   "keywords.txt",
@@ -96,6 +103,31 @@ def validate_required_screenshots!(paths)
   return if missing_families.empty?
 
   UI.user_error!("DELIVER_SCREENSHOTS=1 but screenshots are missing for: #{missing_families.join(', ')}.")
+end
+
+def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
+  locale_directory = File.join(output_directory, "en-US")
+  expected_names = devices.flat_map do |device|
+    REQUIRED_IOS_SCREENSHOT_NAMES.map { |name| "#{device}-#{name}.png" }
+  end.sort
+  actual_names = Dir[File.join(locale_directory, "*.png")].map { |path| File.basename(path) }.sort
+  missing = expected_names - actual_names
+  unexpected = actual_names - expected_names
+  unless missing.empty? && unexpected.empty?
+    UI.test_failure!(
+      "iOS release screenshot manifest mismatch. " \
+        "Missing: #{missing.empty? ? "none" : missing.join(', ')}. " \
+        "Unexpected: #{unexpected.empty? ? "none" : unexpected.join(', ')}."
+    )
+  end
+
+  invalid = expected_names.reject do |name|
+    path = File.join(locale_directory, name)
+    File.size?(path) && File.binread(path, PNG_SIGNATURE.bytesize) == PNG_SIGNATURE
+  end
+  return if invalid.empty?
+
+  UI.test_failure!("Invalid iOS release screenshot PNGs: #{invalid.join(', ')}.")
 end
 
 def snapshot_devices
@@ -1673,16 +1705,17 @@ platform :ios do
     FileUtils.rm_rf(result_bundle_archive_directory)
     FileUtils.mkdir_p(result_bundle_archive_directory)
     FileUtils.rm_rf(derived_data_path)
-    snapshot_devices.each_with_index do |device, index|
+    devices = snapshot_devices
+    devices.each_with_index do |device, index|
       capture_ios_screenshots(
         project: File.join(ios_root, "OpenClaw.xcodeproj"),
         scheme: "OpenClawUITests",
         configuration: "Debug",
         devices: [device],
         languages: ["en-US"],
-        # The scheme also carries functional UI tests (share extension); the
-        # screenshot lane must only drive the deterministic snapshot suite.
-        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
+        # App Store capture is isolated from functional UI checks; this lane only
+        # needs the deterministic four-screenshot release flow.
+        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/testConnectedGatewayTabs"],
         launch_arguments: ["--openclaw-screenshot-mode"],
         output_directory: output_directory,
         clear_previous_screenshots: index.zero?,
@@ -1702,6 +1735,10 @@ platform :ios do
       FileUtils.rm_rf(archived_result_bundle_path)
       FileUtils.mv(result_bundle_path, archived_result_bundle_path)
     end
+    verify_release_ios_screenshot_manifest!(
+      output_directory: output_directory,
+      devices: devices
+    )
 
     # Snapshot fixes its result bundles under the screenshot root. Keep successful
     # evidence in build/ so Deliver sees only locale directories during validation.

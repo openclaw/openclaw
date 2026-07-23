@@ -6,7 +6,6 @@ import {
 import {
   ErrorCodes,
   type ErrorShape,
-  type SessionCreatorIdentity,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -30,10 +29,17 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
+  listSessionEntriesReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import {
+  buildSessionCreationStamp,
+  type SessionCreatedActor,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -42,6 +48,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
+  isIncognitoSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -58,6 +65,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
@@ -219,8 +227,12 @@ export function resolveRequestedSessionAgentId(
   };
 }
 
-export function buildDashboardSessionKey(agentId: string): string {
-  return `agent:${agentId}:dashboard:${randomUUID()}`;
+export function buildDashboardSessionKey(
+  agentId: string,
+  options: { incognito?: boolean } = {},
+): string {
+  const opaqueId = `${options.incognito ? "incognito-" : ""}${randomUUID()}`;
+  return `agent:${agentId}:dashboard:${opaqueId}`;
 }
 
 type CreatedGatewaySession = {
@@ -259,9 +271,9 @@ export async function createGatewaySession(params: {
   label?: string;
   model?: string;
   thinkingLevel?: string;
+  incognito?: boolean;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
-  createdBy?: SessionCreatorIdentity;
   parentSessionKey?: string;
   /**
    * Spawn-lineage depth declared by spawn-owned creations (visible subagent
@@ -293,6 +305,10 @@ export async function createGatewaySession(params: {
   initialEntry?: TrustedInitialSessionEntry;
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
+  /** Admitted operator scopes; omitted only by trusted in-process callers. */
+  requestingOperatorScopes?: readonly string[];
+  /** Trusted in-process creation provenance; never populated from public Gateway params. */
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -362,6 +378,43 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
+  const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
+  const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
+  const explicitDashboardIncognito =
+    explicitIncognito &&
+    explicitTargetParts?.agentId === agentId &&
+    explicitTargetParts.rest.startsWith("dashboard:");
+  if (explicitIncognito && params.incognito !== true) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "incognito-shaped session keys require incognito: true",
+      ),
+    };
+  }
+  if (params.incognito === true && explicitTargetKey) {
+    if (!explicitDashboardIncognito) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
+      };
+    }
+    const durableStorePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const durableEntryExists = listSessionEntriesReadOnly({
+      agentId,
+      storePath: durableStorePath,
+    }).some(({ sessionKey }) => sessionKey === explicitTargetKey);
+    if (durableEntryExists || loadSessionEntryReadOnly(explicitTargetKey).entry) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "incognito is immutable and requires a new session key",
+        ),
+      };
+    }
+  }
   if (
     params.catalogTarget &&
     explicitTargetKey &&
@@ -433,18 +486,6 @@ export async function createGatewaySession(params: {
       };
     }
   }
-  const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId);
-  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Isolated DM scopes lack the shared watcher; global scope lacks a per-agent main.
-  const dashboardParentSessionKey =
-    !parentSessionKey &&
-    params.fork !== true &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
-    params.cfg.session?.scope !== "global" &&
-    targetSessionKey !== agentMainSessionKey
-      ? agentMainSessionKey
-      : undefined;
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
@@ -494,6 +535,38 @@ export async function createGatewaySession(params: {
         : {}),
     });
   }
+  const parentIncognito =
+    parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
+  const incognito = params.incognito === true || parentIncognito;
+  if (
+    incognito &&
+    params.requestingOperatorScopes !== undefined &&
+    !params.requestingOperatorScopes.includes(ADMIN_SCOPE)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `incognito sessions require gateway scope: ${ADMIN_SCOPE}`,
+      ),
+    };
+  }
+  if (incognito && canonicalParentSessionKey && !parentIncognito) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "incognito sessions cannot have durable parents",
+      ),
+    };
+  }
+  if (parentIncognito && explicitTargetKey) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
+    };
+  }
+
   if (
     canonicalParentSessionKey &&
     explicitTargetKey &&
@@ -509,12 +582,27 @@ export async function createGatewaySession(params: {
     };
   }
 
+  const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
+  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
+  // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
+  const dashboardParentSessionKey =
+    !parentSessionKey &&
+    !incognito &&
+    params.fork !== true &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    params.cfg.session?.scope !== "global" &&
+    targetSessionKey !== agentMainSessionKey
+      ? agentMainSessionKey
+      : undefined;
+
   if (
     canonicalParentSessionKey &&
     params.fork !== true &&
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    !parentIncognito &&
     // Catalog targets need a fresh locked row; resetting main would return before
     // the catalog-owned model/runtime pair is persisted.
     !params.catalogTarget &&
@@ -537,7 +625,7 @@ export async function createGatewaySession(params: {
           : {}),
         reason: "new",
         commandSource: params.commandSource,
-        createdBy: params.createdBy,
+        ...(params.creation ? { creation: params.creation } : {}),
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.worktree ? { worktree: params.worktree } : {}),
         ...(params.execNode ? { execNode: params.execNode } : {}),
@@ -547,6 +635,12 @@ export async function createGatewaySession(params: {
       });
       if (!resetResult.ok) {
         return resetResult;
+      }
+      if ("incognitoDeleted" in resetResult) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions cannot reset in place"),
+        };
       }
       return {
         ok: true,
@@ -560,6 +654,7 @@ export async function createGatewaySession(params: {
   }
 
   let createdContext: CreatedGatewaySession | undefined;
+  let createdNewEntry = false;
   const createChildSession = async (): Promise<CreateGatewaySessionResult> => {
     let currentParentSessionEntry = parentSessionEntry;
     if (
@@ -687,6 +782,9 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        // Adoption of an existing key must not stamp provenance or emit a
+        // `created` event; only a genuinely new row is a node creation.
+        createdNewEntry = existingEntry === undefined;
         const requestedModel = normalizeOptionalString(params.model);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
@@ -771,9 +869,10 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
-          ...(existingEntry === undefined && params.createdBy
-            ? { createdBy: { ...params.createdBy } }
-            : {}),
+          // Stamp provenance only for genuinely new rows: adopting an existing key
+          // must not restamp write-once node facts (this direct store write bypasses
+          // the merge-level write-once guard), and legacy rows stay "unknown".
+          ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -818,6 +917,7 @@ export async function createGatewaySession(params: {
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
@@ -880,7 +980,15 @@ export async function createGatewaySession(params: {
         }
         return {
           ...initialized,
-          entry: buildForkedGatewaySessionEntry(entry, fork),
+          entry: buildForkedGatewaySessionEntry(
+            entry,
+            fork,
+            {
+              sessionKey: forkParentSessionKey,
+              sessionId: currentParentSessionEntry.sessionId,
+            },
+            existingEntry,
+          ),
         };
       },
       params.initialEntry
@@ -902,7 +1010,6 @@ export async function createGatewaySession(params: {
             : created.error,
       };
     }
-
     createdContext = {
       key: target.canonicalKey,
       agentId: target.agentId,
@@ -967,12 +1074,28 @@ export async function createGatewaySession(params: {
       run: createChildSession,
     });
     if (result.ok && !result.resetExisting && createdContext) {
+      // Adoption still runs post-create work (initial chat.send, plugin hooks);
+      // only the created journal event is reserved for genuinely new rows.
+      if (createdNewEntry) {
+        recordSessionCreated({
+          sessionKey: createdContext.key,
+          agentId: createdContext.agentId,
+          entry: createdContext.entry,
+        });
+      }
       await params.afterCreate?.(createdContext);
     }
     return result;
   }
   const result = await createChildSession();
   if (result.ok && !result.resetExisting && createdContext) {
+    if (createdNewEntry) {
+      recordSessionCreated({
+        sessionKey: createdContext.key,
+        agentId: createdContext.agentId,
+        entry: createdContext.entry,
+      });
+    }
     await params.afterCreate?.(createdContext);
   }
   return result;

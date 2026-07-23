@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
-  SessionCreatorIdentity,
+  SessionCreatedActor,
   SessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -79,7 +79,6 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
-  getSessionStoreCacheVersion,
   isConfiguredSessionStoreAgentId,
   isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
@@ -96,17 +95,21 @@ import {
   listSessionEntries as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
 } from "../config/sessions/session-accessor.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
+  isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
@@ -408,13 +411,13 @@ type SessionListRowContext = {
   >;
   displayModelIdentityByKey: Map<string, { provider?: string; model?: string }>;
   modelCostConfigByModelRef: Map<string, ModelCostConfig | undefined>;
+  userProfileLabelById: Map<string, string | undefined>;
 };
 
 type SessionListRowContextProvider = () => SessionListRowContext;
 
 type SingleRowChildSessionCandidateCacheEntry = {
   store: Record<string, SessionEntry>;
-  storeVersion: number;
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
@@ -480,15 +483,13 @@ function getSingleRowChildSessionCandidates(params: {
   if (!params.store) {
     return new Map();
   }
-  const storeVersion = getSessionStoreCacheVersion(params.storePath);
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached && cached.store === params.store && cached.storeVersion === storeVersion) {
+  if (cached?.store === params.store) {
     return cached.childSessionCandidatesByParentKey;
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
     store: params.store,
-    storeVersion,
     childSessionCandidatesByParentKey,
   });
   return childSessionCandidatesByParentKey;
@@ -661,6 +662,7 @@ function buildSessionListRowContextFromParts(params: {
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
+    userProfileLabelById: new Map(),
   };
 }
 
@@ -898,7 +900,7 @@ function resolveTranscriptUsageFallback(params: {
 function readAcpMetaForDeletedAgentCheck(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  entry?: Pick<SessionEntry, "acp" | "sessionId"> | null;
+  entry?: Pick<SessionEntry, "acp" | "lifecycleRevision"> | null;
   acpMetadataSessionKey?: string | null;
 }) {
   if (params.entry?.acp) {
@@ -1015,7 +1017,8 @@ export function loadSessionEntryReadOnly(
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns both the freshest entry and the exact persisted key that owns it. */
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -1541,6 +1544,21 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     (isAgentScopedSentinelSessionKey(canonicalKey) || !parseAgentSessionKey(key))
       ? normalizeAgentId(requestedAgentId)
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  if (isIncognitoSessionKey(canonicalKey)) {
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+    // Session resolution may receive arbitrary stale keys; only creation/write
+    // owners may materialize the process-lifetime incognito database.
+    const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
+      readOnly: true,
+    });
+    return {
+      agentId,
+      storePath,
+      canonicalKey,
+      storeKeys: [canonicalKey],
+      store,
+    };
+  }
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,
@@ -1919,6 +1937,31 @@ export function resolveSessionDisplayModelIdentityRef(params: {
   };
 }
 
+/** Adds the current human profile label without persisting rename-prone display data. */
+function projectSessionActor(
+  actor: SessionEntry["createdActor"],
+  userProfileLabelById: Map<string, string | undefined> = new Map(),
+): SessionCreatedActor | undefined {
+  if (!actor) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(actor.id);
+  if (actor.type !== "human" || !id) {
+    return { type: actor.type, ...(id ? { id } : {}) };
+  }
+  let label = userProfileLabelById.get(id);
+  if (!userProfileLabelById.has(id)) {
+    try {
+      label = normalizeOptionalString(getUserProfileListItem(id).displayName);
+    } catch {
+      // Human actors can also be channel sender ids; only profile ids resolve here.
+      label = undefined;
+    }
+    userProfileLabelById.set(id, label);
+  }
+  return { type: actor.type, id, ...(label ? { label } : {}) };
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -2225,18 +2268,26 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
-    createdBy: entry?.createdBy,
+    visibility: entry ? (entry.visibility ?? "shared") : undefined,
+    incognito: entry?.incognito,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    // The live registry controller takes precedence over the persisted spawner.
+    controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     worktree: entry?.worktree,
     execNode: entry?.execNode,
     execCwd: entry?.execCwd,
-    forkedFromParent: entry?.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
+    createdVia: entry?.createdVia,
+    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileLabelById),
+    createdAt: entry?.createdAt,
+    forkSource: entry?.forkSource,
+    previousSessionId: entry?.previousSessionId,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     category: entry?.category,
@@ -2252,6 +2303,7 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileLabelById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     icon: entry?.icon,
@@ -2299,7 +2351,8 @@ export function buildGatewaySessionRow(params: {
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
-    parentSessionKey: subagentOwner || entry?.parentSessionKey,
+    // Navigation lineage is persisted; runtime control is exposed separately above.
+    parentSessionKey: entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
     effectiveResponseUsage: resolveEffectiveResponseUsage(
@@ -2720,7 +2773,7 @@ function selectSessionEntries(params: {
   const creatorEntries = filterSessionEntries(params);
   const creatorId = normalizeOptionalString(params.opts.creatorId);
   const filtered = creatorId
-    ? creatorEntries.filter(([, entry]) => entry.createdBy?.id === creatorId)
+    ? creatorEntries.filter(([, entry]) => entry.createdActor?.id === creatorId)
     : creatorEntries;
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
@@ -2743,14 +2796,16 @@ function selectSessionEntries(params: {
 
 function listSessionCreatorIdentities(
   entries: readonly SessionEntryPair[],
-): SessionCreatorIdentity[] {
-  const creators = new Map<string, SessionCreatorIdentity>();
+  userProfileLabelById: Map<string, string | undefined>,
+): Array<{ id: string; label?: string }> {
+  const creators = new Map<string, { id: string; label?: string }>();
   for (const [, entry] of entries) {
-    const id = normalizeOptionalString(entry.createdBy?.id);
+    const actor = projectSessionActor(entry.createdActor, userProfileLabelById);
+    const id = normalizeOptionalString(actor?.id);
     if (!id) {
       continue;
     }
-    const label = normalizeOptionalString(entry.createdBy?.label);
+    const label = normalizeOptionalString(actor?.label);
     const existing = creators.get(id);
     if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
       creators.set(id, { id, ...(label ? { label } : {}) });
@@ -2849,7 +2904,10 @@ export function listSessionsFromStore(params: {
     offset: offset > 0 ? offset : undefined,
     nextOffset,
     hasMore,
-    creators: listSessionCreatorIdentities(creatorEntries),
+    creators: listSessionCreatorIdentities(
+      creatorEntries,
+      sharedRowContext?.userProfileLabelById ?? new Map(),
+    ),
     defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };
@@ -2902,7 +2960,8 @@ export async function listSessionsFromStoreAsync(params: {
           : undefined,
       defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     });
-    const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
+    const { entries, creatorEntries, totalCount, limitApplied, offset, nextOffset, hasMore } =
+      selection;
     const fullRowContext =
       rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
         ? getRowContext()
@@ -2981,6 +3040,10 @@ export async function listSessionsFromStoreAsync(params: {
       offset: offset > 0 ? offset : undefined,
       nextOffset,
       hasMore,
+      creators: listSessionCreatorIdentities(
+        creatorEntries,
+        sharedRowContext?.userProfileLabelById ?? new Map(),
+      ),
       defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
       sessions,
     };

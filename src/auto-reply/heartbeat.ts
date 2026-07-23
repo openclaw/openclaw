@@ -4,7 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-/** YAML-like task entry parsed from HEARTBEAT.md. */
+/** YAML-like task entry parsed from heartbeat monitor scratch. */
 export type HeartbeatTask = {
   name: string;
   interval: string;
@@ -14,7 +14,7 @@ export type HeartbeatTask = {
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 const HEARTBEAT_CONTEXT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.";
+  "Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats.";
 /** Default prompt for heartbeat turns when config does not override it. */
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
@@ -54,7 +54,7 @@ function stripHeartbeatHtmlComments(content: string): string[] {
 }
 
 /**
- * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
+ * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
  *
  * A file is considered effectively empty if it contains only:
@@ -65,8 +65,8 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
- * Note: A missing file returns false (not effectively empty) so the LLM can still
- * decide what to do. This function is only for when the file exists but has no content.
+ * Note: Missing scratch returns false (not effectively empty) so the model can
+ * still decide what to do. This function applies only when a scratch row exists.
  */
 export function isHeartbeatContentEffectivelyEmpty(content: string | undefined | null): boolean {
   if (content === undefined || content === null) {
