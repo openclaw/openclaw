@@ -23,22 +23,25 @@ async function fixture() {
   const home = path.join(root, "home");
   let workspace = path.join(root, "workspace");
   const bin = path.join(root, "bin");
+  const ownerProbeCountPath = path.join(root, "owner-probe-count");
   const probeSlots = path.join(root, "probe-slots");
   await Promise.all([fs.mkdir(home), fs.mkdir(workspace), fs.mkdir(bin)]);
   workspace = await fs.realpath(workspace);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\nbounded_probe() { slot=""; for n in 1 2 3 4 5 6 7 8; do candidate="$OPENCLAW_TEST_PS_PROBE_SLOTS/$n"; if mkdir "$candidate" 2>/dev/null; then slot=$candidate; break; fi; done; if [ -z "$slot" ]; then exit 75; fi; sleep 0.05; /bin/ps "$@"; status=$?; rmdir "$slot"; exit "$status"; }\ncase "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if [ -d "$OPENCLAW_TEST_PS_PROBE_SLOTS" ]; then bounded_probe "$@"; fi ;; esac\ncase "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*|*"args= -p"*) exec /bin/ps "$@" ;; *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)" ;; esac\n',
+    '#!/bin/sh\nbounded_probe() { slot=""; for n in 1 2 3 4 5 6 7 8; do candidate="$OPENCLAW_TEST_PS_PROBE_SLOTS/$n"; if mkdir "$candidate" 2>/dev/null; then slot=$candidate; break; fi; done; if [ -z "$slot" ]; then exit 75; fi; sleep 0.05; /bin/ps "$@"; status=$?; rmdir "$slot"; exit "$status"; }\ncount_owner_probe() { count=0; if [ -f "$OPENCLAW_TEST_PS_OWNER_PROBE_COUNT" ]; then count=$(cat "$OPENCLAW_TEST_PS_OWNER_PROBE_COUNT"); fi; printf "%s\\n" "$((count + 1))" > "$OPENCLAW_TEST_PS_OWNER_PROBE_COUNT"; }\ncase "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if [ -d "$OPENCLAW_TEST_PS_PROBE_SLOTS" ]; then bounded_probe "$@"; fi ;; esac\ncase "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;; *"args= -p"*) count_owner_probe; exec /bin/ps "$@" ;; *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)" ;; esac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
     bin,
     home,
+    ownerProbeCountPath,
     workspace,
     probeSlots,
     env: {
       ...process.env,
       HOME: home,
+      OPENCLAW_TEST_PS_OWNER_PROBE_COUNT: ownerProbeCountPath,
       OPENCLAW_TEST_PS_PROBE_SLOTS: probeSlots,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
     },
@@ -272,6 +275,48 @@ describe("remote workspace quiescence lease ownership", () => {
       expect(lockOwner.exitCode).toBeNull();
     } finally {
       await terminate(lockOwner);
+      try {
+        process.kill(lease.watchdog.pid, "SIGKILL");
+      } catch {}
+    }
+  }, 15_000);
+
+  it("backs off owner probes while waiting for a live lease mutation lock", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      watchdog: { pid: number; start: string };
+    };
+    const token = "a".repeat(32);
+    const lockPath = `${leaseFile}.lock`;
+    const lockOwner = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const fs = require("node:fs"); const lockPath = process.argv[1]; process.title = "openclaw-qlease-${token}"; fs.mkdirSync(lockPath, { mode: 0o700 }); fs.closeSync(fs.openSync(lockPath + "/owner." + process.pid + ".${token}", "wx", 0o600)); setInterval(() => {}, 1000);`,
+        lockPath,
+      ],
+      { stdio: "ignore" },
+    );
+    let releaseOwner: NodeJS.Timeout | undefined;
+    try {
+      await vi.waitFor(async () => await expect(fs.access(lockPath)).resolves.toBeUndefined());
+      releaseOwner = setTimeout(() => lockOwner.kill("SIGKILL"), 1_000);
+
+      await resume(input, nonce);
+
+      const ownerProbeCount = Number((await fs.readFile(input.ownerProbeCountPath, "utf8")).trim());
+      expect(ownerProbeCount).toBeLessThanOrEqual(20);
+      await expect(fs.access(leaseFile)).rejects.toThrow();
+    } finally {
+      if (releaseOwner) {
+        clearTimeout(releaseOwner);
+      }
+      lockOwner.kill("SIGKILL");
+      if (lockOwner.exitCode === null && lockOwner.signalCode === null) {
+        await once(lockOwner, "exit");
+      }
       try {
         process.kill(lease.watchdog.pid, "SIGKILL");
       } catch {}

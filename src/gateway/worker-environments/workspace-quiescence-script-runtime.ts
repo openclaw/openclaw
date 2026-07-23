@@ -274,6 +274,7 @@ function acquireLeaseMutation(targetPath, timeoutMs = ${REMOTE_QUIESCENCE_LEASE_
   }
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   const deadlineMs = Date.now() + timeoutMs;
+  let contentionDelayMs = 10;
   try {
     while (true) {
       try {
@@ -295,7 +296,8 @@ function acquireLeaseMutation(targetPath, timeoutMs = ${REMOTE_QUIESCENCE_LEASE_
       }
       if (clearStaleLeaseMutation(lockPath)) continue;
       if (Date.now() >= deadlineMs) throw leaseMutationTimeout();
-      Atomics.wait(sleeper, 0, 0, 10);
+      Atomics.wait(sleeper, 0, 0, contentionDelayMs);
+      contentionDelayMs = Math.min(contentionDelayMs * 2, 100);
     }
   } catch (error) {
     process.title = previousTitle;
