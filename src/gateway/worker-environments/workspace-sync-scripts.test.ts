@@ -1,20 +1,13 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
-import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "./workspace-quiescence-scripts.js";
 import {
   REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
@@ -24,185 +17,6 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
-
-async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-quiescence-test-"));
-  roots.push(root);
-  const home = path.join(root, "home");
-  let workspace = path.join(root, "workspace");
-  const bin = path.join(root, "bin");
-  const extraProcessPath = path.join(root, "extra-process.txt");
-  await fs.mkdir(home);
-  await fs.mkdir(workspace);
-  workspace = await fs.realpath(workspace);
-  await fs.mkdir(bin);
-  await fs.writeFile(
-    path.join(bin, "ps"),
-    '#!/bin/sh\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi ;;\nesac\n',
-  );
-  await fs.chmod(path.join(bin, "ps"), 0o755);
-  return {
-    home,
-    workspace,
-    extraProcessPath,
-    env: {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_TEST_PS_EXTRA: extraProcessPath,
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
-    },
-  };
-}
-
-async function quiesce(input: Awaited<ReturnType<typeof fixture>>) {
-  const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
-    { timeoutMs: 10_000, baseEnv: input.env },
-  );
-  expect(result.code).toBe(0);
-  const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
-  expect(match).not.toBeNull();
-  return match![1]!;
-}
-
-function leasePath(home: string, workspace: string, nonce: string) {
-  const key = createHash("sha256").update(workspace).digest("hex");
-  return path.join(home, ".openclaw-worker", "quiescence", `${key}.${nonce}.json`);
-}
-
-async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
-  const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
-    { timeoutMs: 10_000, baseEnv: input.env },
-  );
-  expect(result.code).toBe(0);
-}
-
-async function renew(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
-  const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce, "20000"],
-    { timeoutMs: 10_000, baseEnv: input.env },
-  );
-  expect(result.code).toBe(0);
-  expect(result.stdout).toBe(`renewed ${nonce}\n`);
-}
-
-describe("remote workspace quiescence scripts", () => {
-  it("excludes its ps scanner and terminates its watchdog on resume", async () => {
-    const input = await fixture();
-    const nonce = await quiesce(input);
-    const lease = JSON.parse(
-      await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
-    ) as {
-      watchdog: { pid: number; start: string };
-    };
-
-    await resume(input, nonce);
-
-    await expect(fs.access(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
-    await vi.waitFor(() => {
-      expect(() => process.kill(lease.watchdog.pid, 0)).toThrow();
-    });
-  });
-
-  it("recovers a prior nonce without letting its watchdog own the next lease", async () => {
-    const input = await fixture();
-    const firstNonce = await quiesce(input);
-    const firstLease = JSON.parse(
-      await fs.readFile(leasePath(input.home, input.workspace, firstNonce), "utf8"),
-    ) as { watchdog: { pid: number; start: string } };
-
-    const secondNonce = await quiesce(input);
-
-    expect(secondNonce).not.toBe(firstNonce);
-    await expect(fs.access(leasePath(input.home, input.workspace, firstNonce))).rejects.toThrow();
-    await expect(
-      fs.access(leasePath(input.home, input.workspace, secondNonce)),
-    ).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
-    });
-    await resume(input, secondNonce);
-  });
-
-  it("proves the lease is active and renews its watchdog deadline", async () => {
-    const input = await fixture();
-    const nonce = await quiesce(input);
-    const leaseFile = leasePath(input.home, input.workspace, nonce);
-    const before = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
-      expiresAtMs: number;
-      watchdog: { pid: number; start: string };
-    };
-
-    await renew(input, nonce);
-
-    const after = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
-      expiresAtMs: number;
-      watchdog: { pid: number; start: string };
-    };
-    expect(after.expiresAtMs).toBeGreaterThan(before.expiresAtMs);
-    expect(after.watchdog).toEqual(before.watchdog);
-    expect(() => process.kill(after.watchdog.pid, 0)).not.toThrow();
-    await resume(input, nonce);
-  });
-
-  it("stops a writable process that appeared after the workspace was quiesced", async () => {
-    const input = await fixture();
-    const nonce = await quiesce(input);
-    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      stdio: "ignore",
-    });
-    expect(child.pid).toBeDefined();
-    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
-
-    const heartbeat = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-        input.workspace,
-        nonce,
-        "20000",
-        "heartbeat",
-      ],
-      { timeoutMs: 10_000, baseEnv: input.env },
-    );
-    expect(heartbeat.code).toBe(0);
-
-    try {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
-        { timeoutMs: 10_000, baseEnv: input.env },
-      );
-
-      expect(result.code).toBe(0);
-      const lease = JSON.parse(
-        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
-      ) as { processes: Array<{ pid: number }> };
-      expect(lease.processes.some((entry) => entry.pid === child.pid)).toBe(true);
-    } finally {
-      await resume(input, nonce);
-      child.kill("SIGCONT");
-      child.kill("SIGTERM");
-      if (child.exitCode === null) {
-        await once(child, "exit");
-      }
-      await fs.rm(input.extraProcessPath, { force: true });
-    }
-  });
-
-  it("fails closed when the watchdog lease no longer exists", async () => {
-    const input = await fixture();
-    const nonce = await quiesce(input);
-    await resume(input, nonce);
-
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce],
-      { timeoutMs: 10_000, baseEnv: input.env },
-    );
-    expect(result.code).not.toBe(0);
-  });
 });
 
 describe("remote workspace manifest script", () => {

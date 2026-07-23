@@ -1,97 +1,10 @@
-const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
-  const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-    timeout: 2000,
-  });
-  const rows = new Map();
-  for (const line of output.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
-    if (!match) continue;
-    rows.set(Number(match[1]), {
-      ppid: Number(match[2]),
-      uid: Number(match[3]),
-      state: match[4],
-      start: match[5],
-    });
-  }
-  return rows;
-}
-function ancestors(rows) {
-  const result = new Set();
-  let pid = process.pid;
-  while (pid > 0 && !result.has(pid)) {
-    result.add(pid);
-    pid = rows.get(pid)?.ppid || 0;
-  }
-  return result;
-}
-function processIdentity(pid) {
-  try {
-    const start = require("node:child_process").execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-      encoding: "utf8",
-      maxBuffer: 4096,
-    }).trim();
-    return start || null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
-}
-function processStatus(pid) {
-  try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
-    const match = /^(\S+)\s+(.+)$/u.exec(output);
-    return match ? { state: match[1], start: match[2] } : null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
-}
-function quiescenceCandidates(rows, expectedUid, excludedPids, frozen) {
-  const preserved = ancestors(rows);
-  return [...rows.entries()].filter(
-    ([pid, row]) =>
-      row.uid === expectedUid &&
-      !preserved.has(pid) &&
-      row.ppid !== process.pid &&
-      !excludedPids.has(pid) &&
-      (!frozen || !frozen.has(pid)) &&
-      !row.state.startsWith("T") &&
-      !row.state.startsWith("Z") &&
-      !row.state.startsWith("X"),
-  );
-}`;
-
-const REMOTE_QUIESCENCE_LEASE_JS = String.raw`function validProcessReference(value) {
-  return value && Number.isSafeInteger(value.pid) && value.pid > 0 && typeof value.start === "string" && value.start.length > 0 && value.start.length <= 128;
-}
-function parseLease(raw, expectedNonce, options = {}) {
-  const lease = JSON.parse(raw);
-  if (
-    !lease ||
-    lease.version !== 1 ||
-    lease.nonce !== expectedNonce ||
-    !Array.isArray(lease.processes) ||
-    lease.processes.length > 4096 ||
-    lease.processes.some((entry) => !validProcessReference(entry)) ||
-    (lease.watchdog !== null && !validProcessReference(lease.watchdog)) ||
-    (options.requireWatchdog && lease.watchdog === null) ||
-    !Number.isSafeInteger(lease.expiresAtMs) ||
-    lease.expiresAtMs < 1 ||
-    (options.minimumRemainingMs && lease.expiresAtMs - Date.now() < options.minimumRemainingMs)
-  ) {
-    throw new Error(options.errorMessage || "invalid workspace quiescence lease");
-  }
-  return lease;
-}
-function persistLease(targetPath, lease, verifyCurrent) {
-  if (verifyCurrent) verifyCurrent(JSON.parse(fs.readFileSync(targetPath, "utf8")));
-  const temporary = targetPath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
-  fs.writeFileSync(temporary, JSON.stringify(lease), { mode: 0o600, flag: "wx" });
-  fs.renameSync(temporary, targetPath);
-}`;
-
+import {
+  REMOTE_QUIESCENCE_LEASE_JS,
+  REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY,
+  REMOTE_QUIESCENCE_PS_JS,
+  REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS,
+  REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS,
+} from "./workspace-quiescence-script-runtime.js";
 export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -123,16 +36,65 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
     expiresAtMs,
   });
 }
-function resumeProcesses(entries) {
-  for (const entry of entries) {
-    if (processIdentity(entry.pid) !== entry.start) continue;
+async function recoverOrphanLease(orphanPath, expectedNonce) {
+  const mutation = acquireLeaseMutation(orphanPath);
+  try {
+    let raw;
     try {
-      process.kill(entry.pid, "SIGCONT");
+      raw = fs.readFileSync(orphanPath, "utf8");
     } catch (error) {
-      if (!error || error.code !== "ESRCH") throw error;
+      if (error && error.code === "ENOENT") return;
+      throw error;
     }
+    const lease = parseLease(raw, expectedNonce);
+    const references = [
+      ...(lease.watchdog === null ? [] : [{ ...lease.watchdog, signal: "SIGTERM" }]),
+      ...lease.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+    ];
+    const recovery = await recoverProcessReferences(references);
+    const remaining = recovery.remaining;
+    if (remaining.length === 0) {
+      fs.unlinkSync(orphanPath);
+      return;
+    }
+    const watchdog = remaining.find((entry) => entry.signal === "SIGTERM") ?? null;
+    const processes = remaining
+      .filter((entry) => entry.signal === "SIGCONT")
+      .map(({ pid, start }) => ({ pid, start }));
+    persistLeaseLocked(
+      orphanPath,
+      {
+        ...lease,
+        processes,
+        watchdog: watchdog === null ? null : { pid: watchdog.pid, start: watchdog.start },
+        recovery: {
+          state: recovery.failed ? "recovery-failed" : "probe-timeout",
+          failedAtMs: Date.now(),
+        },
+      },
+      (current) => {
+        if (
+          current.nonce !== lease.nonce ||
+          current.expiresAtMs !== lease.expiresAtMs ||
+          current.watchdog?.pid !== lease.watchdog?.pid ||
+          current.watchdog?.start !== lease.watchdog?.start ||
+          !sameProcessReferences(current.processes, lease.processes)
+        ) {
+          throw new Error("workspace quiescence lease changed during orphan recovery");
+        }
+      },
+    );
+    const failure = recovery.failed ? "failed" : "timed out";
+    throw new Error(
+      "workspace quiescence orphan recovery " +
+        failure +
+        "; lease retained for operator recovery",
+    );
+  } finally {
+    releaseLeaseMutation(mutation);
   }
 }
+async function quiesce() {
 const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
 );
@@ -141,17 +103,37 @@ for (const name of orphanNames) {
   const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
   if (!match) continue;
   const orphanPath = path.join(leaseDirectory, name);
-  const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
-  if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
-    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
-  }
-  resumeProcesses(lease.processes);
-  fs.unlinkSync(orphanPath);
+  await recoverOrphanLease(orphanPath, match[1]);
 }
 writeLease();
+const watchdogSource = [
+  'const childProcess = require("node:child_process");',
+  'const crypto = require("node:crypto");',
+  'const fs = require("node:fs");',
+  probeProcessIdentity.toString(),
+  signalProcessReferences.toString(),
+  retryProcessReferences.toString(),
+  recoverProcessReferences.toString(),
+  validProcessReference.toString(),
+  validRecovery.toString(),
+  parseLease.toString(),
+  leaseMutationOwnerTitle.toString(),
+  leaseMutationOwnerCommand.toString(),
+  leaseMutationOwnerDefinitelyStale.toString(),
+  leaseMutationOwnerName.toString(),
+  parseLeaseMutationOwnerName.toString(),
+  leaseMutationDirectoryOwners.toString(),
+  removeLeaseMutationOwner.toString(),
+  clearStaleLeaseMutation.toString(),
+  leaseMutationTimeout.toString(),
+  acquireLeaseMutation.toString(),
+  releaseLeaseMutation.toString(),
+  persistLeaseLocked.toString(),
+  "(" + watchdogMain.toString() + ")(process.argv[1], process.argv[2]);",
+].join("\n");
 const watchdog = childProcess.spawn(
   process.execPath,
-  ["-e", processIdentity.toString() + "\n(" + watchdogMain.toString() + ")(process.argv[1], process.argv[2])", leasePath, nonce],
+  ["-e", watchdogSource, leasePath, nonce],
   { detached: true, stdio: "ignore" },
 );
 watchdog.unref();
@@ -209,61 +191,107 @@ try {
     throw new Error("worker processes did not reach a quiescent state");
   }
 } catch (error) {
-  if (processIdentity(watchdog.pid) === watchdogStart) {
-    try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || killError.code !== "ESRCH") throw killError; }
+  const mutation = acquireLeaseMutation(leasePath);
+  try {
+    const recovery = await recoverProcessReferences([
+      { pid: watchdog.pid, start: watchdogStart, signal: "SIGTERM" },
+      ...[...frozen].map(([pid, start]) => ({ pid, start, signal: "SIGCONT" })),
+    ]);
+    if (recovery.remaining.length === 0) {
+      try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
+    } else {
+      const remainingWatchdog = recovery.remaining.find((entry) => entry.signal === "SIGTERM");
+      const remainingProcesses = recovery.remaining
+        .filter((entry) => entry.signal === "SIGCONT")
+        .map(({ pid, start }) => ({ pid, start }));
+      persistLeaseLocked(leasePath, {
+        version: 1,
+        nonce,
+        processes: remainingProcesses,
+        watchdog: remainingWatchdog
+          ? { pid: remainingWatchdog.pid, start: remainingWatchdog.start }
+          : null,
+        expiresAtMs: Date.now(),
+        recovery: {
+          state: recovery.failed ? "recovery-failed" : "probe-timeout",
+          failedAtMs: Date.now(),
+        },
+      });
+    }
+  } finally {
+    releaseLeaseMutation(mutation);
   }
-  resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
-  try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
-  const check = () => {
+  const check = async () => {
+    let mutation = null;
     try {
-      const watchdogFs = require("node:fs");
-      const lease = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
-      if (
-        !lease ||
-        lease.version !== 1 ||
-        lease.nonce !== watchedNonce ||
-        !Array.isArray(lease.processes) ||
-        !Number.isSafeInteger(lease.expiresAtMs)
-      ) return;
+      const lease = parseLease(fs.readFileSync(watchedLeasePath, "utf8"), watchedNonce);
       const remainingMs = lease.expiresAtMs - Date.now();
       if (remainingMs > 0) {
         setTimeout(check, Math.min(remainingMs, 60 * 1000));
         return;
       }
-      // Re-read at expiry so a renewal that raced this wake-up wins before SIGCONT.
-      const latest = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
-      if (
-        latest &&
-        latest.version === 1 &&
-        latest.nonce === watchedNonce &&
-        Array.isArray(latest.processes) &&
-        Number.isSafeInteger(latest.expiresAtMs) &&
-        latest.expiresAtMs > Date.now()
-      ) {
-        setTimeout(check, Math.min(latest.expiresAtMs - Date.now(), 60 * 1000));
+      mutation = acquireLeaseMutation(watchedLeasePath);
+      const current = parseLease(fs.readFileSync(watchedLeasePath, "utf8"), watchedNonce);
+      if (current.watchdog === null) return;
+      if (current.expiresAtMs > Date.now()) {
+        setTimeout(check, Math.min(current.expiresAtMs - Date.now(), 60 * 1000));
         return;
       }
-      for (const entry of lease.processes) {
-        if (
-          !entry ||
-          !Number.isSafeInteger(entry.pid) ||
-          entry.pid < 1 ||
-          typeof entry.start !== "string" ||
-          processIdentity(entry.pid) !== entry.start
-        ) continue;
-        try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+      const recoveryDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
+      const recovery = await recoverProcessReferences(
+        current.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+        ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
+        recoveryDeadlineMs,
+      );
+      const remainingReferences = recovery.remaining;
+      const remaining = remainingReferences.map(({ pid, start }) => ({ pid, start }));
+      if (remaining.length === 0) {
+        fs.unlinkSync(watchedLeasePath);
+        return;
       }
-      watchdogFs.unlinkSync(watchedLeasePath);
+      persistLeaseLocked(
+        watchedLeasePath,
+        {
+          ...current,
+          processes: remaining,
+          watchdog: null,
+          recovery: {
+            state: recovery.failed ? "recovery-failed" : "probe-timeout",
+            failedAtMs: Date.now(),
+          },
+        },
+        (latest) => {
+          if (
+            latest.nonce !== current.nonce ||
+            latest.expiresAtMs !== current.expiresAtMs ||
+            latest.watchdog?.pid !== current.watchdog.pid ||
+            latest.watchdog?.start !== current.watchdog.start
+          ) {
+            throw new Error("workspace quiescence lease changed during watchdog recovery");
+          }
+        },
+      );
     } catch (error) {
+      if (error && error.code === "ELOCKED") {
+        setTimeout(check, ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS});
+        return;
+      }
       if (!error || error.code !== "ENOENT") process.exitCode = 1;
+    } finally {
+      if (mutation !== null) releaseLeaseMutation(mutation);
     }
   };
-  check();
+  void check();
 }
 process.stdout.write("quiesced " + nonce + "\n");
+}
+void quiesce().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 `;
 
 export const REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS = String.raw`const childProcess = require("node:child_process");
@@ -284,17 +312,30 @@ const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", cryp
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const input = parseLease(fs.readFileSync(leasePath, "utf8"), nonce, {
-  requireWatchdog: true,
-  minimumRemainingMs: 5000,
   errorMessage: "workspace quiescence lease is no longer active",
 });
+if (input.recovery !== undefined) {
+  const failure = input.recovery.state === "recovery-failed" ? "failed" : "timed out";
+  throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
+}
+if (input.watchdog === null || input.expiresAtMs - Date.now() < 5000) {
+  throw new Error("workspace quiescence lease is no longer active");
+}
 function writeLease(processes, expiresAtMs) {
-  // renewalQueue is the nonce's only writer; the watchdog only reads this lease.
   persistLease(leasePath, { ...input, processes, expiresAtMs }, (current) => {
-    if (current.nonce !== nonce || current.watchdog?.pid !== input.watchdog.pid || current.watchdog?.start !== input.watchdog.start) {
+    if (
+      current.nonce !== nonce ||
+      current.expiresAtMs !== input.expiresAtMs ||
+      current.recovery !== undefined ||
+      current.watchdog?.pid !== input.watchdog.pid ||
+      current.watchdog?.start !== input.watchdog.start ||
+      !sameProcessReferences(current.processes, input.processes)
+    ) {
       throw new Error("workspace quiescence lease changed during renewal");
     }
   });
+  input.processes = processes;
+  input.expiresAtMs = expiresAtMs;
 }
 function assertWatchdogActive() {
   const status = processStatus(input.watchdog.pid);
@@ -308,8 +349,7 @@ function assertWatchdogActive() {
 }
 function refreshLease(processes) {
   assertWatchdogActive();
-  input.expiresAtMs = Date.now() + timeoutMs;
-  writeLease(processes, input.expiresAtMs);
+  writeLease(processes, Date.now() + timeoutMs);
 }
 for (const entry of input.processes) {
   const status = processStatus(entry.pid);
@@ -384,20 +424,76 @@ const root = fs.realpathSync(process.argv[1]);
 const nonce = process.argv[2];
 if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
 const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
-let raw;
-try { raw = fs.readFileSync(leasePath, "utf8"); } catch (error) {
-  if (error && error.code === "ENOENT") process.exit(0);
-  throw error;
-}
 ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
-const input = parseLease(raw, nonce);
-if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
-  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+async function resume() {
+  const mutation = acquireLeaseMutation(leasePath);
+  try {
+    let raw;
+    try {
+      raw = fs.readFileSync(leasePath, "utf8");
+    } catch (error) {
+      if (error && error.code === "ENOENT") return;
+      throw error;
+    }
+    const input = parseLease(raw, nonce);
+    const recoveryDeadlineMs = Date.now() + ${REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS};
+    if (input.watchdog !== null) {
+      const [watchdogOutcome] = await signalProcessReferences(
+        [{ ...input.watchdog, signal: "SIGTERM" }],
+        1,
+        recoveryDeadlineMs,
+      );
+      if (
+        watchdogOutcome.kind === "timeout" ||
+        watchdogOutcome.kind === "deferred" ||
+        watchdogOutcome.kind === "failed"
+      ) {
+        const failure = watchdogOutcome.kind === "failed" ? "failed" : "timed out";
+        throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
+      }
+    }
+    const outcomes = await signalProcessReferences(
+      input.processes.map((entry) => ({ ...entry, signal: "SIGCONT" })),
+      ${REMOTE_QUIESCENCE_PROCESS_PROBE_CONCURRENCY},
+      recoveryDeadlineMs,
+    );
+    const failed = outcomes.some((outcome) => outcome.kind === "failed");
+    const remaining = retryProcessReferences(input.processes, outcomes);
+    if (remaining.length > 0) {
+      persistLeaseLocked(
+        leasePath,
+        {
+          ...input,
+          processes: remaining,
+          watchdog: null,
+          recovery: {
+            state: failed ? "recovery-failed" : "probe-timeout",
+            failedAtMs: Date.now(),
+          },
+        },
+        (current) => {
+          if (
+            current.nonce !== input.nonce ||
+            current.expiresAtMs !== input.expiresAtMs ||
+            current.watchdog?.pid !== input.watchdog?.pid ||
+            current.watchdog?.start !== input.watchdog?.start ||
+            !sameProcessReferences(current.processes, input.processes)
+          ) {
+            throw new Error("workspace quiescence lease changed during operator recovery");
+          }
+        },
+      );
+      const failure = failed ? "failed" : "timed out";
+      throw new Error("workspace quiescence recovery " + failure + "; lease retained for operator recovery");
+    }
+    fs.unlinkSync(leasePath);
+  } finally {
+    releaseLeaseMutation(mutation);
+  }
 }
-for (const entry of input.processes) {
-  if (processIdentity(entry.pid) !== entry.start) continue;
-  try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
-}
-fs.unlinkSync(leasePath);
+void resume().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 `;
