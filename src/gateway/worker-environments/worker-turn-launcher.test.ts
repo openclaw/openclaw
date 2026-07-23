@@ -512,6 +512,28 @@ describe("worker turn launcher", () => {
     });
     let descriptor: WorkerLaunchDescriptor | undefined;
     const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const reconcileWorkspace = vi.fn(
+      async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+        expect(request.stagedResult).toBeDefined();
+        request.stagedResult!.record(request.stagedResult!.ref);
+        expect(placements.listPendingWorkspaceResults()).toMatchObject([
+          { stagedResultRef: request.stagedResult!.ref, workspaceAcceptedAtMs: null },
+        ]);
+        request.journal.commit(MANIFEST_REF);
+        return {
+          manifestRef: MANIFEST_REF,
+          changed: false,
+          verifyStable: async () => {},
+          verifyLocalStable: async () => {},
+          getAppliedWorkspaceResult: () => ({
+            manifestRef: MANIFEST_REF,
+            manifest: { version: 1 as const, baseCommit: null, entries: [] },
+            conflictPaths: ["src/local.ts"],
+            verifyLocalStable: async () => {},
+          }),
+        };
+      },
+    );
     const tunnel: WorkerTunnelHandle = {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
@@ -574,26 +596,7 @@ describe("worker turn launcher", () => {
       syncWorkspace: vi.fn(async () => {
         throw new Error("unexpected workspace sync");
       }),
-      reconcileWorkspace: vi.fn(async (request) => {
-        expect(request.stagedResult).toBeDefined();
-        request.stagedResult!.record(request.stagedResult!.ref);
-        expect(placements.listPendingWorkspaceResults()).toMatchObject([
-          { stagedResultRef: request.stagedResult!.ref, workspaceAcceptedAtMs: null },
-        ]);
-        request.journal.commit(MANIFEST_REF);
-        return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          getAppliedWorkspaceResult: () => ({
-            manifestRef: MANIFEST_REF,
-            manifest: { version: 1 as const, baseCommit: null, entries: [] },
-            conflictPaths: ["src/local.ts"],
-            verifyLocalStable: async () => {},
-          }),
-        };
-      }),
+      reconcileWorkspace,
       stop: vi.fn(async () => {}),
     };
     const environments: WorkerTurnEnvironmentService = {
@@ -637,9 +640,7 @@ describe("worker turn launcher", () => {
       sessionKey: SESSION_KEY,
       agentId: "main",
     });
-    expect(vi.mocked(tunnel.reconcileWorkspace)).toHaveBeenCalledWith(
-      expect.objectContaining({ localPath: root }),
-    );
+    expect(reconcileWorkspace).toHaveBeenCalledWith(expect.objectContaining({ localPath: root }));
     const conflictSummary =
       "Cloud result applied with 1 conflict(s); kept local versions: src/local.ts. Cloud versions staged at refs/openclaw/worker-results/";
     expect(result.payloads).toEqual([
