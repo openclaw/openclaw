@@ -45,6 +45,9 @@ struct SkillsSettings: View {
             await Task.yield()
             await self.model.refreshIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawLocalNodeDidConnect)) { _ in
+            Task { await self.model.refreshAfterLocalNodeReconnect() }
+        }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
                 Task {
@@ -746,6 +749,20 @@ final class SkillsSettingsModel {
     var statusMessage: String?
     private var hasLoaded = false
     private var busySkills: Set<String> = []
+    private var pendingForcedRefresh = false
+    private let loadSkillsStatus: () async throws -> SkillsStatusReport
+
+    init() {
+        self.loadSkillsStatus = Self.defaultLoadSkillsStatus
+    }
+
+    init(loadSkillsStatus: @escaping () async throws -> SkillsStatusReport) {
+        self.loadSkillsStatus = loadSkillsStatus
+    }
+
+    private static func defaultLoadSkillsStatus() async throws -> SkillsStatusReport {
+        try await GatewayConnection.shared.skillsStatus()
+    }
 
     func isBusy(skill: SkillStatus) -> Bool {
         self.busySkills.contains(skill.skillKey)
@@ -756,15 +773,37 @@ final class SkillsSettingsModel {
         await self.refresh()
     }
 
+    func refreshAfterLocalNodeReconnect() async {
+        if self.isLoading {
+            self.pendingForcedRefresh = true
+            return
+        }
+        guard self.hasLoaded else { return }
+        await self.refresh(force: true)
+    }
+
     func refresh(force: Bool = false) async {
-        guard !self.isLoading else { return }
+        if self.isLoading {
+            if force {
+                self.pendingForcedRefresh = true
+            }
+            return
+        }
         if self.hasLoaded, !force {
             return
         }
+        await self.runRefresh()
+        while self.pendingForcedRefresh {
+            self.pendingForcedRefresh = false
+            await self.runRefresh()
+        }
+    }
+
+    private func runRefresh() async {
         self.isLoading = true
         self.error = nil
         do {
-            let report = try await GatewayConnection.shared.skillsStatus()
+            let report = try await self.loadSkillsStatus()
             self.skills = report.skills.sorted { $0.name < $1.name }
             self.hasLoaded = true
         } catch {
