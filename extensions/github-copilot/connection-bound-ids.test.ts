@@ -42,7 +42,7 @@ describe("github-copilot connection-bound response IDs", () => {
     const input = [
       { id: "rs_active", type: "reasoning", encrypted_content: "native", summary: [] },
       { type: "reasoning", status: "completed", encrypted_content: "idless" },
-      { id: connectionBoundId, type: "reasoning", encrypted_content: "connection" },
+      { id: connectionBoundId, type: "reasoning", status: null, encrypted_content: "connection" },
     ];
 
     expect(rewriteInputIds(input)).toBe(true);

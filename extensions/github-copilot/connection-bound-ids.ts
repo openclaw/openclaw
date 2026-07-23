@@ -34,19 +34,10 @@ function isValidReasoningReplayId(id: unknown): id is string {
   return typeof id === "string" && id.length <= 64 && /^rs_[A-Za-z0-9_-]+$/.test(id);
 }
 
-function isCompleteReasoningItem(item: InputItem): boolean {
-  return (
-    typeof item.encrypted_content === "string" &&
-    item.encrypted_content.length > 0 &&
-    (item.status === undefined || item.status === "completed")
-  );
-}
-
 function dropReasoningItem(input: unknown[], index: number): void {
   input.splice(index, 1);
   const dependentMessage = input[index];
-  // Assistant replay IDs are signed with the immediately preceding reasoning.
-  // Keeping the ID after dropping that reasoning makes the next request invalid.
+  // Assistant replay IDs are signed with preceding reasoning; keeping one after a drop is invalid.
   if (
     isInputItem(dependentMessage) &&
     dependentMessage.type === "message" &&
@@ -68,8 +59,16 @@ function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
     }
     const id = item.id;
     if (item.type === "reasoning") {
-      // Cold reasoning is removed before the active loop; never synthesize active reasoning IDs.
-      if (!isCompleteReasoningItem(item)) {
+      // Cold reasoning is removed earlier; normalize null status and never synthesize active IDs.
+      if (item.status === null) {
+        delete item.status;
+        rewrote = true;
+      }
+      const isComplete =
+        typeof item.encrypted_content === "string" &&
+        item.encrypted_content.length > 0 &&
+        (item.status === undefined || item.status === "completed");
+      if (!isComplete) {
         dropReasoningItem(input, index);
         rewrote = true;
       } else if (id === undefined || isValidReasoningReplayId(id)) {

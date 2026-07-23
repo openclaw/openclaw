@@ -182,7 +182,7 @@ describe("wrapCopilotAnthropicStream", () => {
       const payload = {
         input: [
           { id: "rs_active", type: "reasoning", encrypted_content: "native-encrypted" },
-          { type: "reasoning", encrypted_content: "idless-encrypted", summary: [] },
+          { type: "reasoning", status: null, encrypted_content: "idless-encrypted", summary: [] },
           { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
           {
             id: "thinking_0",
