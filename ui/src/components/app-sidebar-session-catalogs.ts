@@ -171,7 +171,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const visibleHosts: SessionCatalogHost[] = [];
     for (const host of hosts) {
       const sessions = host.sessions.filter(
-        (session) => !params.creatorId || session.createdBy?.id === params.creatorId,
+        (session) => !params.creatorId || session.createdActor?.id === params.creatorId,
       );
       if (sessions.length > 0) {
         visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });

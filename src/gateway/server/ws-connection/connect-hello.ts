@@ -67,6 +67,7 @@ export async function sendGatewayHello(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    controlUiDeviceAuthMigrationPending,
   } = state;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
@@ -101,6 +102,9 @@ export async function sendGatewayHello(
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+    ...(controlUiDeviceAuthMigrationPending
+      ? { deviceAuthMigration: { pending: true as const } }
+      : {}),
     auth: {
       role,
       scopes: helloOkAuthScopes,

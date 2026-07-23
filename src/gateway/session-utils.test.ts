@@ -227,6 +227,18 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("emits a tombstone when a session has no current control owner", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:child-without-owner",
+      entry: {} as SessionEntry,
+    });
+
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).controlOwnerSessionKey).toBeNull();
+  });
+
   test("projects only unexpired agent status", () => {
     const entry = {
       sessionId: "session",

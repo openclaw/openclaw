@@ -3,19 +3,18 @@ import { AppSidebarSessionProjectionElement } from "./app-sidebar-session-projec
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
   listSessionCreators,
-  renderSessionCreatorFilter,
-  renderSessionOwnerChip,
-  type SessionCreatedBy,
+  type SessionCreatedActor,
+  type SessionCreatorOption,
 } from "./session-owner-chip.ts";
 
 /** Creator attribution, solo dormancy, and filtering shared by sidebar session surfaces. */
 export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessionProjectionElement {
   @state() protected sessionCreatorFilterId: string | null = null;
 
-  protected sessionCreatorOptions: readonly SessionCreatedBy[] = [];
+  protected sessionCreatorOptions: readonly SessionCreatorOption[] = [];
   protected activeSessionCreatorId: string | null = null;
   protected sessionCreatorFilterActive = false;
-  protected sessionOwnershipVisible = false;
+  sessionOwnershipVisible = false;
 
   override updated() {
     super.updated();
@@ -33,8 +32,8 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
 
   protected applySessionCreatorFilter(
     projected: readonly SidebarRecentSession[],
-    creatorRows: readonly { createdBy?: SessionCreatedBy }[] = [],
-    creatorFacet?: readonly SessionCreatedBy[],
+    creatorRows: readonly { createdActor?: SessionCreatedActor }[] = [],
+    creatorFacet?: readonly { id: string; label?: string }[],
   ): SidebarRecentSession[] {
     const flattened: SidebarRecentSession[] = [];
     const pending = [...projected];
@@ -47,7 +46,9 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
     }
     const completeFacet = creatorFacet ?? this.sessionsResult?.creators;
     this.sessionCreatorOptions = listSessionCreators([
-      ...(completeFacet ?? []).map((createdBy) => ({ createdBy })),
+      ...(completeFacet ?? []).map((creator) => ({
+        createdActor: { type: "human" as const, ...creator },
+      })),
       ...flattened,
       ...creatorRows,
     ]);
@@ -66,7 +67,7 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
       const filtered: SidebarRecentSession[] = [];
       for (const row of treeRows) {
         const children = filterTree(row.children);
-        if (row.createdBy?.id === creatorId) {
+        if (row.createdActor?.id === creatorId) {
           filtered.push({ ...row, children });
         } else {
           for (const child of children) {
@@ -77,24 +78,6 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
       return filtered;
     };
     return filterTree(projected);
-  }
-
-  protected renderSidebarSessionOwnerChip(session: SidebarRecentSession) {
-    return renderSessionOwnerChip(
-      this.sessionOwnershipVisible ? session.createdBy : undefined,
-      "row",
-    );
-  }
-
-  protected renderSidebarSessionCreatorFilter() {
-    return renderSessionCreatorFilter({
-      creators: this.sessionOwnershipVisible ? this.sessionCreatorOptions : [],
-      selectedId: this.sessionCreatorFilterActive ? this.sessionCreatorFilterId : null,
-      onChange: (creatorId) => {
-        this.sessionCreatorFilterId = creatorId;
-        void this.context?.sessions.setCreatorFilter(creatorId);
-      },
-    });
   }
 
   protected hideEmptyCreatorFilteredGroup(category: string | undefined, rowCount: number): boolean {

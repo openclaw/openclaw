@@ -358,7 +358,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=12288
         run: pnpm build
 
-      - name: Run live runtime parity lane
+      - name: Run live core runtime-pair lane
         id: run_lane
         shell: bash
         env:
@@ -375,8 +375,7 @@ jobs:
           pnpm openclaw qa suite \
             --repo-root . \
             --provider-mode live-frontier \
-            --runtime-parity-tier standard \
-            --runtime-parity-tier live-only \
+            --runtime-pair-lane core \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \

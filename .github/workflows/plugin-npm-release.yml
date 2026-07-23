@@ -10,6 +10,7 @@ on:
       - "extensions/**"
       - "package.json"
       - "scripts/lib/npm-publish-plan.mjs"
+      - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/actions-artifact-archive.mjs"

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
@@ -112,6 +113,14 @@ export function createPersistCronSessionEntry(params: {
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
       update: (currentEntry) => {
+        if (!currentEntry) {
+          const creationStamp = buildSessionCreationStamp({
+            via: "cron",
+            actor: { type: "system" },
+          });
+          committedEntry = { ...persistedEntry, ...creationStamp };
+          mergedLiveEntry = { ...liveEntry, ...creationStamp };
+        }
         const ownsCurrentRevision =
           currentEntry?.lifecycleRevision === params.cronSession.lifecycleRevision;
         const currentRevisionActive = Boolean(
@@ -189,6 +198,13 @@ export function createCronRunContinuationSession(params: {
     entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
   const persist = async (create: boolean, phase: "running" | "ready", basePersisted = false) => {
     const source = structuredClone(params.cronSession.sessionEntry);
+    delete source.createdVia;
+    delete source.createdActor;
+    delete source.createdAt;
+    // Node-local lineage must not leak across keys: the base row's generation
+    // chain and fork ancestry describe the cron root, not this :run: node.
+    delete source.previousSessionId;
+    delete source.forkSource;
     let persisted = false;
     let alreadySealed = false;
     await params.persistSessionEntry({
@@ -212,6 +228,9 @@ export function createCronRunContinuationSession(params: {
         return {
           ...current,
           ...source,
+          ...(!current
+            ? buildSessionCreationStamp({ via: "cron", actor: { type: "system" } })
+            : {}),
           ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
           cronRunContinuation: {
             ...continuation,

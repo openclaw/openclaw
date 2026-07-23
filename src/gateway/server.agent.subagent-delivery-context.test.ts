@@ -224,10 +224,10 @@ describe("subagent session deliveryContext from spawn request params", () => {
     });
   });
 
-  test("pre-patched subagent session (via sessions.patch) inherits deliveryContext from agent request", async () => {
-    // Simulates the real subagent spawn flow: spawnSubagentDirect calls sessions.patch
-    // first (to set spawnDepth, spawnedBy, etc.), then calls callSubagentGateway({method: "agent"}).
-    // The sessions.patch creates a partial entry without deliveryContext.
+  test("pre-created subagent session inherits deliveryContext from agent request", async () => {
+    // Simulates the real subagent spawn flow: the trusted session accessor persists lineage
+    // before callSubagentGateway({method: "agent"}) seeds the delivery context.
+    // The direct lineage write creates a partial entry without deliveryContext.
     // The agent handler must seed deliveryContext from the request params.
     await prepareSessionStore({
       "agent:main:subagent:pre-patched": {

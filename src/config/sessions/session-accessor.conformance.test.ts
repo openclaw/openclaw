@@ -1258,7 +1258,11 @@ describe("sqlite session normalization", () => {
     await upsertSqliteSessionEntry(scope, {
       channel: "telegram",
       chatType: "group",
+      createdVia: "channel",
+      createdActor: { type: "human", id: "telegram-sender" },
+      createdAt: 1_782_973_390_000,
       displayName: "telegram:g-bucephalus-+-topics",
+      forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
       sessionId: oldSessionId,
       status: "killed",
       updatedAt: 1_782_973_392_492,
@@ -1298,6 +1302,11 @@ describe("sqlite session normalization", () => {
     expect(loadSqliteSessionEntry(scope)).toEqual(
       expect.objectContaining({
         sessionId: newSessionId,
+        createdVia: "channel",
+        createdActor: { type: "human", id: "telegram-sender" },
+        createdAt: 1_782_973_390_000,
+        forkSource: { sessionKey: "agent:main:main", sessionId: "root-session" },
+        previousSessionId: oldSessionId,
         usageFamilyKey: sessionKey,
         usageFamilySessionIds: [oldSessionId, newSessionId],
       }),

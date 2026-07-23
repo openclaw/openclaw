@@ -7,7 +7,6 @@ import type {
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
@@ -17,7 +16,11 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
-import type { SessionEntryProvenance } from "./session-entry-provenance.js";
+import type {
+  SessionCreatedActor,
+  SessionCreatedVia,
+  SessionEntryProvenance,
+} from "./session-entry-provenance.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
@@ -252,8 +255,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
-    /** Operator identity captured once for this session generation. */
-    createdBy?: SessionCreatorIdentity;
     updatedAt: number;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
@@ -294,7 +295,17 @@ export type SessionEntry = SessionRestartRecoveryState &
     worktree?: { id: string; branch: string; repoRoot: string };
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
-    /** True after a thread/topic session has been forked from its parent transcript once. */
+    /** How this session node came to exist; written once and retained across sessionId rotations. */
+    createdVia?: SessionCreatedVia;
+    /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
+    createdActor?: SessionCreatedActor;
+    /** Node creation time (ms); unlike sessionStartedAt, survives sessionId rotations. */
+    createdAt?: number;
+    /** Exact source generation and optional cut entry for an actual transcript-copy fork. */
+    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+    /** Session id of the prior transcript generation under this same session key. */
+    previousSessionId?: string;
+    /** Thread parent-seeding settled marker; also set when seeding is deliberately skipped. */
     forkedFromParent?: boolean;
     /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
     spawnDepth?: number;
@@ -670,6 +681,20 @@ function mergeSessionEntryWithPolicy(
       patch.sessionStartedAt ??
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
+
+  // Node creation and exact fork ancestry are write-once; patches may only fill absent values.
+  if (existing.createdVia !== undefined) {
+    next.createdVia = existing.createdVia;
+  }
+  if (existing.createdActor !== undefined) {
+    next.createdActor = existing.createdActor;
+  }
+  if (existing.createdAt !== undefined) {
+    next.createdAt = existing.createdAt;
+  }
+  if (existing.forkSource !== undefined) {
+    next.forkSource = existing.forkSource;
+  }
 
   if (existing.sessionId !== sessionId) {
     // Session id rotations should move transcript paths when they match known reset/fork shapes.
