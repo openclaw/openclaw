@@ -231,6 +231,115 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  // Group 2b: Plugin containerWorkdir threading (e.g. OpenShell /sandbox, /agent)
+  describe("containerWorkdir threading", () => {
+    it("maps /sandbox absolute paths into sandbox root when containerWorkdir is /sandbox", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media: "/sandbox/out/photo.png",
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        });
+        expect(result).toBe(path.join(sandboxDir, "out", "photo.png"));
+      });
+    });
+
+    it("maps file:// URLs under /sandbox into sandbox root when containerWorkdir is /sandbox", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media: "file:///sandbox/out/photo.png",
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        });
+        expect(result).toBe(path.join(sandboxDir, "out", "photo.png"));
+      });
+    });
+
+    it("still maps /workspace paths by default when containerWorkdir is omitted", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media: "/workspace/media/pic.png",
+          sandboxRoot: sandboxDir,
+        });
+        expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
+      });
+    });
+
+    it("normalizes a trailing slash in containerWorkdir (/sandbox/ matches /sandbox)", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media: "/sandbox/out/photo.png",
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox/",
+        });
+        expect(result).toBe(path.join(sandboxDir, "out", "photo.png"));
+      });
+    });
+
+    it("maps the bare container workdir to the sandbox root", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        const result = await resolveSandboxedMediaSource({
+          media: "/sandbox",
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        });
+        expect(result).toBe(path.resolve(sandboxDir));
+      });
+    });
+
+    it("rejects prefix-attack paths that only share a name prefix (/sandboxer/secret)", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        await expect(
+          resolveSandboxedMediaSource({
+            media: "/sandboxer/secret",
+            sandboxRoot: sandboxDir,
+            containerWorkdir: "/sandbox",
+          }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+      });
+    });
+
+    it("rejects /workspace paths when containerWorkdir is /sandbox", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        await expect(
+          resolveSandboxedMediaSource({
+            media: "/workspace/out/photo.png",
+            sandboxRoot: sandboxDir,
+            containerWorkdir: "/sandbox",
+          }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+      });
+    });
+
+    it("rejects file:// URLs under /workspace when containerWorkdir is /sandbox", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        // On Linux the URL resolves to a host path and is rejected by the sandbox
+        // boundary check; on Windows safeFileURLToPath rejects /workspace first.
+        await expect(
+          resolveSandboxedMediaSource({
+            media: "file:///workspace/out/photo.png",
+            sandboxRoot: sandboxDir,
+            containerWorkdir: "/sandbox",
+          }),
+        ).rejects.toThrow(/escapes sandbox root|Invalid file:\/\/ URL/i);
+      });
+    });
+
+    it("falls back to the default workdir when containerWorkdir is root-only (/)", async () => {
+      await withSandboxRoot(async (sandboxDir) => {
+        // "/" strips to an empty prefix; it must fall back to /workspace rather
+        // than matching every absolute path inward, so /sandbox paths still escape.
+        await expect(
+          resolveSandboxedMediaSource({
+            media: "/sandbox/out/photo.png",
+            sandboxRoot: sandboxDir,
+            containerWorkdir: "/",
+          }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+      });
+    });
+  });
+
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({

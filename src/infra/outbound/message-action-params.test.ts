@@ -162,6 +162,72 @@ describe("message action media helpers", () => {
     }
   });
 
+  it("threads containerWorkdir through normalizeSandboxMediaList for /sandbox paths", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-cwd-"));
+    try {
+      const result = await normalizeSandboxMediaList({
+        values: [
+          "file:///sandbox/out/photo.png",
+          "/sandbox/out/photo.png",
+          "/sandbox/screens/final.png",
+        ],
+        sandboxRoot,
+        containerWorkdir: "/sandbox",
+      });
+      expect(result).toEqual([
+        path.join(sandboxRoot, "out", "photo.png"),
+        path.join(sandboxRoot, "screens", "final.png"),
+      ]);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("threads containerWorkdir through normalizeSandboxMediaParams for /sandbox paths", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-cwd-"));
+    try {
+      const args: Record<string, unknown> = {
+        mediaUrl: "file:///sandbox/assets/photo.png",
+        fileUrl: "/sandbox/docs/report.pdf",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+          containerWorkdir: "/sandbox",
+        },
+      });
+
+      expect(args.mediaUrl).toBe(path.join(sandboxRoot, "assets", "photo.png"));
+      expect(args.fileUrl).toBe(path.join(sandboxRoot, "docs", "report.pdf"));
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveAttachmentMediaPolicy surfaces containerWorkdir in sandbox mode", () => {
+    expect(
+      resolveAttachmentMediaPolicy({
+        sandboxRoot: "/tmp/workspace",
+        containerWorkdir: "/sandbox",
+      }),
+    ).toEqual({
+      mode: "sandbox",
+      sandboxRoot: "/tmp/workspace",
+      containerWorkdir: "/sandbox",
+    });
+    expect(
+      resolveAttachmentMediaPolicy({
+        sandboxRoot: "/tmp/workspace",
+      }),
+    ).toEqual({
+      mode: "sandbox",
+      sandboxRoot: "/tmp/workspace",
+    });
+  });
+
   maybeIt("normalizes mediaUrl and fileUrl sandbox media params", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-alias-"));
     try {

@@ -1054,6 +1054,7 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
@@ -1707,6 +1708,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
+          sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           // Only an admitted channel source can arm terminal restart reconciliation.
           // Source-less scheduled and ambient sends remain ordinary message actions.
