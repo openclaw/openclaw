@@ -2,11 +2,15 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getMediaDir } from "../media/store.js";
-import { buildInboundMediaNote } from "./media-note.js";
+import { buildInboundMediaNoteProjection } from "./media-note.js";
 import {
   createSuccessfulAudioMediaDecision,
   createSuccessfulImageMediaDecision,
 } from "./media-understanding.test-fixtures.js";
+
+const buildInboundMediaNote = (
+  ctx: Parameters<typeof buildInboundMediaNoteProjection>[0],
+): string | undefined => buildInboundMediaNoteProjection(ctx).text;
 
 describe("buildInboundMediaNote", () => {
   it("formats single MediaPath as a media note (collapses redundant duplicate URL, #47587)", () => {
@@ -107,7 +111,7 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("keeps image attachments after image descriptions are added", () => {
-    const note = buildInboundMediaNote({
+    const projection = buildInboundMediaNoteProjection({
       MediaPaths: ["/tmp/photo.png"],
       MediaUrls: ["https://example.com/photo.png"],
       MediaTypes: ["image/png"],
@@ -120,9 +124,20 @@ describe("buildInboundMediaNote", () => {
         },
       ],
     });
-    expect(note).toBe(
+    expect(projection.text).toBe(
       "[media attached: /tmp/photo.png (image/png) | https://example.com/photo.png]",
     );
+    expect(projection.media).toEqual([
+      {
+        path: "/tmp/photo.png",
+        url: "https://example.com/photo.png",
+        contentType: "image/png",
+        kind: "image",
+        transcribed: false,
+        messageId: undefined,
+        hydrationSuppressed: true,
+      },
+    ]);
   });
 
   it("keeps image attachments when image understanding succeeds via decisions", () => {
@@ -373,5 +388,60 @@ describe("buildInboundMediaNote", () => {
       MediaUrl: "/tmp/a.png   ",
     });
     expect(note).toBe("[media attached: /tmp/a.png (image/png)]");
+  });
+
+  it("pairs byte-stable single and multi notes with their ordered facts", () => {
+    const single = buildInboundMediaNoteProjection({
+      media: [
+        {
+          path: "/tmp/a.png",
+          url: "https://example.com/a.png",
+          contentType: "image/png",
+          kind: "image",
+        },
+      ],
+      MediaPath: "/tmp/a.png",
+      MediaUrl: "https://example.com/a.png",
+      MediaType: "image/png",
+    });
+    expect(single).toEqual({
+      text: "[media attached: /tmp/a.png (image/png) | https://example.com/a.png]",
+      media: [
+        {
+          path: "/tmp/a.png",
+          url: "https://example.com/a.png",
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+          messageId: undefined,
+        },
+      ],
+    });
+
+    const multi = buildInboundMediaNoteProjection({
+      media: [
+        { path: "/tmp/a.png", contentType: "image/png" },
+        { path: "/tmp/b.pdf", contentType: "application/pdf" },
+      ],
+      MediaPaths: ["/tmp/a.png", "/tmp/b.pdf"],
+      MediaTypes: ["image/png", "application/pdf"],
+    });
+    expect(multi.text).toBe(
+      [
+        "[media attached: 2 files]",
+        "[media attached 1/2: /tmp/a.png (image/png)]",
+        "[media attached 2/2: /tmp/b.pdf (application/pdf)]",
+      ].join("\n"),
+    );
+    expect(
+      multi.media.map(({ path: pathValue, contentType, kind }) => ({
+        path: pathValue,
+        contentType,
+        kind,
+      })),
+    ).toEqual([
+      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
+      { path: "/tmp/b.pdf", contentType: "application/pdf", kind: "document" },
+    ]);
   });
 });

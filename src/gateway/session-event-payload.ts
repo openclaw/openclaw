@@ -1,3 +1,4 @@
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 
 /**
@@ -27,6 +28,7 @@ export function buildGatewaySessionEventFields(params: {
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
+    createdActor: sessionRow.createdActor ?? null,
     kind: sessionRow.kind,
     channel: sessionRow.channel,
     subject: sessionRow.subject,
@@ -45,13 +47,18 @@ export function buildGatewaySessionEventFields(params: {
     observerDigest: sessionRow.observerDigest ?? null,
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
+    controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
     swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
-    forkedFromParent: sessionRow.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(sessionRow) ? true : undefined,
     spawnDepth: sessionRow.spawnDepth,
     subagentRole: sessionRow.subagentRole,
     subagentControlScope: sessionRow.subagentControlScope,
+    createdVia: sessionRow.createdVia,
+    createdAt: sessionRow.createdAt,
+    forkSource: sessionRow.forkSource,
+    previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,

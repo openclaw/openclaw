@@ -101,7 +101,22 @@ export const HelloOkSchema = closedObject({
       }),
     ),
   ),
+  // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
+  controlUiWidgetKinds: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        kind: NonEmptyString,
+        label: NonEmptyString,
+      }),
+    ),
+  ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  deviceAuthMigration: Type.Optional(
+    closedObject({
+      pending: Type.Literal(true),
+    }),
+  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
     role: NonEmptyString,

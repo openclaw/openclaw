@@ -19,9 +19,12 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 ## Multiple Gateway windows
 
 Open **Settings → Gateways** to add or remove reusable Gateway profiles. Each
-profile contains a `ws://` or `wss://` endpoint and its optional token or
-password; credentials are stored in the macOS Keychain. Removing a profile
-also closes its open windows and shuts down its secondary connection.
+profile contains a private-network `ws://` or secure `wss://` endpoint and its
+optional token or password; credentials are stored in the macOS Keychain.
+Secure profiles maintain their own system-trust-gated first-use certificate pin
+and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
+Removing a profile also closes its open windows and shuts down its secondary
+connection.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every
@@ -44,7 +47,7 @@ Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to
 
 Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder) and sends to that agent's main session. After Return accepts a send, the bar stays open and expands downward with the streamed Markdown reply and recent transcript. The bar input remains the composer. Press Command-Return to send and open the same target in the full chat window, Shift-Return for a newline, or Escape to dismiss the whole bar and reply area. Clicking outside also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
 
-Use the microphone button to dictate into the composer. Partial speech results replace the dictated span live while preserving text that was already in the composer. Press the button again, Return, or Escape to stop; sending, hiding, or unfocusing Quick Chat also releases the microphone. The first use asks for macOS Microphone and Speech Recognition access.
+Use the microphone button to dictate into the composer. Partial speech results replace the dictated span live while preserving text that was already in the composer. Press the button again, Return, or Escape to stop; sending, hiding, or unfocusing Quick Chat also releases the microphone. The first use asks for macOS Microphone and Speech Recognition access. Quick Chat uses Apple Speech and may use its network services; only passive Voice Wake requires on-device recognition.
 
 The compact model control shows the target session's current model and reasoning level. A model choice updates that session and therefore persists there, while a reasoning choice applies only to each message sent from the current Quick Chat presentation. Local choices reset when the bar hides. Switching agents or choosing a recent session keeps explicit choices but reloads the newly targeted session's underlying model state.
 
@@ -61,7 +64,7 @@ After a reply finishes, choose **Paste to &lt;app&gt;** to copy its visible assi
 Disable the feature entirely with **Settings → General → Quick Chat**; the same section hosts the shortcut recorder.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
-- **Remote mode**: forwards the Gateway control port over SSH and uses that tunnel as the data plane.
+- **Remote mode**: uses the configured direct `ws://`/`wss://` route or the app-managed SSH tunnel as the data plane.
 
 ## Launch and debugging
 

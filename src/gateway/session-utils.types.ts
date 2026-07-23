@@ -1,7 +1,11 @@
 // Shared Gateway session projection types.
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { SessionPlacement } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionCreatedActor,
+  SessionPlacement,
+  SessionRow,
+} from "../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
@@ -46,6 +50,8 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Current runtime controller, falling back to the durable spawning session. */
+  controlOwnerSessionKey?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;
   spawnedWorkspaceDir?: string;
@@ -60,6 +66,11 @@ export type GatewaySessionRow = {
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
   subagentControlScope?: SessionEntry["subagentControlScope"];
+  createdVia?: SessionEntry["createdVia"];
+  createdActor?: SessionCreatedActor;
+  createdAt?: SessionEntry["createdAt"];
+  forkSource?: SessionEntry["forkSource"];
+  previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
@@ -82,7 +93,10 @@ export type GatewaySessionRow = {
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
-  observerDigest?: Pick<SessionObserverDigest, "headline" | "health" | "updatedAt" | "revision">;
+  observerDigest?: Pick<
+    SessionObserverDigest,
+    "runId" | "headline" | "health" | "updatedAt" | "revision"
+  >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
   lastActivityAt?: number;
@@ -145,6 +159,16 @@ export type GatewaySessionRow = {
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
+
+/**
+ * Compile-time drift guard: fails typecheck when the Gateway projection stops
+ * matching the protocol schema's documented row fields. Value-level so the
+ * unused-export scan sees a consumer.
+ */
+const sessionRowSchemaDriftGuard: Pick<GatewaySessionRow, keyof SessionRow> extends SessionRow
+  ? true
+  : false = true;
+void sessionRowSchemaDriftGuard;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 

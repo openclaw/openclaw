@@ -223,10 +223,6 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ].some(hasRestrictiveAllowPolicy);
-  const shouldCaptureCronCreatorToolAllowlist =
-    shouldInheritEffectiveToolAllowlist ||
-    explicitDenylist.length > 0 ||
-    excludedToolNames.length > 0;
 
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -270,9 +266,7 @@ export function resolveGatewayScopedTools(params: {
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
     pluginToolDenylist: explicitDenylist,
-    cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
-      ? cronCreatorToolAllowlist
-      : undefined,
+    cronCreatorToolAllowlist,
     inheritedToolAllowlist,
     inheritedToolDenylist,
   });
@@ -399,13 +393,9 @@ export function resolveGatewayScopedTools(params: {
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, inheritableTools);
   }
-  if (shouldCaptureCronCreatorToolAllowlist) {
-    replaceWithEffectiveCronCreatorToolAllowlist(
-      cronCreatorToolAllowlist,
-      inheritableTools,
-      (tool) => getPluginToolMeta(tool),
-    );
-  }
+  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, inheritableTools, (tool) =>
+    getPluginToolMeta(tool),
+  );
 
   return {
     agentId,

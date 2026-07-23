@@ -166,7 +166,9 @@ const APPLE_BUILTIN_UI_CALLS = new Set([
   "Toggle",
   "searchable",
 ]);
-const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
+const APPLE_PLIST_KEYED_STRINGS = /<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu;
+// macOS uses this legacy privacy key instead of the *UsageDescription suffix.
+const APPLE_LOCALIZABLE_DESCRIPTION_KEYS = new Set(["NSScreenCaptureDescription"]);
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
@@ -194,6 +196,19 @@ function isAsciiAlphaNumeric(character: string): boolean {
     isAsciiUppercaseLetter(character) ||
     (character >= "0" && character <= "9")
   );
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function isLocalizableApplePlistKey(key: string): boolean {
+  return key.endsWith("UsageDescription") || APPLE_LOCALIZABLE_DESCRIPTION_KEYS.has(key);
 }
 
 export function isConditionalBranchIdentifier(source: string): boolean {
@@ -1058,15 +1073,18 @@ export function extractNativeI18nCandidates(
     }
   }
   if (surface === "apple" && repoPath.endsWith(".plist")) {
-    for (const match of source.matchAll(APPLE_PLIST_STRINGS)) {
-      if (match[1]) {
+    for (const match of source.matchAll(APPLE_PLIST_KEYED_STRINGS)) {
+      const key = match[1];
+      const value = match[2];
+      if (key && isLocalizableApplePlistKey(key) && value) {
+        const valueOffset = (match.index ?? 0) + match[0].indexOf(value);
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          decodeXml(value),
           "plist-string",
-          lineNumber(source, match.index ?? 0),
+          lineNumber(source, valueOffset),
         );
       }
     }

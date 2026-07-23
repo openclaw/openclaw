@@ -18,14 +18,16 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { recordSubagentSpawned } from "../sessions/session-state-events.js";
+import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import type { FastMode } from "../shared/fast-mode.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -69,6 +71,10 @@ import {
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
+import {
+  applySubagentLaunchAuthorization,
+  type SubagentLaunchAuthorization,
+} from "./subagent-launch-authorization.js";
 import {
   completeCollectorLaunchCleanup,
   listSwarmRunsForGroup,
@@ -235,29 +241,41 @@ type SpawnSubagentResult = {
 
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
+  authorization?: SubagentLaunchAuthorization,
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
-  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // (sessions.delete → admin, agent → write). When each call
   // independently negotiates least-privilege scopes the first connection pairs
   // at a lower tier and every subsequent higher-tier call triggers a
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope. The params-aware
-  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  // "agent" -> write) keep their least-privilege scope. Apply the trusted
+  // launch authorization before resolving the request's required scope.
+  const authorizedParams =
+    params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
+      ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
+      : params.params;
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
-    params.params,
+    authorizedParams,
   );
+  const allowModelOverride = authorization !== undefined;
+  const hasInProcessGateway = subagentSpawnDeps.hasInProcessGatewayContext();
+  const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
-    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
+    params.scopes ??
+    (leastPrivilegeScopes.includes(ADMIN_SCOPE) || needsOutOfProcessModelOverrideAuth
+      ? [ADMIN_SCOPE]
+      : undefined);
   const request = {
     ...params,
+    params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
   if (
-    subagentSpawnDeps.hasInProcessGatewayContext() &&
+    hasInProcessGateway &&
     request.params != null &&
     typeof request.params === "object" &&
     !Array.isArray(request.params)
@@ -272,6 +290,7 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
+        ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
         ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
@@ -371,6 +390,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     patch.completionOwnerSessionKey.trim()
   ) {
     entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
+  }
+  if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
+    entry.parentSessionKey = patch.parentSessionKey.trim();
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
@@ -793,7 +815,7 @@ async function waitForProvisionalSessionDeletion(
       return;
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -850,7 +872,7 @@ async function terminateAcceptedCollectorRun(params: {
       }
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -1299,6 +1321,16 @@ export async function spawnSubagentDirect(
       };
     }
     const { resolvedModel, thinkingOverride } = plan;
+    const resolvedLaunchModel = splitModelRef(resolvedModel);
+    const launchAuthorization: SubagentLaunchAuthorization | undefined =
+      modelOverride?.trim() && resolvedLaunchModel.model
+        ? {
+            modelOverride: {
+              ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
+              model: resolvedLaunchModel.model,
+            },
+          }
+        : undefined;
     if (params.outputSchema) {
       const outputModelError = await resolveCollectorOutputModelError({
         cfg,
@@ -1312,21 +1344,24 @@ export async function spawnSubagentDirect(
       }
     }
     const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
+    let childCreationEntry: SessionEntry | undefined;
     const patchChildSession = async (
       patch: Record<string, unknown>,
+      creationStamp?: ReturnType<typeof buildSessionCreationStamp>,
     ): Promise<string | undefined> => {
       try {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key: childSessionKey,
         });
-        await upsertSessionEntry(
+        const updatedEntry = await upsertSessionEntry(
           {
             storePath: target.storePath,
             sessionKey: target.canonicalKey,
           },
-          buildDirectChildSessionPatch(patch),
+          { ...buildDirectChildSessionPatch(patch), ...creationStamp },
         );
+        childCreationEntry ??= updatedEntry ?? undefined;
         return undefined;
       } catch (err) {
         const message =
@@ -1336,6 +1371,13 @@ export async function spawnSubagentDirect(
     };
 
     const initialChildSessionPatch: Record<string, unknown> = {
+      spawnedBy: spawnedByKey,
+      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+      // Navigation and control lineage commit with the creation stamp so a
+      // launch failure cannot leave a durable but parentless child row.
+      parentSessionKey: spawnedByKey,
+      ...(spawnedWorkspaceDir ? { spawnedWorkspaceDir } : {}),
+      ...(spawnedCwd ? { spawnedCwd } : {}),
       ...admission.childSessionPatch,
       inheritedToolPolicyVersion: 1,
       ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
@@ -1346,7 +1388,13 @@ export async function spawnSubagentDirect(
       ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     };
 
-    const initialPatchError = await patchChildSession(initialChildSessionPatch);
+    const initialPatchError = await patchChildSession(
+      initialChildSessionPatch,
+      buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: requesterInternalKey },
+      }),
+    );
     if (initialPatchError) {
       return {
         status: "error",
@@ -1502,32 +1550,18 @@ export async function spawnSubagentDirect(
       persistentSession: spawnMode === "session",
       task,
     });
-
     const spawnedMetadata = normalizeSpawnedRunMetadata({
       spawnedBy: spawnedByKey,
       ...toolSpawnMetadata,
       workspaceDir: spawnedWorkspaceDir,
     });
-    const spawnLineagePatchError = await patchChildSession({
-      spawnedBy: spawnedByKey,
-      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
-      ...(spawnedMetadata.workspaceDir
-        ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir }
-        : {}),
-      ...(spawnedCwd ? { spawnedCwd } : {}),
-    });
-    if (spawnLineagePatchError) {
-      await cleanupFailedSpawnBeforeAgentStart({
-        childSessionKey,
-        attachmentAbsDir,
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
+
+    if (childCreationEntry) {
+      recordSessionCreated({
+        sessionKey: childSessionKey,
+        agentId: targetAgentId,
+        entry: childCreationEntry,
       });
-      return {
-        status: "error",
-        error: spawnLineagePatchError,
-        childSessionKey,
-      };
     }
     recordSubagentSpawned({
       childSessionKey,
@@ -1586,12 +1620,28 @@ export async function spawnSubagentDirect(
         : {}),
       ...publicSpawnedMetadata,
     };
+    const childLaunch = {
+      request: childLaunchRequest,
+      ...(launchAuthorization ? { authorization: launchAuthorization } : {}),
+      timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+    };
+    const queuedLaunch =
+      params.collect && swarmSchedulerGroupKey
+        ? {
+            ...childLaunch,
+            schedulerGroupKey: swarmSchedulerGroupKey,
+            maxConcurrent: swarmConfig.maxConcurrent,
+          }
+        : undefined;
     const launchChildRun = async () =>
-      await callSubagentGateway({
-        method: "agent",
-        params: childLaunchRequest,
-        timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-      });
+      await callSubagentGateway(
+        {
+          method: "agent",
+          params: childLaunch.request,
+          timeoutMs: childLaunch.timeoutMs,
+        },
+        childLaunch.authorization,
+      );
 
     // "spawned"/"started" hooks mean an accepted Gateway run. Direct runs emit
     // after the shared pipeline; queued collectors emit from the scheduler start.
@@ -1765,15 +1815,7 @@ export async function spawnSubagentDirect(
             : undefined,
           outputSchema: params.outputSchema,
           groupId: swarmGroupId,
-          queuedLaunch:
-            params.collect && swarmSchedulerGroupKey
-              ? {
-                  request: childLaunchRequest,
-                  timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-                  schedulerGroupKey: swarmSchedulerGroupKey,
-                  maxConcurrent: swarmConfig.maxConcurrent,
-                }
-              : undefined,
+          queuedLaunch,
           queued: params.collect === true,
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
@@ -1838,10 +1880,7 @@ export async function spawnSubagentDirect(
             } catch {
               // The child is stopped; retry only the durable terminal write.
               await new Promise<void>((resolve) => {
-                const timer = setTimeout(
-                  resolve,
-                  process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000,
-                );
+                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
                 timer.unref?.();
               });
             }
