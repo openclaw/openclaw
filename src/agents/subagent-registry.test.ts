@@ -983,7 +983,9 @@ describe("subagent registry seam flow", () => {
 
     lifecycleHandler?.({
       runId: "run-start-race",
+      seq: 1,
       stream: "lifecycle",
+      ts: startedAt,
       data: { phase: "start", startedAt },
     });
     await waitForFast(() =>

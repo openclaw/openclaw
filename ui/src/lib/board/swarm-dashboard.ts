@@ -40,7 +40,7 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
 function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
   // Callers pass hydrated rows first and the current lifecycle-decorated page
   // second, so equal persisted timestamps intentionally prefer the latter.
-  return candidate.updatedAt >= current.updatedAt;
+  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
 }
 
 export function mergeSwarmSessionRows(
@@ -87,7 +87,7 @@ export class SwarmRosterHydrator {
   private generation = 0;
   private attemptRevision = -1;
   private attempts = 0;
-  private timer: number | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.parentKey}`;

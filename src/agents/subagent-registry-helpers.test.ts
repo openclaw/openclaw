@@ -81,7 +81,7 @@ describe("resolveSubagentArchiveAtMs", () => {
     });
 
     expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
-    expect(entry.completion.capturedAt).toBe(10_000);
+    expect(entry.completion?.capturedAt).toBe(10_000);
     expect(entry.archiveAtMs).toBe(310_000);
     vi.useRealTimers();
   });
