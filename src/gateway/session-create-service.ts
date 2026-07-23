@@ -6,6 +6,7 @@ import {
 import {
   ErrorCodes,
   type ErrorShape,
+  type SessionVisibility,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -70,6 +71,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
+import { isSessionVisibilityAllowed } from "./session-sharing.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
@@ -272,6 +274,7 @@ export async function createGatewaySession(params: {
   model?: string;
   thinkingLevel?: string;
   incognito?: boolean;
+  visibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -323,6 +326,16 @@ export async function createGatewaySession(params: {
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
+  if (params.visibility && !isSessionVisibilityAllowed(params.cfg, params.visibility)) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `session visibility is disabled: ${params.visibility}`,
+        { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility } },
+      ),
+    };
+  }
   if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
     return {
       ok: false,
@@ -615,6 +628,15 @@ export async function createGatewaySession(params: {
     );
     const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
     if (canonicalParentSessionKey === parentMainKey) {
+      if (params.visibility) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "sessions.create visibility requires a new session",
+          ),
+        };
+      }
       const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
       const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
       const execCwd = normalizeOptionalString(params.execCwd);
@@ -782,6 +804,15 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        if (params.visibility && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "sessions.create visibility requires a new session",
+            ),
+          };
+        }
         // Adoption of an existing key must not stamp provenance or emit a
         // `created` event; only a genuinely new row is a node creation.
         createdNewEntry = existingEntry === undefined;
@@ -873,6 +904,7 @@ export async function createGatewaySession(params: {
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
+          ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,

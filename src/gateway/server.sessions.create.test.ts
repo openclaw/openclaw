@@ -555,6 +555,38 @@ function requireNonEmptyString(value: string | undefined, label: string): string
   return value;
 }
 
+test("sessions.create persists draft visibility in the initial session entry", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const created = await directSessionReq<{
+    key: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", visibility: "draft" });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry.visibility).toBe("draft");
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility).toBe(
+    "draft",
+  );
+});
+
+test("sessions.create rejects draft visibility when policy disables drafts", async () => {
+  testState.sessionConfig = { sharing: { drafts: false } };
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    visibility: "draft",
+  });
+
+  expect(created).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "session visibility is disabled: draft",
+      details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
+    },
+  });
+});
+
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-session-worktree-"),
@@ -814,6 +846,27 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   expect(gatewaySession.payload?.entry.execHost).toBeUndefined();
   expect(gatewaySession.payload?.entry.execNode).toBeUndefined();
   expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
+});
+
+test("sessions.create does not apply create-time visibility to an in-place reset", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-existing-main") } });
+
+  const reset = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    visibility: "draft",
+  });
+
+  expect(reset).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "sessions.create visibility requires a new session",
+    },
+  });
 });
 
 test("sessions.create rejects a Gateway worktree targeting a node", async () => {
