@@ -795,6 +795,24 @@ export async function startGatewaySidecars(params: {
 
   schedulePostReadySidecarTask({
     startupTrace: params.startupTrace,
+    name: "sidecars.bundle-mcp-temp-sweep",
+    log: params.log,
+    run: async (isStopped) => {
+      try {
+        const { sweepOrphanedBundleMcpTempDirs } =
+          await import("../agents/cli-runner/bundle-mcp-sweep.js");
+        if (isStopped()) {
+          return;
+        }
+        await sweepOrphanedBundleMcpTempDirs({ log: params.log });
+      } catch (err) {
+        params.log.warn(`bundle MCP temp sweep failed on startup: ${String(err)}`);
+      }
+    },
+  });
+
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
     name: "sidecars.restart-sentinel",
     log: params.log,
     run: async () => {
