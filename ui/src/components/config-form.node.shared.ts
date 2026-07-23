@@ -5,6 +5,7 @@ import { icons } from "../components/icons.ts";
 import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { formatUnknownText } from "../lib/format.ts";
+import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   hasSensitiveConfigData,
   REDACTED_PLACEHOLDER,
@@ -23,7 +24,7 @@ export type ConfigNodeRenderParams = {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
-  searchCriteria?: import("./config-form.search.ts").ConfigSearchCriteria;
+  searchCriteria?: ConfigSearchCriteria;
   revealSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
