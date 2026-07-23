@@ -1027,6 +1027,25 @@ export function createImageTool(options?: {
         // `image:0` (e.g. "first image in the prompt"). We don't have access to a
         // shared image registry here, so fail gracefully instead of attempting to
         // `fs.readFile("image:0")` and producing a noisy ENOENT.
+        //
+        // Some models also generate un-schemed index references like `image_0`,
+        // `image-0`, or `image0` — these have no colon and would otherwise slip
+        // past the unsupported-scheme check and be treated as a relative file path.
+        if (/^(?:image|img)[_\-:]?\d+$/i.test(normalizedRef)) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `The image reference "${imageRawInput}" points to an image already visible in the prompt. You don't need the image tool for this — you can already see and describe the image directly. If you need to load an image from disk, use its file path instead.`,
+              },
+            ],
+            details: {
+              error: "prompt_image_reference",
+              image: imageRawInput,
+            },
+          };
+        }
+
         const refInfo = classifyMediaReferenceSource(normalizedRef);
         const { isDataUrl, isFileUrl, isHttpUrl, isMediaStoreUrl } = refInfo;
         if (refInfo.hasUnsupportedScheme) {
