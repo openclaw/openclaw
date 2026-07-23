@@ -1128,6 +1128,7 @@ describe("web auto-reply connection", () => {
         ingress: { admission: "dispatch", decision: "allow" },
       },
       event: { id: "rich-1" },
+      debounceKey: "custom:rich-message",
       payload: {
         body: "<media:image>",
         media: { path: "/tmp/inbound.jpg", type: "image/jpeg" },
@@ -1147,7 +1148,7 @@ describe("web auto-reply connection", () => {
     });
     expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
       expect.objectContaining({
-        debounceKey: "default:120363@g.us:15550001111@s.whatsapp.net",
+        debounceKey: "custom:rich-message",
         defaultAction: "bypass",
         conversationKind: "group",
         message: { hasMedia: true, hasLocation: false, hasQuote: false },

@@ -41,7 +41,9 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
   return hookRunner
     .runInboundDebounce(
       {
-        debounceKey: `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
+        debounceKey:
+          normalized.debounceKey ??
+          `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
         defaultAction,
         defaultDebounceMs: params.defaultDebounceMs,
         conversationKind: admission.conversation.kind,

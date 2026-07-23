@@ -588,9 +588,11 @@ export async function attachWebInboxToSocket(
     buildKey: (msg) => msg.debounceKey ?? buildInboundDebounceKey(msg),
     shouldDebounce: shouldDebounceInboundMessage,
     resolveDecision: resolveInboundDebounceDecision,
-    // Location is singular structured context, so it cannot be represented safely in a batch.
+    // Location and quote are singular contexts, so they cannot be represented safely in a batch.
     canCombine: (bufferedItems, item) =>
-      !item.payload.location && bufferedItems.every((entry) => !entry.payload.location),
+      !item.payload.location &&
+      !item.quote &&
+      bufferedItems.every((entry) => !entry.payload.location && !entry.quote),
     onFlush: async (entries) => {
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {

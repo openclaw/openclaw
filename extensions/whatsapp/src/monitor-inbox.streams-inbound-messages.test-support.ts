@@ -1128,6 +1128,59 @@ describe("web monitor inbox", () => {
     expect(messages.some((message) => message.payload.body === "after location")).toBe(true);
   });
 
+  it("keeps quote context out of plugin-requested batches", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("plugin-debounce-quote"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "reply",
+              contextInfo: {
+                stanzaId: "quoted-message",
+                participant: "111@s.whatsapp.net",
+                quotedMessage: { conversation: "original" },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-after-quote"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "after quote",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 2);
+
+    await listener.close();
+
+    const messages = onMessage.mock.calls.map((call) => call[0] as WebInboundMessage);
+    expect(messages.find((message) => message.quote)?.quote).toMatchObject({
+      id: "quoted-message",
+      body: "original",
+    });
+    expect(messages.some((message) => message.payload.body === "after quote")).toBe(true);
+  });
+
   it("completes shutdown under a long durable debounce without waiting for the window", async () => {
     // Durable pump tasks await claim flush waiters; close must force-flush
     // debounced batches before waiting on those pumps (socket-close timeout).
