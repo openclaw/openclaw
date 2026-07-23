@@ -35,6 +35,7 @@ import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
+import { redactUngroundedMediaRefs } from "./transcript-grounding.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
   isWithinTranscriptWindow,
@@ -194,10 +195,15 @@ function parseRecentConversationText(
   if (upstreamUserText === null) {
     return undefined;
   }
-  const text =
+  // Assistant text is grounded before replay: a fabricated managed-media path
+  // (model hallucination) must not re-enter later prompts as if it were a real
+  // attachment. User text is only whitespace-trimmed, never redacted.
+  const rawText =
     message.role === "assistant"
       ? extractAssistantVisibleText(message)
       : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
+  const text =
+    message.role === "assistant" && rawText ? redactUngroundedMediaRefs(rawText) : rawText;
   if (!text) {
     return undefined;
   }

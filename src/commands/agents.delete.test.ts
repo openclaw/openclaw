@@ -46,7 +46,10 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayTransportError: gatewayMocks.isGatewayTransportError,
 }));
 
-vi.mock("../infra/fs-safe.js", () => ({
+// Partial mock: config/sessions now reaches media/store.js, whose module graph
+// needs the real isPathInside/readLocalFileSafely bindings at load time.
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
   movePathToTrash: fsSafeMocks.movePathToTrash,
 }));
 
