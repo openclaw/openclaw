@@ -237,10 +237,10 @@ function parseGeminiCliCredentials(
 ): { clientId: string; clientSecret: string } | null {
   const clientId =
     content.match(/OAUTH_CLIENT_ID\s*=\s*["']([^"']+)["']/)?.[1] ??
-    content.match(/(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)/)?.[1];
+    content.match(/\b(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)\b/)?.[1];
   const clientSecret =
     content.match(/OAUTH_CLIENT_SECRET\s*=\s*["']([^"']+)["']/)?.[1] ??
-    content.match(/(GOCSPX-[A-Za-z0-9_-]+)/)?.[1];
+    content.match(/\b(GOCSPX-[A-Za-z0-9_-]+)\b/)?.[1];
   if (!clientId || !clientSecret) {
     return null;
   }
