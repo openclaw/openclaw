@@ -25,7 +25,7 @@ type CronSessionModelOverrides = {
 type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
 
 /** Inputs used to resolve the model for one isolated cron run. */
-export type CronModelSelectionOwner = {
+type CronModelSelectionOwner = {
   config: OpenClawConfig;
   agentId: string;
   agentDir: string;
