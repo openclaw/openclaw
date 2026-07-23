@@ -37,7 +37,7 @@ import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 const INSPECT_THROTTLE_MS = 120;
 const ACTION_REFRESH_DELAY_MS = 350;
 
-export type BrowserPanelMode = "interact" | "annotate" | "inspect";
+type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
 export interface BrowserPanelControllerHost extends ReactiveControllerHost {
   readonly client: GatewayBrowserClient | null;
