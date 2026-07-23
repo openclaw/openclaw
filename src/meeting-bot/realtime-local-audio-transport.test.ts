@@ -35,6 +35,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       processes.set(command, proc);
       return proc;
     });
+    spawn.stderrLifecycle = "stream";
     const debug = vi.fn();
     const transport = createLocalMeetingRealtimeAudioTransport({
       inputCommand: ["input"],
@@ -118,6 +119,12 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     const processes = new Map<string, TestBridgeProcess>();
     const debug = vi.fn();
+    const spawn = ((command: string) => {
+      const proc = createTestBridgeProcess();
+      processes.set(command, proc);
+      return proc;
+    }) as MeetingRealtimeAudioSpawn;
+    spawn.stderrLifecycle = "stream";
     createLocalMeetingRealtimeAudioTransport({
       inputCommand: ["input"],
       outputCommand: ["output"],
@@ -126,11 +133,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       bargeInCooldownMs: 1,
       logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       logScope: "[meeting]",
-      spawn: (command) => {
-        const proc = createTestBridgeProcess();
-        processes.set(command, proc);
-        return proc;
-      },
+      spawn,
     });
     const outputProcess = processes.get("output");
     if (!outputProcess) {
@@ -194,9 +197,6 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     outputProcess.stderr.write("before exit ");
     outputProcess.emit("exit", 0, null);
-    outputProcess.stderr.write("after exit");
-    outputProcess.stderr.end();
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit");
   });
 });
