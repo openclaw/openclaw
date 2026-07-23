@@ -141,6 +141,35 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     );
   });
 
+  it("imports a shared workspace file into every agent monitor before removing it", async () => {
+    const fixture = await createFixture();
+    const cfg = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [
+          { id: "main", workspace: fixture.workspace },
+          { id: "ops", workspace: fixture.workspace },
+        ],
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(fixture.heartbeatPath, "shared checklist\n", "utf8");
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(2);
+    await expect(fs.access(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const storePath = resolveCronJobsStorePath();
+    const store = await loadCronJobsStore(storePath);
+    for (const agentId of ["main", "ops"]) {
+      const monitor = store.jobs.find((job) => heartbeatMonitorAgentId(job) === agentId);
+      expect(monitor, agentId).toBeDefined();
+      expect(readCronJobScratchState(storePath, monitor!.id).scratch?.content, agentId).toBe(
+        "shared checklist\n",
+      );
+    }
+  });
+
   it("rejects external symlink targets without importing or removing them", async () => {
     const fixture = await createFixture();
     const external = path.join(fixture.root, "outside.md");

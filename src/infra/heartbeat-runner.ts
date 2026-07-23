@@ -1,5 +1,8 @@
 // Runs heartbeat checks and emits status updates for configured agents.
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { TextDecoder } from "node:util";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -10,12 +13,18 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
+import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
@@ -88,8 +97,9 @@ import {
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import { readHeartbeatMonitorScratch, writeCronJobScratch } from "../cron/scratch-store.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
@@ -879,7 +889,10 @@ async function resolveHeartbeatPreflight(params: {
     hasTaggedCronEvents;
   let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
   try {
-    monitorScratch = readHeartbeatMonitorScratch(resolveCronJobsStorePath(), params.agentId);
+    monitorScratch = readHeartbeatMonitorScratch(
+      resolveCronJobsStorePathFromConfig(params.cfg),
+      params.agentId,
+    );
   } catch (error) {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
@@ -1814,7 +1827,7 @@ export async function runHeartbeatOnce(opts: {
       } else {
         try {
           const scratchWrite = writeCronJobScratch({
-            storePath: resolveCronJobsStorePath(),
+            storePath: resolveCronJobsStorePathFromConfig(cfg),
             jobId: preflight.scratchJobId,
             content: heartbeatScratchProposal,
             expectedRevision: preflight.scratchRevision ?? 0,

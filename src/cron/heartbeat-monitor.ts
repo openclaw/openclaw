@@ -37,6 +37,10 @@ export function resolveHeartbeatMonitorSpecs(
 
   const schedulerSeed = resolveHeartbeatSchedulerSeed();
   return resolveHeartbeatAgents(cfg).flatMap((agent) => {
+    // Unset config already resolves to the 30m default here, so this is null
+    // only for an explicitly disabled cadence ("0m"/invalid). The fallbacks
+    // below therefore only shape the retained disabled monitor row; removing an
+    // interval override or re-enabling always returns to the resolved config.
     const configuredIntervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
     const existing = existingByAgentId.get(agent.agentId);
     const intervalMs =

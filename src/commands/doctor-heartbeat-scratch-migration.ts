@@ -18,7 +18,7 @@ import {
 import { CronService } from "../cron/service.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
-  resolveCronJobsStorePath,
+  resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -184,7 +184,7 @@ function migrationFinding(params: {
 export async function collectHeartbeatScratchMigrationFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const storePath = resolveCronJobsStorePath();
+  const storePath = resolveCronJobsStorePathFromConfig(cfg);
   const existingJobs = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs;
   const findings: HealthFinding[] = [];
   for (const spec of resolveHeartbeatMonitorSpecs(cfg, existingJobs)) {
@@ -227,7 +227,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<HeartbeatScratchMigrationResult> {
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(undefined, env);
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const changes: string[] = [];
   const warnings: string[] = [];
   if (!params.shouldRepair) {
@@ -263,6 +263,10 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     };
   }
 
+  // Agents can share one workspace file. Group monitors by source path and
+  // import into every monitor before the file is archived and removed once, so
+  // the first agent's cleanup cannot starve its siblings.
+  const groups = new Map<string, { source: HeartbeatSource; agents: [string, CronJob][] }>();
   for (const [agentId, monitor] of monitors) {
     let source: HeartbeatSource | undefined;
     try {
@@ -274,46 +278,63 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     if (!source) {
       continue;
     }
-    const state = readCronJobScratchState(storePath, monitor.id, { env });
-    const current = state.scratch;
-    if (current && current.content !== source.content && current.sourceSha256 !== source.sha256) {
-      warnings.push(
-        `Agent "${agentId}" already has different cron scratch; ${shortenHomePath(source.path)} was left unchanged.`,
-      );
+    const group = groups.get(source.path) ?? { source, agents: [] };
+    group.agents.push([agentId, monitor]);
+    groups.set(source.path, group);
+  }
+
+  for (const { source, agents } of groups.values()) {
+    let importedAll = true;
+    for (const [agentId, monitor] of agents) {
+      const state = readCronJobScratchState(storePath, monitor.id, { env });
+      const current = state.scratch;
+      if (current && current.content !== source.content && current.sourceSha256 !== source.sha256) {
+        warnings.push(
+          `Agent "${agentId}" already has different cron scratch; ${shortenHomePath(source.path)} was left unchanged.`,
+        );
+        importedAll = false;
+        continue;
+      }
+      try {
+        if (current?.sourceSha256 !== source.sha256) {
+          const write = writeCronJobScratch({
+            storePath,
+            jobId: monitor.id,
+            content: source.content,
+            expectedRevision: state.currentRevision,
+            sourceSha256: source.sha256,
+            options: { env },
+          });
+          if (!write.ok) {
+            throw new Error("scratch changed during migration");
+          }
+        }
+        const verified = readCronJobScratchState(storePath, monitor.id, { env }).scratch;
+        if (
+          !verified ||
+          verified.content !== source.content ||
+          verified.sourceSha256 !== source.sha256
+        ) {
+          throw new Error("scratch verification failed after write");
+        }
+        changes.push(
+          `Migrated ${shortenHomePath(source.path)} into cron scratch for ${monitor.displayName ?? monitor.name}.`,
+        );
+      } catch (error) {
+        warnings.push(
+          `Agent "${agentId}" scratch was not finalized: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+        );
+        importedAll = false;
+      }
+    }
+    if (!importedAll) {
       continue;
     }
     try {
-      if (current?.sourceSha256 !== source.sha256) {
-        const write = writeCronJobScratch({
-          storePath,
-          jobId: monitor.id,
-          content: source.content,
-          expectedRevision: state.currentRevision,
-          sourceSha256: source.sha256,
-          options: { env },
-        });
-        if (!write.ok) {
-          warnings.push(
-            `Agent "${agentId}" scratch changed during migration; ${shortenHomePath(source.path)} was left unchanged.`,
-          );
-          continue;
-        }
-      }
-      const verified = readCronJobScratchState(storePath, monitor.id, { env }).scratch;
-      if (
-        !verified ||
-        verified.content !== source.content ||
-        verified.sourceSha256 !== source.sha256
-      ) {
-        throw new Error("scratch verification failed after write");
-      }
-      await archiveAndRemoveSource({ cfg: params.cfg, agentId, source, env });
-      changes.push(
-        `Migrated ${shortenHomePath(source.path)} into cron scratch for ${monitor.displayName ?? monitor.name}.`,
-      );
+      await archiveAndRemoveSource({ cfg: params.cfg, agentId: agents[0]![0], source, env });
     } catch (error) {
       warnings.push(
-        `Agent "${agentId}" scratch was not finalized: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+        `${shortenHomePath(source.path)} was migrated but not removed: ${errorMessage(error)}. Rerun doctor to retry safely.`,
       );
     }
   }
