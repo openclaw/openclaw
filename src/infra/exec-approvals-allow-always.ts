@@ -8,7 +8,7 @@ import {
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
-import { type ExecApprovalsFile } from "./exec-approvals-core.js";
+import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { replaceExecApprovalsSnapshot, updateExecApprovalsSync } from "./exec-approvals-store.js";
 import { resolveExecApprovalsFromFile } from "./exec-approvals.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
