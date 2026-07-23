@@ -351,6 +351,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     void config.refresh({
       auth: {
         hello: snapshot.hello,
+        deviceToken: snapshot.deviceToken,
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       },

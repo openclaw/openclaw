@@ -3,6 +3,10 @@ import { normalizeOptionalString, uniqueStrings } from "../lib/string-coerce.ts"
 
 type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
+  // WS-resolved device token surfaced from the live connection. The server
+  // omits `hello.auth.deviceToken` on already-authorized reconnects, so this
+  // is the only Bearer candidate that survives a reconnect without rotation.
+  deviceToken?: string | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
 };
@@ -24,6 +28,7 @@ function sanitizeHeaderToken(value: string | null): string | null {
 export function resolveControlUiAuthToken(source: ControlUiAuthSource): string | null {
   return (
     sanitizeHeaderToken(normalizeOptionalString(source.hello?.auth?.deviceToken) ?? null) ??
+    sanitizeHeaderToken(normalizeOptionalString(source.deviceToken) ?? null) ??
     sanitizeHeaderToken(normalizeOptionalString(source.settings?.token) ?? null) ??
     sanitizeHeaderToken(normalizeOptionalString(source.password) ?? null) ??
     null
@@ -43,6 +48,7 @@ export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): str
   return uniqueStrings(
     [
       normalizeOptionalString(source.hello?.auth?.deviceToken),
+      normalizeOptionalString(source.deviceToken),
       normalizeOptionalString(source.settings?.token),
       normalizeOptionalString(source.password),
     ].flatMap((raw) => sanitizeHeaderToken(raw ?? null) ?? []),

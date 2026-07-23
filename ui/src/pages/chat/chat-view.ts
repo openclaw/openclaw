@@ -179,6 +179,7 @@ export type ChatProps = {
   userName?: string | null;
   userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
+  localMediaPreviewRootsLoaded?: boolean;
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
@@ -362,6 +363,7 @@ export function renderChat(props: ChatProps) {
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
+      localMediaPreviewRootsLoaded: props.localMediaPreviewRootsLoaded,
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode,

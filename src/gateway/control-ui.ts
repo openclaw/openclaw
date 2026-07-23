@@ -19,10 +19,8 @@ import {
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
-import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
-import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
@@ -38,11 +36,7 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
-import {
-  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  type AuthRateLimiter,
-} from "./auth-rate-limit.js";
+import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
@@ -52,6 +46,7 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
+import { authorizeControlUiDeviceReadTokenRequest } from "./control-ui-device-read-token.js";
 import {
   isReadHttpMethod,
   respondNotFound as respondControlUiNotFound,
@@ -92,8 +87,6 @@ const CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE = "assistant-media";
 const CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS = 5 * 60 * 1000;
 const CONTROL_UI_ASSETS_MISSING_MESSAGE =
   "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
-const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
-const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
 type ControlUiRequestOptions = {
@@ -312,27 +305,22 @@ async function authorizeControlUiReadRequest(
     opts.auth.mode !== "trusted-proxy" &&
     opts.auth.mode !== "none"
   ) {
-    const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-    if (deviceRateCheck && !deviceRateCheck.allowed) {
+    const deviceAuth = await authorizeControlUiDeviceReadTokenRequest({
+      token,
+      requiredSharedGatewaySessionGeneration: sharedAuthGeneration,
+      rateLimiter: opts.rateLimiter,
+      clientIp,
+    });
+    if (deviceAuth.ok) {
+      verifiedDeviceScopes = deviceAuth.scopes;
+      resolvedAuthResult = { ok: true, method: "device-token" };
+    } else if (deviceAuth.rateLimited) {
       resolvedAuthResult = {
         ok: false,
         reason: "rate_limited",
         rateLimited: true,
-        retryAfterMs: deviceRateCheck.retryAfterMs,
+        retryAfterMs: deviceAuth.retryAfterMs,
       };
-    } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, sharedAuthGeneration);
-      const deviceScopes = deviceTokenOk
-        ? await resolveControlUiDeviceReadTokenScopes(token)
-        : null;
-      if (deviceScopes) {
-        verifiedDeviceScopes = deviceScopes;
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-        opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
-        resolvedAuthResult = { ok: true, method: "device-token" };
-      } else {
-        opts.rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-      }
     }
   }
   if (!resolvedAuthResult.ok) {
@@ -371,48 +359,6 @@ async function authorizeControlUiReadRequest(
   }
 
   return true;
-}
-
-async function authorizeControlUiDeviceReadToken(
-  token: string,
-  requiredSharedGatewaySessionGeneration: string | undefined,
-): Promise<boolean> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (!operatorToken || operatorToken.revokedAtMs) {
-      continue;
-    }
-    if (!verifyPairingToken(token, operatorToken.token)) {
-      continue;
-    }
-    const verified = await verifyDeviceToken({
-      deviceId: device.deviceId,
-      token,
-      role: CONTROL_UI_OPERATOR_ROLE,
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration,
-    });
-    if (verified.ok) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function resolveControlUiDeviceReadTokenScopes(token: string): Promise<string[] | null> {
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    const operatorBearer = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
-    if (
-      operatorBearer &&
-      !operatorBearer.revokedAtMs &&
-      verifyPairingToken(token, operatorBearer.token)
-    ) {
-      return operatorBearer.scopes;
-    }
-  }
-  return null;
 }
 
 type AssistantMediaAvailability =

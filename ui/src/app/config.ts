@@ -12,6 +12,7 @@ import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 type ApplicationConfigAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
+  deviceToken?: string | null;
   settings?: { token?: string | null } | null;
   password?: string | null;
 };
@@ -41,6 +42,10 @@ type ApplicationConfig = {
   serverVersion: string | null;
   devGitBranch: string | null;
   localMediaPreviewRoots: string[];
+  // Distinguishes "roots not fetched yet / auth failed" from "fetched, empty".
+  // Only a successful config fetch flips this true, so the chat attachment UI
+  // can avoid reporting local files as out-of-roots when roots are unknown.
+  localMediaPreviewRootsLoaded: boolean;
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth: string | null;
@@ -78,6 +83,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   serverVersion: null,
   devGitBranch: null,
   localMediaPreviewRoots: [],
+  localMediaPreviewRootsLoaded: false,
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   chatMessageMaxWidth: null,
@@ -150,6 +156,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     localMediaPreviewRoots: Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
       : [],
+    localMediaPreviewRootsLoaded: true,
     embedSandboxMode:
       parsed.embedSandbox === "trusted"
         ? "trusted"

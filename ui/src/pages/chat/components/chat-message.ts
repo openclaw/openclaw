@@ -838,6 +838,7 @@ type RenderMessageGroupOptions = {
   showAvatarGutter?: boolean;
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
+  localMediaPreviewRootsLoaded?: boolean;
   assistantAttachmentAuthToken?: string | null;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -893,6 +894,7 @@ function buildGroupedMessageRenderOptions(
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    localMediaPreviewRootsLoaded: opts.localMediaPreviewRootsLoaded,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
@@ -1657,9 +1659,12 @@ function resolveRenderableMessageImages(
       return [];
     }
     const availability = canProxyLocalImage
-      ? resolveAssistantAttachmentAvailability(
+      ? // canProxyLocalImage already confirmed the source is within loaded,
+        // allowed roots, so the availability pre-check is known to pass here.
+        resolveAssistantAttachmentAvailability(
           img.url,
           opts?.localMediaPreviewRoots ?? [],
+          true,
           opts?.basePath,
           opts?.authToken,
           opts?.onRequestUpdate,
@@ -2128,6 +2133,7 @@ function scheduleAssistantAttachmentRefresh(
 function resolveAssistantAttachmentAvailability(
   source: string,
   localMediaPreviewRoots: readonly string[],
+  rootsLoaded: boolean,
   basePath: string | undefined,
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
@@ -2135,7 +2141,11 @@ function resolveAssistantAttachmentAvailability(
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
+  // Only apply the client-side roots pre-check once roots are actually known.
+  // Before then (config never fetched, e.g. auth failure) the empty list is not
+  // evidence a file is out of bounds; defer to the server meta fetch, which
+  // returns an accurate reason instead of a misleading "outside folders" chip.
+  if (rootsLoaded && !isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
@@ -2264,6 +2274,7 @@ function renderAssistantAttachmentStatusCard(params: {
 function renderAssistantAttachments(
   attachments: AttachmentItem[],
   localMediaPreviewRoots: readonly string[],
+  rootsLoaded: boolean,
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
@@ -2280,6 +2291,7 @@ function renderAssistantAttachments(
         const availability = resolveAssistantAttachmentAvailability(
           attachment.url,
           localMediaPreviewRoots,
+          rootsLoaded,
           basePath,
           authToken,
           onRequestUpdate,
@@ -2724,6 +2736,7 @@ function renderGroupedMessage(
     canvasPluginSurfaceUrl?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
+    localMediaPreviewRootsLoaded?: boolean;
     assistantAttachmentAuthToken?: string | null;
     onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
@@ -2960,6 +2973,7 @@ function renderGroupedMessage(
                       ${renderAssistantAttachments(
                         visibleAttachments,
                         opts.localMediaPreviewRoots ?? [],
+                        opts.localMediaPreviewRootsLoaded ?? false,
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
@@ -3026,6 +3040,7 @@ function renderGroupedMessage(
             ${renderAssistantAttachments(
               visibleAttachments,
               opts.localMediaPreviewRoots ?? [],
+              opts.localMediaPreviewRootsLoaded ?? false,
               opts.basePath,
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,

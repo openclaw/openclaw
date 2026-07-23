@@ -77,6 +77,7 @@ export class SessionParticipationTracker {
 
 export function resolveAssistantAttachmentAuthToken(state: {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
+  deviceToken?: string | null;
   password?: string | null;
   settings?: { token?: string | null } | null;
 }) {

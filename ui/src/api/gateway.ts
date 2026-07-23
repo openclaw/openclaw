@@ -173,7 +173,7 @@ export type GatewayBrowserClientOptions = {
   platform?: string;
   mode?: GatewayClientMode;
   instanceId?: string;
-  onHello?: (hello: GatewayHelloOk) => void;
+  onHello?: (hello: GatewayHelloOk, resolvedDeviceToken: string | null) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: {
     code: number;
@@ -301,6 +301,10 @@ export class GatewayBrowserClient {
   inboundActivitySeq = 0;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  // The device token that actually authenticated the live socket. Captured at
+  // connect-hello (before onHello) so it can be surfaced as an HTTP Bearer
+  // candidate even when the server omits a rotated token on reconnect.
+  private resolvedDeviceToken: string | null = null;
   private readonly recoveryScopeTracker = new GatewayRecoveryScopeTracker();
 
   constructor(private opts: GatewayBrowserClientOptions) {
@@ -318,7 +322,7 @@ export class GatewayBrowserClient {
       buildConnectPlan: ({ nonce, generation }) => this.buildConnectPlan(nonce, generation),
       buildConnectParams: (plan) => plan.params,
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
-      onHello: (hello) => this.opts.onHello?.(hello),
+      onHello: (hello) => this.opts.onHello?.(hello, this.resolvedDeviceToken),
       onConnectFailure: (error, context) => {
         this.client.recordTiming("failed", context.generation, context.plan, {
           errorCode: error.code,
@@ -491,6 +495,10 @@ export class GatewayBrowserClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.opts.bootstrapToken = undefined;
+    // Prefer a freshly rotated token; otherwise fall back to the stored token
+    // that authenticated this socket. Either way HTTP fetches get a live Bearer.
+    this.resolvedDeviceToken =
+      hello?.auth?.deviceToken ?? plan.selectedAuth.resolvedDeviceToken ?? null;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,

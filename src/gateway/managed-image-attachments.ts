@@ -19,9 +19,17 @@ import {
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
+import { authorizeControlUiDeviceReadTokenRequest } from "./control-ui-device-read-token.js";
 import {
-  authorizeGatewayHttpRequestOrReply,
+  sendGatewayAuthFailure,
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} from "./http-common.js";
+import {
+  type AuthorizedGatewayHttpRequest,
+  checkGatewayHttpRequestAuth,
+  getBearerToken,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
@@ -36,6 +44,8 @@ import {
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { resolveRequestClientIp } from "./net.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
   loadSessionEntryReadOnly,
@@ -1027,6 +1037,69 @@ function safeAttachmentFilename(value: string | null) {
   return base || fallback;
 }
 
+type ManagedOutgoingImageRequestAuth =
+  | { kind: "shared-secret"; requestAuth: AuthorizedGatewayHttpRequest }
+  | { kind: "device-read" };
+
+// The managed outgoing-image route is a Control UI read surface: webchat tabs
+// authenticate by device pairing, so accept the same paired operator.read
+// device token control-ui.ts honors before rejecting a failed shared-secret
+// attempt. On failure the response is already sent and null is returned.
+async function authorizeManagedOutgoingImageHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: {
+    auth: ResolvedGatewayAuth;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+  },
+): Promise<ManagedOutgoingImageRequestAuth | null> {
+  const authCheck = await checkGatewayHttpRequestAuth({
+    req,
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
+  });
+  if (authCheck.ok) {
+    return { kind: "shared-secret", requestAuth: authCheck.requestAuth };
+  }
+
+  const token = getBearerToken(req);
+  if (!token || opts.auth.mode === "trusted-proxy" || opts.auth.mode === "none") {
+    sendGatewayAuthFailure(res, authCheck.authResult);
+    return null;
+  }
+
+  const clientIp =
+    resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
+    req.socket?.remoteAddress;
+  const deviceAuth = await authorizeControlUiDeviceReadTokenRequest({
+    token,
+    requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
+      opts.auth,
+      opts.trustedProxies,
+    ),
+    rateLimiter: opts.rateLimiter,
+    clientIp,
+  });
+  if (deviceAuth.ok) {
+    return { kind: "device-read" };
+  }
+  if (deviceAuth.rateLimited) {
+    sendGatewayAuthFailure(res, {
+      ok: false,
+      reason: "rate_limited",
+      rateLimited: true,
+      retryAfterMs: deviceAuth.retryAfterMs,
+    });
+    return null;
+  }
+  sendGatewayAuthFailure(res, authCheck.authResult);
+  return null;
+}
+
 export async function handleManagedOutgoingImageHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1049,23 +1122,22 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
-    req,
-    res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
-  });
+  const requestAuth = await authorizeManagedOutgoingImageHttpRequest(req, res, opts);
   if (!requestAuth) {
     return true;
   }
 
-  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(res, scopeAuth.missingScope);
-    return true;
+  // Shared-secret callers self-declare operator scopes, so keep the chat.history
+  // scope gate for them. A paired device read token is already an authenticated
+  // operator.read credential (verified above), matching how control-ui.ts treats
+  // device reads, so it needs no additional operator-scope assertion.
+  if (requestAuth.kind === "shared-secret") {
+    const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth.requestAuth);
+    const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
+    if (!scopeAuth.allowed) {
+      sendMissingScopeForbidden(res, scopeAuth.missingScope);
+      return true;
+    }
   }
 
   const encodedSessionKey = match[1];
@@ -1089,9 +1161,14 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  // Requester-session headers are client-declared, so media bytes require
-  // authenticated owner/admin context rather than trusting a URL-scoped header.
-  if (!resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
+  // Requester-session headers are client-declared, so shared-secret media bytes
+  // require authenticated owner/admin context rather than trusting a URL-scoped
+  // header. A paired device read token is the control-ui read credential itself,
+  // so it satisfies the read the same way the sibling control-ui read path does.
+  if (
+    requestAuth.kind === "shared-secret" &&
+    !resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth.requestAuth)
+  ) {
     sendJson(res, 403, {
       ok: false,
       error: {

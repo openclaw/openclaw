@@ -2975,6 +2975,7 @@ describe("grouped chat rendering", () => {
           basePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
+          localMediaPreviewRootsLoaded: true,
           onRequestUpdate: renderMessage,
         },
       );
@@ -3027,6 +3028,7 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           basePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
+          localMediaPreviewRootsLoaded: true,
           onRequestUpdate: rerender,
         },
       );
@@ -3080,6 +3082,7 @@ describe("grouped chat rendering", () => {
           basePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
+          localMediaPreviewRootsLoaded: true,
           onRequestUpdate: rerender,
         },
       );
@@ -3131,6 +3134,7 @@ describe("grouped chat rendering", () => {
           basePath: "/openclaw",
           assistantAttachmentAuthToken: token,
           localMediaPreviewRoots: ["/tmp/openclaw"],
+          localMediaPreviewRootsLoaded: true,
           onRequestUpdate: () => renderWithToken(token),
         },
       );
@@ -3174,6 +3178,7 @@ describe("grouped chat rendering", () => {
           showToolCalls: false,
           basePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
+          localMediaPreviewRootsLoaded: true,
           onRequestUpdate: rerender,
         },
       );
@@ -3237,6 +3242,7 @@ describe("grouped chat rendering", () => {
         showToolCalls: false,
         basePath: "/openclaw",
         localMediaPreviewRoots: ["/tmp/openclaw"],
+        localMediaPreviewRootsLoaded: true,
       },
     );
 
@@ -3249,6 +3255,44 @@ describe("grouped chat rendering", () => {
       blocked?.querySelector(".chat-assistant-attachment-card__reason")?.textContent?.trim(),
     ).toBe("Outside allowed folders");
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Blocked\nDone");
+  });
+
+  it("defers to server meta fetch (no outside-folders chip) when roots never loaded", async () => {
+    const source = "/Users/test/Documents/private.pdf";
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toContain("meta=1");
+      // A failed/401 meta fetch maps to the generic reason, never the
+      // misleading "Outside allowed folders" chip.
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer device-token");
+      return { ok: false, status: 401, json: async () => null };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-roots-unloaded-local-media",
+        role: "assistant",
+        content: `Blocked\nMEDIA:${source}\nDone`,
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        assistantAttachmentAuthToken: "device-token",
+        localMediaPreviewRoots: [],
+        localMediaPreviewRootsLoaded: false,
+      },
+    );
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&meta=1`;
+    const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
+    expectSameOriginGet(fetchInit);
+    const blocked = container.querySelector(".chat-assistant-attachment-card--blocked");
+    expect(
+      blocked?.querySelector(".chat-assistant-attachment-card__reason")?.textContent?.trim(),
+    ).not.toBe("Outside allowed folders");
   });
 
   it("renders transcript video URLs with encoded extensions", () => {
@@ -3291,6 +3335,7 @@ describe("grouped chat rendering", () => {
           basePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
+          localMediaPreviewRootsLoaded: true,
           onRequestUpdate: rerender,
         });
       rerender();

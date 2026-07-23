@@ -1,5 +1,6 @@
 // Managed image attachment tests cover storage, HTTP serving, cleanup, and
 // operator authorization for generated image artifacts attached to gateway replies.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -10,6 +11,11 @@ import {
   createSolidPngBuffer,
 } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  approveDevicePairing,
+  ensureDeviceToken,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -19,10 +25,19 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
-const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
+const checkGatewayHttpRequestAuthMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
+const getBearerTokenMock = vi.fn((req: http.IncomingMessage): string | undefined => {
+  const raw = req.headers.authorization;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || !value.toLowerCase().startsWith("bearer ")) {
+    return undefined;
+  }
+  return value.slice(7).trim() || undefined;
+});
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const resolveSessionHistoryTranscriptPathMock = vi.fn();
@@ -34,7 +49,8 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
+  checkGatewayHttpRequestAuth: checkGatewayHttpRequestAuthMock,
+  getBearerToken: getBearerTokenMock,
   resolveOpenAiCompatibleHttpOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopesMock,
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
@@ -164,19 +180,20 @@ async function requestManagedImage(params: {
   scopes?: string[];
   denyAuth?: boolean;
   authResponse?: Record<string, unknown>;
+  auth?: Record<string, unknown>;
   headers?: Record<string, string>;
   transcriptMessages?: Record<string, unknown>[];
   sessionEntry?: { sessionId: string; sessionFile?: string };
   resolvedTranscriptPath?: string | null;
   onReadTranscriptMessages?: () => Promise<void> | void;
 }) {
-  authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) => {
+  // `denyAuth` fails the shared-secret check; the handler then either rejects
+  // (no bearer token) or attempts the paired device-read-token fallback.
+  checkGatewayHttpRequestAuthMock.mockImplementation(async () => {
     if (params.denyAuth) {
-      res.statusCode = 401;
-      res.end();
-      return null;
+      return { ok: false, authResult: { ok: false, reason: "token_mismatch" } };
     }
-    return { ok: true, ...params.authResponse };
+    return { ok: true, requestAuth: { ...params.authResponse } };
   });
   resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
   resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockImplementation((_req, requestAuth) => {
@@ -214,7 +231,7 @@ async function requestManagedImage(params: {
     );
   });
 
-  const auth = { mode: "test" } as never;
+  const auth = (params.auth ?? { mode: "test" }) as never;
   const server = http.createServer((req, res) => {
     void (async () => {
       const handled = await handleManagedOutgoingImageHttpRequest(req, res, {
@@ -269,6 +286,45 @@ async function requestManagedImage(params: {
       server.close((error) => (error ? reject(error) : resolve()));
     });
   }
+}
+
+// Pair an operator.read device under an isolated OPENCLAW_HOME so the real
+// device-read-token fallback resolves a genuine paired token, matching the
+// credential a control-ui webchat tab holds.
+async function withPairedOperatorDevice(
+  options: { issuerGeneration?: string; browserMetadata?: boolean },
+  fn: (token: string) => Promise<void>,
+) {
+  const home = tempDirs.make("managed-image-device-home-");
+  await withEnvAsync({ OPENCLAW_HOME: home }, async () => {
+    const deviceId = `managed-image-device-${randomUUID()}`;
+    const requested = await requestDevicePairing({
+      deviceId,
+      publicKey: "test-public-key",
+      role: "operator",
+      scopes: ["operator.read"],
+      ...(options.browserMetadata
+        ? { clientId: "openclaw-control-ui", clientMode: "webchat" }
+        : {}),
+    });
+    const approved = await approveDevicePairing(requested.request.requestId, {
+      callerScopes: ["operator.read"],
+    });
+    expect(approved?.status).toBe("approved");
+    let token =
+      approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+    if (options.issuerGeneration) {
+      const issued = await ensureDeviceToken({
+        deviceId,
+        role: "operator",
+        scopes: ["operator.read"],
+        issuer: { kind: "shared-gateway-auth", generation: options.issuerGeneration },
+      });
+      token = issued?.token;
+    }
+    expect(typeof token).toBe("string");
+    await fn(token ?? "");
+  });
 }
 
 describe("resolveManagedImageAttachmentLimits", () => {
@@ -407,7 +463,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(401);
-    expect(result.body.byteLength).toBe(0);
+    expect(result.body.toString("utf-8")).not.toContain("original-image");
   });
 
   it("rejects non-owner trusted-proxy requests with self-declared session ownership", async () => {
@@ -423,17 +479,78 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(403);
   });
 
-  it("rejects device-token access with self-declared session ownership", async () => {
+  it("serves images to a paired control-ui operator read token", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const auth = { mode: "token", token: `shared-secret-${randomUUID()}` };
+    const generation = resolveSharedGatewaySessionGeneration(auth as never);
 
-    const { result } = await requestManagedImage({
-      stateDir,
-      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
-      authResponse: { authMethod: "device-token" },
-      headers: { "x-openclaw-requester-session-key": sessionKey },
+    await withPairedOperatorDevice({ issuerGeneration: generation }, async (token) => {
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+        auth,
+        denyAuth: true,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(result.statusCode).toBe(200);
+      expect(result.body.toString("utf-8")).toBe("original-image");
     });
+  });
 
-    expect(result.statusCode).toBe(403);
+  it("rejects a device read token issued for a stale gateway generation", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const auth = { mode: "token", token: `shared-secret-${randomUUID()}` };
+
+    await withPairedOperatorDevice({ issuerGeneration: "stale-generation" }, async (token) => {
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+        auth,
+        denyAuth: true,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(result.statusCode).toBe(401);
+      expect(result.body.toString("utf-8")).not.toContain("original-image");
+    });
+  });
+
+  it("rejects a legacy issuer-less browser device token", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const auth = { mode: "token", token: `shared-secret-${randomUUID()}` };
+
+    await withPairedOperatorDevice({ browserMetadata: true }, async (token) => {
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+        auth,
+        denyAuth: true,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+      expect(result.statusCode).toBe(401);
+      expect(result.body.toString("utf-8")).not.toContain("original-image");
+    });
+  });
+
+  it("rejects an unpaired bearer token when the shared secret fails", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const auth = { mode: "token", token: `shared-secret-${randomUUID()}` };
+
+    // Pair a real device but present a bearer token that matches no device.
+    await withPairedOperatorDevice({}, async () => {
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+        auth,
+        denyAuth: true,
+        headers: { authorization: `Bearer not-a-paired-token` },
+      });
+
+      expect(result.statusCode).toBe(401);
+      expect(result.body.toString("utf-8")).not.toContain("original-image");
+    });
   });
 
   it("serves owner trusted-proxy requests with admin scope", async () => {
@@ -469,7 +586,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const { result } = await requestManagedImage({
       stateDir,
       pathName: `/api/chat/media/outgoing/%E0%A4%A/${attachmentId}/full`,
-      authResponse: { authMethod: "device-token" },
+      authResponse: { authMethod: "token" },
     });
 
     expect(result.statusCode).toBe(404);

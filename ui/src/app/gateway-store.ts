@@ -58,6 +58,7 @@ export function createApplicationGateway(
     phase: "stopped",
     offlineStable: false,
     hello: null,
+    deviceToken: null,
     assistantAgentId: "main",
     sessionKey: settings.sessionKey,
     lastError: null,
@@ -209,7 +210,7 @@ export function createApplicationGateway(
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       mode: "webchat",
       instanceId: generateUUID(),
-      onHello: (hello: GatewayHelloOk) => {
+      onHello: (hello: GatewayHelloOk, resolvedDeviceToken: string | null) => {
         if (client !== nextClient) {
           return;
         }
@@ -235,6 +236,7 @@ export function createApplicationGateway(
           client: nextClient,
           phase: "connected",
           hello,
+          deviceToken: resolvedDeviceToken,
           assistantAgentId: sessionDefaults?.defaultAgentId ?? "main",
           sessionKey,
           lastError: null,
@@ -266,6 +268,7 @@ export function createApplicationGateway(
               ? "connecting"
               : "stopped",
           hello: null,
+          deviceToken: null,
           selfUser: null,
           lastError: error?.message ?? `disconnected (${code}): ${reason || "no reason"}`,
           lastErrorCode: error?.code ?? null,
@@ -293,6 +296,7 @@ export function createApplicationGateway(
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
       hello: null,
+      deviceToken: null,
       selfUser: null,
       sessionKey: nextSessionKey,
       lastError: null,
@@ -338,6 +342,7 @@ export function createApplicationGateway(
         phase: "stopped",
         offlineStable: false,
         hello: null,
+        deviceToken: null,
         selfUser: null,
         lastError: null,
         lastErrorCode: null,
