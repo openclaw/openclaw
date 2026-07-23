@@ -8,7 +8,6 @@ import {
 } from "./exec-wrapper-resolution.js";
 import {
   NUSHELL_INLINE_COMMAND_FLAGS,
-  NUSHELL_OPTIONS_WITH_SEPARATE_VALUES,
   POSIX_INLINE_COMMAND_FLAGS,
   isPowerShellInlineRestCommandFlag,
   resolveInlineCommandMatch,
@@ -104,7 +103,6 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
           wrapper === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS,
           {
             allowCombinedC: true,
-            valueOptions: wrapper === "nu" ? NUSHELL_OPTIONS_WITH_SEPARATE_VALUES : undefined,
           },
         ).valueTokenIndex;
   if (inlineCommandIndex === null) {

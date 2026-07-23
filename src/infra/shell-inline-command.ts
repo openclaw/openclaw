@@ -15,16 +15,6 @@ export const NUSHELL_INLINE_COMMAND_FLAGS = new Set([
   "-e",
   "--execute",
 ]);
-export const NUSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
-  "-m",
-  "-t",
-  "--config",
-  "--env-config",
-  "--log-level",
-  "--table-mode",
-  "--testbin",
-  "--threads",
-]);
 
 function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
   const forms: string[] = [];

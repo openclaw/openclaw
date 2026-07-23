@@ -12,7 +12,6 @@ import {
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
   NUSHELL_INLINE_COMMAND_FLAGS,
-  NUSHELL_OPTIONS_WITH_SEPARATE_VALUES,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
@@ -241,7 +240,6 @@ function extractPosixShellInlineCommand(argv: string[], baseExecutable: string):
   if (baseExecutable === "nu") {
     return extractInlineCommandByFlags(argv, NUSHELL_INLINE_COMMAND_FLAGS, {
       allowCombinedC: true,
-      valueOptions: NUSHELL_OPTIONS_WITH_SEPARATE_VALUES,
     });
   }
   return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
