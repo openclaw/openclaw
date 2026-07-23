@@ -131,6 +131,9 @@ function collectWorkspaceViolations(cwd) {
 
 /**
  * Collects dependency pin violations for the current workspace.
+ *
+ * @param {string} [cwd]
+ * @param {{ gitTimeoutMs?: number }} [options]
  */
 export function collectDependencyPinViolations(
   cwd = process.cwd(),
