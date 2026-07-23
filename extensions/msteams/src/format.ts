@@ -8,8 +8,6 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import type { MarkdownTableMode } from "../runtime-api.js";
 
-const RAW_MARKDOWN_TABLE_RE =
-  /^(?:[ \t]*>[ \t]?)*[^\n]*\|[^\n]*\r?\n(?:[ \t]*>[ \t]?)*[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*(?:\r?\n(?![ \t]*(?:>[ \t]*)*\r?$)[^\n]*)*/gmu;
 const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}[\]()#+\-.!|>~]/gu;
 const MARKDOWN_ENTITY_RE = /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/giu;
 const TOKEN_END = "\u{E002}";
@@ -264,39 +262,86 @@ function protectMSTeamsMentions(text: string, tokenPrefix: string, mentions: str
   return protectedText + text.slice(cursor);
 }
 
+function parseQuotePrefix(line: string): { content: string; depth: number; prefix: string } {
+  let cursor = 0;
+  let depth = 0;
+  while (cursor < line.length) {
+    const checkpoint = cursor;
+    let spaces = 0;
+    while (spaces < 3 && line[cursor] === " ") {
+      cursor += 1;
+      spaces += 1;
+    }
+    if (line[cursor] !== ">") {
+      cursor = checkpoint;
+      break;
+    }
+    cursor += 1;
+    depth += 1;
+    if (line[cursor] === " " || line[cursor] === "\t") {
+      cursor += 1;
+    }
+  }
+  return { content: line.slice(cursor).replace(/\r$/u, ""), depth, prefix: line.slice(0, cursor) };
+}
+
+function isTableDelimiterLine(content: string): boolean {
+  const trimmed = content.trim();
+  const inner = trimmed.replace(/^\|/u, "").replace(/\|$/u, "");
+  const cells = inner.split("|").map((cell) => cell.trim());
+  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/u.test(cell));
+}
+
 function protectRawTablesInSegment(text: string, tokenPrefix: string, rawTables: string[]): string {
-  RAW_MARKDOWN_TABLE_RE.lastIndex = 0;
-  const protectedText = text.replace(RAW_MARKDOWN_TABLE_RE, (candidate) => {
-    const lines = candidate.split(/\r?\n/u);
-    const quoteDepth = leadingQuoteDepth(lines[0] ?? "");
-    let tableLineCount = lines.length;
-    for (let index = 2; index < lines.length; index += 1) {
-      const line = lines[index] ?? "";
-      if (leadingQuoteDepth(line) !== quoteDepth || isInterruptingBlock(line)) {
-        tableLineCount = index;
-        break;
+  const lines = text.split("\n");
+  const output: string[] = [];
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index] ?? "";
+    const header = parseQuotePrefix(line);
+    const delimiter = parseQuotePrefix(lines[index + 1] ?? "");
+    if (
+      header.content.includes("|") &&
+      delimiter.depth === header.depth &&
+      isTableDelimiterLine(delimiter.content)
+    ) {
+      let end = index + 2;
+      while (end < lines.length) {
+        const row = parseQuotePrefix(lines[end] ?? "");
+        if (
+          row.depth !== header.depth ||
+          !row.content.trim() ||
+          isInterruptingBlock(lines[end] ?? "")
+        ) {
+          break;
+        }
+        end += 1;
       }
+      const table = lines.slice(index, end).join("\n");
+      if (convertMarkdownTables(table, "code") !== table) {
+        const tableIndex = rawTables.push(table.slice(header.prefix.length)) - 1;
+        output.push(`${header.prefix}${tokenPrefix}t${tableIndex}${TOKEN_END}`);
+        index = end;
+        continue;
+      }
+      for (let lineIndex = index; lineIndex < end; lineIndex += 1) {
+        output.push(lines[lineIndex] ?? "");
+      }
+      index = end;
+      continue;
     }
-    const table = lines.slice(0, tableLineCount).join("\n");
-    const remainder = lines.slice(tableLineCount).join("\n");
-    if (convertMarkdownTables(table, "code") === table) {
-      return candidate;
-    }
-    const quotePrefix = /^(?:[ \t]*>[ \t]?)*/u.exec(table)?.[0] ?? "";
-    const index = rawTables.push(table.slice(quotePrefix.length)) - 1;
-    return `${quotePrefix}${tokenPrefix}t${index}${TOKEN_END}${remainder ? `\n${remainder}` : ""}`;
-  });
-  RAW_MARKDOWN_TABLE_RE.lastIndex = 0;
-  return protectedText;
+    output.push(line);
+    index += 1;
+  }
+  return output.join("\n");
 }
 
 function isInterruptingBlock(line: string): boolean {
-  const content = line.replace(/^(?:[ \t]*>[ \t]?)+/u, "");
+  const content = parseQuotePrefix(line).content;
   return /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|(?:[-+*]|\d+[.)])[ \t]+)/u.test(content);
 }
 
 function leadingQuoteDepth(line: string): number {
-  return /^(?:[ \t]*>[ \t]?)+/u.exec(line)?.[0].match(/>/gu)?.length ?? 0;
+  return parseQuotePrefix(line).depth;
 }
 
 function parseFenceLine(

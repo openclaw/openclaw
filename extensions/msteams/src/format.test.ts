@@ -156,6 +156,11 @@ describe("formatMSTeamsMarkdown", () => {
     expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
   });
 
+  it("keeps raw tables with tab-padded delimiter cells", () => {
+    const table = ["| A | B |", "|\t---\t|\t---\t|", "| x | y |"].join("\n");
+    expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
+  });
+
   it("keeps pipe-less body rows in raw tables when conversion is disabled", () => {
     const table = ["| Name | State |", "|---|---|", "[deploy](https://host/a)"].join("\n");
     expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
@@ -217,6 +222,11 @@ describe("formatMSTeamsMarkdown", () => {
     const output = formatMSTeamsMarkdown(before, "off");
     expect(output).toContain("**Next**");
     expect(output).not.toContain("# Next");
+  });
+
+  it("stops quoted tables at quote-only lines with trailing whitespace", () => {
+    const before = ["> | A | B |", "> |---|---|", "> | x | y |", ">  ", "> # Next"].join("\n");
+    expect(formatMSTeamsMarkdown(before, "off")).toContain("**Next**");
   });
 
   it("ends list-contained fence state on outdent", () => {
