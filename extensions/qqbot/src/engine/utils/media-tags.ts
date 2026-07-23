@@ -18,7 +18,9 @@ function expandTilde(p: string): string {
     return p;
   }
   const home =
-    typeof process !== "undefined" ? (process.env.HOME ?? process.env.USERPROFILE) : undefined;
+    typeof process !== "undefined"
+      ? [process.env.HOME, process.env.USERPROFILE].find((value) => value?.trim())
+      : undefined;
   if (!home) {
     return p;
   }

@@ -11,10 +11,10 @@
 import type { EngineLogger } from "../types.js";
 
 function getHomeForTildePath(windowsStyle: boolean): string | undefined {
-  if (windowsStyle && process.env.USERPROFILE) {
+  if (windowsStyle && process.env.USERPROFILE?.trim()) {
     return process.env.USERPROFILE;
   }
-  return process.env.HOME ?? process.env.USERPROFILE;
+  return [process.env.HOME, process.env.USERPROFILE].find((value) => value?.trim());
 }
 
 /**

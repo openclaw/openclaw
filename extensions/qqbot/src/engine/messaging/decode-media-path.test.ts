@@ -36,4 +36,11 @@ describe("decodeMediaPath", () => {
       String.raw`C:\Users\operator\1\photo.png`,
     );
   });
+
+  it("falls back to USERPROFILE when HOME is blank", () => {
+    process.env.HOME = "";
+    process.env.USERPROFILE = String.raw`C:\Users\operator`;
+
+    expect(decodeMediaPath("~/photo.png")).toBe(String.raw`C:\Users\operator/photo.png`);
+  });
 });
