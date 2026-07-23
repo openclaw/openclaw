@@ -388,6 +388,8 @@ export type SessionEntry = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Server-stamped creator session used to resolve sender-independent group policy. */
       ownerSessionKey?: string;
+      /** Server-stamped creator account paired with ownerSessionKey. */
+      ownerAccountId?: string;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";

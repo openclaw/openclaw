@@ -6,6 +6,7 @@ import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/exec-approvals.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
@@ -18,6 +19,7 @@ export type AgentRuntimeIdentity = {
   kind: "agentRuntime";
   agentId: string;
   sessionKey: string;
+  turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
 };
 
@@ -25,6 +27,7 @@ type AgentRuntimeIdentityTokenPayload = {
   kind: typeof AGENT_RUNTIME_IDENTITY_TOKEN_KIND;
   agentId: string;
   sessionKey: string;
+  turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
 };
 
@@ -160,6 +163,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       kind?: unknown;
       agentId?: unknown;
       sessionKey?: unknown;
+      turnSourceAccountId?: unknown;
       messageActionContext?: unknown;
     };
     if (
@@ -171,6 +175,9 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     }
     const agentId = normalizeAgentId(raw.agentId);
     const sessionKey = raw.sessionKey.trim();
+    const turnSourceAccountId = normalizeOptionalAccountId(
+      typeof raw.turnSourceAccountId === "string" ? raw.turnSourceAccountId : undefined,
+    );
     if (!agentId || !sessionKey) {
       return undefined;
     }
@@ -185,6 +192,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
       sessionKey,
+      ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
       ...(messageActionContext ? { messageActionContext } : {}),
     };
   } catch {
@@ -196,6 +204,7 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
 export async function mintAgentRuntimeIdentityToken(params: {
   agentId: string;
   sessionKey: string;
+  turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
 }): Promise<string> {
   if (
@@ -215,10 +224,12 @@ export async function mintAgentRuntimeIdentityToken(params: {
         ),
       }
     : undefined;
+  const turnSourceAccountId = normalizeOptionalAccountId(params.turnSourceAccountId);
   const payload = encodePayload({
     kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
     agentId: normalizeAgentId(params.agentId),
     sessionKey: params.sessionKey.trim(),
+    ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
@@ -250,6 +261,7 @@ export async function verifyAgentRuntimeIdentityToken(
     kind: "agentRuntime",
     agentId: payload.agentId,
     sessionKey: payload.sessionKey,
+    ...(payload.turnSourceAccountId ? { turnSourceAccountId: payload.turnSourceAccountId } : {}),
     ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
   };
 }

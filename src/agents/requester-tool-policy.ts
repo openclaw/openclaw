@@ -62,6 +62,8 @@ type RequesterToolPolicyParams = {
   senderPolicyMode?: SenderPolicyMode;
   /** Group session selected by a trusted scheduled authority envelope. */
   groupPolicySessionKey?: string;
+  /** Fail closed when scheduled authority names a removed non-default account. */
+  requireConfiguredGroupAccount?: boolean;
 };
 
 function policyFromEnvelope(
@@ -194,6 +196,7 @@ export function resolveRequesterToolPolicies(
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
       accountId: params.accountId,
+      requireConfiguredAccount: params.requireConfiguredGroupAccount,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,

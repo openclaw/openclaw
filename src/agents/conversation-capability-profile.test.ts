@@ -196,7 +196,10 @@ describe("resolveConversationCapabilityProfile", () => {
     const legacy = resolveConversationCapabilityProfile(baseParams);
     const scheduled = resolveConversationCapabilityProfile({
       ...baseParams,
-      scheduledToolPolicy: { ownerSessionKey: "agent:main:whatsapp:group:team" },
+      scheduledToolPolicy: {
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+      },
     });
 
     expect(legacy.policy.senderPolicy).toEqual({ deny: ["write"] });

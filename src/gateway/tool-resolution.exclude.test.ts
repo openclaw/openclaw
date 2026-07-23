@@ -26,7 +26,7 @@ type CreateOpenClawCodingToolsArg = {
   workspaceDir?: string;
   cwd?: string;
   wrapBeforeToolCallHook?: boolean;
-  scheduledToolPolicy?: { ownerSessionKey: string };
+  scheduledToolPolicy?: { ownerSessionKey: string; ownerAccountId: string };
 };
 
 type LazyExecToolDefaults = {
@@ -161,7 +161,10 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       surface: "loopback",
       excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
       mediatedToolNames: ["write"],
-      scheduledToolPolicy: { ownerSessionKey: "agent:main:qa-channel:group:ops" },
+      scheduledToolPolicy: {
+        ownerSessionKey: "agent:main:qa-channel:group:ops",
+        ownerAccountId: "default",
+      },
     });
 
     expect(result.tools.map((tool) => tool.name)).toContain("write");
@@ -173,7 +176,10 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         workspaceDir: "/workspace",
         cwd: "/workspace/task",
         wrapBeforeToolCallHook: false,
-        scheduledToolPolicy: { ownerSessionKey: "agent:main:qa-channel:group:ops" },
+        scheduledToolPolicy: {
+          ownerSessionKey: "agent:main:qa-channel:group:ops",
+          ownerAccountId: "default",
+        },
       }),
     );
     expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();

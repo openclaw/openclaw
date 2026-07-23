@@ -130,6 +130,7 @@ const CronDisplayNameSchema = Type.String({ minLength: 1, maxLength: 200, patter
 const CronOwnerSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  accountId: Type.Optional(NonEmptyString),
 });
 const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
 const CronFailoverReasonSchema = Type.Union([

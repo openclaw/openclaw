@@ -146,6 +146,7 @@ describe("createPersistCronSessionEntry", () => {
       toolsAllow: ["image_generate", "write"],
       toolsAllowIsDefault: true,
       ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
       persistSessionEntry,
     });
 
@@ -172,6 +173,7 @@ describe("createPersistCronSessionEntry", () => {
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
         ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "work",
       },
     });
 

@@ -263,7 +263,7 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
-function callerClient(agentId: string): GatewayClient {
+function callerClient(agentId: string, accountId?: string): GatewayClient {
   return {
     connect: {} as GatewayClient["connect"],
     internal: {
@@ -271,6 +271,7 @@ function callerClient(agentId: string): GatewayClient {
         kind: "agentRuntime",
         agentId,
         sessionKey: `agent:${agentId}:main`,
+        ...(accountId ? { turnSourceAccountId: accountId } : {}),
       },
     },
   };
@@ -1100,7 +1101,11 @@ describe("cron method validation", () => {
     );
 
     const payload = requireCronAddPayload(context);
-    expect(payload.owner).toEqual({ agentId: "ops", sessionKey: "agent:ops:main" });
+    expect(payload.owner).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "default",
+    });
     const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
     const matchesExisting = options.matchesExisting as ((job: CronJob) => boolean) | undefined;
     expect(matchesExisting?.(createCronJob({ agentId: "ops" }))).toBe(true);
@@ -1108,9 +1113,30 @@ describe("cron method validation", () => {
     expect(matchesExisting?.(createCronJob({ agentId: "worker", owner: { agentId: "ops" } }))).toBe(
       true,
     );
+    expect(
+      matchesExisting?.(
+        createCronJob({
+          agentId: "worker",
+          owner: { agentId: "ops", accountId: "work" },
+        }),
+      ),
+    ).toBe(false);
     expect(matchesExisting?.(createCronJob({ agentId: "ops", owner: { agentId: "worker" } }))).toBe(
       false,
     );
+    expectCronSuccess(respond);
+  });
+
+  it("stamps declaration ownership from the authenticated source account", async () => {
+    const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
+      client: callerClient("ops", "work"),
+    });
+
+    expect(requireCronAddPayload(context).owner).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "work",
+    });
     expectCronSuccess(respond);
   });
 
@@ -1130,6 +1156,73 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ total: 1, jobs: [expect.objectContaining({ id: "cron-1" })] }),
+      undefined,
+    );
+  });
+
+  it("keeps new jobs scoped to their creator account while preserving accountless legacy jobs", async () => {
+    const workOwned = createCronJob({
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "work" },
+    });
+    const context = createCronContext(workOwned);
+
+    const wrongAccount = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops", "default") },
+    );
+    expect(wrongAccount.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+
+    const matchingAccount = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context, client: callerClient("ops", "work") },
+    );
+    expect(matchingAccount.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+
+    const legacyContext = createCronContext(
+      createCronJob({ owner: { agentId: "ops", sessionKey: "agent:ops:main" } }),
+    );
+    const legacy = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context: legacyContext, client: callerClient("ops", "other") },
+    );
+    expect(legacy.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
+      undefined,
+    );
+
+    const accountOnlyContext = createCronContext(
+      createCronJob({ agentId: "ops", owner: { accountId: "work" } }),
+    );
+    const accountOnlyWrong = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context: accountOnlyContext, client: callerClient("ops", "other") },
+    );
+    expect(accountOnlyWrong.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 0, jobs: [] }),
+      undefined,
+    );
+    const accountOnlyMatch = await invokeCron(
+      "cron.list",
+      { compact: true },
+      { context: accountOnlyContext, client: callerClient("ops", "work") },
+    );
+    expect(accountOnlyMatch.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ total: 1 }),
       undefined,
     );
   });

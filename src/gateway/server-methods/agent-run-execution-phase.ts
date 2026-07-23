@@ -355,6 +355,7 @@ export function startAgentRunExecution(params: {
             ? resolveScheduledToolPolicyContext({
                 toolsAllow: params.restoredCronContinuation.toolsAllow,
                 ownerSessionKey: params.restoredCronContinuation.ownerSessionKey,
+                ownerAccountId: params.restoredCronContinuation.ownerAccountId,
               })
             : undefined,
           requireExplicitMessageTarget:

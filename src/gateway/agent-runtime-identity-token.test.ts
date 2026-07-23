@@ -66,6 +66,23 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips the authenticated turn-source account", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      turnSourceAccountId: " Work ",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "session-1",
+      turnSourceAccountId: "work",
+    });
+  });
+
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     const home = useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

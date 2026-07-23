@@ -727,7 +727,10 @@ describe("createCopilotToolBridge", () => {
           jobId: "job-1",
           memoryFlushWritePath: ".memory/append.md",
           toolsAllow: ["read", "edit"],
-          scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
+          scheduledToolPolicy: {
+            ownerSessionKey: "agent:main:discord:group:ops",
+            ownerAccountId: "default",
+          },
         } as never,
         createOpenClawCodingTools,
         modelId: "gpt-4o",
@@ -745,6 +748,7 @@ describe("createCopilotToolBridge", () => {
       expect(opts.runtimeToolAllowlist).toEqual(["read", "edit"]);
       expect(opts.scheduledToolPolicy).toEqual({
         ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "default",
       });
     });
 

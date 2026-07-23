@@ -34,7 +34,11 @@ function makeParams() {
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "check allowed tools" },
       delivery: { mode: "none" },
-      owner: { agentId: "main", sessionKey: "agent:main:whatsapp:group:team" },
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:whatsapp:group:team",
+        accountId: "default",
+      },
     } as never,
     message: "check allowed tools",
     sessionKey: "cron:tools-allow",
@@ -77,13 +81,13 @@ function makeParamsWithDefaultToolsAllow(toolsAllow: string[]) {
 function requireEmbeddedAgentCall(): {
   jobId?: string;
   toolsAllow?: string[];
-  scheduledToolPolicy?: { ownerSessionKey: string };
+  scheduledToolPolicy?: { ownerSessionKey: string; ownerAccountId: string };
 } {
   const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
     | {
         jobId?: string;
         toolsAllow?: string[];
-        scheduledToolPolicy?: { ownerSessionKey: string };
+        scheduledToolPolicy?: { ownerSessionKey: string; ownerAccountId: string };
       }
     | undefined;
   if (!call) {
@@ -135,6 +139,21 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   );
 
   it(
+    "keeps capped accountless legacy jobs on the ordinary sender-policy path",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["cron"]);
+      delete (params.job as { owner?: { accountId?: string } }).owner?.accountId;
+
+      await runCronIsolatedAgentTurn(params);
+
+      const call = requireEmbeddedAgentCall();
+      expect(call.toolsAllow).toEqual(["cron"]);
+      expect(call.scheduledToolPolicy).toBeUndefined();
+    },
+  );
+
+  it(
     "passes through isolated cron toolsAllow=cron self-removal path",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
@@ -146,6 +165,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(call.toolsAllow).toEqual(["cron"]);
       expect(call.scheduledToolPolicy).toEqual({
         ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
       });
     },
   );

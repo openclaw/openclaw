@@ -1,4 +1,5 @@
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { GatewayClient } from "./types.js";
@@ -7,6 +8,7 @@ export type CronCallerScope = {
   kind: "agentTool";
   agentId: string;
   sessionKey?: string;
+  accountId: string;
 };
 
 export function readCronCallerScope(
@@ -20,6 +22,7 @@ export function readCronCallerScope(
     kind: "agentTool",
     agentId: normalizeAgentId(identity.agentId),
     sessionKey: identity.sessionKey?.trim() || undefined,
+    accountId: normalizeAccountId(identity.turnSourceAccountId),
   };
 }
 
@@ -75,11 +78,20 @@ export function cronJobMatchesCallerScope(params: {
   if (isOperatorCommandCronJob(params.job)) {
     return false;
   }
+  const ownerAccountId = params.job.owner?.accountId;
+  // Operator-created records may name an account without an owner agent; account ownership is
+  // therefore an independent boundary, not a refinement of ownerAgentId.
+  if (ownerAccountId && normalizeAccountId(ownerAccountId) !== params.callerScope.accountId) {
+    return false;
+  }
   // Declarative jobs retain their stamped owner when an operator retargets execution.
   // Ownerless jobs predate attribution, so keep their routing-based visibility.
   const ownerAgentId = resolveCronJobOwnerAgentId(params.job);
   if (ownerAgentId) {
-    return ownerAgentId === params.callerScope.agentId;
+    if (ownerAgentId !== params.callerScope.agentId) {
+      return false;
+    }
+    return true;
   }
   if (
     resolveCronJobEffectiveAgentId(params.job, params.defaultAgentId) !== params.callerScope.agentId
@@ -154,6 +166,7 @@ export function applyCronCreateCallerScopeDefault(
     owner: {
       agentId: callerScope.agentId,
       ...(callerScope.sessionKey ? { sessionKey: callerScope.sessionKey } : {}),
+      accountId: callerScope.accountId,
     },
   };
 }

@@ -204,6 +204,7 @@ export function createCronRunContinuationSession(params: {
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
   ownerSessionKey?: string;
+  ownerAccountId?: string;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -216,8 +217,13 @@ export function createCronRunContinuationSession(params: {
     phase: "running" as const,
     ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
-    ...(params.toolsAllow !== undefined && params.ownerSessionKey?.trim()
-      ? { ownerSessionKey: params.ownerSessionKey.trim() }
+    ...(params.toolsAllow !== undefined &&
+    params.ownerSessionKey?.trim() &&
+    params.ownerAccountId?.trim()
+      ? {
+          ownerSessionKey: params.ownerSessionKey.trim(),
+          ownerAccountId: params.ownerAccountId.trim(),
+        }
       : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }

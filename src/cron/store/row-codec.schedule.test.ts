@@ -11,6 +11,24 @@ function roundTrip(schedule: CronSchedule): CronSchedule | null {
 }
 
 describe("schedule column codec round-trip", () => {
+  it("round-trips the creator account through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+      }),
+    );
+
+    expect(job.owner).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:discord:group:ops",
+      accountId: "work",
+    });
+  });
+
   it("round-trips pacing through the additive job_json envelope", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({ pacing: { min: "15m", max: "4h" } }),

@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { isCronJobActive } from "../active-jobs.js";
@@ -1097,15 +1098,17 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   }
   const ownerAgentId = normalizeOptionalAgentId(input.owner?.agentId);
   const ownerSessionKey = normalizeOptionalString(input.owner?.sessionKey);
+  const ownerAccountId = normalizeOptionalAccountId(input.owner?.accountId);
   const job: CronJob = {
     id,
     ...(declarationKey ? { declarationKey } : {}),
     ...(displayName ? { displayName } : {}),
-    ...(ownerAgentId || ownerSessionKey
+    ...(ownerAgentId || ownerSessionKey || ownerAccountId
       ? {
           owner: {
             ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
             ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
+            ...(ownerAccountId ? { accountId: ownerAccountId } : {}),
           },
         }
       : {}),

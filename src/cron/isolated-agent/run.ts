@@ -1127,6 +1127,7 @@ async function prepareCronRunContext(params: {
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
           ownerSessionKey: input.job.owner?.sessionKey,
+          ownerAccountId: input.job.owner?.accountId,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

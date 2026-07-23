@@ -75,4 +75,29 @@ describe("createOpenClawTools Gateway caller identity", () => {
       },
     ]);
   });
+
+  it("uses scheduled creator account authority without changing live delivery routing", async () => {
+    mocks.observedIdentities.length = 0;
+
+    const tool = requireTool("synthetic_direct_cron_plugin", {
+      agentChannel: "discord",
+      agentTo: "channel:123",
+      agentAccountId: "delivery-account",
+      scheduledToolPolicy: {
+        ownerSessionKey: "agent:main:discord:channel:creator",
+        ownerAccountId: "creator-account",
+      },
+    });
+    await tool.execute("tool-call-scheduled", {});
+
+    expect(mocks.observedIdentities).toEqual([
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "creator-account",
+      },
+    ]);
+  });
 });

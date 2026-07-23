@@ -277,6 +277,7 @@ function createCronPromptExecutor(params: {
   const scheduledToolPolicy = resolveScheduledToolPolicyContext({
     toolsAllow: params.agentPayload?.toolsAllow,
     ownerSessionKey: params.job.owner?.sessionKey,
+    ownerAccountId: params.job.owner?.accountId,
   });
   if (!params.sourceDelivery) {
     logWarn(

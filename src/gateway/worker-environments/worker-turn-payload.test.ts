@@ -22,7 +22,10 @@ describe("assertSupportedTurn", () => {
           },
         },
         toolsAllow: ["write"],
-        scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
+        scheduledToolPolicy: {
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "default",
+        },
       } as SessionPlacementTurnParams),
     ).toEqual({ provider: "openai", model: "gpt-5.4" });
   });

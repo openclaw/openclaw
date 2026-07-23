@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 
 describe("resolveScheduledToolPolicyContext", () => {
-  it("requires both a persisted cap and a trusted owner session", () => {
+  it("requires a persisted cap and a trusted owner session/account pair", () => {
     expect(
       resolveScheduledToolPolicyContext({
         ownerSessionKey: "agent:main:discord:group:ops",
@@ -17,6 +17,13 @@ describe("resolveScheduledToolPolicyContext", () => {
       resolveScheduledToolPolicyContext({
         toolsAllow: ["write"],
         ownerSessionKey: "   ",
+        ownerAccountId: "work",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveScheduledToolPolicyContext({
+        toolsAllow: ["write"],
+        ownerSessionKey: "agent:main:discord:group:ops",
       }),
     ).toBeUndefined();
   });
@@ -26,7 +33,11 @@ describe("resolveScheduledToolPolicyContext", () => {
       resolveScheduledToolPolicyContext({
         toolsAllow: [],
         ownerSessionKey: " agent:main:discord:group:ops ",
+        ownerAccountId: " work ",
       }),
-    ).toEqual({ ownerSessionKey: "agent:main:discord:group:ops" });
+    ).toEqual({
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
   });
 });

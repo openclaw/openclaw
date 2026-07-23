@@ -792,7 +792,11 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
       const callerScope = resolveCronToolCallerScope(opts, runtimeConfig);
       const callerIdentity =
         callerScope && opts?.agentSessionKey?.trim()
-          ? { agentId: callerScope.agentId, sessionKey: opts.agentSessionKey.trim() }
+          ? {
+              agentId: callerScope.agentId,
+              sessionKey: opts.agentSessionKey.trim(),
+              turnSourceAccountId: opts.agentAccountId,
+            }
           : undefined;
 
       return await withGatewayToolCallerIdentity(callerIdentity, async () => {

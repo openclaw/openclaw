@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -271,6 +272,11 @@ function pacingFromRow(row: CronJobRow): CronPacing | undefined {
 }
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
+  const jobJson = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+  const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
+  const ownerAccountId = normalizeOptionalAccountId(
+    typeof jsonOwner?.accountId === "string" ? jsonOwner.accountId : undefined,
+  );
   const schedule = scheduleFromRow(row);
   const payload = payloadFromRow(row);
   const delivery = deliveryFromRow(row);
@@ -285,11 +291,12 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     id: row.job_id,
     ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
-    ...(row.owner_agent_id || row.owner_session_key
+    ...(row.owner_agent_id || row.owner_session_key || ownerAccountId
       ? {
           owner: {
             ...(row.owner_agent_id ? { agentId: row.owner_agent_id } : {}),
             ...(row.owner_session_key ? { sessionKey: row.owner_session_key } : {}),
+            ...(ownerAccountId ? { accountId: ownerAccountId } : {}),
           },
         }
       : {}),

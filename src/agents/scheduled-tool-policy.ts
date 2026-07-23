@@ -5,16 +5,21 @@
  */
 export type ScheduledToolPolicyContext = {
   ownerSessionKey: string;
+  ownerAccountId: string;
 };
 
 /** Builds scheduled policy context only when both the cap and trusted owner exist. */
 export function resolveScheduledToolPolicyContext(params: {
   toolsAllow?: readonly string[];
   ownerSessionKey?: string | null;
+  ownerAccountId?: string | null;
 }): ScheduledToolPolicyContext | undefined {
   if (params.toolsAllow === undefined) {
     return undefined;
   }
   const ownerSessionKey = params.ownerSessionKey?.trim();
-  return ownerSessionKey ? { ownerSessionKey } : undefined;
+  const ownerAccountId = params.ownerAccountId?.trim();
+  // Accountless jobs predate creator-account authority. Keep their shipped sender-policy path;
+  // inferring authority from a later delivery account would cross the account boundary.
+  return ownerSessionKey && ownerAccountId ? { ownerSessionKey, ownerAccountId } : undefined;
 }

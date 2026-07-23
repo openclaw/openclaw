@@ -2434,7 +2434,10 @@ describe("prepareCliRunContext", () => {
       provider: "native-cli",
       runId: "run-test-loopback-prompt-tools",
       config: createCliBackendConfig({ bundleMcp: true }),
-      scheduledToolPolicy: { ownerSessionKey: "agent:worker:discord:group:ops" },
+      scheduledToolPolicy: {
+        ownerSessionKey: "agent:worker:discord:group:ops",
+        ownerAccountId: "default",
+      },
       cliSessionBinding: {
         sessionId: "cli-session",
         promptToolNamesHash: "old-tool-surface",
@@ -2461,7 +2464,10 @@ describe("prepareCliRunContext", () => {
       workspaceDir: expect.any(String),
       modelProvider: "native-cli",
       modelId: "test-model",
-      scheduledToolPolicy: { ownerSessionKey: "agent:worker:discord:group:ops" },
+      scheduledToolPolicy: {
+        ownerSessionKey: "agent:worker:discord:group:ops",
+        ownerAccountId: "default",
+      },
     });
     expect(context.systemPrompt).toContain("## Memory Recall");
     expect(context.systemPrompt).toContain("tools=memory_search");
@@ -2982,7 +2988,10 @@ describe("prepareCliRunContext", () => {
         sessionKey: "agent:main:main",
         provider: "claude-cli",
         toolsAllow: ["write"],
-        scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
+        scheduledToolPolicy: {
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "default",
+        },
       });
       cleanup = context.preparedBackend.cleanup;
 
@@ -2997,11 +3006,15 @@ describe("prepareCliRunContext", () => {
       ]);
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.scheduledToolPolicy).toEqual({
         ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "default",
       });
       expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
         expect.objectContaining({
           toolsAllow: ["write"],
-          scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
+          scheduledToolPolicy: {
+            ownerSessionKey: "agent:main:discord:group:ops",
+            ownerAccountId: "default",
+          },
         }),
       );
       const projected = resolveMcpLoopbackPolicyTools.mock.calls[0]?.[0];

@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
@@ -370,10 +371,14 @@ export function normalizeCronJobInput(
   if (isRecord(base.owner)) {
     const agentId = normalizeOptionalString(base.owner.agentId);
     const sessionKey = normalizeOptionalString(base.owner.sessionKey);
-    if (agentId || sessionKey) {
+    const accountId = normalizeOptionalAccountId(
+      typeof base.owner.accountId === "string" ? base.owner.accountId : undefined,
+    );
+    if (agentId || sessionKey || accountId) {
       next.owner = {
         ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
         ...(sessionKey ? { sessionKey } : {}),
+        ...(accountId ? { accountId } : {}),
       };
     } else {
       delete next.owner;

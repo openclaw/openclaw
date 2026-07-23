@@ -463,6 +463,8 @@ export type CronJob = CronJobBase<
   owner?: {
     agentId?: string;
     sessionKey?: string;
+    /** Authenticated account that created this scheduled authority envelope. */
+    accountId?: string;
   };
   trigger?: CronTrigger;
   state: CronJobState;

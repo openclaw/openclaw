@@ -311,19 +311,27 @@ describe("cron trigger script evaluator", () => {
     const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
     const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
 
-    for (const ownerSessionKey of ["agent:main:discord:group:a", "agent:main:discord:group:b"]) {
+    for (const [ownerSessionKey, ownerAccountId] of [
+      ["agent:main:discord:group:a", "alpha"],
+      ["agent:main:discord:group:b", "beta"],
+    ] as const) {
       await evaluate({
         jobId: "job-owner-session",
         script: "return result",
         state: null,
         toolsAllow: ["write"],
         ownerSessionKey,
+        ownerAccountId,
       });
     }
 
     expect(prepareRuntime.mock.calls.map(([params]) => params.ownerSessionKey)).toEqual([
       "agent:main:discord:group:a",
       "agent:main:discord:group:b",
+    ]);
+    expect(prepareRuntime.mock.calls.map(([params]) => params.ownerAccountId)).toEqual([
+      "alpha",
+      "beta",
     ]);
   });
 

@@ -83,6 +83,7 @@ type PrepareTriggerRuntime = (params: {
   agentId?: string;
   toolsAllow?: string[];
   ownerSessionKey?: string;
+  ownerAccountId?: string;
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
@@ -109,6 +110,7 @@ async function prepareTriggerRuntime(params: {
   agentId?: string;
   toolsAllow?: string[];
   ownerSessionKey?: string;
+  ownerAccountId?: string;
   signal?: AbortSignal;
 }): Promise<PreparedTriggerRuntime> {
   params.signal?.throwIfAborted();
@@ -179,6 +181,7 @@ async function prepareTriggerRuntime(params: {
         scheduledToolPolicy: resolveScheduledToolPolicyContext({
           toolsAllow: params.toolsAllow,
           ownerSessionKey: params.ownerSessionKey,
+          ownerAccountId: params.ownerAccountId,
         }),
         toolConstructionPlan: toolPlan.codingToolConstructionPlan,
       })
@@ -349,6 +352,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     agentId: string;
     toolsAllow?: string[];
     ownerSessionKey?: string;
+    ownerAccountId?: string;
     toolsAllowKey: string;
     signal: AbortSignal;
   }): Promise<PreparedTriggerRuntime> => {
@@ -384,6 +388,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       agentId: request.requestedAgentId,
       toolsAllow: request.toolsAllow,
       ownerSessionKey: request.ownerSessionKey,
+      ownerAccountId: request.ownerAccountId,
       signal: request.signal,
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -410,6 +415,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     script: string;
     toolsAllow?: string[];
     ownerSessionKey?: string;
+    ownerAccountId?: string;
     abortSignal?: AbortSignal;
     wallClockMs: number;
     maxToolCalls: number;
@@ -430,6 +436,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       const toolsAllowKey = JSON.stringify([
         params.toolsAllow ?? null,
         params.ownerSessionKey?.trim() || null,
+        params.ownerAccountId?.trim() || null,
       ]);
       const runtime = await resolveCachedRuntime({
         runtimeConfig,
@@ -438,6 +445,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         agentId,
         toolsAllow: params.toolsAllow,
         ownerSessionKey: params.ownerSessionKey,
+        ownerAccountId: params.ownerAccountId,
         toolsAllowKey,
         signal: evaluationScope.signal,
       });
@@ -605,6 +613,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       streamBatch?: string;
       toolsAllow?: string[];
       ownerSessionKey?: string;
+      ownerAccountId?: string;
       abortSignal?: AbortSignal;
     }): Promise<CronTriggerEvaluationResult> => {
       if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
@@ -632,6 +641,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       streamBatch?: string;
       toolsAllow?: string[];
       ownerSessionKey?: string;
+      ownerAccountId?: string;
       timeoutSeconds?: number;
       toolBudget?: number;
       abortSignal?: AbortSignal;

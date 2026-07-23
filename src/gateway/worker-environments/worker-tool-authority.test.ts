@@ -60,7 +60,10 @@ describe("resolveWorkerToolAuthority", () => {
         messageProvider: "whatsapp",
         senderId: "guest",
         toolsAllow: ["read", "write", "exec"],
-        scheduledToolPolicy: { ownerSessionKey: "agent:main:whatsapp:group:team" },
+        scheduledToolPolicy: {
+          ownerSessionKey: "agent:main:whatsapp:group:team",
+          ownerAccountId: "default",
+        },
       }),
     ).toEqual(["read", "write", "apply_patch"]);
     expect(
@@ -85,7 +88,10 @@ describe("resolveWorkerToolAuthority", () => {
         },
         messageProvider: "whatsapp",
         toolsAllow: ["write"],
-        scheduledToolPolicy: { ownerSessionKey: "agent:main:whatsapp:group:team" },
+        scheduledToolPolicy: {
+          ownerSessionKey: "agent:main:whatsapp:group:team",
+          ownerAccountId: "default",
+        },
       }),
     ).toEqual([]);
   });

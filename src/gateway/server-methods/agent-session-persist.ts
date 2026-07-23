@@ -230,6 +230,9 @@ export async function persistAgentSessionPhase(params: {
                 ...(marker.ownerSessionKey?.trim()
                   ? { ownerSessionKey: marker.ownerSessionKey.trim() }
                   : {}),
+                ...(marker.ownerAccountId?.trim()
+                  ? { ownerAccountId: marker.ownerAccountId.trim() }
+                  : {}),
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
                   : {}),

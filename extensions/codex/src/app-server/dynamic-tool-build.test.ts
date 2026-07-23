@@ -460,7 +460,10 @@ describe("Codex app-server dynamic tool build", () => {
       sourceTool: "subagent_announce",
     };
     params.trustedInternalHandoff = true;
-    params.scheduledToolPolicy = { ownerSessionKey: "agent:main:discord:group:ops" };
+    params.scheduledToolPolicy = {
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "default",
+    };
     let receivedOptions: unknown;
     setOpenClawCodingToolsFactoryForTests((options) => {
       receivedOptions = options;
