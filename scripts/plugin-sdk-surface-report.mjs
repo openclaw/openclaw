@@ -163,7 +163,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: closed attempt-terminal merge, normalization, and projection helper.
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
       // +1: canonical unknown-value to Error coercion.
-      4705,
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      4711,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -183,7 +184,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: channel partial-delivery error creator and structural guard.
       // +1: harness-native MCP App preview helper.
       // +1: canonical unknown-value to Error coercion.
-      2849,
+      // +6: canonical session delivery normalization, access, and projection helpers.
+      2855,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
