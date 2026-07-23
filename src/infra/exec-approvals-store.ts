@@ -10,7 +10,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import {
   createFailClosedExecApprovalsFallback,
   generateToken,
-  normalizeExecApprovals,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
@@ -28,6 +27,7 @@ import {
   withExecApprovalsReadLock,
   withExecApprovalsReadLockSync,
 } from "./exec-approvals-lock.js";
+import { normalizeExecApprovals } from "./exec-approvals.js";
 
 function readExecApprovalsSnapshotUnlocked(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();

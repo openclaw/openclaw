@@ -8,8 +8,8 @@ import {
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import { type ExecApprovalsFile } from "./exec-approvals-core.js";
-import { resolveExecApprovalsFromFile } from "./exec-approvals-policy.js";
 import { replaceExecApprovalsSnapshot, updateExecApprovalsSync } from "./exec-approvals-store.js";
+import { resolveExecApprovalsFromFile } from "./exec-approvals.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {

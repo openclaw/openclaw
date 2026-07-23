@@ -10,12 +10,13 @@ import {
   type AllowAlwaysPersistenceDecision,
 } from "./exec-approvals-allow-always.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
-import { maxAsk, minSecurity, resolveExecApprovalsFromFile } from "./exec-approvals-policy.js";
+import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import {
   replaceExecApprovalsSnapshot,
   updateExecApprovals,
   updateExecApprovalsSync,
 } from "./exec-approvals-store.js";
+import { resolveExecApprovalsFromFile } from "./exec-approvals.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecApprovalUsageAuthorization = {
