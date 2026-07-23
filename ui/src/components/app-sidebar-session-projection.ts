@@ -13,7 +13,7 @@ import { SessionDataController } from "./session-data-controller.ts";
 
 /** Shared ordering and PR-state projection used by sidebar navigation. */
 export abstract class AppSidebarSessionProjectionElement extends AppSidebarBase {
-  @state() protected sessionSortMode: SidebarSessionSortMode = "created";
+  @state() sessionSortMode: SidebarSessionSortMode = "created";
 
   readonly sessionData = new SessionDataController(this);
   private readonly sessionPullRequestIndicators = new SessionPullRequestIndicatorsController(this, {

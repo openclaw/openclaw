@@ -50,12 +50,12 @@ export abstract class AppSidebarSessionListElement
     menuSession: SidebarRecentSession,
     trigger: HTMLElement,
   ): void {
-    if (this.sessionMenu?.session.key === session.key) {
-      this.closeSessionMenu();
+    if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
+      this.sidebarMenus.closeSessionMenu();
       return;
     }
     const rect = trigger.getBoundingClientRect();
-    this.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
+    this.sidebarMenus.openSessionMenu(menuSession, rect.right, rect.bottom + 4, trigger);
   }
 
   startSessionGroupDrag(group: string): void {
@@ -118,7 +118,7 @@ export abstract class AppSidebarSessionListElement
     y: number,
     trigger?: HTMLElement,
   ): void {
-    this.catalogMenu.open(request, x, y, trigger);
+    this.sidebarMenus.catalogMenu.open(request, x, y, trigger);
   }
 
   protected renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {

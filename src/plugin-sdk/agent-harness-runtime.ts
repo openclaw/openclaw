@@ -60,6 +60,7 @@ export type {
 } from "../agents/harness/types.js";
 export { AgentHarnessSessionSupersededError } from "../agents/harness/errors.js";
 export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
+export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,

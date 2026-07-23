@@ -216,7 +216,9 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const prepareSessionManagerForRunMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
     images: [],
+    imageFactIndexes: [],
     detectedRefs: [],
+    failedMediaCount: 0,
     loadedCount: 0,
     skippedCount: 0,
   }));
