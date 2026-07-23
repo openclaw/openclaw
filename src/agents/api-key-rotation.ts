@@ -18,7 +18,12 @@ import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys
 type ApiKeyRetryParams = {
   apiKey: string;
   error: unknown;
+  /** @deprecated Use apiKeyIndex for key-rotation position or attemptNumber for per-key retry count. */
   attempt: number;
+  /** Zero-based index of the current key in the rotation array. */
+  apiKeyIndex: number;
+  /** One-based attempt count for the current key (resets to 1 when rotating to a new key). */
+  attemptNumber: number;
 };
 
 type ExecuteWithApiKeyRotationOptions<T> = {
@@ -65,7 +70,14 @@ export async function executeWithApiKeyRotation<T>(
         lastError = error;
         const message = formatErrorMessage(error);
         const rotateKey = params.shouldRetry
-          ? params.shouldRetry({ apiKey, error, attempt: apiKeyIndex, message })
+          ? params.shouldRetry({
+              apiKey,
+              error,
+              attempt: apiKeyIndex,
+              apiKeyIndex,
+              attemptNumber,
+              message,
+            })
           : isApiKeyRateLimitError(message);
 
         if (rotateKey) {
@@ -74,7 +86,14 @@ export async function executeWithApiKeyRotation<T>(
           if (apiKeyIndex + 1 >= keys.length) {
             break;
           }
-          params.onRetry?.({ apiKey, error, attempt: apiKeyIndex, message });
+          params.onRetry?.({
+            apiKey,
+            error,
+            attempt: apiKeyIndex,
+            apiKeyIndex,
+            attemptNumber,
+            message,
+          });
           break;
         }
 

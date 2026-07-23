@@ -312,4 +312,41 @@ describe("executeWithApiKeyRotation", () => {
       }),
     );
   });
+
+  it("passes apiKeyIndex and attemptNumber to rotation callbacks", async () => {
+    const shouldRetry = vi.fn(() => true);
+    const onRetry = vi.fn();
+    const execute = vi
+      .fn<(apiKey: string) => Promise<string>>()
+      .mockRejectedValueOnce(new Error("Rate limit"))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      executeWithApiKeyRotation({
+        provider: "openai",
+        apiKeys: ["key-1", "key-2"],
+        shouldRetry,
+        onRetry,
+        execute,
+      }),
+    ).resolves.toBe("ok");
+
+    // shouldRetry receives apiKeyIndex (0) and attemptNumber (1)
+    expect(shouldRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 0,
+        apiKeyIndex: 0,
+        attemptNumber: 1,
+      }),
+    );
+
+    // onRetry receives apiKeyIndex (0) and attemptNumber (1)
+    expect(onRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 0,
+        apiKeyIndex: 0,
+        attemptNumber: 1,
+      }),
+    );
+  });
 });
