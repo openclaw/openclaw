@@ -356,4 +356,48 @@ describe("resolveSystemRunExecArgv", () => {
       expect(result).toBeNull();
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when opaque shell transports use inner allowlist authorization",
+    async () => {
+      const env = { PATH: "/usr/bin:/bin" };
+      const authorizationPlan = await planShellAuthorization({
+        command: "head -c 16",
+        env,
+        platform: process.platform,
+      });
+      expect(authorizationPlan.ok).toBe(true);
+      if (!authorizationPlan.ok) {
+        throw new Error(authorizationPlan.reason);
+      }
+
+      const result = await resolveSystemRunExecArgv({
+        plannedAllowlistArgv: undefined,
+        argv: ["nu", "--commands", "head -c 16"],
+        security: "allowlist",
+        approvals: resolveAllowlistApprovals(),
+        safeBins: new Set(),
+        safeBinProfiles: {},
+        trustedSafeBinDirs: new Set(),
+        skillBins: [],
+        autoAllowSkills: false,
+        isWindows: false,
+        policy: {
+          approvedByAsk: false,
+          analysisOk: true,
+          allowlistSatisfied: true,
+        },
+        shellCommand: "head -c 16",
+        segments: authorizationPlan.groups.flatMap((group) =>
+          group.candidates.map((candidate) => candidate.sourceSegment),
+        ),
+        segmentSatisfiedBy: ["allowlist"],
+        authorizationPlan,
+        cwd: undefined,
+        env,
+      });
+
+      expect(result).toBeNull();
+    },
+  );
 });

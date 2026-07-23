@@ -191,14 +191,16 @@ export async function resolveSystemRunExecArgv(params: {
     !params.policy.approvedByAsk &&
     params.shellCommand &&
     params.policy.analysisOk &&
-    params.policy.allowlistSatisfied &&
-    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
+    params.policy.allowlistSatisfied
   ) {
     const transportKind = resolvePosixShellInlineCommandTransportKind(params.argv);
     if (transportKind === "opaque") {
       return null;
     }
-    if (transportKind !== "parseable") {
+    if (
+      transportKind !== "parseable" ||
+      !params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
+    ) {
       return execArgv;
     }
     if (!params.authorizationPlan) {
