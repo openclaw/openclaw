@@ -54,6 +54,10 @@ function fakeLowercaseBase36Identifier(): string {
   return `${"z".repeat(39)}1`;
 }
 
+function fakeFlyTokenWithAwsShapedBody(): string {
+  return `FlyV1 fm123_${fakeAwsSecretAccessKeyWithPadding()}_${"tail".repeat(20)}`;
+}
+
 describe("diagnostic support export", () => {
   let tempDir: string;
 
@@ -747,6 +751,7 @@ describe("diagnostic support export", () => {
       ],
       [`jwt ${fakeJwt}`, "jwt <redacted-jwt>"],
       [`jwt ${jwtWithAwsSecretShapedSegment}`, "jwt <redacted-jwt>"],
+      [`provider ${fakeFlyTokenWithAwsShapedBody()}`, "provider FlyV1 …tail"],
       [`commit ${fakeCommitHash()}`, `commit ${fakeCommitHash()}`],
       [`id ${fakeLowercaseBase36Identifier()}`, `id ${fakeLowercaseBase36Identifier()}`],
       ["email alice@example.com", "email <redacted-email>"],

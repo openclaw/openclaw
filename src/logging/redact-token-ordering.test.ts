@@ -18,6 +18,10 @@ function fakeLowercaseBase36Identifier(): string {
   return `${"z".repeat(39)}1`;
 }
 
+function fakeFlyTokenWithAwsShapedBody(): string {
+  return `FlyV1 fm123_${fakeAwsCredentialWithPadding()}_${"tail".repeat(20)}`;
+}
+
 describe("redactSensitiveText token ordering", () => {
   it("masks AWS secret access keys containing padding characters", () => {
     const secret = fakeAwsCredentialWithPadding();
@@ -50,5 +54,14 @@ describe("redactSensitiveText token ordering", () => {
   it("does not mask ordinary lowercase 40-character alphanumeric identifiers", () => {
     const identifier = fakeLowercaseBase36Identifier();
     expect(redactSensitiveText(`id ${identifier}`, { mode: "tools" })).toBe(`id ${identifier}`);
+  });
+
+  it("masks full provider tokens before generic AWS-shaped chunks", () => {
+    const token = fakeFlyTokenWithAwsShapedBody();
+    const output = redactSensitiveText(`provider ${token}`, { mode: "tools" });
+
+    expect(output).toBe("provider FlyV1 …tail");
+    expect(output).not.toContain(token);
+    expect(output).not.toContain("_tailtail");
   });
 });
