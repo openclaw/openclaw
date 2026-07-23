@@ -176,12 +176,12 @@ describe("chat pane connection lifecycle", () => {
       assistantAgentId: "main",
     };
 
-    pane.applyGatewaySnapshot({ ...snapshot, connected: false, hello: null });
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
     state.pendingAbort = { sourceClient: client, runId: null, sessionKey, clearQueued: true };
 
     pane.applyGatewaySnapshot({
       ...snapshot,
-      connected: true,
+      phase: "connected",
     });
 
     await vi.waitFor(() =>
@@ -192,7 +192,7 @@ describe("chat pane connection lifecycle", () => {
     );
     expect(state.pendingAbort).toBeNull();
 
-    pane.applyGatewaySnapshot({ ...snapshot, connected: true });
+    pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
     expect(request.mock.calls.filter(([method]) => method === "sessions.abort")).toHaveLength(1);
   });
 });

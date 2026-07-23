@@ -440,7 +440,7 @@ describe("sessions.abort agent scope", () => {
           reason: "abort",
         }),
         new Set(["conn-1"]),
-        { dropIfSlow: true },
+        expect.objectContaining({ dropIfSlow: true }),
       );
     } finally {
       weixinOperation.complete();
