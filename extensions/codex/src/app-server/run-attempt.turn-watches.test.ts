@@ -1398,41 +1398,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("does not count account rate-limit updates as turn completion activity", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
+    const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -1444,14 +1411,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       postToolRawAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 60_000,
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -1464,7 +1426,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    await notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
+    await harness.notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
 
     const result = await run;
     expect(result.aborted).toBe(true);
@@ -1484,267 +1446,110 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(warnData?.lastActivityReason).toBe("request:item/tool/call:response");
   });
 
-  it("keeps the post-tool completion watchdog armed across dynamic tool completion bookkeeping", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.timeoutMs = 60_000;
-
-    let settled = false;
-    const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 5,
-      postToolRawAssistantCompletionIdleTimeoutMs: 80,
-      turnTerminalIdleTimeoutMs: 200,
-    }).finally(() => {
-      settled = true;
-    });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
-
-    const toolResult = (await handleRequest?.({
-      id: "request-tool-1",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
+  it.each([
+    {
+      name: "dynamic tool completion bookkeeping",
+      completion: itemNotification("item/completed", {
+        type: "dynamicToolCall",
+        id: "call-1",
         tool: "message",
-        arguments: { action: "send", text: "already sent" },
-      },
-    })) as { success?: boolean };
-    expect(toolResult.success).toBe(false);
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "dynamicToolCall",
-          id: "call-1",
+      }),
+      expectedReason: undefined,
+      expectedItemType: undefined,
+    },
+    {
+      name: "raw tool-output completion",
+      completion: {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "custom_tool_call_output",
+            id: "call-1",
+            call_id: "call-1",
+            output: "already sent",
+          },
+        },
+      } satisfies CodexServerNotification,
+      expectedReason: "notification:rawResponseItem/completed",
+      expectedItemType: "custom_tool_call_output",
+    },
+  ])(
+    "keeps the post-tool completion watchdog armed across $name",
+    async ({ completion, expectedReason, expectedItemType }) => {
+      const harness = createStartedThreadHarness();
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      params.timeoutMs = 60_000;
+
+      let settled = false;
+      const run = runCodexAppServerAttempt(params, {
+        turnCompletionIdleTimeoutMs: 5,
+        postToolRawAssistantCompletionIdleTimeoutMs: 80,
+        turnTerminalIdleTimeoutMs: 200,
+      }).finally(() => {
+        settled = true;
+      });
+      await harness.waitForMethod("turn/start");
+
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
           tool: "message",
+          arguments: { action: "send", text: "already sent" },
         },
-      },
-    });
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(false);
+      await harness.notify(completion);
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    expect(settled).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      expect(settled).toBe(false);
+      expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(
+        false,
+      );
 
-    const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
-    expect(
-      warn.mock.calls.some(
+      const result = await run;
+      expect(result).toMatchObject({
+        aborted: true,
+        timedOut: true,
+        promptError: "codex app-server turn idle timed out waiting for turn/completed",
+      });
+      const completionWarnCall = warn.mock.calls.find(
         ([message]) => message === "codex app-server turn idle timed out waiting for completion",
-      ),
-    ).toBe(true);
-    const completionWarnCall = warn.mock.calls.find(
-      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
-    );
-    const completionWarnData = completionWarnCall?.[1] as { timeoutMs?: number } | undefined;
-    expect(completionWarnData?.timeoutMs).toBe(80);
-    expect(
-      warn.mock.calls.some(
-        ([message]) =>
-          message === "codex app-server turn idle timed out waiting for terminal event",
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps the post-tool completion watchdog armed across raw tool-output completion", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
+      );
+      expect(completionWarnCall).toBeDefined();
+      const completionWarnData = completionWarnCall?.[1] as
+        | { lastActivityReason?: string; lastNotificationItemType?: string; timeoutMs?: number }
+        | undefined;
+      expect(completionWarnData?.timeoutMs).toBe(80);
+      if (expectedReason) {
+        expect(completionWarnData?.lastActivityReason).toBe(expectedReason);
       }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
+      if (expectedItemType) {
+        expect(completionWarnData?.lastNotificationItemType).toBe(expectedItemType);
       }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.timeoutMs = 60_000;
-
-    let settled = false;
-    const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 5,
-      postToolRawAssistantCompletionIdleTimeoutMs: 80,
-      turnTerminalIdleTimeoutMs: 200,
-    }).finally(() => {
-      settled = true;
-    });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
-
-    const toolResult = (await handleRequest?.({
-      id: "request-tool-1",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", text: "already sent" },
-      },
-    })) as { success?: boolean };
-    expect(toolResult.success).toBe(false);
-    await notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "custom_tool_call_output",
-          id: "call-1",
-          call_id: "call-1",
-          output: "already sent",
-        },
-      },
-    });
-
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    expect(settled).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
-
-    const result = await run;
-    expect(result.aborted).toBe(true);
-    expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe(
-      "codex app-server turn idle timed out waiting for turn/completed",
-    );
-    const completionWarnCall = warn.mock.calls.find(
-      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
-    );
-    const completionWarnData = completionWarnCall?.[1] as
-      | { lastActivityReason?: string; lastNotificationItemType?: string; timeoutMs?: number }
-      | undefined;
-    expect(completionWarnData?.timeoutMs).toBe(80);
-    expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
-    expect(completionWarnData?.lastNotificationItemType).toBe("custom_tool_call_output");
-    expect(
-      warn.mock.calls.some(
-        ([message]) =>
-          message === "codex app-server turn idle timed out waiting for terminal event",
-      ),
-    ).toBe(false);
-  });
+      expect(
+        warn.mock.calls.some(
+          ([message]) =>
+            message === "codex app-server turn idle timed out waiting for terminal event",
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("keeps waiting when Codex emits a raw assistant item after a dynamic tool response", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -1756,14 +1561,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       turnAssistantCompletionIdleTimeoutMs: 200,
       turnTerminalIdleTimeoutMs: 200,
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -1776,7 +1576,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -1792,9 +1592,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
-    await notify({
+    await harness.notify({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -1807,44 +1607,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
-    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
   it("keeps waiting after an OpenClaw dynamic tool response before final synthesis", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session-post-tool-silent.jsonl"),
       path.join(tempDir, "workspace-post-tool-silent"),
@@ -1860,14 +1627,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }).finally(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -1885,9 +1647,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       setTimeout(resolve, 130);
     });
     expect(settled).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
-    await notify({
+    await harness.notify({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -2052,40 +1814,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("times out post-tool raw assistant progress after the post-tool timeout", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -2098,14 +1827,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       postToolRawAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 500,
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -2118,7 +1842,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -2140,7 +1864,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith(
+        expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
           {
             threadId: "thread-1",
@@ -2153,41 +1877,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("uses configured post-tool raw assistant completion timeout instead of assistant release timeout", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
+    const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -2203,14 +1894,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }).finally(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -2223,7 +1909,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -2250,7 +1936,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith(
+        expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
           {
             threadId: "thread-1",
@@ -2279,41 +1965,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("uses the post-tool timeout for commentary raw assistant progress", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
+    const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -2329,14 +1982,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     }).finally(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -2349,7 +1997,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -2380,41 +2028,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("keeps the post-tool guard armed for patch update snapshots", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
+    const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session-patch-snapshot-timeout.jsonl"),
       path.join(tempDir, "workspace-patch-snapshot-timeout"),
@@ -2427,14 +2042,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       postToolRawAssistantCompletionIdleTimeoutMs: 50,
       turnTerminalIdleTimeoutMs: 1_000,
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    await handleRequest?.({
+    await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -2446,7 +2056,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         arguments: { action: "send", text: "already sent" },
       },
     });
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -2463,7 +2073,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 30);
     });
-    await notify({
+    await harness.notify({
       method: "item/fileChange/patchUpdated",
       params: {
         threadId: "thread-1",
@@ -2496,28 +2106,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("times out post-native-tool raw assistant progress after the post-tool timeout", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -2530,12 +2119,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
       postToolRawAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 500,
     });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -2543,7 +2128,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         item: { type: "commandExecution", id: "cmd-1", status: "inProgress" },
       },
     });
-    await notify({
+    await harness.notify({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -2551,7 +2136,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         item: { type: "commandExecution", id: "cmd-1", status: "completed" },
       },
     });
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -2573,7 +2158,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith(
+        expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
           {
             threadId: "thread-1",
@@ -2586,41 +2171,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("logs raw assistant item context when the terminal watchdog fires", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
+    const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -2632,14 +2184,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       turnAssistantCompletionIdleTimeoutMs: 500,
       turnTerminalIdleTimeoutMs: 5,
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -2652,7 +2199,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -2705,41 +2252,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("uses the post-tool timeout after raw reasoning completes", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
+    const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -2752,14 +2266,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       postToolRawAssistantCompletionIdleTimeoutMs: 80,
       turnTerminalIdleTimeoutMs: 500,
     });
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-    // The keyed router only accepts turn-scoped requests once the turn is bound.
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
-      fastWait,
-    );
+    await harness.waitForMethod("turn/start");
 
-    const toolResult = (await handleRequest?.({
+    const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",
       method: "item/tool/call",
       params: {
@@ -2775,7 +2284,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     // Post-tool reasoning can precede the final reply; keep the longer
     // post-tool guard armed instead of falling back to the generic completion
     // idle timeout.
-    await notify({
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -3352,63 +2861,65 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
-  it("releases the session when a completed agent message item goes quiet", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
+  it.each([
+    {
+      name: "a completed agent message item goes quiet",
+      attemptOptions: {
+        pluginConfig: { appServer: { turnAssistantCompletionIdleTimeoutMs: 5 } },
+      },
+      notifications: [completedAssistant("msg-final-1", "Done.")],
+    },
+    {
+      name: "a real completed agent message omits text",
+      attemptOptions: { turnAssistantCompletionIdleTimeoutMs: 5 },
+      notifications: [
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "msg-final-1",
+            delta: "Done.",
           },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
+        },
+        completedAssistant("msg-final-1"),
+      ],
+    },
+    {
+      name: "bookkeeping follows a completed assistant",
+      attemptOptions: { turnAssistantCompletionIdleTimeoutMs: 5 },
+      notifications: [
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "msg-final-1",
+            delta: "Done.",
+          },
+        },
+        completedAssistant("msg-final-1"),
+        {
+          method: "turn/plan/updated",
+          params: { threadId: "thread-1", turnId: "turn-1", plan: [] },
+        },
+      ],
+    },
+  ])("releases the session when $name", async ({ attemptOptions, notifications }) => {
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 200;
-
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { turnAssistantCompletionIdleTimeoutMs: 5 } },
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "msg-final-1",
-          text: "Done.",
-        },
-      },
-    });
+    const run = runCodexAppServerAttempt(params, attemptOptions);
+    await harness.waitForMethod("turn/start");
+    for (const notification of notifications) {
+      await harness.notify(notification as CodexServerNotification);
+    }
 
     const result = await run;
-    expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
-      assistantTexts: result.assistantTexts,
-    }).toEqual({
+    expect(result).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3416,379 +2927,85 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith(
+        expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
-          {
-            threadId: "thread-1",
-            turnId: "turn-1",
-          },
+          { threadId: "thread-1", turnId: "turn-1" },
           { timeoutMs: 5_000 },
         ),
       { interval: 1 },
     );
   });
 
-  it("releases the session when a real completed agent message omits text", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
+  it.each([
+    {
+      name: "typed commentary before a typed final answer",
+      commentary: itemNotification("item/completed", {
+        type: "agentMessage",
+        id: "msg-commentary-1",
+        phase: "commentary",
+        text: "I am checking the workspace.",
+      }),
+      completion: itemNotification("item/completed", {
+        type: "agentMessage",
+        id: "msg-final-1",
+        phase: "final_answer",
+        text: "Done.",
+      }),
+      expectedAssistantTexts: ["Done."],
+    },
+    {
+      name: "raw commentary before turn completion",
+      commentary: {
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "message",
+            id: "raw-commentary-1",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "I am checking the workspace." }],
           },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
+        },
+      } satisfies CodexServerNotification,
+      completion: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      } satisfies CodexServerNotification,
+      expectedAssistantTexts: [],
+    },
+  ])("does not release $name", async ({ commentary, completion, expectedAssistantTexts }) => {
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 200;
-
-    const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "msg-final-1",
-        delta: "Done.",
-      },
-    });
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "msg-final-1",
-        },
-      },
-    });
-
-    const result = await run;
-    expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
-      assistantTexts: result.assistantTexts,
-    }).toEqual({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-      assistantTexts: ["Done."],
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith(
-          "turn/interrupt",
-          {
-            threadId: "thread-1",
-            turnId: "turn-1",
-          },
-          { timeoutMs: 5_000 },
-        ),
-      { interval: 1 },
-    );
-  });
-
-  it("keeps the completed assistant release armed across bookkeeping notifications", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.timeoutMs = 200;
-
-    const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "msg-final-1",
-        delta: "Done.",
-      },
-    });
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "msg-final-1",
-        },
-      },
-    });
-    await notify({
-      method: "turn/plan/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        plan: [],
-      },
-    });
-
-    const result = await run;
-    expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
-      assistantTexts: result.assistantTexts,
-    }).toEqual({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-      assistantTexts: ["Done."],
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith(
-          "turn/interrupt",
-          {
-            threadId: "thread-1",
-            turnId: "turn-1",
-          },
-          { timeoutMs: 5_000 },
-        ),
-      { interval: 1 },
-    );
-  });
-
-  it("does not release commentary agent message items", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.timeoutMs = 200;
-
-    const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "msg-commentary-1",
-          phase: "commentary",
-          text: "I am checking the workspace.",
-        },
-      },
-    });
+    const run = runCodexAppServerAttempt(params, { turnAssistantCompletionIdleTimeoutMs: 5 });
+    await harness.waitForMethod("turn/start");
+    await harness.notify(commentary);
     await new Promise((resolve) => {
       setTimeout(resolve, 20);
     });
-
-    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "agentMessage",
-          id: "msg-final-1",
-          phase: "final_answer",
-          text: "Done.",
-        },
-      },
-    });
+    expect(harness.request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    await harness.notify(completion);
 
     const result = await run;
-    expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
-      assistantTexts: result.assistantTexts,
-    }).toEqual({
+    expect(result).toMatchObject({
       aborted: false,
       timedOut: false,
       promptError: null,
-      assistantTexts: ["Done."],
-    });
-  });
-
-  it("does not release or return commentary raw assistant response items", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-    params.timeoutMs = 200;
-
-    const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
-    });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "message",
-          id: "raw-commentary-1",
-          role: "assistant",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "I am checking the workspace." }],
-        },
-      },
-    });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-
-    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
-
-    const result = await run;
-    expect({
-      aborted: result.aborted,
-      timedOut: result.timedOut,
-      promptError: result.promptError,
-      assistantTexts: result.assistantTexts,
-    }).toEqual({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-      assistantTexts: [],
+      assistantTexts: expectedAssistantTexts,
     });
   });
 
   it("releases the session after a raw assistant response item without turn completion", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -3800,12 +3017,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
       turnAssistantCompletionIdleTimeoutMs: 30,
       turnTerminalIdleTimeoutMs: 500,
     });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
       method: "rawResponseItem/completed",
       params: {
         threadId: "thread-1",
@@ -3833,7 +3046,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith(
+        expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
           {
             threadId: "thread-1",
@@ -4683,28 +3896,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("keeps waiting when a current-turn item is still active", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -4715,12 +3907,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
       turnAssistantCompletionIdleTimeoutMs: 5,
       turnTerminalIdleTimeoutMs: 50,
     });
-    await vi.waitFor(
-      () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
-      { interval: 1 },
-    );
-    await notify({
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -4728,7 +3916,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         item: { type: "commandExecution", id: "cmd-1", status: "inProgress" },
       },
     });
-    await notify({
+    await harness.notify({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -4744,8 +3932,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
       setTimeout(resolve, 20);
     });
 
-    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
-    await notify({
+    expect(harness.request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    await harness.notify({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -4769,28 +3957,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
   });
 
   it("times out promptly when the last completed non-assistant current-turn item is not followed by turn completion", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
-      if (method === "turn/start") {
-        return turnStartResult("turn-1", "inProgress");
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
+    const harness = createStartedThreadHarness();
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -4807,10 +3974,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+        expect(harness.request).toHaveBeenCalledWith(
+          "turn/start",
+          expect.anything(),
+          expect.anything(),
+        ),
       { interval: 5, timeout: 10_000 },
     );
-    await notify({
+    await harness.notify({
       method: "item/started",
       params: {
         threadId: "thread-1",
@@ -4824,7 +3995,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         },
       },
     });
-    await notify({
+    await harness.notify({
       method: "item/completed",
       params: {
         threadId: "thread-1",
@@ -4848,7 +4019,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     });
     await vi.waitFor(
       () =>
-        expect(request).toHaveBeenCalledWith(
+        expect(harness.request).toHaveBeenCalledWith(
           "turn/interrupt",
           {
             threadId: "thread-1",
