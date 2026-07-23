@@ -2222,6 +2222,13 @@ jobs:
           } >"${output_dir}/source-attestation.txt"
           echo "output_dir=$output_dir" >>"$GITHUB_OUTPUT"
 
+          # The frozen archive is mounted read-only for the isolated SUT. Invoke
+          # its built CLI directly so pnpm cannot attempt an implicit install.
+          run_candidate_telegram_qa() (
+            cd "$CANDIDATE_ROOT"
+            exec node ./dist/index.js qa telegram "$@"
+          )
+
           run_qa_attempt() (
             set -euo pipefail
             exec 2>&1
@@ -2232,7 +2239,7 @@ jobs:
             trap 'printf "::%s::\n" "$workflow_command_token"' EXIT
             set +e
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              run_candidate_telegram_qa \
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
@@ -2260,7 +2267,7 @@ jobs:
             fi
           done < <(
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              run_candidate_telegram_qa \
                 --repo-root "$CANDIDATE_ROOT" \
                 --provider-mode mock-openai \
                 --list-scenarios

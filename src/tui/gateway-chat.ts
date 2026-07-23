@@ -29,7 +29,6 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -161,6 +160,7 @@ export class GatewayChatClient implements TuiBackend {
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
       caps: [
+        GATEWAY_CLIENT_CAPS.AGENT_KIND,
         GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
         GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
         GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
@@ -481,16 +481,7 @@ async function resolveGatewayConnection(
     ...(urlOverride ? { url: urlOverride } : {}),
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
-  const allowInsecureLocalOperatorUi = (() => {
-    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
-      return false;
-    }
-    try {
-      return isLoopbackHost(new URL(url).hostname);
-    } catch {
-      return false;
-    }
-  })();
+  const allowInsecureLocalOperatorUi = false;
 
   if (urlOverride) {
     return {

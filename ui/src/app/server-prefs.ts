@@ -80,7 +80,7 @@ const SYNCED_PREFS = {
   }),
   chatPersistCommentary: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),
-    local: (settings) => settings.chatPersistCommentary ?? false,
+    local: (settings) => settings.chatPersistCommentary !== false,
   }),
   chatSendShortcut: prefSpec<ChatSendShortcut>({
     extract: (value) =>
@@ -103,6 +103,10 @@ const SYNCED_PREFS = {
   sidebarLiveActivity: prefSpec<boolean>({
     extract: (value) => (typeof value === "boolean" ? value : undefined),
     local: (settings) => settings.sidebarLiveActivity !== false,
+  }),
+  showAdvancedSettings: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.showAdvancedSettings === true,
   }),
 } as const;
 
@@ -273,7 +277,7 @@ export function applyServerUiPrefs(
   }
   const changed: ServerUiPrefs = {};
   for (const prefKey of Object.keys(prefs) as Array<keyof ServerUiPrefs>) {
-    if (lastSeenRaw === null || prefs[prefKey] !== lastSeen[prefKey]) {
+    if (lastSeenRaw === null || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey])) {
       (changed as Record<string, unknown>)[prefKey] = prefs[prefKey];
     }
   }
@@ -331,6 +335,9 @@ async function drainPrefsQueue(client: GatewayBrowserClient): Promise<void> {
         await client.request("config.patch", {
           baseHash,
           raw: JSON.stringify({ ui: { prefs } }),
+          ...(prefs.sidebarEntries !== undefined
+            ? { replacePaths: ["ui.prefs.sidebarEntries"] }
+            : {}),
           note: "control-ui prefs sync",
         });
         staleConfigHashes.add(baseHash);

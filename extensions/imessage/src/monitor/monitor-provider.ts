@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -12,6 +12,7 @@ import {
   runChannelInboundEvent,
   shouldDebounceTextInbound,
   type ChannelInboundTurnPlan,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -129,8 +130,8 @@ const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 const IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS = 7_000;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
-function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
-  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }
 
 function resolveIMessageSplitSendCompatDebounceMs(
@@ -178,10 +179,15 @@ function resolveIMessageInboundMediaInput(params: {
   const mediaCandidates = params.attachments.filter(
     (entry) => !isIMessagePluginPayloadAttachment(entry),
   );
-  const rawMediaAttachments = mediaCandidates.flatMap((attachment) => {
+  const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
+    const contentType = attachment.mime_type?.trim() || undefined;
+    return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+  });
+  const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
+    const fact = mediaFacts[index] ?? { kind: "unknown" as const };
     const attachmentPath = attachment.original_path?.trim();
     if (!attachmentPath || attachment.missing) {
-      return [];
+      return fact;
     }
     if (
       !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
@@ -189,21 +195,13 @@ function resolveIMessageInboundMediaInput(params: {
       params.logVerbose?.(
         `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
       );
-      return [];
+      return fact;
     }
-    return [{ path: attachmentPath, contentType: attachment.mime_type ?? undefined }];
+    return { ...fact, path: attachmentPath };
   });
-  const kind = kindFromMime(
-    rawMediaAttachments[0]?.contentType ?? mediaCandidates[0]?.mime_type ?? undefined,
-  );
-  const mediaPlaceholder = kind
-    ? `<media:${kind}>`
-    : mediaCandidates.length
-      ? "<media:attachment>"
-      : "";
   return {
-    bodyText: params.messageText || mediaPlaceholder,
-    mediaPlaceholder,
+    bodyText: params.messageText,
+    mediaFacts,
     mediaCandidates,
     rawMediaAttachments,
   };
@@ -211,20 +209,10 @@ function resolveIMessageInboundMediaInput(params: {
 
 function formatIMessageInboundMediaBody(params: {
   messageText: string;
-  optimisticPlaceholder: string;
-  mediaAttachments: Array<{ contentType?: string }>;
   unavailableCount: number;
 }): string {
-  const materializedKind = kindFromMime(params.mediaAttachments[0]?.contentType);
-  const materializedPlaceholder = materializedKind
-    ? `<media:${materializedKind}>`
-    : params.mediaAttachments.length > 0
-      ? "<media:attachment>"
-      : "";
   return formatInboundMediaUnavailableText({
-    body: params.messageText || materializedPlaceholder || params.optimisticPlaceholder,
-    mediaPlaceholder:
-      params.mediaAttachments.length === 0 ? params.optimisticPlaceholder : undefined,
+    body: params.messageText,
     notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
   });
 }
@@ -563,7 +551,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
 
-  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
+  const coalesceSameSenderDms = false;
   const debounceMsOverride = resolveIMessageSplitSendCompatDebounceMs(cfg, coalesceSameSenderDms);
   // Session capability latch: flips true once any inbound row from this imsg
   // build carries balloon metadata. The coalesce flush gate needs a build-level
@@ -900,7 +888,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const {
       messageText,
       bodyText,
-      mediaPlaceholder,
+      mediaFacts,
       mediaCandidates,
       rawMediaAttachments,
       effectiveAttachmentRoots,
@@ -941,6 +929,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       opts,
       messageText,
       bodyText,
+      mediaFacts,
       allowFrom,
       groupAllowFrom,
       allowLegacyConversationAllowFromForGroup,
@@ -1084,7 +1073,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
       }
     }
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg, decision.route.agentId);
     const sendPolicy = resolveSendPolicy({
       cfg,
       entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
@@ -1156,7 +1145,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const staged = remoteHost
       ? {
           attachments: rawMediaAttachments,
-          unavailableCount: mediaCandidates.length - rawMediaAttachments.length,
+          unavailableCount: rawMediaAttachments.filter((attachment) => !attachment.path).length,
         }
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
@@ -1164,12 +1153,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
-    const firstAttachment = mediaAttachments[0];
-    const mediaPath = firstAttachment?.path ?? undefined;
-    const mediaType = firstAttachment?.contentType ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
-    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
     const unavailableCount = staged.unavailableCount;
     const contextDecision =
       unavailableCount > 0
@@ -1177,8 +1160,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             ...decision,
             agentBodyText: formatIMessageInboundMediaBody({
               messageText,
-              optimisticPlaceholder: mediaPlaceholder,
-              mediaAttachments,
               unavailableCount,
             }),
           }
@@ -1215,10 +1196,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       dmHistory,
       media: {
-        path: mediaPath,
-        type: mediaType,
-        paths: mediaPaths,
-        types: mediaTypes,
+        facts: mediaAttachments,
       },
     });
 

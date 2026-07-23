@@ -38,6 +38,7 @@ import { resolveDiscordPreflightChannelAccess } from "./message-handler.prefligh
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
 import { buildDiscordMessagePreflightContext } from "./message-handler.preflight-context.js";
 import {
+  hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
   resolveDiscordMentionState,
@@ -164,7 +165,15 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  return toInboundMediaFacts(mediaList, { kind: "image", messageId: params.message.id });
+  const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
+  return toInboundMediaFacts(mediaList, { messageId: params.message.id }).map((media, index) => ({
+    path: media.path,
+    url: media.url,
+    contentType: media.contentType,
+    kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
+    transcribed: media.transcribed,
+    messageId: media.messageId,
+  }));
 }
 
 async function recordDiscordPendingHistoryEntry(params: {
@@ -241,11 +250,12 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfNeeded({
+  const hydration = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
   });
+  message = hydration.message;
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
@@ -451,7 +461,9 @@ export async function preflightDiscordMessage(
     providerPolicy: params.discordConfig?.mentionPatterns,
   });
   const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
   );
   const hasAnyMention =
     !isDirectMessage &&
@@ -752,7 +764,9 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  if (!messageText) {
+  const hasNativeMedia =
+    (message.attachments?.length ?? 0) > 0 || resolveDiscordMessageStickers(message).length > 0;
+  if (!messageText && !hasNativeMedia) {
     logDebug(`[discord-preflight] drop: empty content`);
     logVerbose(`discord: drop message ${message.id} (empty content)`);
     return null;

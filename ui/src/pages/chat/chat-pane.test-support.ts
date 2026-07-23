@@ -6,9 +6,11 @@ import type {
   TaskSuggestion,
   TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
@@ -34,9 +36,12 @@ export type TestChatPane = HTMLElement & {
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
+  refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
+  sessionPullRequests: ControlUiSessionPullRequest[];
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
+  switchPaneSession: (nextSessionKey: string) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
@@ -96,6 +101,13 @@ export function createSessionContext(
       },
     },
     agents: { state: { agentsList: null } },
+    config: {
+      current: {
+        assistantIdentity: { name: "Molty" },
+        terminalEnabled: false,
+      },
+    },
+    initialUserMessage: createInitialUserMessageHandoff(),
     sessions,
   } as unknown as ApplicationContext;
 }
@@ -137,6 +149,8 @@ export function createTestChatPane(params: {
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
+    realtimeTalkInputLevel: { set: vi.fn() },
+    resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
   pane.context = createSessionContext(params.client, params.sessions);

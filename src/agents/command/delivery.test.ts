@@ -387,9 +387,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("renders response prefix templates with the selected runtime model", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: {
-          responsePrefix: "[{modelFull}]",
-        },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn() } as never,
@@ -722,48 +720,6 @@ describe("deliverAgentCommandResult payload normalization", () => {
     );
   });
 
-  it("merges result metadata overrides into JSON output and returned results", async () => {
-    const runtime = {
-      log: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
-
-    const delivered = await deliverAgentCommandResult({
-      cfg: {} as OpenClawConfig,
-      deps: {} as CliDeps,
-      runtime: runtime as never,
-      opts: {
-        message: "test",
-        json: true,
-        resultMetaOverrides: {
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      } as AgentCommandOpts,
-      outboundSession: undefined,
-      sessionEntry: undefined,
-      payloads: [{ text: "local" }],
-      result: createResult(),
-    });
-
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.writeJson).toHaveBeenCalledWith(
-      {
-        payloads: [{ text: "local", mediaUrl: null }],
-        meta: {
-          durationMs: 1,
-          transport: "embedded",
-          fallbackFrom: "gateway",
-        },
-      },
-      2,
-    );
-    expect(delivered.meta.durationMs).toBe(1);
-    expect(delivered.meta.transport).toBe("embedded");
-    expect(delivered.meta.fallbackFrom).toBe("gateway");
-  });
-
   it("preserves committed message-tool delivery evidence when automatic delivery is disabled", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 
@@ -1047,7 +1003,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("dedupes sent text after applying the delivery response prefix", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: { responsePrefix: "Bot:" },
+        channels: { slack: { responsePrefix: "Bot:" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
@@ -1082,7 +1038,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: { responsePrefix: "[{modelFull}]" },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn(), error: vi.fn() } as never,

@@ -530,6 +530,52 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).not.toHaveBeenCalled();
   });
 
+  it.each(["react", "edit", "delete"] as const)(
+    "delegates Telegram %s topic binding to the bundled provider",
+    async (action) => {
+      setReadPlugin({ channel: "telegram", origin: "bundled" });
+
+      await dispatchChannelMessageAction({
+        channel: "telegram",
+        action,
+        cfg: {} as OpenClawConfig,
+        params: { chatId: "-1001" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentThreadTs: "77",
+        },
+      });
+
+      expect(handleAction).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not grant Telegram mutation enforcement to an external override", async () => {
+    setReadPlugin({ channel: "telegram", origin: "workspace" });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "telegram",
+        action: "react",
+        cfg: {} as OpenClawConfig,
+        params: { chatId: "-1001" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentThreadTs: "77",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
   it("uses bundled provider target normalization for equivalent exact-current forms", async () => {
     const normalizeTarget = vi.fn((raw: string) => {
       const room = raw

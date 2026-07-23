@@ -126,7 +126,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
                 return OpenClawChatAgentsListResponse(
                     defaultId: result.defaultid,
-                    agents: result.agents.map {
+                    agents: result.agents.filter(\.isSelectableAgent).map {
                         OpenClawChatAgentChoice(
                             id: $0.id,
                             name: $0.name,
@@ -437,6 +437,27 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             entryId: entryId)
         let response = try await self.requestSessionMutation(request)
         return try JSONDecoder().decode(OpenClawChatForkAtMessageResponse.self, from: response)
+    }
+
+    func listSessionBranches(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        let request = OpenClawChatGatewayRequests.listSessionBranches(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID)
+        let response = try await self.gateway.request(request)
+        return try JSONDecoder().decode(OpenClawChatSessionBranchesResponse.self, from: response)
+    }
+
+    func switchSessionBranch(sessionKey: String, agentID: String?, leafEntryId: String) async throws {
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.switchSessionBranch(
+            sessionKey: target.sessionKey,
+            agentID: agentID ?? target.agentID,
+            leafEntryId: leafEntryId)
+        _ = try await self.requestSessionMutation(request)
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {

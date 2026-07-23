@@ -7,6 +7,7 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -93,6 +94,7 @@ export async function prepareInternalSessionEffectsSession(params: {
   }
   const now = Date.now();
   const entry = await upsertSessionEntry(scope, {
+    ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
     sessionId: scope.sessionId,
     sessionStartedAt: now,
     updatedAt: now,

@@ -1,6 +1,11 @@
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./mcp-app-security.ts";
+import {
+  MCP_APP_VIEW_EXPIRED_EVENT,
+  WIDGET_PROMPT_EVENT,
+  type WidgetPromptEventDetail,
+} from "./mcp-app-security.ts";
 
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
@@ -175,6 +180,7 @@ describe("mcp-app-view localization", () => {
           content?: Array<{ type: string; text?: string }>;
           structuredContent?: Record<string, unknown>;
         }) => Promise<Record<string, never>>;
+        onsizechange?: (params: { height?: number }) => void;
         setHostContext: ReturnType<typeof vi.fn>;
         teardownResource: ReturnType<typeof vi.fn>;
         emit(type: string): void;
@@ -234,6 +240,54 @@ describe("mcp-app-view localization", () => {
     }
     expect(await send([{ type: "text", text: "Prompt 10" }])).toEqual({ isError: true });
     expect(received).toHaveLength(9);
+  });
+
+  it("signals its board owner when the view lease has expired", async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error("MCP App view expired"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      });
+    });
+    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
+    Reflect.set(view, "context", {
+      gateway: {
+        snapshot: { client: { request } },
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      },
+    });
+    view.sessionKey = "agent:main:main";
+    view.viewId = "mcp-app-expired";
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    document.body.append(view);
+
+    await expect.poll(() => expired).toHaveBeenCalledOnce();
+    await expect
+      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .toContain("MCP App view expired");
+  });
+
+  it("does not renew the view for unrelated upstream expiry errors", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("upstream token expired");
+    });
+    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
+    Reflect.set(view, "context", {
+      gateway: {
+        snapshot: { client: { request } },
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      },
+    });
+    view.sessionKey = "agent:main:main";
+    view.viewId = "mcp-app-upstream-expired";
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    document.body.append(view);
+
+    await expect
+      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .toContain("upstream token expired");
+    expect(expired).not.toHaveBeenCalled();
   });
 
   it("does not advertise or install message support for read-only views", async () => {
@@ -299,6 +353,25 @@ describe("mcp-app-view localization", () => {
     resize?.();
     expect(bridge.setHostContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ containerDimensions: { width: 720, height: 600 } }),
+    );
+
+    view.height = 480;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
+    );
+
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("900px");
+
+    view.fixedHeight = true;
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    bridge.onsizechange?.({ height: 900 });
+    expect(view.shadowRoot?.querySelector("iframe")?.style.height).toBe("480px");
+    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
+      expect.objectContaining({ containerDimensions: { width: 720, height: 480 } }),
     );
 
     view.remove();

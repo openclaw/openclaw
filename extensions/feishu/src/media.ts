@@ -25,14 +25,9 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
-import { sendIdempotentFeishuMessage } from "./message-send.js";
 import { getFeishuRuntime } from "./runtime.js";
-import {
-  assertFeishuMessageApiSuccess,
-  resolveFeishuReceiptKind,
-  toFeishuSendResult,
-} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import { sendReplyOrFallbackDirect } from "./send.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
@@ -510,30 +505,40 @@ async function sendUploadedMediaFeishu(params: {
   msgType: "image" | "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, content, msgType, replyToMessageId, replyInThread, accountId } = params;
+  const {
+    cfg,
+    to,
+    content,
+    msgType,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
   const subject = msgType === "image" ? "image" : "file";
-  const action = replyToMessageId ? "reply" : "send";
-  const errorPrefix = `Feishu ${subject} ${action} failed`;
-  const response = await sendIdempotentFeishuMessage({
-    client,
-    receiveId,
-    receiveIdType,
-    content,
-    msgType,
-    errorPrefix,
+  return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
-    includeNestedErrorLogId: true,
+    allowTopLevelReplyFallback,
+    content,
+    msgType,
+    directParams: {
+      receiveId,
+      receiveIdType,
+      content,
+      msgType,
+    },
+    directErrorPrefix: `Feishu ${subject} send failed`,
+    replyErrorPrefix: `Feishu ${subject} reply failed`,
   });
-  assertFeishuMessageApiSuccess(response, errorPrefix);
-  return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
 }
 
 /**
@@ -803,6 +808,7 @@ export async function sendMediaFeishu(params: {
   fileName?: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
   /** Allowed roots for local path reads; required for local filePath to work. */
   mediaLocalRoots?: readonly string[];
@@ -817,6 +823,7 @@ export async function sendMediaFeishu(params: {
     fileName,
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     accountId,
     mediaLocalRoots,
     audioAsVoice,
@@ -869,6 +876,7 @@ export async function sendMediaFeishu(params: {
       msgType: "image",
       replyToMessageId,
       replyInThread,
+      allowTopLevelReplyFallback,
       accountId,
     });
     return {
@@ -897,6 +905,7 @@ export async function sendMediaFeishu(params: {
     msgType: routing.msgType,
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     accountId,
   });
   return {

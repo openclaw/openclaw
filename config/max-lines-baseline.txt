@@ -91,7 +91,6 @@ extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
-extensions/discord/src/monitor/message-utils.test.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command-model-picker-interaction.ts
@@ -296,7 +295,6 @@ extensions/telegram/src/bot-native-commands.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
-extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts
 extensions/telegram/src/bot/delivery.test.ts
 extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
@@ -305,7 +303,6 @@ extensions/telegram/src/fetch.test.ts
 extensions/telegram/src/fetch.ts
 extensions/telegram/src/format.ts
 extensions/telegram/src/lane-delivery.test.ts
-extensions/telegram/src/message-cache.test.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/polling-session.ts
@@ -353,6 +350,10 @@ packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/providers/openai-responses-shared.ts
+packages/ai/src/transports/anthropic-transport-stream.test.ts
+packages/ai/src/transports/anthropic-transport-stream.ts
+packages/ai/src/transports/openai-completions-transport.ts
+packages/ai/src/transports/openai-responses-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
@@ -363,7 +364,6 @@ packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
 packages/speech-core/src/tts.test.ts
-packages/speech-core/src/tts.ts
 packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
@@ -387,8 +387,6 @@ src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
 src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
-src/agents/anthropic-transport-stream.test.ts
-src/agents/anthropic-transport-stream.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/oauth.openai-codex-refresh-fallback.test.ts
 src/agents/auth-profiles/persisted.ts
@@ -406,7 +404,6 @@ src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
-src/agents/cli-backends.test.ts
 src/agents/cli-output.test.ts
 src/agents/cli-output.ts
 src/agents/cli-runner.reliability.test.ts
@@ -494,8 +491,6 @@ src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-completions-transport.ts
-src/agents/openai-responses-transport.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.deepseek-and-shaping.test.ts
 src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts
@@ -507,7 +502,6 @@ src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
-src/agents/provider-attribution.ts
 src/agents/provider-local-service.ts
 src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
@@ -742,7 +736,6 @@ src/config/sessions/transcript.ts
 src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
-src/config/zod-schema.providers-core.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
@@ -874,7 +867,6 @@ src/gateway/session-utils.test.ts
 src/gateway/session-utils.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
-src/gateway/sessions-patch.ts
 src/gateway/talk-realtime-relay.test.ts
 src/gateway/talk-realtime-relay.ts
 src/gateway/test-helpers.server.ts
@@ -963,7 +955,6 @@ src/plugin-sdk/approval-native-helpers.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
 src/plugin-sdk/provider-stream-shared.test.ts
-src/plugin-sdk/provider-stream-shared.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
@@ -1053,7 +1044,6 @@ src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
 src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
-src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts
 src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts

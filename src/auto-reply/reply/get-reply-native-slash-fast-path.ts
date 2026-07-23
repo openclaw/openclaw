@@ -6,6 +6,7 @@ import {
 } from "../../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -169,6 +170,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       };
     }
     const persistedInitialEntry = persistence.entry;
+    if (creatingSession) {
+      recordSessionCreated({
+        sessionKey: sessionState.sessionKey,
+        agentId: params.agentId,
+        entry: persistedInitialEntry,
+      });
+    }
     // Commit the synthesized activity/channel touch before commands or directives
     // capture their own mutation baseline.
     sessionState.sessionEntry = persistedInitialEntry;

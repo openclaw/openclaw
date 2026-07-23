@@ -37,7 +37,11 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     cliSessionIds: { "claude-cli": "claude-conversation" },
     compactionCount: 2,
     contextTokens: 100_000,
+    createdVia: "operator",
+    createdActor: { type: "human", id: "profile-1" },
+    createdAt: 1_000,
     deliveryContext: { channel: "telegram", to: "chat-123" },
+    forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
     lastChannel: "telegram",
     lastTo: "chat-123",
     lifecycleRevision: "source-lifecycle-revision",
@@ -210,6 +214,11 @@ describe("SQLite session message cuts", () => {
       cliSessionIds: undefined,
       compactionCount: undefined,
       contextTokens: undefined,
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-1" },
+      createdAt: 1_000,
+      forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
+      previousSessionId: "message-cut-source",
     });
     expect(result.entry.deliveryContext).toEqual({ channel: "telegram", to: "chat-123" });
   });
@@ -274,6 +283,16 @@ describe("SQLite session message cuts", () => {
     expect(result.entry.lastChannel).toBeUndefined();
     expect(result.entry.lastTo).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);
+    expect(result.entry.previousSessionId).toBeUndefined();
+    expect(result.entry.forkedFromParent).toBeUndefined();
+    expect(result.entry.createdVia).toBeUndefined();
+    expect(result.entry.createdActor).toBeUndefined();
+    expect(result.entry.createdAt).toBeUndefined();
+    expect(result.entry.forkSource).toEqual({
+      sessionKey: canonicalSourceKey,
+      sessionId: "message-cut-source",
+      entryId: "user-2",
+    });
     expect(result.entry).toMatchObject({
       modelOverride: "gpt-5",
       modelOverrideSource: "user",

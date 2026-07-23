@@ -5,7 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
-  resolveAgentConfig,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
@@ -37,7 +36,11 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
@@ -1128,7 +1131,7 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestEntry = loadSessionEntry({
+    const latestEntry = loadSessionEntryReadOnly({
       storePath,
       sessionKey,
     });
@@ -1416,6 +1419,7 @@ export async function runReplyAgent(params: {
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+        ...(followupRun.media?.length ? { media: followupRun.media } : {}),
         ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode
@@ -1721,6 +1725,21 @@ export async function runReplyAgent(params: {
     requesterAccountId:
       followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
     requesterSenderId: sessionCtx.SenderId,
+    resolveUserTurnTarget: ({
+      entry,
+      sessionId,
+      sessionKey: targetSessionKey,
+      storePath: targetStorePath,
+    }) => ({
+      sessionId,
+      sessionKey: targetSessionKey,
+      sessionEntry: entry,
+      ...(activeSessionStore ? { sessionStore: activeSessionStore } : {}),
+      storePath: targetStorePath,
+      agentId: followupRun.run.agentId,
+      cwd: followupRun.run.workspaceDir,
+      config: cfg,
+    }),
     ...(sessionKey ? { sessionKey } : {}),
     setEntry: (entry) => {
       activeSessionEntry = entry;
@@ -2545,7 +2564,7 @@ export async function runReplyAgent(params: {
     const coveredByExistingCron =
       hasReminderCommitment && successfulCronAdds === 0
         ? await hasSessionRelatedCronJobs({
-            cronStorePath: cfg.cron?.store,
+            cronStorePath: undefined,
             sessionKey,
           })
         : false;
@@ -2923,14 +2942,7 @@ export async function runReplyAgent(params: {
         }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
-      const agentId = followupRun.run.agentId;
-      const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
-      const heartbeatAckMaxChars = Math.max(
-        0,
-        heartbeatAgentCfg?.ackMaxChars ??
-          cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-          DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
+      const heartbeatAckMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
       const resolvedPendingText = isHeartbeat
         ? (() => {
             const stripped = stripHeartbeatToken(pendingText, {
