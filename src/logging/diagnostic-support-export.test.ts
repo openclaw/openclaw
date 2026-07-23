@@ -721,6 +721,8 @@ describe("diagnostic support export", () => {
       ["event $F0Zlxky8bavuqH6MK75Av_c7UWFLp550WTQ1EA-F0KM", "event <redacted-matrix-event>"],
       ["notify @support_bot now", "notify <redacted-handle> now"],
       ["phone 15555551212", "phone <redacted-id>"],
+      ["config password = support-password-1234567890", "config password = suppor…7890"],
+      ["config jdbc.password=support-password-1234567890", "config jdbc.password=suppor…7890"],
     ] as const;
 
     for (const [input, expected] of cases) {

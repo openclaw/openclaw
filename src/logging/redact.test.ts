@@ -794,6 +794,33 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain("opaque-pass-secret-1234567890");
   });
 
+  it("masks common config-file secret assignments", () => {
+    const dbPassword = ["db", "password", "fixture", "1234567890"].join("-");
+    const apiSecret = ["api", "secret", "fixture", "1234567890"].join("-");
+    const secretKey = ["django", "secret", "key", "1234567890"].join("-");
+    const passphrase = ["tls", "passphrase", "fixture", "1234567890"].join("-");
+    const input = [
+      `password = ${dbPassword}`,
+      `api_secret: ${apiSecret}`,
+      `jdbc.password=${dbPassword}`,
+      `secret_key = ${secretKey}`,
+      `tls.passphrase: ${passphrase}`,
+      "safe_option = visible",
+    ].join("\n");
+
+    const output = redactSensitiveText(input, { mode: "tools" });
+    expect(output).toContain("password = db-pas…7890");
+    expect(output).toContain("api_secret: api-se…7890");
+    expect(output).toContain("jdbc.password=db-pas…7890");
+    expect(output).toContain("secret_key = django…7890");
+    expect(output).toContain("tls.passphrase: tls-pa…7890");
+    expect(output).toContain("safe_option = visible");
+    expect(output).not.toContain(dbPassword);
+    expect(output).not.toContain(apiSecret);
+    expect(output).not.toContain(secretKey);
+    expect(output).not.toContain(passphrase);
+  });
+
   it("masks complete unquoted assignment values that contain delimiter-like punctuation", () => {
     const input = "password=abc,def token=abc;def client_secret=abc]def pass=abc)def";
     const output = redactSensitiveText(input, { mode: "tools" });
