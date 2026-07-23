@@ -17,7 +17,7 @@ type TranscriptStreamCursor = {
 
 type PendingTranscriptLine = {
   cursor: TranscriptStreamCursor;
-  line: MeetingTranscriptLine;
+  line?: MeetingTranscriptLine;
 };
 
 type TranscriptSnapshotDelta = {
@@ -207,6 +207,12 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
           if (pendingError) {
             if (delta.lines.length > 0) {
               this.#queuePending(session.id, snapshot, delta, 0, delta.prefixKeys, true);
+            } else if (delta.commitEmpty) {
+              this.#queuePendingCursor(session.id, {
+                pageEpoch: snapshot.epoch,
+                pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
+                tailKeys: delta.prefixKeys,
+              });
             }
             throw pendingError;
           }
@@ -253,10 +259,12 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
       if (!next) {
         break;
       }
-      try {
-        await this.options.onLines?.(session, [next.line]);
-      } catch (error) {
-        throw new MeetingTranscriptDeliveryError(error);
+      if (next.line) {
+        try {
+          await this.options.onLines?.(session, [next.line]);
+        } catch (error) {
+          throw new MeetingTranscriptDeliveryError(error);
+        }
       }
       this.#streamCursors.set(session.id, next.cursor);
       pending.shift();
@@ -290,6 +298,12 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     // Undelivered rows are the only copy once the browser rolls its caption buffer.
     // Preserve them until durable delivery succeeds; retirement clears the queue.
     this.#pendingLines.set(sessionId, combined);
+  }
+
+  #queuePendingCursor(sessionId: string, cursor: TranscriptStreamCursor): void {
+    const pending = this.#pendingLines.get(sessionId) ?? [];
+    pending.push({ cursor });
+    this.#pendingLines.set(sessionId, pending);
   }
 
   retire(sessionId: string): void {
