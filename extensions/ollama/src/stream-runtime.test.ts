@@ -1743,9 +1743,7 @@ describe("parseNdjsonStream", () => {
 
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.done).toBe(true);
-    expect(ollamaStreamWarnMock).toHaveBeenCalledWith(
-      "Skipping malformed NDJSON line: not-json",
-    );
+    expect(ollamaStreamWarnMock).toHaveBeenCalledWith("Skipping malformed NDJSON line: not-json");
     expect(stream.locked).toBe(false);
   });
 });
