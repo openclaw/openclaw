@@ -1615,29 +1615,20 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.resumeSessionId).toBe("7f4a78e0-f6be-43fe-855c-c1c4fd229bc4");
   });
 
-  it("ignores ACP-only fields for subagent spawns", async () => {
+  it("rejects streamTo when runtime is subagent", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
-    const result = await tool.execute("call-guard", {
-      runtime: "subagent",
-      task: "resume prior work",
-      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
-      streamTo: "parent",
-    });
-
-    expectDetailFields(result.details, {
-      status: "accepted",
-      childSessionKey: "agent:main:subagent:1",
-      runId: "run-subagent",
-    });
-    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.task).toBe("resume prior work");
-    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
-    expect(spawnContext.agentSessionKey).toBe("agent:main:main");
-    expect(spawnArgs).not.toHaveProperty("resumeSessionId");
-    expect(spawnArgs).not.toHaveProperty("streamTo");
+    await expect(
+      tool.execute("call-guard", {
+        runtime: "subagent",
+        task: "resume prior work",
+        resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+        streamTo: "parent",
+      }),
+    ).rejects.toThrow('streamTo is only supported for runtime="acp"; got runtime="subagent"');
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
@@ -1762,27 +1753,20 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
-  it('ignores streamTo when runtime is omitted and defaults to "subagent"', async () => {
+  it('rejects streamTo when runtime is omitted and defaults to "subagent"', async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
-    const result = await tool.execute("call-3b", {
-      task: "analyze file",
-      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
-      streamTo: "parent",
-    });
-
-    expectDetailFields(result.details, {
-      status: "accepted",
-      childSessionKey: "agent:main:subagent:1",
-      runId: "run-subagent",
-    });
+    await expect(
+      tool.execute("call-3b", {
+        task: "analyze file",
+        resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+        streamTo: "parent",
+      }),
+    ).rejects.toThrow('streamTo is only supported for runtime="acp"; got runtime="subagent"');
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.task).toBe("analyze file");
-    expect(spawnArgs).not.toHaveProperty("resumeSessionId");
-    expect(spawnArgs).not.toHaveProperty("streamTo");
   });
 
   it('treats model="default" as no explicit model override', async () => {

@@ -1083,6 +1083,19 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
     logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
+    emitSessionLifecycleEvent({
+      sessionKey: giveUpParams.entry.childSessionKey,
+      reason: "subagent-delivery-failed",
+      parentSessionKey: giveUpParams.entry.requesterSessionKey,
+      label: giveUpParams.entry.label,
+      deliveryFailure: {
+        runId: giveUpParams.runId,
+        taskName: giveUpParams.entry.taskName,
+        giveUpReason: giveUpParams.reason,
+        finalStatus: giveUpParams.entry.outcome?.status,
+        deliveryError,
+      },
+    });
     // Retry-limit / expiry give-up should not leave cleanup stuck behind the
     // best-effort ended hook. Mark the run cleaned first, then fire the hook.
     completeCleanupBookkeeping({
@@ -1537,6 +1550,19 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       const completionReason = resolveCleanupCompletionReason(entry);
       logAnnounceGiveUp(entry, deferredDecision.reason);
+      emitSessionLifecycleEvent({
+        sessionKey: entry.childSessionKey,
+        reason: "subagent-delivery-failed",
+        parentSessionKey: entry.requesterSessionKey,
+        label: entry.label,
+        deliveryFailure: {
+          runId,
+          taskName: entry.taskName,
+          giveUpReason: deferredDecision.reason,
+          finalStatus: entry.outcome?.status,
+          deliveryError,
+        },
+      });
       // Giving up on announce delivery is terminal for cleanup even if the
       // best-effort hook is still resolving.
       completeCleanupBookkeeping({

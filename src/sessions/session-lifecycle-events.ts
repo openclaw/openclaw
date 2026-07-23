@@ -1,3 +1,16 @@
+/**
+ * Structured info surfaced when reason === "subagent-delivery-failed".
+ * Attached so the requester can decide how to recover — e.g. read the child
+ * transcript at `sessionKey` — instead of silently hanging on a lost announce.
+ */
+export type SubagentDeliveryFailureInfo = {
+  runId: string;
+  taskName?: string;
+  giveUpReason: "retry-limit" | "expiry";
+  finalStatus?: "ok" | "error" | "timeout" | "killed";
+  deliveryError?: string;
+};
+
 /** Session lifecycle event broadcast to observers when a session is created or linked. */
 export type SessionLifecycleEvent = {
   sessionKey: string;
@@ -5,6 +18,12 @@ export type SessionLifecycleEvent = {
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
+  /**
+   * Populated when reason === "subagent-delivery-failed" — the subagent
+   * completed but every announce delivery attempt failed. Requester should
+   * read the child transcript at `sessionKey` to surface the outcome.
+   */
+  deliveryFailure?: SubagentDeliveryFailureInfo;
 };
 
 export type SessionIdentityMutationTarget = {

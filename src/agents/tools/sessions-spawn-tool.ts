@@ -356,6 +356,11 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+      if (runtime === "subagent" && params.streamTo != null) {
+        throw new ToolInputError(
+          `streamTo is only supported for runtime="acp"; got runtime="subagent". Remove streamTo or switch to runtime="acp".`,
+        );
+      }
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};

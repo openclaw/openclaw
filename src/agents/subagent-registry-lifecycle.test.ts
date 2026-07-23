@@ -3092,6 +3092,51 @@ describe("subagent registry lifecycle hardening", () => {
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
   });
 
+  it.each([
+    { giveUpReason: "retry-limit" as const, lastError: "gateway request timeout for agent" },
+    { giveUpReason: "expiry" as const, lastError: undefined },
+  ])(
+    "emits subagent-delivery-failed lifecycle event on terminal give-up ($giveUpReason)",
+    async ({ giveUpReason, lastError }) => {
+      const persist = vi.fn();
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        expectsCompletionMessage: false,
+        retainAttachmentsOnKeep: true,
+        taskName: "diagnose-outage",
+        label: "sre-agent",
+        outcome: { status: "ok" },
+        delivery: lastError ? { status: "pending", lastError } : { status: "pending" },
+      });
+
+      const controller = createLifecycleController({
+        entry,
+        persist,
+        captureSubagentCompletionReply: vi.fn(async () => undefined),
+      });
+
+      await controller.finalizeResumedAnnounceGiveUp({
+        runId: entry.runId,
+        entry,
+        reason: giveUpReason,
+      });
+
+      expect(lifecycleEventMocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
+        sessionKey: entry.childSessionKey,
+        reason: "subagent-delivery-failed",
+        parentSessionKey: entry.requesterSessionKey,
+        label: "sre-agent",
+        deliveryFailure: {
+          runId: entry.runId,
+          taskName: "diagnose-outage",
+          giveUpReason,
+          finalStatus: "ok",
+          deliveryError: lastError ?? giveUpReason,
+        },
+      });
+    },
+  );
+
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
     const persistOrThrow = vi.fn();
     const entry = createRunEntry({
