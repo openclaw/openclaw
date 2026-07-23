@@ -67,8 +67,8 @@ async function loop(
 
   for (let i = 0; i < maxTurns && i < turns.length; i++) {
     turnsUsed = i + 1;
-    lastPartition = turns[i].partition;
-    const [stop, r] = await cond.check({ turn: turnsUsed, replyText: turns[i].reply, startedAt });
+    lastPartition = turns[i]!.partition;
+    const [stop, r] = await cond.check({ turn: turnsUsed, replyText: turns[i]!.reply, startedAt });
     if (stop) {
       reason = r;
       break;
@@ -80,7 +80,7 @@ async function loop(
 
 function scorer(partitions: ClaimPartition[]) {
   let i = 0;
-  return (_: string) => partitions[i++ % partitions.length];
+  return (_: string) => partitions[i++ % partitions.length]!;
 }
 
 function gsarOr(partitions: ClaimPartition[], weights = TOOL_MATCH_WEIGHTS, budget = 5) {
@@ -142,17 +142,17 @@ describe("web research — Anthropic API rate limits query", () => {
   });
 
   it("turn 1 hallucination is correctly scored near 0 (pure ungrounded)", () => {
-    expect(computeGroundednessScore(turns[0].partition, WEB_WEIGHTS)).toBe(0);
+    expect(computeGroundednessScore(turns[0]!.partition, WEB_WEIGHTS)).toBe(0);
   });
 
   it("turn 2 contradiction penalty keeps score in regenerate band", () => {
-    const s = computeGroundednessScore(turns[1].partition, WEB_WEIGHTS);
+    const s = computeGroundednessScore(turns[1]!.partition, WEB_WEIGHTS);
     expect(s).toBeGreaterThan(0.5);
     expect(s).toBeLessThan(0.8); // regenerate zone
   });
 
   it("turn 3 clears the proceed threshold", () => {
-    const s = computeGroundednessScore(turns[2].partition, WEB_WEIGHTS);
+    const s = computeGroundednessScore(turns[2]!.partition, WEB_WEIGHTS);
     expect(s).toBeGreaterThanOrEqual(0.8);
   });
 });
@@ -239,7 +239,7 @@ describe("code review — PR #74360 SSRF fix analysis", () => {
   ];
 
   it("inference-only review at turn 1 scores low (INFERENCE_WEIGHTS)", () => {
-    const s = computeGroundednessScore(turns[0].partition, INFERENCE_WEIGHTS);
+    const s = computeGroundednessScore(turns[0]!.partition, INFERENCE_WEIGHTS);
     // grounded=0, ungrounded=1, complementary=2 with w(comp)=0.2:
     // S = (0 + 2*0.2) / (0 + 1*1.0 + 0 + 2*0.2) = 0.4/1.4 ≈ 0.29 — replan zone
     expect(s).toBeLessThan(0.5);
@@ -247,7 +247,7 @@ describe("code review — PR #74360 SSRF fix analysis", () => {
   });
 
   it("file-grounded review at turn 3 exceeds proceed threshold (TOOL_MATCH_WEIGHTS)", () => {
-    const s = computeGroundednessScore(turns[2].partition, TOOL_MATCH_WEIGHTS);
+    const s = computeGroundednessScore(turns[2]!.partition, TOOL_MATCH_WEIGHTS);
     expect(s).toBeGreaterThanOrEqual(0.8);
   });
 
@@ -263,16 +263,16 @@ describe("code review — PR #74360 SSRF fix analysis", () => {
     );
     expect(r.turnsUsed).toBe(2);
     expect(r.reason).toMatch(/grounded:proceed/);
-    expect(computeGroundednessScore(turns[1].partition, TOOL_MATCH_WEIGHTS)).toBeGreaterThanOrEqual(
-      0.8,
-    );
+    expect(
+      computeGroundednessScore(turns[1]!.partition, TOOL_MATCH_WEIGHTS),
+    ).toBeGreaterThanOrEqual(0.8);
   });
 
   it("GSAR with inference weights exits later — file evidence treated as weaker", () => {
     // With inference weights (w=0.4), even 6 grounded claims need more to clear 0.80
     // p(6, 0, 0, 2): S = (6*0.4 + 2*0.2)/(6*0.4 + 0 + 0 + 2*0.2) = (2.4+0.4)/(2.4+0.4) = 1.0
     // Still clears — but turn 2 won't (5 grounded, 1 contradicted)
-    const p2score = computeGroundednessScore(turns[1].partition, INFERENCE_WEIGHTS);
+    const p2score = computeGroundednessScore(turns[1]!.partition, INFERENCE_WEIGHTS);
     // p(5,0,1,1): S = (5*0.4 + 1*0.2)/(5*0.4 + 0 + 1*1.0 + 1*0.2) = (2+0.2)/(2+1+0.2) = 2.2/3.2 ≈ 0.688
     expect(p2score).toBeGreaterThan(0.65);
     expect(p2score).toBeLessThan(0.8); // regenerate, not proceed
@@ -302,13 +302,13 @@ describe("A2A delegation — shell-grounded system metrics", () => {
 
   it("guessed answer (turn 1) scores low — ungrounded claims dominate", () => {
     // p(0,2,0,1): S = (0 + 1*0.5)/(0 + 2*1.0 + 0 + 1*0.5) = 0.5/2.5 = 0.2 → replan
-    const s = computeGroundednessScore(turns[0].partition, TOOL_MATCH_WEIGHTS);
+    const s = computeGroundednessScore(turns[0]!.partition, TOOL_MATCH_WEIGHTS);
     expect(s).toBe(0.2);
     expect(s).toBeLessThan(0.65); // replan zone
   });
 
   it("shell-grounded answer (turn 2) proceeds immediately", () => {
-    const s = computeGroundednessScore(turns[1].partition, TOOL_MATCH_WEIGHTS);
+    const s = computeGroundednessScore(turns[1]!.partition, TOOL_MATCH_WEIGHTS);
     expect(s).toBe(1);
   });
 
@@ -379,7 +379,7 @@ describe("scheduled digest — PR summary with time budget", () => {
     slowCond.reset();
     const [stop, reason] = await slowCond.check({
       turn: 1,
-      replyText: turns[0].reply,
+      replyText: turns[0]!.reply,
       startedAt: Date.now() - 2000,
     });
     expect(stop).toBe(true);

@@ -49,7 +49,7 @@ async function runRecoveryLoop(
 
   for (let i = 0; i < maxTurns && i < turns.length; i++) {
     const turn = i + 1;
-    const { reply } = turns[i];
+    const { reply } = turns[i]!;
     finalReply = reply;
     turnsUsed = turn;
     const [stop, reason] = await condition.check({ turn, replyText: reply, startedAt });
@@ -101,7 +101,7 @@ describe("P2 — Grounded monotonicity: moving a claim from U→G never decrease
   it("score is monotone across a U→G migration path", async () => {
     const scores = [0, 1, 2, 3, 4].map((g) => computeGroundednessScore(p(g, 4 - g, 0, 0)));
     for (let i = 1; i < scores.length; i++) {
-      expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1]);
+      expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1]!);
     }
   });
 });
@@ -110,7 +110,7 @@ describe("P3 — Contradiction penalty: adding contradicted claims never increas
   it("each additional contradicted claim strictly decreases S", async () => {
     const scores = [0, 1, 2, 3].map((x) => computeGroundednessScore(p(3, 0, x, 0)));
     for (let i = 1; i < scores.length; i++) {
-      expect(scores[i]).toBeLessThan(scores[i - 1]);
+      expect(scores[i]).toBeLessThan(scores[i - 1]!);
     }
   });
 });
@@ -195,7 +195,7 @@ describe("three-tier decision function δ(S)", () => {
 
 function makeScorer(partitions: ClaimPartition[]) {
   let call = 0;
-  return (_reply: string): ClaimPartition => partitions[call++ % partitions.length];
+  return (_reply: string): ClaimPartition => partitions[call++ % partitions.length]!;
 }
 
 describe("scenario A — grounded provider (Claude-like): exits at turn 1", () => {
@@ -230,7 +230,7 @@ describe("scenario A — grounded provider (Claude-like): exits at turn 1", () =
     );
     const flatResult = await runRecoveryLoop(
       new MaxIterations(5),
-      Array.from({ length: 5 }, () => turns[0]),
+      Array.from({ length: 5 }, () => turns[0]!),
     );
     expect(flatResult.turnsUsed - gsarResult.turnsUsed).toBe(4);
   });
@@ -346,7 +346,7 @@ describe("joint improvement — GSAR × termination algebra", () => {
       cond = new TextMention("DONE").or(new MaxIterations(5));
     } else {
       let call = 0;
-      const scorer = (_: string) => turns[call++ % turns.length].partition;
+      const scorer = (_: string) => turns[call++ % turns.length]!.partition;
       cond = new GroundednessCondition(scorer).or(new MaxIterations(5));
     }
 

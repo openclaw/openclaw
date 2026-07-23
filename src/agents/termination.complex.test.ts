@@ -36,7 +36,7 @@ async function runLoop(
 
   for (let i = 0; i < maxTurns && i < turns.length; i++) {
     const turn = i + 1;
-    const { reply, delayMs = 0 } = turns[i];
+    const { reply, delayMs = 0 } = turns[i]!;
     const effectiveStartedAt = startedAt - delayMs;
     replies.push(reply);
     turnsUsed = turn;
@@ -414,8 +414,8 @@ describe("multi-provider tournament — behavioral proof", () => {
     const byTurns = results.toSorted((a, b) => a.turnsUsed - b.turnsUsed);
 
     // Anthropic providers occupy the top 2 spots
-    expect(byTurns[0].provider).toMatch(/claude/);
-    expect(byTurns[1].provider).toMatch(/claude/);
+    expect(byTurns[0]!.provider).toMatch(/claude/);
+    expect(byTurns[1]!.provider).toMatch(/claude/);
 
     // All Claude runs cost less than all GPT runs
     const claudeMax = Math.max(
@@ -475,7 +475,7 @@ describe("multi-provider tournament — behavioral proof", () => {
     // Claude saves more than GPT does (GPT is bounded by hard limit in both cases)
     const claudeSavings = flat
       .filter((r) => r.provider.startsWith("claude"))
-      .reduce((s, r, i) => s + r.turns - algebra[i].turns, 0);
+      .reduce((s, r, i) => s + r.turns - algebra[i]!.turns, 0);
     const gptSavings = flat
       .filter((r) => r.provider.startsWith("gpt"))
       .reduce((s, r, _i) => {

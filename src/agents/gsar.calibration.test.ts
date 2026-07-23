@@ -96,7 +96,7 @@ describe("sensitivity — complementary weight w(K)", () => {
       return computeGroundednessScore(partition, w);
     });
     for (let i = 1; i < scores.length; i++) {
-      expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1]);
+      expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1]!);
     }
   });
 
@@ -122,7 +122,7 @@ describe("sensitivity — contradiction penalty ρ", () => {
       computeGroundednessScore(partition, DEFAULT_WEIGHTS, rho),
     );
     for (let i = 1; i < scores.length; i++) {
-      expect(scores[i]).toBeLessThanOrEqual(scores[i - 1]);
+      expect(scores[i]).toBeLessThanOrEqual(scores[i - 1]!);
     }
   });
 
