@@ -141,11 +141,11 @@ class AppSidebar extends AppSidebarSessionListElement {
           .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
           .avatarText=${cardAvatarText}
           .subtitle=${this.agentChipSubtitle(cardAgentId)}
-          .menuOpen=${this.agentMenuPosition !== null}
+          .menuOpen=${this.sidebarMenus.agentMenuPosition !== null}
           .menuUnread=${menuUnread}
           .approvalCount=${approvalCount}
           .switcherAvailable=${cardAgents.length > 1}
-          .onToggleMenu=${(trigger: HTMLElement) => this.toggleAgentMenu(trigger)}
+          .onToggleMenu=${(trigger: HTMLElement) => this.sidebarMenus.toggleAgentMenu(trigger)}
         ></openclaw-sidebar-agent-card>
         <div class="sidebar-brand__actions">
           <openclaw-tooltip
@@ -263,9 +263,10 @@ class AppSidebar extends AppSidebarSessionListElement {
           type="button"
           class="sidebar-nav__head-action"
           aria-haspopup="menu"
-          aria-expanded=${String(this.moreMenuPosition !== null)}
+          aria-expanded=${String(this.sidebarMenus.moreMenuPosition !== null)}
           aria-label=${t("nav.customize")}
-          @click=${(event: MouseEvent) => this.toggleMoreMenu(event.currentTarget as HTMLElement)}
+          @click=${(event: MouseEvent) =>
+            this.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
         >
           ${icons.penLine}
         </button>
@@ -369,17 +370,19 @@ class AppSidebar extends AppSidebarSessionListElement {
     workboardRows: ReadonlyMap<string, SidebarWorkboardBoard>,
   ) {
     if (
-      (entry.type === "route" && !this.isRouteEnabled(entry.route)) ||
-      (entry.type === "workboard" && !this.isRouteEnabled("workboard"))
+      (entry.type === "route" && !this.sidebarMenus.isRouteEnabled(entry.route)) ||
+      (entry.type === "workboard" && !this.sidebarMenus.isRouteEnabled("workboard"))
     ) {
       return nothing;
     }
     const serialized = serializeSidebarEntry(entry);
     const dropPosition =
-      this.sidebarZoneDropTarget?.entry === serialized ? this.sidebarZoneDropTarget.position : null;
+      this.sessionOrganizer.sidebarZoneDropTarget?.entry === serialized
+        ? this.sessionOrganizer.sidebarZoneDropTarget.position
+        : null;
     const content =
       entry.type === "route"
-        ? this.renderRoute(entry.route)
+        ? this.sidebarMenus.renderRoute(entry.route)
         : entry.type === "workboard"
           ? workboardRows.has(entry.boardId)
             ? this.renderWorkboardBoard(workboardRows.get(entry.boardId)!)
@@ -392,7 +395,9 @@ class AppSidebar extends AppSidebarSessionListElement {
       <div
         class="sidebar-zone-entry ${dropPosition
           ? `sidebar-zone-entry--drop-${dropPosition}`
-          : ""} ${this.draggingSidebarEntry === serialized ? "sidebar-zone-entry--dragging" : ""}"
+          : ""} ${this.sessionOrganizer.draggingSidebarEntry === serialized
+          ? "sidebar-zone-entry--dragging"
+          : ""}"
         data-sidebar-entry=${serialized}
         draggable=${draggable ? "true" : "false"}
         @dragstart=${entry.type === "route"
@@ -451,7 +456,7 @@ class AppSidebar extends AppSidebarSessionListElement {
             @scroll=${(event: Event) =>
               this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
           >
-            <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
+            <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
               ${this.renderPagesHead()}
               <div
                 class="nav-section__items"
@@ -510,9 +515,10 @@ class AppSidebar extends AppSidebarSessionListElement {
             ${this.renderFooterBar()}
           </div>
         </div>
-        ${this.renderCustomizeMenu()} ${this.renderMoreMenu()} ${this.renderAgentMenu()}
-        ${this.renderSessionMenu()} ${this.catalogMenu.render()} ${this.renderSessionGroupMenu()}
-        ${this.renderSessionSortMenu()}
+        ${this.sidebarMenus.renderCustomizeMenu()} ${this.sidebarMenus.renderMoreMenu()}
+        ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderSessionMenu()}
+        ${this.sidebarMenus.catalogMenu.render()} ${this.sidebarMenus.renderSessionGroupMenu()}
+        ${this.sidebarMenus.renderSessionSortMenu()}
       </aside>
     `;
   }

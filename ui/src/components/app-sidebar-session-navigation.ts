@@ -123,7 +123,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return this.getSessionNavigationState().toSidebarSession(row);
   }
 
-  protected getRouteSessionKey(): string {
+  getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
@@ -131,7 +131,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return this.outboxCountForSession(sessionKey);
   }
 
-  protected getSessionNavigationState() {
+  getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
     const navigation = resolveSessionNavigation({
@@ -341,7 +341,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return [...pinnedRows, ...visibleRows];
   }
 
-  protected selectedVisibleSessions(): SidebarRecentSession[] {
+  selectedVisibleSessions(): SidebarRecentSession[] {
     if (this.selectedSessionKeys.size === 0) {
       return [];
     }
@@ -452,7 +452,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       : normalizeAgentId(this.getSessionNavigationState().selectedAgentId);
   }
 
-  protected activeChipAgent() {
+  activeChipAgent() {
     const roster = this.context?.agents.state.agentsList?.agents ?? [];
     const activeId = this.expandedAgentId();
     const agent = roster.find((entry) => normalizeAgentId(entry.id) === activeId);
@@ -514,13 +514,13 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return t("agentChip.ready");
   }
 
-  protected switchChipAgent(agentId: string) {
+  switchChipAgent(agentId: string) {
     this.closeAgentMenu();
     this.expandAgent(agentId);
     this.openAgentConversation(agentId);
   }
 
-  protected askAgentCapabilities(agentId: string) {
+  askAgentCapabilities(agentId: string) {
     this.closeAgentMenu();
     if (!this.connected) {
       return;
@@ -733,7 +733,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     this.fullyShownChildSessionKeys = new Set(this.fullyShownChildSessionKeys).add(sessionKey);
   }
 
-  protected agentUnreadCount(agentId: string): number {
+  agentUnreadCount(agentId: string): number {
     const rows = this.sessionData.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
     return rows.filter((row) => row.unread === true && row.archived !== true).length;
   }
