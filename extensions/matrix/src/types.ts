@@ -105,6 +105,44 @@ export type MatrixParticipationConfig = {
   model?: string;
 };
 
+export type MatrixFreshnessMode = "auto" | "revise" | "suppress" | "send-as-is";
+export type MatrixFreshnessScope = "room" | "thread-aware";
+export type MatrixFreshnessFinalAction = "revise" | "suppress" | "send-as-is";
+
+export type MatrixFreshnessConfig = {
+  /**
+   * Opt in to publish-time Matrix freshness checks. Default: false.
+   *
+   * When enabled for a Matrix room, the monitor rechecks for newer visible
+   * room/thread messages before final delivery and can suppress or revise stale drafts.
+   */
+  enabled?: boolean;
+  /**
+   * Final handling when newer relevant activity arrives.
+   * - auto: optionally ask the model, otherwise fall back to send-as-is.
+   * - revise: redraft the final answer against the newer context.
+   * - suppress: drop the draft before posting.
+   * - send-as-is: observe/log freshness without changing delivery.
+   */
+  mode?: MatrixFreshnessMode;
+  /** Freshness matching scope. Default: thread-aware. */
+  scope?: MatrixFreshnessScope;
+  /** Optional holdback before final publish to catch near-simultaneous messages. */
+  draftHoldbackMs?: number;
+  /** Optional model override for AI final-action selection. */
+  model?: string;
+  /** Minimum joined room members required before freshness activates. */
+  minRoomMembers?: number;
+  /** Minimum configured agent members required before freshness activates. */
+  minAgentMembers?: number;
+  /** Allowed AI-selected final actions. Defaults to all final actions. */
+  allowedFinalActions?: MatrixFreshnessFinalAction[];
+  /** Let AI choose suppress/revise/send-as-is in auto mode. Default: false. */
+  aiDeterminesFinalAction?: boolean;
+  /** Deterministic final action override for auto mode. */
+  finalAction?: MatrixFreshnessFinalAction;
+};
+
 export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 
 export type MatrixStreamingConfig = {
@@ -197,6 +235,8 @@ export type MatrixConfig = {
   threadBindings?: MatrixThreadBindingsConfig;
   /** Opt-in participation control for multi-agent Matrix rooms. */
   participation?: MatrixParticipationConfig;
+  /** Opt-in publish-time freshness control for multi-agent Matrix rooms. */
+  freshness?: MatrixFreshnessConfig;
   /** Whether Matrix should auto-request self verification on startup when unverified. */
   startupVerification?: "off" | "if-unverified";
   /** Cooldown window for automatic startup verification requests. Default: 24 hours. */

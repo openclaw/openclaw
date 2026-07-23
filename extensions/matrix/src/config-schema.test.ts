@@ -181,4 +181,48 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts opt-in Matrix draft freshness config", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      freshness: {
+        enabled: true,
+        mode: "auto",
+        scope: "thread-aware",
+        draftHoldbackMs: 250,
+        model: "openai/gpt-5.1-mini",
+        minRoomMembers: 3,
+        minAgentMembers: 2,
+        allowedFinalActions: ["revise", "suppress", "send-as-is"],
+        aiDeterminesFinalAction: true,
+        finalAction: "revise",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown Matrix draft freshness fields", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      freshness: {
+        enabled: true,
+        surprise: true,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects invalid Matrix draft freshness final actions", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      freshness: {
+        enabled: true,
+        allowedFinalActions: ["revise", "delete"],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });

@@ -47,6 +47,17 @@ const resolveMatrixMentionsForBodyMock = vi.hoisted(() =>
     };
   }),
 );
+const getReplyFromConfigMock = vi.hoisted(() =>
+  vi.fn(async () => ({ text: "revised final reply" })),
+);
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: getReplyFromConfigMock,
+  };
+});
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
@@ -120,6 +131,7 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+  getReplyFromConfigMock.mockReset().mockResolvedValue({ text: "revised final reply" });
 });
 
 afterEach(() => {
@@ -790,6 +802,119 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  async function runMatrixFreshnessScenario(params: {
+    mode: "revise" | "send-as-is" | "suppress";
+    finalText?: string;
+  }) {
+    type DeliverFn = (payload: { text?: string }, info: { kind: string }) => Promise<void>;
+    let capturedDeliver: DeliverFn | undefined;
+    let resolveCaptured: (() => void) | undefined;
+    const captured = new Promise<void>((resolve) => {
+      resolveCaptured = resolve;
+    });
+    let releaseFirstDispatch: (() => void) | undefined;
+    const firstDispatchGate = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    let dispatchCount = 0;
+    const dispatchInboundMessage = vi.fn(async () => {
+      dispatchCount += 1;
+      if (dispatchCount === 1) {
+        await firstDispatchGate;
+        return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+      }
+      return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+    });
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      historyLimit: 10,
+      accountConfig: {
+        freshness: {
+          enabled: true,
+          mode: params.mode,
+        },
+      },
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      createReplyDispatcherWithTyping: (options: Record<string, unknown> | undefined) => {
+        if (!capturedDeliver) {
+          capturedDeliver = options?.deliver as DeliverFn | undefined;
+          resolveCaptured?.();
+        }
+        return {
+          dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      dispatchInboundMessage: dispatchInboundMessage as never,
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@new:example.org" ? "new-sender" : "sender",
+    });
+
+    const firstDone = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$fresh-trigger", body: "initial question" }),
+    );
+    await captured;
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$fresh-new",
+        sender: "@new:example.org",
+        body: "new context before the draft posts",
+      }),
+    );
+
+    deliverMatrixRepliesMock.mockClear();
+    await capturedDeliver?.(
+      { text: params.finalText ?? "original final reply" },
+      { kind: "final" },
+    );
+    releaseFirstDispatch?.();
+    await firstDone;
+    return { dispatchInboundMessage };
+  }
+
+  it("suppresses stale Matrix final replies when freshness mode is suppress", async () => {
+    await runMatrixFreshnessScenario({ mode: "suppress" });
+
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("sends stale Matrix final replies unchanged when freshness mode is send-as-is", async () => {
+    await runMatrixFreshnessScenario({ mode: "send-as-is" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(requireRecord(replies[0], "delivered reply").text).toBe("original final reply");
+  });
+
+  it("redrafts stale Matrix final replies when freshness mode is revise", async () => {
+    await runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
+
+    expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    const freshCtx = requireRecord(
+      callArg(getReplyFromConfigMock, 0, 0, "freshness reply ctx"),
+      "freshness reply ctx",
+    );
+    expect(String(freshCtx.BodyForAgent)).toContain("new context before the draft posts");
+    expect(String(freshCtx.BodyForAgent)).toContain("old draft");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(requireRecord(replies[0], "delivered reply").text).toBe("revised final reply");
   });
 
   it('drops configured Matrix bot room messages without a mention when allowBots="mentions"', async () => {
