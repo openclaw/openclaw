@@ -2823,7 +2823,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "discord",
         accountId: "acct-1",
         to: "dm:U123",
-        content: "The generated music is ready.",
+        content: "",
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
         idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
       }),
@@ -3005,9 +3005,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "slack",
         accountId: "acct-1",
         to: "channel:C123",
-        content: "The generated image is ready.",
+        content: "",
         mediaUrls: ["/tmp/generated-robot-2.png"],
         idempotencyKey: "announce-channel-media-partial-message-tool:generated-media-direct",
+      }),
+    );
+  });
+
+  it("keeps the generic caption when the message-tool record lacks a destination", async () => {
+    // Fail-closed guard: a sent-target record without `to` cannot prove the
+    // caption reached the fallback destination, so suppression must not fire.
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            text: "The first image is ready.",
+            mediaUrls: ["/tmp/generated-robot-1.png"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-media-toless-message-tool",
+      sourceTool: "image_generate",
+      internalEvents: imageCompletionEvents({
+        taskLabel: "two proof images",
+        result:
+          "Generated 2 images.\nMEDIA:/tmp/generated-robot-1.png\nMEDIA:/tmp/generated-robot-2.png",
+        mediaUrls: ["/tmp/generated-robot-1.png", "/tmp/generated-robot-2.png"],
+        replyInstruction:
+          "Tell the user the images are ready and send them through the message tool.",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-robot-2.png"],
+        idempotencyKey: "announce-channel-media-toless-message-tool:generated-media-direct",
       }),
     );
   });
@@ -3086,7 +3132,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "slack",
         accountId: "acct-1",
         to: "channel:C123",
-        content: "The generated image is ready.",
+        content: "",
         mediaUrls: ["/tmp/generated-robot-2.png"],
         idempotencyKey: "announce-channel-media-partial-automatic:generated-media-direct",
       }),
@@ -3177,7 +3223,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "slack",
         accountId: "acct-1",
         to: "channel:C123",
-        content: "The generated image is ready.",
+        content: "",
         mediaUrls: ["/tmp/generated-robot-2.png"],
         idempotencyKey: "announce-channel-media-automatic-suppressed:generated-media-direct",
       }),
@@ -3507,7 +3553,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         channel: "slack",
         accountId: "acct-1",
         to: "channel:C123",
-        content: "The generated image is ready.",
+        content: "",
         mediaUrls: ["/tmp/generated-robot-2.png"],
         idempotencyKey: "announce-channel-media-active-wake-failed:generated-media-direct",
       }),
@@ -3900,7 +3946,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           channel: origin.channel,
           accountId: "acct-1",
           to: origin.to,
-          content: "The generated music is ready.",
+          content: "",
           mediaUrls: ["/tmp/generated-night-drive.mp3"],
           idempotencyKey: `announce-legacy-media-message-tool-${origin.channel}:generated-media-direct`,
         }),
