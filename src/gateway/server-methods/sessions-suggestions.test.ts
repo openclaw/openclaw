@@ -14,6 +14,12 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 const mocks = vi.hoisted(() => ({
   appendSessionAudit: vi.fn(async () => undefined),
   handleChatSend: vi.fn(),
+  suggestionMutationFailure: undefined as
+    | "claim"
+    | "release"
+    | "release-unexpected"
+    | "finalize"
+    | undefined,
   presence: [] as Array<{
     user?: { id: string; name?: string };
     watchedSessions?: string[];
@@ -25,6 +31,38 @@ vi.mock("./session-audit.js", () => ({ appendSessionAudit: mocks.appendSessionAu
 vi.mock("../../infra/system-presence.js", () => ({
   listSystemPresence: () => mocks.presence,
 }));
+vi.mock("../../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+  const failIfRequested = (phase: "claim" | "release" | "finalize") => {
+    if (mocks.suggestionMutationFailure === phase) {
+      throw new actual.SessionWorkStartInvalidatedError("session changed in test");
+    }
+  };
+  return {
+    ...actual,
+    claimSessionSuggestionDispatch: (
+      ...args: Parameters<typeof actual.claimSessionSuggestionDispatch>
+    ) => {
+      failIfRequested("claim");
+      return actual.claimSessionSuggestionDispatch(...args);
+    },
+    finalizeSessionSuggestionClaim: (
+      ...args: Parameters<typeof actual.finalizeSessionSuggestionClaim>
+    ) => {
+      failIfRequested("finalize");
+      return actual.finalizeSessionSuggestionClaim(...args);
+    },
+    releaseSessionSuggestionDispatch: (
+      ...args: Parameters<typeof actual.releaseSessionSuggestionDispatch>
+    ) => {
+      failIfRequested("release");
+      if (mocks.suggestionMutationFailure === "release-unexpected") {
+        throw new Error("release storage failed");
+      }
+      return actual.releaseSessionSuggestionDispatch(...args);
+    },
+  };
+});
 
 const sessionKey = "agent:main:main";
 
@@ -108,6 +146,7 @@ beforeEach(() => {
   mocks.handleChatSend.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
     respond(true, { runId: "suggestion-run", status: "started" });
   });
+  mocks.suggestionMutationFailure = undefined;
   mocks.presence = [];
 });
 
@@ -413,7 +452,7 @@ describe("session suggestion handlers", () => {
         client("alice", "Alice"),
       );
       const audit = createDeferred<undefined>();
-      mocks.appendSharingAudit.mockImplementationOnce(() => audit.promise);
+      mocks.appendSessionAudit.mockImplementationOnce(() => audit.promise);
       const broadcast = vi.fn();
       const pending = call(
         "session.suggestions.resolve",
@@ -422,7 +461,7 @@ describe("session suggestion handlers", () => {
         context(broadcast),
       );
 
-      await vi.waitFor(() => expect(mocks.appendSharingAudit).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mocks.appendSessionAudit).toHaveBeenCalledOnce());
       expect(broadcast).toHaveBeenCalledWith(
         "session.suggestion",
         expect.objectContaining({ action: "resolved" }),
@@ -755,6 +794,103 @@ describe("session suggestion handlers", () => {
         },
       });
       expect(broadcast).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["claim", "release", "finalize"] as const)(
+    "maps a session replacement during %s to the structured terminal error",
+    async (phase) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "session-race",
+            updatedAt: 1,
+            createdActor: { type: "human", id: "owner" },
+            visibility: "suggest",
+          },
+        );
+        const added = await call(
+          "session.suggestions.add",
+          { sessionKey, text: `replace during ${phase}` },
+          client("alice", "Alice"),
+        );
+        if (phase === "release") {
+          mocks.handleChatSend.mockImplementationOnce(
+            async ({ respond }: { respond: RespondFn }) => {
+              respond(false, undefined, {
+                code: "INVALID_REQUEST",
+                message: "definite dispatch rejection",
+              });
+            },
+          );
+        }
+        mocks.suggestionMutationFailure = phase;
+        const broadcast = vi.fn();
+
+        const result = await call(
+          "session.suggestions.resolve",
+          {
+            sessionKey,
+            id: responseSuggestionId(added),
+            resolution: phase === "release" ? "send" : "dismiss",
+          },
+          client("owner", "Owner"),
+          context(broadcast),
+        );
+
+        expect(result.responses).toHaveLength(1);
+        expect(result.responses[0]?.[0]).toBe(false);
+        expect(result.responses[0]?.[2]).toMatchObject({
+          code: "UNAVAILABLE",
+          retryable: false,
+          details: {
+            code: "SESSION_SUGGESTION_SESSION_CHANGED",
+            sessionKey,
+          },
+        });
+        expect(broadcast).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("keeps an unexpected claim-release failure retryable", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-release-failure",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const added = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "retry after release failure" },
+        client("alice", "Alice"),
+      );
+      mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
+        respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: "definite dispatch rejection",
+        });
+      });
+      mocks.suggestionMutationFailure = "release-unexpected";
+
+      const result = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id: responseSuggestionId(added), resolution: "send" },
+        client("owner", "Owner"),
+      );
+
+      expect(result.responses).toHaveLength(1);
+      expect(result.responses[0]?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        message: "release storage failed",
+        retryable: true,
+        retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+      });
     });
   });
 

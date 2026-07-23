@@ -13,6 +13,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { ensureOpenClawAgentSessionSharingSchemaInTransaction } from "../../state/openclaw-agent-session-sharing-schema.js";
+import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
@@ -103,7 +104,7 @@ function assertSessionInstance(
     row.current_session_id !== entrySessionId ||
     entrySessionId !== expectedSessionId
   ) {
-    throw new Error("session changed before suggestion mutation");
+    throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
   }
 }
 

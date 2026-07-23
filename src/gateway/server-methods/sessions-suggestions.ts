@@ -15,6 +15,7 @@ import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
   finalizeSessionSuggestionClaim,
+  isSessionWorkStartInvalidatedError,
   listSessionSuggestions,
   releaseSessionSuggestionDispatch,
   resolveSessionWorkStartError,
@@ -136,6 +137,40 @@ function publishSuggestion(
 
 function resolutionState(resolution: SessionSuggestionResolution): "accepted" | "dismissed" {
   return resolution === "dismiss" ? "dismissed" : "accepted";
+}
+
+function respondSessionSuggestionSessionChanged(respond: RespondFn, sessionKey: string): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "session changed before suggestion resolution could be finalized",
+      {
+        retryable: false,
+        details: {
+          code: "SESSION_SUGGESTION_SESSION_CHANGED",
+          sessionKey,
+        },
+      },
+    ),
+  );
+}
+
+function runSessionSuggestionMutation<T>(params: {
+  mutate: () => T;
+  respond: RespondFn;
+  sessionKey: string;
+}): { ok: true; value: T } | { ok: false } {
+  try {
+    return { ok: true, value: params.mutate() };
+  } catch (error) {
+    if (!isSessionWorkStartInvalidatedError(error)) {
+      throw error;
+    }
+    respondSessionSuggestionSessionChanged(params.respond, params.sessionKey);
+    return { ok: false };
+  }
 }
 
 function resolutionAuditAction(resolution: SessionSuggestionResolution): string {
@@ -495,11 +530,20 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const scope = suggestionScope(target);
-    const claim = claimSessionSuggestionDispatch(scope, {
-      id: params.id,
-      resolution,
-      expectedSessionId: target.entry.sessionId,
+    const claimResult = runSessionSuggestionMutation({
+      respond,
+      sessionKey: params.sessionKey,
+      mutate: () =>
+        claimSessionSuggestionDispatch(scope, {
+          id: params.id,
+          resolution,
+          expectedSessionId: target.entry.sessionId,
+        }),
     });
+    if (!claimResult.ok) {
+      return;
+    }
+    const claim = claimResult.value;
     if (!claim) {
       respond(
         false,
@@ -531,8 +575,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     if (dispatching && client) {
+      let dispatched: Awaited<ReturnType<typeof dispatchSuggestion>>;
       try {
-        const dispatched = await dispatchSuggestion({
+        dispatched = await dispatchSuggestion({
           context,
           client,
           req,
@@ -541,20 +586,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           suggestion: claim.suggestion,
           resolution,
         });
-        if (!dispatched.ok) {
-          releaseSessionSuggestionDispatch(scope, {
-            id: claim.suggestion.id,
-            token: claim.token,
-            expectedSessionId: target.entry.sessionId,
-          });
-          respond(
-            false,
-            undefined,
-            dispatched.error ??
-              errorShape(ErrorCodes.INVALID_REQUEST, "suggestion dispatch failed"),
-          );
-          return;
-        }
       } catch (error) {
         respond(
           false,
@@ -570,6 +601,44 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (!dispatched.ok) {
+        let releaseResult: ReturnType<typeof runSessionSuggestionMutation<boolean>>;
+        try {
+          releaseResult = runSessionSuggestionMutation({
+            respond,
+            sessionKey: params.sessionKey,
+            mutate: () =>
+              releaseSessionSuggestionDispatch(scope, {
+                id: claim.suggestion.id,
+                token: claim.token,
+                expectedSessionId: target.entry.sessionId,
+              }),
+          });
+        } catch (error) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
+              {
+                retryable: true,
+                retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+              },
+            ),
+          );
+          return;
+        }
+        if (!releaseResult.ok) {
+          return;
+        }
+        respond(
+          false,
+          undefined,
+          dispatched.error ?? errorShape(ErrorCodes.INVALID_REQUEST, "suggestion dispatch failed"),
+        );
+        return;
+      }
     }
     const currentTarget = resolveSessionSharingTarget({
       cfg: context.getRuntimeConfig(),
@@ -580,29 +649,24 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       // Session replacement clears session_suggestions in the same entry-store
       // write, so the old claim is already terminal. Never finalize or publish it
       // against the replacement instance after an accepted dispatch.
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "session changed before suggestion resolution could be finalized",
-          {
-            retryable: false,
-            details: {
-              code: "SESSION_SUGGESTION_SESSION_CHANGED",
-              sessionKey: params.sessionKey,
-            },
-          },
-        ),
-      );
+      respondSessionSuggestionSessionChanged(respond, params.sessionKey);
       return;
     }
-    const suggestion = finalizeSessionSuggestionClaim(scope, {
-      id: claim.suggestion.id,
-      token: claim.token,
-      state: resolutionState(resolution),
-      expectedSessionId: target.entry.sessionId,
+    const finalizeResult = runSessionSuggestionMutation({
+      respond,
+      sessionKey: params.sessionKey,
+      mutate: () =>
+        finalizeSessionSuggestionClaim(scope, {
+          id: claim.suggestion.id,
+          token: claim.token,
+          state: resolutionState(resolution),
+          expectedSessionId: target.entry.sessionId,
+        }),
     });
+    if (!finalizeResult.ok) {
+      return;
+    }
+    const suggestion = finalizeResult.value;
     if (!suggestion) {
       respond(
         false,
