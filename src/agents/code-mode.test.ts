@@ -413,10 +413,13 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain("returns its JSON value directly");
     expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
+    expect(execTool.description).toContain("never pass shell strings");
+    expect(execTool.description).toContain("Do not retry the same failed exec payload");
 
     expect(parameters.properties?.code?.description).toContain(
       "`tools.search` takes a query string, not an object",
     );
+    expect(parameters.properties?.command?.description).toMatch(/Not a shell command/i);
     expect(parameters.properties?.code?.description).toContain(
       "Select exact ids from `ALL_TOOLS` or `tools.search`",
     );
@@ -1038,6 +1041,24 @@ describe("Code Mode", () => {
         command: "return 2;",
       }),
     ).rejects.toThrow("code and command must match when both are provided");
+  });
+
+  it("rejects shell-shaped command aliases before QuickJS evaluation", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    await expect(
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-shell-command", {
+        command: "ls -la /workspace/",
+      }),
+    ).rejects.toThrow(/not shell/);
   });
 
   it("runs JavaScript through QuickJS-WASI and resumes nested tool calls with wait", async () => {

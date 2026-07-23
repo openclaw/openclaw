@@ -1025,6 +1025,30 @@ Model code is hostile. The runtime uses defense in depth:
 The sandbox is one security layer; operators may still need OS-level
 hardening for high-risk deployments.
 
+## Local models
+
+Some local chat models (especially under keep-trying prompts) treat code-mode
+`exec` like a shell tool and pass strings such as `ls /workspace` or
+`/bin/ls` in `command`. OpenClaw code-mode `exec` evaluates **JavaScript or
+TypeScript** only; `command` is a source alias for `code`, not bash. Those
+shell-shaped payloads used to fail inside QuickJS as `SyntaxError` /
+`ReferenceError` at `openclaw-code-mode:user.js`, which can trigger long retry
+storms.
+
+OpenClaw rejects clearly shell-shaped `exec` source before the guest runs and
+returns `invalid_input` with guidance to use `ALL_TOOLS` / `tools.search` /
+`tools.callValue`. `openclaw doctor` also warns when code mode is enabled and
+local providers (`lmstudio` / `ollama`) are configured.
+
+Notes for operators:
+
+- Prefer a known-good cloud model on the **openclaw** harness for code-mode
+  work. OpenAI Codex harness sessions expose a different tool surface
+  (`sandbox_exec`, etc.) and are not a same-contract control for OpenClaw code
+  mode.
+- If a local model must stay, use a prompt that requires one guest JS program
+  via catalog tools and forbids shell strings / identical retries.
+
 ## Error codes
 
 ```typescript
@@ -1038,9 +1062,10 @@ type CodeModeErrorCode =
 ```
 
 `invalid_input` covers bad `exec`/`wait` arguments, disabled languages,
-rejected module access, TypeScript transform failures, unknown/expired/
-wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
-covers a QuickJS worker that fails to start or exits non-zero.
+rejected module access, TypeScript transform failures, shell-shaped `code` /
+`command` payloads, unknown/expired/wrong-scope `runId` values, and too many
+suspended runs. `runtime_unavailable` covers a QuickJS worker that fails to
+start or exits non-zero.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects, prototypes, and host functions do not cross into QuickJS.
