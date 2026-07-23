@@ -58,6 +58,32 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
   };
 
+/** A caption paired with its 1-based album position. */
+/** @internal */
+type MediaGroupCaption = {
+  albumIndex: number;
+  caption: string;
+};
+
+/**
+ * Collect every non-empty caption from a media group, preserving the
+ * 1-based album position so labels match the order in the user's album
+ * even when some images lack captions (sparse).
+ */
+/** @internal */
+export function collectMediaGroupCaptions(
+  messages: Array<{ caption?: string }>,
+): MediaGroupCaption[] {
+  const captions: MediaGroupCaption[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const caption = messages[i]?.caption?.trim();
+    if (caption && caption.length > 0) {
+      captions.push({ albumIndex: i + 1, caption });
+    }
+  }
+  return captions;
+}
+
 export function createTelegramInboundMediaGroupRuntime(
   params: Pick<
     RegisterTelegramHandlerParams,
@@ -282,6 +308,19 @@ export function createTelegramInboundMediaGroupRuntime(
             ),
         }).catch(() => {});
       }
+      // Preserve per-image captions from all media group messages so the
+      // agent sees every image's caption, not just the first one.
+      // Album index is the 1-based position within the media group, which
+      // may differ from the sparse-caption index when some images lack
+      // captions.
+      const captions = collectMediaGroupCaptions(entry.messages.map((m) => m.msg));
+      if (captions.length > 1) {
+        primary.msg = {
+          ...primary.msg,
+          caption: captions.map((c) => `Image ${c.albumIndex}: ${c.caption}`).join("\n"),
+        };
+      }
+
       const result = await processMessageWithReplyChain({
         ctx: primary.ctx,
         msg: primary.msg,
