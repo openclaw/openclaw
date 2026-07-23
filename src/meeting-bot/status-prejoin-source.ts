@@ -1,4 +1,4 @@
-export type MeetingStatusPreludeParams = {
+type MeetingStatusPreludeParams = {
   allowMicrophone: boolean;
   allowSessionAdoption: boolean;
   autoJoin: boolean;
@@ -13,7 +13,7 @@ export type MeetingStatusPreludeParams = {
   waitForInCallMs: number;
 };
 
-export type MeetingStatusPreludeSourceOptions = {
+type MeetingStatusPreludeSourceOptions = {
   controlLookupSource: string;
   lifecycleSource: string;
   manualActionSource: string;

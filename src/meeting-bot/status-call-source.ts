@@ -1,4 +1,4 @@
-export type MeetingStatusCallSourceOptions = {
+type MeetingStatusCallSourceOptions = {
   captionEnableSource: string;
   captionSettleMs?: number;
   platform: {
