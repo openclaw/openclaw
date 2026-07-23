@@ -34,6 +34,26 @@ async function readZipTextEntries(file: string): Promise<Record<string, string>>
   return entries;
 }
 
+function fakeAwsSecretAccessKey(): string {
+  return Array.from({ length: 40 }, (_entry, index) => "Ab9/"[index % 4] ?? "A").join("");
+}
+
+function fakeAwsSecretAccessKeyWithPadding(): string {
+  return Array.from({ length: 40 }, (_entry, index) => "Ab9="[index % 4] ?? "A").join("");
+}
+
+function fakeJwtAwsSecretShapedSegment(): string {
+  return Array.from({ length: 40 }, (_entry, index) => "Ab9C"[index % 4] ?? "A").join("");
+}
+
+function fakeCommitHash(): string {
+  return `${"0123456789abcdef".repeat(2)}01234567`;
+}
+
+function fakeLowercaseBase36Identifier(): string {
+  return `${"z".repeat(39)}1`;
+}
+
 describe("diagnostic support export", () => {
   let tempDir: string;
 
@@ -692,11 +712,16 @@ describe("diagnostic support export", () => {
 
   it("redacts support text identifiers without hiding useful URL hosts", () => {
     const fakeAwsKey = ["ASIA", "IOSFODNN7EXAMPLE"].join("");
-    const fakeAwsSecretKey = ["wJalrXUtnFEMI", "/K7MDENG", "/bPxRfiCY", "EXAMPLEKEY"].join("");
+    const fakeAwsSecretKey = fakeAwsSecretAccessKey();
     const fakeJwt = [
       "eyJhbGciOiJIUzI1NiIs",
       "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4i",
       "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    ].join(".");
+    const jwtWithAwsSecretShapedSegment = [
+      "eyJheaderabcd",
+      fakeJwtAwsSecretShapedSegment(),
+      "signatureabcd123456",
     ].join(".");
     const cases = [
       [
@@ -716,7 +741,14 @@ describe("diagnostic support export", () => {
       ["Cookie: sid=secret; theme=light", "Cookie: <redacted>"],
       [`aws ${fakeAwsKey}`, "aws <redacted-aws-key>"],
       [`aws secret ${fakeAwsSecretKey}`, "aws secret <redacted-aws-secret-key>"],
+      [
+        `aws padded secret ${fakeAwsSecretAccessKeyWithPadding()}`,
+        "aws padded secret <redacted-aws-secret-key>",
+      ],
       [`jwt ${fakeJwt}`, "jwt <redacted-jwt>"],
+      [`jwt ${jwtWithAwsSecretShapedSegment}`, "jwt <redacted-jwt>"],
+      [`commit ${fakeCommitHash()}`, `commit ${fakeCommitHash()}`],
+      [`id ${fakeLowercaseBase36Identifier()}`, `id ${fakeLowercaseBase36Identifier()}`],
       ["email alice@example.com", "email <redacted-email>"],
       ["matrix @support-user:matrix.example.com", "matrix <redacted-matrix-user>"],
       ["room !support-room:matrix.example.com", "room <redacted-matrix-room>"],

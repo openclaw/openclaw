@@ -142,7 +142,8 @@ const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALON
 // data-URL media is never corrupted while tokens in URL paths or assignments still redact.
 const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
-const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+]))(?=[A-Za-z0-9/+]{0,39}[A-Z])(?=[A-Za-z0-9/+]{0,39}[a-z])(?=[A-Za-z0-9/+]{0,39}[0-9/+])[A-Za-z0-9/+]{40}`;
+const AWS_SECRET_ACCESS_KEY_VALUE_PATTERN = String.raw`(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}`;
+const AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN = String.raw`/${BASE64_SAFE_TOKEN_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})/g`;
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const HTTP_AUTH_HEADER_REDACT_PATTERNS = [
@@ -169,6 +170,7 @@ const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
   AUTHORIZATION_BASIC_REDACT_PATTERN,
   AUTHORIZATION_BOT_REDACT_PATTERN,
   STANDALONE_BEARER_REDACT_PATTERN,
+  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
 ]);
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
@@ -211,8 +213,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // PEM blocks.
   String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
   // Common token prefixes.
-  String.raw`(^|[\s,{])["']?(?:${AWS_SECRET_ACCESS_KEY_FIELD_KEYS})["']?\s*[:=]\s*(["']?)([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+])\2`,
-  String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(${AWS_SECRET_ACCESS_KEY_VALUE_PATTERN})`,
+  String.raw`(^|[\s,{])["']?(?:${AWS_SECRET_ACCESS_KEY_FIELD_KEYS})["']?\s*[:=]\s*(["']?)([A-Za-z0-9/+=]{40})(?![A-Za-z0-9/+=])\2`,
   String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
   String.raw`(ghp_[A-Za-z0-9]{10,})`,
   String.raw`(github_pat_[A-Za-z0-9_]{10,})`,
@@ -232,6 +233,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(ya29\.[0-9A-Za-z_\-./+=]{10,})`,
   String.raw`(1//0[0-9A-Za-z_\-./+=]{10,})`,
   String.raw`(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`,
+  AWS_SECRET_ACCESS_KEY_VALUE_REDACT_PATTERN,
   String.raw`(pplx-[A-Za-z0-9_-]{10,})`,
   String.raw`(fal_[A-Za-z0-9_-]{10,})`,
   String.raw`(fc-[A-Za-z0-9]{10,})`,
