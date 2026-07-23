@@ -11,6 +11,7 @@ import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
+import { redactCronJsonReadback } from "../../cron/public-job.js";
 import type { CronDelivery, CronPacing } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
@@ -846,9 +847,11 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
               }
             }
             return jsonResult(
-              selfRemoveOnlyJobId
-                ? filterCronListResultToJobId(result, selfRemoveOnlyJobId)
-                : result,
+              redactCronJsonReadback(
+                selfRemoveOnlyJobId
+                  ? filterCronListResultToJobId(result, selfRemoveOnlyJobId)
+                  : result,
+              ),
             );
           }
           case "get": {
@@ -857,9 +860,11 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
               throw new Error("jobId required (id accepted for backward compatibility)");
             }
             return jsonResult(
-              await callGateway("cron.get", gatewayOpts, {
-                id,
-              }),
+              redactCronJsonReadback(
+                await callGateway("cron.get", gatewayOpts, {
+                  id,
+                }),
+              ),
             );
           }
           case "add": {
