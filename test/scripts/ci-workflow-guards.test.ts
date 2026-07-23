@@ -2165,8 +2165,14 @@ describe("ci workflow guards", () => {
       'if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ] &&\n' +
       '  [ "$sticky_snapshot_matches" != "true" ]; then';
     expect(installStep.run).toContain(forceStickyWriterInstall);
+    const clearStickyModules =
+      'find "$GITHUB_WORKSPACE/node_modules" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +';
+    expect(installStep.run).toContain(clearStickyModules);
     expect(installStep.run).toContain("install_args+=(--force)");
     expect(installStep.run.indexOf(forceStickyWriterInstall)).toBeLessThan(
+      installStep.run.indexOf(clearStickyModules),
+    );
+    expect(installStep.run.indexOf(clearStickyModules)).toBeLessThan(
       installStep.run.indexOf("run_pnpm_install()"),
     );
     expect(installStep.run).toContain("install_attempts=2");
