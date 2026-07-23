@@ -205,10 +205,17 @@ export type HostedOfficialExternalPluginCatalogTrustState = {
   verifiedAt: string;
 };
 
+export class HostedCatalogSignedFeedMonotonicityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedCatalogSignedFeedMonotonicityError";
+  }
+}
+
 export type HostedOfficialExternalPluginCatalogSnapshotMonotonicState = {
   mode: "signed-feed";
   sequence: number;
-  generatedAt: string;
+  generatedAt?: string;
 };
 
 export type HostedOfficialExternalPluginCatalogLoadResult =
@@ -1054,21 +1061,33 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (snapshotStore && parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
-        // Only an authenticated invalid-timestamp payload is repairable. Signature
-        // and trust failures must remain fail-closed so rollback checks cannot be bypassed.
-        const current = await parseHostedCatalogFeedBody({
-          body: currentSnapshot.body,
-          verification: source.verification,
-          verifiedAt: currentSnapshot.trust.verifiedAt,
-          allowLegacyBetaEnvelope: true,
-        }).catch((err: unknown) => {
-          if (err instanceof HostedCatalogFeedTimestampError) {
-            return { feed: { sequence: err.sequence } };
-          }
-          throw err;
-        });
-        if (isHostedCatalogSignedFeedRollback({ candidate: parsed.feed, current: current.feed })) {
-          throw new Error("hosted catalog signed feed sequence is older than current snapshot");
+        const current =
+          currentSnapshot.monotonic?.mode === "signed-feed"
+            ? currentSnapshot.monotonic
+            : (
+                await parseHostedCatalogFeedBody({
+                  body: currentSnapshot.body,
+                  verification: source.verification,
+                  verifiedAt: currentSnapshot.trust.verifiedAt,
+                  allowLegacyBetaEnvelope: true,
+                }).catch((err: unknown) => {
+                  // Only an authenticated invalid-timestamp payload is repairable. Signature
+                  // and trust failures must remain fail-closed so rollback checks cannot be bypassed.
+                  if (err instanceof HostedCatalogFeedTimestampError) {
+                    return { feed: { sequence: err.sequence } };
+                  }
+                  throw err;
+                })
+              ).feed;
+        if (
+          isHostedCatalogSignedFeedRollback({
+            candidate: parsed.feed,
+            current,
+          })
+        ) {
+          throw new HostedCatalogSignedFeedMonotonicityError(
+            "hosted catalog signed feed sequence is older than current snapshot",
+          );
         }
       }
     }
@@ -1096,10 +1115,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
           : {}),
       })
       .catch((err: unknown) => {
-        if (
-          err instanceof Error &&
-          err.message.includes("hosted catalog signed feed sequence is older")
-        ) {
+        if (err instanceof HostedCatalogSignedFeedMonotonicityError) {
           throw err;
         }
         if (params?.requireSnapshotWrite) {
