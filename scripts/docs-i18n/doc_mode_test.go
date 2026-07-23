@@ -294,11 +294,23 @@ func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ str
 func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
 	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
-	translated = regexp.MustCompile(`(?m)^(__OC_I18N_\d+__)`).ReplaceAllString(translated, "  $1")
+	translated = regexp.MustCompile(`(?m)^(__OC_I18N_\d+__)`).ReplaceAllString(translated, "  1. $1")
 	return translated, nil
 }
 
 func (t *docSyntaxMaskingTranslator) Close() {}
+
+type accidentalListMarkerTranslator struct{}
+
+func (accidentalListMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (accidentalListMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return strings.ReplaceAll(text, "September begins the standard rate.", "1. September beginnt der Standardtarif."), nil
+}
+
+func (accidentalListMarkerTranslator) Close() {}
 
 type duplicateFirstFencedPlaceholderTranslator struct {
 	rawCalls int
@@ -746,6 +758,8 @@ func TestNormalizeMaskedListMarkerPlaceholdersRemovesAddedContainers(t *testing.
 		"  __OC_I18N_000001__Top level",
 		"> __OC_I18N_000002__Nested",
 		"  > __OC_I18N_000003__Quoted",
+		"1. __OC_I18N_000001__Numbered wrapper",
+		"  - __OC_I18N_000002__Bullet wrapper",
 		"  __OC_I18N_000004__ prose",
 		"",
 	}, "\n")
@@ -753,12 +767,45 @@ func TestNormalizeMaskedListMarkerPlaceholdersRemovesAddedContainers(t *testing.
 		"__OC_I18N_000001__Top level",
 		"__OC_I18N_000002__Nested",
 		"__OC_I18N_000003__Quoted",
+		"__OC_I18N_000001__Numbered wrapper",
+		"__OC_I18N_000002__Bullet wrapper",
 		"  __OC_I18N_000004__ prose",
 		"",
 	}, "\n")
 
 	if got := normalizeMaskedListMarkerPlaceholders(translated, mapping); got != want {
 		t.Fatalf("normalized placeholders changed unexpectedly\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestEscapeUnexpectedMarkdownListMarkersPreservesFencedExamples(t *testing.T) {
+	t.Parallel()
+
+	translated := strings.Join([]string{
+		"1. September beginnt der Standardtarif.",
+		"- Unbeabsichtigter Aufzählungspunkt.",
+		"> 2) Verschachtelte Nummerierung.",
+		"- __OC_I18N_000001__Maskierter Listeneintrag.",
+		"3. September mit __OC_I18N_000002__Inlinecode.",
+		"```md",
+		"1. Beispiel bleibt unverändert.",
+		"```",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		`1\. September beginnt der Standardtarif.`,
+		`\- Unbeabsichtigter Aufzählungspunkt.`,
+		`> 2\) Verschachtelte Nummerierung.`,
+		"- __OC_I18N_000001__Maskierter Listeneintrag.",
+		`3\. September mit __OC_I18N_000002__Inlinecode.`,
+		"```md",
+		"1. Beispiel bleibt unverändert.",
+		"```",
+		"",
+	}, "\n")
+
+	if got := escapeUnexpectedMarkdownListMarkers(translated, map[string]string{"__OC_I18N_000001__": "- "}); got != want {
+		t.Fatalf("unexpected escaped list markers:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -2360,6 +2407,27 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	}
 	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
 		t.Fatalf("expected final structure to validate: %v", err)
+	}
+}
+
+func TestTranslateDocBodyChunkedEscapesModelInventedListMarker(t *testing.T) {
+	t.Parallel()
+
+	body := "1. First step.\n2. Second step.\n\nSeptember begins the standard rate.\n"
+	translated, err := translateDocBodyChunked(
+		context.Background(), accidentalListMarkerTranslator{}, "concepts/model-failover.md", body, "en", "de",
+	)
+	if err != nil {
+		t.Fatalf("translateDocBodyChunked returned error: %v", err)
+	}
+	if !strings.Contains(translated, "1. First step.\n2. Second step.") {
+		t.Fatalf("expected source list markers to be restored:\n%s", translated)
+	}
+	if !strings.Contains(translated, `1\. September beginnt der Standardtarif.`) {
+		t.Fatalf("expected model-invented list marker to be escaped:\n%s", translated)
+	}
+	if err := validateDocBodyFencedLiterals(body, translated); err != nil {
+		t.Fatalf("expected repaired final structure to validate: %v", err)
 	}
 }
 

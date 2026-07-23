@@ -593,6 +593,7 @@ export function buildClaudeControlRequestEvents(params: {
   toolUseId: string;
   input: Record<string, unknown>;
   sessionId?: string;
+  toolName?: string;
 }) {
   const sessionId = params.sessionId ?? "live-control";
   return [
@@ -601,7 +602,7 @@ export function buildClaudeControlRequestEvents(params: {
       request_id: params.requestId,
       request: {
         subtype: "can_use_tool",
-        tool_name: "Bash",
+        tool_name: params.toolName ?? "Bash",
         tool_use_id: params.toolUseId,
         input: params.input,
       },

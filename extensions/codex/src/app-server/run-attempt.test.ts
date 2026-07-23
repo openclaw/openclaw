@@ -74,6 +74,7 @@ import {
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
@@ -657,6 +658,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     const sandbox = {
       enabled: true,
@@ -752,6 +754,7 @@ describe("runCodexAppServerAttempt", () => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
+      setCodexTestModelSupportsTools(params, true);
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
         agents: {
@@ -2839,6 +2842,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
     const {
@@ -2948,6 +2952,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -2978,6 +2983,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -3106,6 +3112,7 @@ describe("runCodexAppServerAttempt", () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("memory_get")]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -3192,6 +3199,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.config = {
       agents: {
@@ -3259,6 +3267,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -4059,6 +4068,7 @@ describe("runCodexAppServerAttempt", () => {
     const pngBase64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
     params.model = createCodexTestModel("codex", ["text", "image"]);
+    setCodexTestModelSupportsTools(params, false);
     params.images = [
       {
         type: "image",
@@ -5535,6 +5545,7 @@ describe("runCodexAppServerAttempt", () => {
     delete params.authProfileId;
     params.agentDir = agentDir;
     params.config = {
+      ...params.config,
       agents: {
         defaults: {
           compaction: {
@@ -6131,13 +6142,16 @@ describe("runCodexAppServerAttempt", () => {
       return {};
     });
     const clientFactory = vi.fn(async () => harness.client);
-    const params = {
-      ...createParams(sessionFile, workspaceDir),
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      model: createCodexTestModel("anthropic"),
-      config: { tools: { exec: { mode: "auto" } } },
-    } as EmbeddedRunAttemptParams;
+    testing.setOpenClawCodingToolsFactoryForTests(() => []);
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "anthropic";
+    params.modelId = "claude-opus-4-6";
+    params.model = createCodexTestModel("anthropic");
+    setCodexTestModelSupportsTools(params, false);
+    params.config = {
+      ...params.config,
+      tools: { ...params.config?.tools, exec: { mode: "auto" } },
+    } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: {

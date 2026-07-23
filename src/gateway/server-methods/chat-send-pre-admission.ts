@@ -46,6 +46,7 @@ export async function runChatSendPreAdmission(params: {
     entry,
     sessionKey,
     rawSessionKey,
+    sessionLoadKey,
     selectedAgent,
     clientRunId,
     pendingChatSendKey,
@@ -146,7 +147,7 @@ export async function runChatSendPreAdmission(params: {
     clientRunId,
     entry,
     persistedSessionKey: legacyKey ?? sessionKey,
-    reloadEntry: () => loadSessionEntry(rawSessionKey, sessionLoadOptions).entry,
+    reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
     storePath,
     recoveryRuntime: context.recoveryRuntime,
     warn: (message) =>

@@ -125,8 +125,6 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
-extensions/google-meet/src/cli.test.ts
-extensions/google-meet/src/cli.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -891,7 +889,6 @@ src/infra/exec-approval-forwarder.ts
 src/infra/exec-approvals-allow-always.test.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-approvals-store.test.ts
-src/infra/exec-approvals.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
 src/infra/heartbeat-runner.ts
@@ -963,7 +960,6 @@ src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
 src/plugins/clawhub.ts
 src/plugins/commands.test.ts
-src/plugins/compat/registry.ts
 src/plugins/contracts/host-hooks.contract.test.ts
 src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
@@ -1045,7 +1041,6 @@ src/status/status-message.ts
 src/system-agent/chat-engine.test.ts
 src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts
-src/system-agent/setup-inference.ts
 src/system-agent/verified-inference.test.ts
 src/system-agent/verified-inference.ts
 src/tasks/task-executor.test.ts
@@ -1075,10 +1070,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/browser/browser-panel.ts
-ui/src/components/config-form.node.ts
-ui/src/components/markdown.ts
-ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
 ui/src/e2e/new-session-page.e2e.test.ts
 ui/src/e2e/session-management.e2e.test.ts
@@ -1102,7 +1093,6 @@ ui/src/pages/chat/chat-history.ts
 ui/src/pages/chat/chat-pane.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
-ui/src/pages/chat/chat-send.ts
 ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts

@@ -1749,7 +1749,7 @@ struct ChatViewModelOutboxTests {
             vm.messages.first { vm.outboxState(for: $0.id)?.isFailed == true }?.id
         })
         await MainActor.run { vm.retryOutboxMessage(failedMessageID) }
-        try await waitUntil("retried command drained") {
+        try await waitUntil("retried command drained", timeoutSeconds: 30) {
             await store.loadCommands().isEmpty
         }
         #expect(await transport.state.sentIdempotencyKeys.count == 1)

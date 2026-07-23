@@ -1452,6 +1452,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("resolves per-sender global agent aliases to the canonical agent main session", async () => {
+    await createTranscriptFixture("openclaw-chat-send-per-sender-global-alias-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { scope: "per-sender" },
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "global",
+      requestParams: { agentId: "main" },
+      idempotencyKey: "idem-per-sender-global-alias",
+      expectBroadcast: false,
+    });
+
+    const [ok] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(true);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      SessionKey: "agent:main:main",
+      AgentId: "main",
+    });
+    expect(mockState.loadSessionEntryCalls.length).toBeGreaterThan(0);
+    expect(mockState.loadSessionEntryCalls).toEqual(
+      expect.arrayContaining([
+        {
+          rawKey: "agent:main:main",
+          opts: { agentId: "main" },
+        },
+      ]),
+    );
+    expect(mockState.loadSessionEntryCalls).not.toEqual(
+      expect.arrayContaining([
+        {
+          rawKey: "global",
+          opts: { agentId: "main" },
+        },
+      ]),
+    );
+  });
+
   it("registers selected-agent global aliases under the canonical abort key", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-alias-abort-key-");
     mockState.config = {
@@ -5256,7 +5299,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
       expect(mockState.lastDispatchImageOrder).toBeUndefined();
-      expect(mockState.lastDispatchCtx?.Body).toBe("summarize this");
+      expect(mockState.lastDispatchCtx?.Body).toBe(
+        "summarize this\n[media attached: media://inbound/saved-media]",
+      );
       expect(mockState.savedMediaCalls[0]?.contentType).toBe("application/pdf");
       expect(mockState.savedMediaCalls[0]?.subdir).toBe("inbound");
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
@@ -5635,7 +5680,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     });
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
@@ -5811,7 +5856,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     });
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
@@ -5876,11 +5921,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
     expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    // Non-image offloads MUST NOT inject a media://URI into the prompt body —
-    // they ride through ctx.MediaPaths so buildInboundMediaNote prepends the
-    // real path, avoiding duplicate media markers.
-    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
-    expect(mockState.lastDispatchCtx?.BodyForAgent).not.toContain("media://");
+    // Non-image offloads retain their claim-check line while the staged path
+    // also travels structurally for media tools and transcript persistence.
+    expect(mockState.lastDispatchCtx?.Body).toContain(
+      "[media attached: media://inbound/saved-media]",
+    );
+    expect(mockState.lastDispatchCtx?.BodyForAgent).toContain(
+      "[media attached: media://inbound/saved-media]",
+    );
     expect(mockState.lastDispatchImages).toBeUndefined();
     // Marker replaces the implicit "relative-path no-op" coupling in
     // get-reply.ts with an explicit skip contract.
@@ -5939,7 +5987,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
     expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.Body).toContain(
+      "[media attached: media://inbound/saved-media]",
+    );
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 

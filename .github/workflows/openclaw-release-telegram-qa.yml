@@ -472,6 +472,7 @@ jobs:
             LANG=C.UTF-8 \
             NODE_OPTIONS=--max-old-space-size=8192 \
             NPM_CONFIG_USERCONFIG=/dev/null \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm --dir .candidate exec node scripts/build-all.mjs qaRuntime
@@ -821,7 +822,7 @@ jobs:
 
       - name: Attest exact candidate archive bytes
         id: attest
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: ${{ steps.verify_candidate.outputs.archive_path }}
 
