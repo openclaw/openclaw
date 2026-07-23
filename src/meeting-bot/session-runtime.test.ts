@@ -227,6 +227,7 @@ function createTestRuntime(params: {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
 
@@ -371,6 +372,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
   });
 
   it("retries failed final delivery without retiring its stream cursor", async () => {
+    vi.useFakeTimers();
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
     tempDirs.push(stateDir);
     const empty = { droppedLines: 0, epoch: "page-1", lines: [] };
@@ -417,8 +419,10 @@ describe("MeetingSessionRuntime durable transcripts", () => {
       onUtterance,
     });
 
-    await expect(runtime.leave(session.id)).rejects.toThrow("subscriber unavailable");
     await expect(runtime.leave(session.id)).resolves.toMatchObject({ found: true });
+    expect(session.state).toBe("ended");
+    expect(releaseBrowserTab).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_000);
 
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -429,7 +433,6 @@ describe("MeetingSessionRuntime durable transcripts", () => {
       summary: { utteranceCount: 1 },
     });
     expect(onUtterance).toHaveBeenCalledTimes(4);
-    expect(releaseBrowserTab).toHaveBeenCalledOnce();
   });
 });
 

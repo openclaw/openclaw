@@ -557,8 +557,9 @@ export class MeetingSessionRuntime<
       this.#transcriptStore.startFinalizing(session.id);
     }
     try {
-      await this.#durableTranscripts.stop(session, { allowFallback: firstAttempt });
-      transcriptStopped = true;
+      transcriptStopped = await this.#durableTranscripts.stop(session, {
+        allowFallback: firstAttempt,
+      });
       session.state = "ended";
       session.updatedAt = nowIso();
       this.#sessionSpeakers.delete(session.id);

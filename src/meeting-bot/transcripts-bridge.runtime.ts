@@ -24,6 +24,8 @@ const CAPTURE_INTERVAL_MS = 5_000;
 type ActiveCapture<TSession extends MeetingSessionRecord> = {
   closing: boolean;
   descriptor: TranscriptSessionDescriptor;
+  finalCaptureError?: string;
+  finalCaptureFailedAt?: string;
   runCapture(task: () => Promise<void>): Promise<void>;
   session: TSession;
   timer?: ReturnType<typeof setInterval>;
@@ -245,8 +247,14 @@ export function createMeetingDurableTranscriptBridge<
         } catch (error) {
           if (!(error instanceof MeetingTranscriptDeliveryError)) {
             reportCaptureError(session.id, error);
+            active.finalCaptureError = error instanceof Error ? error.message : String(error);
+            active.finalCaptureFailedAt ??= new Date().toISOString();
             deliveryError = undefined;
             break;
+          }
+          if (error.finalCaptureError !== undefined) {
+            active.finalCaptureError = error.finalCaptureError;
+            active.finalCaptureFailedAt ??= new Date().toISOString();
           }
           deliveryError = error;
         }
@@ -254,8 +262,21 @@ export function createMeetingDurableTranscriptBridge<
       if (deliveryError) {
         throw deliveryError;
       }
+      const finalCaptureError = active.finalCaptureError;
       const stoppedAt = new Date().toISOString();
-      const stopped = { ...active.descriptor, stoppedAt };
+      const stopped = {
+        ...active.descriptor,
+        stoppedAt,
+        ...(finalCaptureError !== undefined
+          ? {
+              metadata: {
+                ...active.descriptor.metadata,
+                finalCaptureError,
+                finalCaptureFailedAt: active.finalCaptureFailedAt,
+              },
+            }
+          : {}),
+      };
       try {
         await runSerial(session.id, async () => {
           await store.writeSession(stopped);

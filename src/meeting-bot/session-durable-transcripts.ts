@@ -13,8 +13,12 @@ import type {
   MeetingDurableTranscriptsOptions,
 } from "./transcripts-bridge.js";
 
+const STOP_RETRY_DELAY_MS = 1_000;
+const STOP_RETRY_MAX_DELAY_MS = 60_000;
+
 export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRecord> {
   #bridge?: Promise<MeetingDurableTranscriptBridge<TSession> | undefined>;
+  readonly #stopRetries = new Map<string, { attempt: number; token: symbol }>();
 
   constructor(
     private readonly options: {
@@ -45,12 +49,23 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
     );
   }
 
-  async stop(session: TSession, options: { allowFallback: boolean }): Promise<void> {
+  async stop(session: TSession, options: { allowFallback: boolean }): Promise<boolean> {
     const finalCapture = async () =>
       await this.options.transcriptStore.captureNotes(session, { finalize: true });
     const bridge = await this.#getBridge();
-    if (bridge?.enabled && (await bridge.stop(session, finalCapture))) {
-      return;
+    if (bridge?.enabled) {
+      try {
+        if (await bridge.stop(session, finalCapture)) {
+          this.#stopRetries.delete(session.id);
+          return true;
+        }
+      } catch (error) {
+        this.options.logger.warn(
+          `${this.options.logScope} durable transcript finalization queued for retry: ${this.options.formatError(error)}`,
+        );
+        this.#scheduleStopRetry(session, bridge);
+        return false;
+      }
     }
     if (options.allowFallback && this.options.isTranscribeSession(session)) {
       await finalCapture().catch((error: unknown) => {
@@ -59,6 +74,7 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
         );
       });
     }
+    return true;
   }
 
   async startSource(request: TranscriptStartRequest): Promise<TranscriptsStartResult> {
@@ -120,5 +136,49 @@ export class MeetingSessionDurableTranscripts<TSession extends MeetingSessionRec
         return undefined;
       });
     return await this.#bridge;
+  }
+
+  #scheduleStopRetry(session: TSession, bridge: MeetingDurableTranscriptBridge<TSession>): void {
+    if (this.#stopRetries.has(session.id)) {
+      return;
+    }
+    const token = Symbol(session.id);
+    this.#stopRetries.set(session.id, { attempt: 1, token });
+    const retry = () => {
+      const attempt = this.#stopRetries.get(session.id)?.attempt ?? 1;
+      const delayMs = Math.min(
+        STOP_RETRY_DELAY_MS * 2 ** Math.min(attempt - 1, 16),
+        STOP_RETRY_MAX_DELAY_MS,
+      );
+      const timer = setTimeout(() => void run(), delayMs);
+      timer.unref?.();
+    };
+    const run = async () => {
+      const state = this.#stopRetries.get(session.id);
+      if (!state || state.token !== token) {
+        return;
+      }
+      try {
+        const handled = await bridge.stop(
+          session,
+          async () => await this.options.transcriptStore.flushPending(session),
+        );
+        if (!handled) {
+          throw new Error("durable transcript capture is no longer active");
+        }
+        if (this.#stopRetries.get(session.id)?.token !== token) {
+          return;
+        }
+        this.options.transcriptStore.retire(session.id);
+        this.#stopRetries.delete(session.id);
+      } catch {
+        if (this.#stopRetries.get(session.id)?.token !== token) {
+          return;
+        }
+        this.#stopRetries.set(session.id, { attempt: state.attempt + 1, token });
+        retry();
+      }
+    };
+    retry();
   }
 }

@@ -15,6 +15,18 @@ type TranscriptStreamCursor = {
   tailKeys: string[];
 };
 
+type PendingTranscriptLine = {
+  cursor: TranscriptStreamCursor;
+  line: MeetingTranscriptLine;
+};
+
+type TranscriptSnapshotDelta = {
+  commitEmpty: boolean;
+  lines: MeetingTranscriptLine[];
+  prefixKeys: string[];
+  startIndex: number;
+};
+
 const ENDED_TRANSCRIPTS_MAX = 4;
 const TRANSCRIPT_CURSOR_TAIL = 64;
 const TRANSCRIPT_MAX_LINES = 2_000;
@@ -39,9 +51,19 @@ function maximalTranscriptOverlap(previousKeys: string[], currentKeys: string[])
 }
 
 export class MeetingTranscriptDeliveryError extends Error {
-  constructor(cause: unknown) {
+  readonly finalCaptureError?: string;
+
+  constructor(cause: unknown, finalCaptureError?: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "MeetingTranscriptDeliveryError";
+    if (finalCaptureError !== undefined) {
+      this.finalCaptureError =
+        finalCaptureError instanceof Error
+          ? finalCaptureError.message
+          : typeof finalCaptureError === "string"
+            ? finalCaptureError
+            : "unknown final capture error";
+    }
   }
 }
 
@@ -49,6 +71,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
   readonly #transcripts = new Map<string, RetainedTranscriptSnapshot>();
   readonly #captures = new Map<string, Promise<void>>();
   readonly #finalizing = new Set<string>();
+  readonly #pendingLines = new Map<string, PendingTranscriptLine[]>();
   readonly #retired = new Set<string>();
   readonly #streamCursors = new Map<string, TranscriptStreamCursor>();
 
@@ -127,10 +150,15 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     await this.#capture(session, options, false);
   }
 
+  async flushPending(session: TSession): Promise<void> {
+    await this.#capture(session, {}, false, true);
+  }
+
   async #capture(
     session: TSession,
     options: { finalize?: boolean },
     requireTranscribeMode: boolean,
+    pendingOnly = false,
   ): Promise<void> {
     // Live reads, periodic notes, and finalization share this per-session chain.
     // Keep cursor reads inside it so overlapping snapshots cannot deliver twice.
@@ -138,24 +166,56 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
     const capture = previous
       .catch(() => {})
       .then(async () => {
+        let pendingError: MeetingTranscriptDeliveryError | undefined;
+        try {
+          await this.#flushPending(session);
+        } catch (error) {
+          if (pendingOnly || options.finalize !== true) {
+            throw error;
+          }
+          pendingError = error as MeetingTranscriptDeliveryError;
+        }
+        if (pendingOnly) {
+          return;
+        }
         if (
           !this.options.isBrowserSession(session) ||
           (requireTranscribeMode && !this.options.isTranscribeSession(session)) ||
           !this.options.hasBrowserTab(session)
         ) {
+          if (pendingError) {
+            throw pendingError;
+          }
           return;
         }
-        const snapshot = await this.options.capture(session, options);
+        let snapshot: MeetingTranscriptSnapshot | undefined;
+        try {
+          snapshot = await this.options.capture(session, options);
+        } catch (error) {
+          if (pendingError) {
+            throw new MeetingTranscriptDeliveryError(pendingError.cause ?? pendingError, error);
+          }
+          throw error;
+        }
         if (snapshot) {
           if (this.options.isTranscribeSession(session)) {
             this.#merge(session.id, snapshot);
           }
-          const delta = this.#snapshotDelta(this.#streamCursors.get(session.id), snapshot);
+          const pending = this.#pendingLines.get(session.id);
+          const cursor = pending?.at(-1)?.cursor ?? this.#streamCursors.get(session.id);
+          const delta = this.#snapshotDelta(cursor, snapshot);
+          if (pendingError) {
+            if (delta.lines.length > 0) {
+              this.#queuePending(session.id, snapshot, delta, 0, delta.prefixKeys, true);
+            }
+            throw pendingError;
+          }
           let tailKeys = [...delta.prefixKeys];
           for (const [index, line] of delta.lines.entries()) {
             try {
               await this.options.onLines?.(session, [line]);
             } catch (error) {
+              this.#queuePending(session.id, snapshot, delta, index, tailKeys);
               throw new MeetingTranscriptDeliveryError(error);
             }
             tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
@@ -172,6 +232,8 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
               tailKeys: delta.prefixKeys,
             });
           }
+        } else if (pendingError) {
+          throw pendingError;
         }
       });
     this.#captures.set(session.id, capture);
@@ -182,6 +244,52 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         this.#captures.delete(session.id);
       }
     }
+  }
+
+  async #flushPending(session: TSession): Promise<void> {
+    const pending = this.#pendingLines.get(session.id);
+    for (;;) {
+      const next = pending?.[0];
+      if (!next) {
+        break;
+      }
+      try {
+        await this.options.onLines?.(session, [next.line]);
+      } catch (error) {
+        throw new MeetingTranscriptDeliveryError(error);
+      }
+      this.#streamCursors.set(session.id, next.cursor);
+      pending.shift();
+    }
+    if (pending?.length === 0) {
+      this.#pendingLines.delete(session.id);
+    }
+  }
+
+  #queuePending(
+    sessionId: string,
+    snapshot: MeetingTranscriptSnapshot,
+    delta: TranscriptSnapshotDelta,
+    failedIndex: number,
+    prefixKeys: string[],
+    append = false,
+  ): void {
+    let tailKeys = [...prefixKeys];
+    const pending = delta.lines.slice(failedIndex).map((line, offset) => {
+      tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
+      return {
+        line,
+        cursor: {
+          pageEpoch: snapshot.epoch,
+          pageNextIndex: delta.startIndex + failedIndex + offset + 1,
+          tailKeys,
+        },
+      };
+    });
+    this.#pendingLines.set(sessionId, [
+      ...(append ? (this.#pendingLines.get(sessionId) ?? []) : []),
+      ...pending,
+    ]);
   }
 
   retire(sessionId: string): void {
@@ -207,18 +315,14 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         session.transcriptEvicted = true;
       }
     }
+    this.#pendingLines.delete(sessionId);
     this.#streamCursors.delete(sessionId);
   }
 
   #snapshotDelta(
     previous: TranscriptStreamCursor | undefined,
     snapshot: MeetingTranscriptSnapshot,
-  ): {
-    commitEmpty: boolean;
-    lines: MeetingTranscriptLine[];
-    prefixKeys: string[];
-    startIndex: number;
-  } {
+  ): TranscriptSnapshotDelta {
     const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
     if (!previous || previous.pageEpoch !== snapshot.epoch) {
       return {

@@ -261,4 +261,58 @@ describe("MeetingSessionTranscriptStore", () => {
 
     expect(delivered).toEqual(["A", "A", "B"]);
   });
+
+  it("queues newer final rows behind an unavailable pending batch", async () => {
+    const session = createSession();
+    let unavailable = true;
+    const delivered: string[] = [];
+    const store = createStore(
+      session,
+      [
+        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }] },
+        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }, { text: "B" }] },
+      ],
+      async (lines) => {
+        if (unavailable) {
+          throw new Error("store unavailable");
+        }
+        delivered.push(...lines.map((line) => line.text));
+      },
+    );
+
+    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
+    await expect(store.captureNotes(session, { finalize: true })).rejects.toThrow(
+      "store unavailable",
+    );
+    unavailable = false;
+    await store.flushPending(session);
+
+    expect(delivered).toEqual(["A", "B"]);
+  });
+
+  it("preserves pending delivery when the final browser snapshot also fails", async () => {
+    const session = createSession();
+    let captureCount = 0;
+    const store = new MeetingSessionTranscriptStore({
+      getSession: () => session,
+      isBrowserSession: () => true,
+      isTranscribeSession: () => true,
+      hasBrowserTab: () => true,
+      capture: async () => {
+        captureCount += 1;
+        if (captureCount === 1) {
+          return { droppedLines: 0, lines: [{ text: "pending" }] };
+        }
+        throw new Error("browser snapshot unavailable");
+      },
+      onLines: async () => {
+        throw new Error("store unavailable");
+      },
+    });
+
+    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
+    await expect(store.captureNotes(session, { finalize: true })).rejects.toMatchObject({
+      finalCaptureError: "browser snapshot unavailable",
+    });
+  });
 });

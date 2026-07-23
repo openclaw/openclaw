@@ -381,4 +381,32 @@ describe("MeetingDurableTranscriptBridge", () => {
     expect(onUtterance).toHaveBeenCalledOnce();
     await bridge.stop(current, async () => {});
   });
+
+  it("records a non-blocking final browser snapshot failure", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-bridge-"));
+    tempDirs.push(stateDir);
+    const current = session();
+    const bridge = createMeetingDurableTranscriptBridge({
+      logger: { warn: vi.fn() },
+      options: { providerId: "zoom", providerName: "Zoom", stateDir },
+    });
+    await bridge.start(current, async () => {});
+
+    await expect(
+      bridge.stop(current, async () => {
+        throw new Error("");
+      }),
+    ).resolves.toBe(true);
+
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    await expect(store.readSession(current.id)).resolves.toMatchObject({
+      metadata: {
+        finalCaptureError: "",
+        finalCaptureFailedAt: expect.any(String),
+      },
+      stoppedAt: expect.any(String),
+    });
+  });
 });
