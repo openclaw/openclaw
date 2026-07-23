@@ -8,6 +8,7 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { ChannelAccountSnapshot as ProtocolChannelAccountStatus } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -140,8 +141,16 @@ export type ChannelMeta = {
   preferOver?: readonly string[];
 };
 
-/** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = {
+/** Canonical credential-free snapshot returned by channel status surfaces. */
+export type ChannelAccountStatus = ProtocolChannelAccountStatus;
+
+/**
+ * Plugin/runtime status contribution normalized before it reaches public output.
+ *
+ * This retains the legacy input fields so shipped plugins keep compiling. The
+ * status projection, rather than this input type, owns credential redaction.
+ */
+export type ChannelAccountSnapshotInput = {
   accountId: string;
   name?: string;
   enabled?: boolean;
@@ -211,6 +220,9 @@ export type ChannelAccountSnapshot = {
   channelAccessToken?: string;
   channelSecret?: string;
 };
+
+/** @deprecated Use ChannelAccountStatus for output or ChannelAccountSnapshotInput for input. */
+export type ChannelAccountSnapshot = ChannelAccountSnapshotInput;
 
 export type ChannelLogSink = {
   info: (msg: string) => void;

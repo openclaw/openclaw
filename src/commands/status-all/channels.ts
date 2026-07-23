@@ -15,7 +15,7 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountStatus,
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
@@ -313,7 +313,7 @@ export async function buildChannelsTable(
           cfg,
           defaultAccountId,
           snapshot:
-            defaultEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            defaultEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountStatus),
         })
       : undefined;
 

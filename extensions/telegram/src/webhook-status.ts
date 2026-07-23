@@ -1,8 +1,8 @@
 // Telegram plugin module implements webhook status behavior.
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 
-type TelegramWebhookStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+type TelegramWebhookStatusSink = (patch: Omit<ChannelAccountSnapshotInput, "accountId">) => void;
 
 export function createTelegramWebhookStatusPublisher(setStatus?: TelegramWebhookStatusSink) {
   return {

@@ -1,6 +1,6 @@
 // Telegram type declarations define plugin contracts.
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountSnapshotInput,
   ChannelRuntimeSurface,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -23,7 +23,7 @@ export type MonitorTelegramOpts = {
   webhookUrl?: string;
   webhookCertPath?: string;
   botInfo?: TelegramBotInfo;
-  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+  setStatus?: (patch: Omit<ChannelAccountSnapshotInput, "accountId">) => void;
   isolatedIngress?: {
     enabled?: boolean;
   };

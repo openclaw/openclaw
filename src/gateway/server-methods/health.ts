@@ -1,7 +1,7 @@
 // Health gateway methods return cached or refreshed status summaries while
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshotInput } from "../../channels/plugins/types.public.js";
 import { buildDeliveryQueueHealthSummary } from "../../commands/health.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
@@ -29,7 +29,7 @@ function cachedAccountForRuntimeSnapshot(params: {
 
 function cachedLifecycleDiffersFromRuntime(params: {
   cachedAccount: ChannelHealthSummary | undefined;
-  runtimeSnapshot: ChannelAccountSnapshot;
+  runtimeSnapshot: ChannelAccountSnapshotInput;
 }): boolean {
   for (const key of ["running", "connected"] as const) {
     const runtimeValue = params.runtimeSnapshot[key];

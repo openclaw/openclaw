@@ -10,6 +10,7 @@ export {
   buildComputedAccountStatusSnapshot,
   buildModelsProviderData,
   buildPendingHistoryContextFromMap,
+  type ChannelAccountStatus,
   type ChannelAccountSnapshot,
   type ChannelDirectoryEntry,
   type ChannelGroupContext,

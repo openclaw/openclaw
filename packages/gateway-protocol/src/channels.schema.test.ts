@@ -38,37 +38,38 @@ describe("ChannelsStatusResultSchema", () => {
   const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {
-    expect(
-      validate.Check({
-        ts: Date.now(),
-        channelOrder: ["discord"],
-        channelLabels: { discord: "Discord" },
-        channels: { discord: { configured: true } },
-        channelAccounts: {
-          discord: [
-            {
-              accountId: "default",
-              enabled: true,
-              configured: true,
-              running: true,
-              connected: false,
-              healthState: "stale-socket",
-            },
-          ],
-        },
-        channelDefaultAccountId: { discord: "default" },
-        partial: true,
-        warnings: ["discord:default probe timed out after 1000ms"],
-        eventLoop: {
-          degraded: true,
-          reasons: ["event_loop_delay", "cpu"],
-          intervalMs: 62_000,
-          delayP99Ms: 1_250.5,
-          delayMaxMs: 62_000,
-          utilization: 0.98,
-          cpuCoreRatio: 1.2,
-        },
-      }),
-    ).toBe(true);
+    const result = {
+      ts: Date.now(),
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      channels: { discord: { configured: true } },
+      channelAccounts: {
+        discord: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: true,
+            connected: false,
+            healthState: "stale-socket",
+          },
+        ],
+      },
+      channelDefaultAccountId: { discord: "default" },
+      partial: true,
+      warnings: ["discord:default probe timed out after 1000ms"],
+      eventLoop: {
+        degraded: true,
+        reasons: ["event_loop_delay", "cpu"],
+        intervalMs: 62_000,
+        delayP99Ms: 1_250.5,
+        delayMaxMs: 62_000,
+        utilization: 0.98,
+        cpuCoreRatio: 1.2,
+      },
+    };
+    expect(validate.Check(result)).toBe(true);
+    Object.assign(result.channelAccounts.discord[0], { channelAccessToken: "secret-token" });
+    expect(validate.Check(result)).toBe(false);
   });
 });

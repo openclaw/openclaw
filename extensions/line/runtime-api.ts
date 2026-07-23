@@ -2,6 +2,7 @@
 // Keep this barrel thin and aligned with the local extension surface.
 
 export type {
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
   ChannelPlugin,
   OpenClawConfig,

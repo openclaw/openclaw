@@ -1,5 +1,5 @@
 // Qqbot tests cover channel gateway status truth on disconnect.
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { qqbotPlugin } from "./channel.js";
 import type { ResolvedQQBotAccount } from "./types.js";
@@ -19,8 +19,8 @@ type StartGatewayOptions = {
 
 async function startAccountAndCaptureGatewayOptions() {
   startGatewayMock.mockImplementation(() => new Promise<void>(() => {}));
-  const statusWrites: ChannelAccountSnapshot[] = [];
-  let status: ChannelAccountSnapshot = {
+  const statusWrites: ChannelAccountSnapshotInput[] = [];
+  let status: ChannelAccountSnapshotInput = {
     accountId: "test-account",
     running: true,
     connected: false,
@@ -43,7 +43,7 @@ async function startAccountAndCaptureGatewayOptions() {
     runtime: {},
     abortSignal: new AbortController().signal,
     getStatus: () => status,
-    setStatus: (next: ChannelAccountSnapshot) => {
+    setStatus: (next: ChannelAccountSnapshotInput) => {
       status = next;
       statusWrites.push(next);
     },

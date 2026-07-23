@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS as TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   isIngressClaimOwnedByOtherLiveProcess as isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   resolveIngressRetryDelayMs,
@@ -423,7 +424,7 @@ function createPollingSession(params: {
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
   getLastUpdateId?: () => number | null;
   stallThresholdMs?: number;
-  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+  setStatus?: (patch: Omit<ChannelAccountSnapshotInput, "accountId">) => void;
   isolatedIngress?: ConstructorParameters<typeof TelegramPollingSession>[0]["isolatedIngress"];
 }) {
   return new TelegramPollingSession({

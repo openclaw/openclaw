@@ -33,7 +33,7 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
     ]);
   });
 
-  it("omits webhook and public-key style fields from generic snapshots", () => {
+  it("omits webhook fields while preserving public account metadata", () => {
     const snapshot = projectSafeChannelAccountSnapshotFields({
       name: "Primary",
       tokenSource: "config",
@@ -53,6 +53,8 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       tokenStatus: "configured_unavailable",
       signingSecretSource: "config", // pragma: allowlist secret
       signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
+      audienceType: "project-number",
+      audience: "1234567890",
     });
   });
 

@@ -1,5 +1,5 @@
 // Discord tests cover status issues plugin behavior.
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountStatus } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 
@@ -18,7 +18,7 @@ describe("collectDiscordStatusIssues", () => {
         audit: {
           unresolvedChannels: 2,
         },
-      } as ChannelAccountSnapshot,
+      } as ChannelAccountStatus,
     ]);
 
     expect(issues).toEqual([
@@ -58,7 +58,7 @@ describe("collectDiscordStatusIssues", () => {
             },
           ],
         },
-      } as ChannelAccountSnapshot,
+      } as ChannelAccountStatus,
     ]);
 
     expect(issues).toEqual([
@@ -82,7 +82,7 @@ describe("collectDiscordStatusIssues", () => {
         running: true,
         connected: true,
         healthState: "stale-socket",
-      } as ChannelAccountSnapshot,
+      } as ChannelAccountStatus,
     ]);
 
     expect(issues).toEqual([

@@ -20,7 +20,10 @@ import {
 } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshotInput,
+  ChannelAccountStatus,
+} from "../../channels/plugins/types.public.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -221,7 +224,7 @@ function resolveRuntimeAccountSnapshot(params: {
   runtime: ChannelRuntimeSnapshot;
   channelId: ChannelId;
   accountId: string;
-}): ChannelAccountSnapshot | undefined {
+}): ChannelAccountSnapshotInput | undefined {
   const accounts = params.runtime.channelAccounts[params.channelId];
   const direct = accounts?.[params.accountId];
   if (direct) {
@@ -378,7 +381,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelId: ChannelId,
       accountId: string,
       defaultAccountId: string,
-    ): ChannelAccountSnapshot | undefined => {
+    ): ChannelAccountSnapshotInput | undefined => {
       const accounts = runtime.channelAccounts[channelId];
       const defaultRuntimeLocal = runtime.channels[channelId];
       const raw =
@@ -496,9 +499,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const plugin = pluginMap.get(channelId);
       if (!plugin) {
         return {
-          accounts: [] as ChannelAccountSnapshot[],
+          accounts: [] as ChannelAccountStatus[],
           defaultAccountId: DEFAULT_ACCOUNT_ID,
-          defaultAccount: undefined as ChannelAccountSnapshot | undefined,
+          defaultAccount: undefined as ChannelAccountStatus | undefined,
           resolvedAccounts: {} as Record<string, unknown>,
         };
       }
@@ -516,7 +519,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         ),
         limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
       });
-      const accounts: ChannelAccountSnapshot[] = [];
+      const accounts: ChannelAccountStatus[] = [];
       for (const result of results) {
         if (result) {
           resolvedAccounts[result.accountId] = result.account;
@@ -569,7 +572,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
                   defaultAccount ??
                   ({
                     accountId: defaultAccountId,
-                  } as ChannelAccountSnapshot),
+                  } as ChannelAccountStatus),
               }),
           });
           summary = summaryResult.ok ? summaryResult.value : fallbackSummary(summaryResult.error);

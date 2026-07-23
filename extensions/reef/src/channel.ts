@@ -212,7 +212,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       connected: runtime?.connected ?? false,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastError: runtime?.lastError ?? null,
-      extra: { handle: account.config.handle },
     }),
   },
   gateway: {

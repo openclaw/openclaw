@@ -1,5 +1,5 @@
 // Matrix plugin module implements status behavior.
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
@@ -11,11 +11,11 @@ import {
   type MatrixSyncState,
 } from "../sync-state.js";
 
-type MatrixMonitorStatusSink = (patch: ChannelAccountSnapshot) => void;
+type MatrixMonitorStatusSink = (patch: ChannelAccountSnapshotInput) => void;
 
 function cloneLastDisconnect(
-  value: ChannelAccountSnapshot["lastDisconnect"],
-): ChannelAccountSnapshot["lastDisconnect"] {
+  value: ChannelAccountSnapshotInput["lastDisconnect"],
+): ChannelAccountSnapshotInput["lastDisconnect"] {
   if (!value || typeof value === "string") {
     return value ?? null;
   }
@@ -39,7 +39,7 @@ export function createMatrixMonitorStatusController(params: {
   baseUrl?: string;
   statusSink?: MatrixMonitorStatusSink;
 }) {
-  const status: ChannelAccountSnapshot = {
+  const status: ChannelAccountSnapshotInput = {
     accountId: params.accountId,
     ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
     connected: false,

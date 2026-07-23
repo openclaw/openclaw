@@ -1,6 +1,6 @@
 // Telegram plugin module implements polling session behavior.
 import { type RunOptions, run } from "@grammyjs/runner";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -98,7 +98,7 @@ type TelegramPollingSessionOpts = {
   createTelegramTransport?: () => TelegramTransport;
   /** Stall detection threshold in ms. Defaults to 120_000 (2 min). */
   stallThresholdMs?: number;
-  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+  setStatus?: (patch: Omit<ChannelAccountSnapshotInput, "accountId">) => void;
   isolatedIngress?: {
     enabled: boolean;
     apiRoot?: string;

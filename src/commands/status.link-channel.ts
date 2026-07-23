@@ -1,9 +1,13 @@
 // Resolves the first channel that can report linked/unlinked auth state for status summaries.
 // Channel-specific linking logic stays inside plugin status hooks.
 
+import { projectSafeChannelAccountSnapshotFields } from "../channels/account-snapshot-fields.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshotInput,
+  ChannelAccountStatus,
+} from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
@@ -30,14 +34,18 @@ export async function resolveLinkChannelContext(
         mode: "read_only",
         commandName: "status",
       });
-    const snapshot = plugin.config.describeAccount
+    const described: ChannelAccountSnapshotInput = plugin.config.describeAccount
       ? plugin.config.describeAccount(account, cfg)
       : ({
           // Fallback snapshot keeps older/simple plugins visible in status.
           accountId: defaultAccountId,
           enabled,
           configured,
-        } as ChannelAccountSnapshot);
+        } satisfies ChannelAccountSnapshotInput);
+    const snapshot: ChannelAccountStatus = {
+      accountId: defaultAccountId,
+      ...projectSafeChannelAccountSnapshotFields(described),
+    };
     const summary = plugin.status?.buildChannelSummary
       ? await plugin.status.buildChannelSummary({
           account,

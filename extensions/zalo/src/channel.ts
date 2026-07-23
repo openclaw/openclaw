@@ -8,7 +8,7 @@ import {
   createScopedDmSecurityResolver,
   mapAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelAccountStatus } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelConfigSchema,
   createChatChannelPlugin,
@@ -207,7 +207,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       config: {
         ...zaloConfigAdapter,
         isConfigured: (account) => Boolean(account.token?.trim()),
-        describeAccount: (account): ChannelAccountSnapshot =>
+        describeAccount: (account): ChannelAccountStatus =>
           describeWebhookAccountSnapshot({
             account,
             configured: Boolean(account.token?.trim()),

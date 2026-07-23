@@ -1,7 +1,9 @@
 // Channel contract suites provide reusable expectations for channel plugin test coverage.
 import { expect, it } from "vitest";
+import { projectSafeChannelAccountSnapshotFields } from "../../channels/account-snapshot-fields.js";
 import type {
-  ChannelAccountSnapshot,
+  ChannelAccountSnapshotInput,
+  ChannelAccountStatus,
   ChannelAccountState,
   ChannelSetupInput,
 } from "../../channels/plugins/types.core.js";
@@ -176,7 +178,7 @@ type ChannelStatusContractCase<Probe> = {
   name: string;
   cfg: OpenClawConfig;
   accountId?: string;
-  runtime?: ChannelAccountSnapshot;
+  runtime?: ChannelAccountSnapshotInput;
   probe?: Probe;
   beforeTest?: () => void;
   expectedState?: ChannelAccountState;
@@ -184,7 +186,7 @@ type ChannelStatusContractCase<Probe> = {
     configured: boolean;
     enabled: boolean;
   };
-  assertSnapshot?: (snapshot: ChannelAccountSnapshot) => void;
+  assertSnapshot?: (snapshot: ChannelAccountSnapshotInput) => void;
   assertSummary?: (summary: Record<string, unknown>) => void;
 };
 
@@ -208,7 +210,8 @@ export function installChannelStatusContractSuite<ResolvedAccount, Probe = unkno
       testCase.beforeTest?.();
 
       const account = params.plugin.config.resolveAccount(testCase.cfg, testCase.accountId);
-      const snapshot = await params.plugin.status!.buildAccountSnapshot!({
+      const snapshot: ChannelAccountSnapshotInput = await params.plugin.status!
+        .buildAccountSnapshot!({
         account,
         cfg: testCase.cfg,
         runtime: testCase.runtime,
@@ -222,11 +225,15 @@ export function installChannelStatusContractSuite<ResolvedAccount, Probe = unkno
       if (params.plugin.status?.buildChannelSummary) {
         const defaultAccountId =
           params.plugin.config.defaultAccountId?.(testCase.cfg) ?? testCase.accountId ?? "default";
+        const summarySnapshot: ChannelAccountStatus = {
+          accountId: snapshot.accountId,
+          ...projectSafeChannelAccountSnapshotFields(snapshot),
+        };
         const summary = await params.plugin.status.buildChannelSummary({
           account,
           cfg: testCase.cfg,
           defaultAccountId,
-          snapshot,
+          snapshot: summarySnapshot,
         });
         expect(summary).toEqual(expect.any(Object));
         testCase.assertSummary?.(summary);

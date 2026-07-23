@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
+import type { ChannelAccountStatus } from "openclaw/plugin-sdk/status-helpers";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -429,7 +429,7 @@ describe("googlechat setup", () => {
 
   it("clears running status when monitor startup fails", async () => {
     hoisted.startGoogleChatMonitor.mockRejectedValue(new Error("webhook bind failed"));
-    const patches: ChannelAccountSnapshot[] = [];
+    const patches: ChannelAccountStatus[] = [];
 
     const task = startGoogleChatGatewayAccount(
       createStartAccountContext({

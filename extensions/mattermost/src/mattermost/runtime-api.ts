@@ -1,6 +1,7 @@
 // Mattermost API module exposes the plugin public contract.
 export type {
   BaseProbeResult,
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
   ChatType,

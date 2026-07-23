@@ -1,5 +1,6 @@
 // Line API module exposes the plugin public contract.
 export type {
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
   ChannelPlugin,
   OpenClawConfig,

@@ -1663,6 +1663,8 @@ export type {
   TtsSpeakParams,
   TtsSpeakResult,
   TalkModeParams,
+  ChannelAccountSnapshot,
+  ChannelUiMeta,
   ChannelsStatusParams,
   ChannelsStatusResult,
   ChannelsPairingListParams,

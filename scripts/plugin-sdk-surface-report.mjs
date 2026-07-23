@@ -93,7 +93,9 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
-  core: 2,
+  core: 3,
+  "channel-contract": 1,
+  "status-helpers": 1,
   routing: 1,
   health: 1,
   "channel-streaming": 54,
@@ -149,7 +151,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: channel-owned setup contract factory.
       // +18: generic schema primitives needed by plugin-owned channel config schemas.
       // +2: shared Teams reply-style and TTS schema leaves.
-      4698,
+      // +6: typed public channel-status contract and its input/output helpers.
+      4704,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -159,13 +162,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: settled-turn full-attempt projector.
       // +1: channel-owned setup contract factory.
       // +4: generic channel schema shape builders.
-      // +1: plugin-owned sensitive-schema registration.
+      // +1: shared Teams reply-style schema leaf.
       2847,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1697,
+      // +3: deprecated ChannelAccountSnapshot aliases retained during the status contract migration.
+      1700,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

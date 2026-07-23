@@ -16,7 +16,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelAccountStatus } from "../channels/plugins/types.public.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -698,7 +698,7 @@ export async function getHealthSnapshot(params?: {
         (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
       const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(plugin.id, probe);
       const snapshotProbe = includeSensitive ? probe : nonSensitiveProbeFailure;
-      const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
+      const snapshot: ChannelAccountStatus = await buildChannelAccountSnapshotFromAccount({
         plugin,
         cfg,
         accountId,

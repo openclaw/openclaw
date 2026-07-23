@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../account-snapshot-fields.js";
-import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
+import type { ChannelAccountStatus } from "../plugins/types.public.js";
 
 export type RuntimeChannelStatusPayload = {
   channelAccounts?: unknown;
@@ -36,14 +36,14 @@ export function getRuntimeChannelAccounts(params: {
 /** Normalizes gateway channel account snapshots into a channel-id map. */
 export function normalizeRuntimeChannelAccountSnapshots(
   payload: unknown,
-): Map<string, ChannelAccountSnapshot[]> {
-  const out = new Map<string, ChannelAccountSnapshot[]>();
+): Map<string, ChannelAccountStatus[]> {
+  const out = new Map<string, ChannelAccountStatus[]>();
   for (const [channelId, accounts] of Object.entries(readRuntimeAccountsByChannel(payload))) {
     if (!Array.isArray(accounts)) {
       continue;
     }
     const normalized = accounts.filter(
-      (account): account is ChannelAccountSnapshot =>
+      (account): account is ChannelAccountStatus =>
         Boolean(account) &&
         typeof account === "object" &&
         typeof (account as { accountId?: unknown }).accountId === "string",
@@ -111,12 +111,12 @@ export function markConfiguredUnavailableCredentialStatusesAvailable(
 /** Merges local and runtime accounts into display rows with source metadata. */
 export async function resolveChannelAccountStatusRows(params: {
   localAccountIds: string[];
-  runtimeAccounts: ChannelAccountSnapshot[];
-  resolveLocalSnapshot: (accountId: string) => Promise<ChannelAccountSnapshot>;
+  runtimeAccounts: ChannelAccountStatus[];
+  resolveLocalSnapshot: (accountId: string) => Promise<ChannelAccountStatus>;
 }): Promise<
   Array<{
     accountId: string;
-    snapshot: ChannelAccountSnapshot;
+    snapshot: ChannelAccountStatus;
     source: "gateway" | "config";
   }>
 > {
@@ -126,7 +126,7 @@ export async function resolveChannelAccountStatusRows(params: {
   ]);
   const rows: Array<{
     accountId: string;
-    snapshot: ChannelAccountSnapshot;
+    snapshot: ChannelAccountStatus;
     source: "gateway" | "config";
   }> = [];
   for (const accountId of mergedAccountIds) {

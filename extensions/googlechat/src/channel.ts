@@ -170,13 +170,13 @@ export const googlechatPlugin = createChatChannelPlugin({
           }
           return issues;
         }),
-      buildChannelSummary: ({ snapshot }) =>
+      buildChannelSummary: ({ account, snapshot }) =>
         buildPassiveProbedChannelStatusSummary(snapshot, {
           credentialSource: snapshot.credentialSource ?? "none",
           audienceType: snapshot.audienceType ?? null,
           audience: snapshot.audience ?? null,
-          webhookPath: snapshot.webhookPath ?? null,
-          webhookUrl: snapshot.webhookUrl ?? null,
+          webhookPath: account.config.webhookPath ?? null,
+          webhookUrl: account.config.webhookUrl ?? null,
         }),
       probeAccount: async ({ account }) =>
         (await loadGoogleChatChannelRuntime()).probeGoogleChat(account),

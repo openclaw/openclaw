@@ -1,9 +1,9 @@
 // Line tests cover channel.status plugin behavior.
 import { describe, expect, it } from "vitest";
-import type { ChannelAccountSnapshot } from "../api.js";
+import type { ChannelAccountStatus } from "../api.js";
 import { lineStatusAdapter } from "./status.js";
 
-function collectIssues(accounts: ChannelAccountSnapshot[]) {
+function collectIssues(accounts: ChannelAccountStatus[]) {
   const collect = lineStatusAdapter.collectStatusIssues;
   if (!collect) {
     throw new Error("LINE plugin status collector is unavailable");

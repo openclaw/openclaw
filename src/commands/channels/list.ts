@@ -7,7 +7,7 @@ import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposu
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { ChannelAccountStatus } from "../../channels/plugins/types.public.js";
 import {
   normalizeRuntimeChannelAccountSnapshots,
   resolveChannelAccountStatusRows,
@@ -85,7 +85,7 @@ function shouldShowConfigured(channel: ChannelPlugin): boolean {
 
 function formatAccountLine(params: {
   channel: ChannelPlugin;
-  snapshot: ChannelAccountSnapshot;
+  snapshot: ChannelAccountStatus;
   installed: boolean;
 }): string {
   const { channel, snapshot, installed } = params;
@@ -163,7 +163,7 @@ export async function channelsListCommand(
   });
   const runtimeAccountsByChannel =
     opts.json === true
-      ? new Map<string, ChannelAccountSnapshot[]>()
+      ? new Map<string, ChannelAccountStatus[]>()
       : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
   const installedByChannelId = new Map<string, boolean>();
   for (const entry of catalogEntries) {
@@ -184,7 +184,7 @@ export async function channelsListCommand(
 
   type AccountLineSource = {
     plugin: ChannelPlugin;
-    snapshot: ChannelAccountSnapshot;
+    snapshot: ChannelAccountStatus;
     installed: boolean;
   };
   const accountLines: AccountLineSource[] = [];

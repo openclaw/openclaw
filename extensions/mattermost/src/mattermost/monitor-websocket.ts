@@ -1,5 +1,6 @@
 // Mattermost plugin module implements monitor websocket behavior.
 import { randomUUID } from "node:crypto";
+import type { ChannelAccountSnapshotInput } from "openclaw/plugin-sdk/channel-contract";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureWsEvent,
@@ -10,7 +11,7 @@ import WebSocket, { type ClientOptions } from "ws";
 import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
-import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
+import type { RuntimeEnv } from "./runtime-api.js";
 
 export type MattermostEventPayload = {
   event?: string;
@@ -103,7 +104,7 @@ type CreateMattermostConnectOnceOpts = {
   wsUrl: string;
   botToken: string;
   abortSignal?: AbortSignal;
-  statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void;
+  statusSink?: (patch: Partial<ChannelAccountSnapshotInput>) => void;
   runtime: RuntimeEnv;
   nextSeq: () => number;
   onPosted: (rawEvent: string) => Promise<void>;

@@ -4,8 +4,8 @@ import { buildChannelAccountSnapshotFromAccount } from "./status.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 describe("buildChannelAccountSnapshotFromAccount", () => {
-  it("redacts a custom status snapshot baseUrl without mutating the resolved account", async () => {
-    const rawBaseUrl = [
+  it("redacts a hook-provided base URL without mutating the account", async () => {
+    const baseUrl = [
       "https://",
       "user",
       ":",
@@ -14,20 +14,14 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
       "chat.example.test/?token=",
       "secret",
     ].join("");
-    const account = Object.freeze({
-      baseUrl: rawBaseUrl,
-    });
-    let receivedAccount: unknown;
+    const account = Object.freeze({ baseUrl });
     const plugin = {
       config: {},
       status: {
-        buildAccountSnapshot: ({ account: hookAccount }: { account: unknown }) => {
-          receivedAccount = hookAccount;
-          return {
-            accountId: "custom",
-            baseUrl: (hookAccount as { baseUrl: string }).baseUrl,
-          };
-        },
+        buildAccountSnapshot: ({ account: hookAccount }: { account: typeof account }) => ({
+          accountId: "custom",
+          baseUrl: hookAccount.baseUrl,
+        }),
       },
     } as unknown as ChannelPlugin<typeof account>;
 
@@ -38,8 +32,7 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
       account,
     });
 
-    expect(receivedAccount).toBe(account);
     expect(snapshot.baseUrl).toBe("https://chat.example.test/?token=***");
-    expect(account.baseUrl).toBe(rawBaseUrl);
+    expect(account.baseUrl).toBe(baseUrl);
   });
 });

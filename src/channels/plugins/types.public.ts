@@ -9,7 +9,9 @@ export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
 export type {
   BaseProbeResult,
   BaseTokenResolution,
+  ChannelAccountStatus,
   ChannelAccountSnapshot,
+  ChannelAccountSnapshotInput,
   ChannelAgentTool,
   ChannelCapabilities,
   ChannelDirectoryEntry,
