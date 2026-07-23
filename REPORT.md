@@ -4,6 +4,8 @@ Implementation commit: `083482ea654 feat(sessions): attribute archive transition
 
 Alias-rollback follow-up: `14230f2e84a fix(sessions): restore alias layout after archive audit failure`
 
+Final rollback redesign: `b5cc8061a9b fix(sessions): isolate archive audit rollback`
+
 ## Files changed
 
 Session state and mutation:
@@ -185,7 +187,9 @@ The shared audit extraction is nearly LOC-neutral by moving the former sharing-o
 - No push, PR, changelog edit, `scripts/pr`, or live Gateway mutation was performed.
 - `origin/main` advanced during the long validation window. The branch is intentionally left for the reviewer to rebase as requested.
 
-## Alias-complete rollback follow-up
+## Superseded raw-layout rollback follow-up
+
+This section records the intermediate `14230f2e84a` approach for review history. It was superseded and removed by `b5cc8061a9b` because restoring snapshotted `session_members` could revive a membership concurrently revoked outside the archive lifecycle lock.
 
 The first rollback restored only the canonical primary entry after an audit append failure. That was logically complete for the archive fields but not layout-complete: `applySessionPatchProjection` removes every non-primary alias candidate while canonicalizing the freshest row.
 
@@ -250,3 +254,50 @@ total 250 added, 16 deleted, net +234
 ```
 
 No push, PR, changelog edit, protocol change, schema-version bump, or `CLAUDE.md` edit was performed.
+
+## Final archive-only rollback redesign
+
+The final design treats candidate-key canonicalization as the normal benign behavior of `sessions.patch`; alias layout is not rolled back. If archive auditing fails, the handler re-reads the current candidate state and applies the inverse archived boolean through a second `applySessionPatchProjection` plus `projectSessionsPatchEntry` pass. It then restores only the prior `archivedAt` and `archivedBy` values. Other valid patch effects remain, and the rollback never reads or writes `session_members`.
+
+The intermediate raw `session_entries`/`session_members` snapshot API and all related accessor plumbing were deleted. This avoids reviving a member removed concurrently between archive projection and audit failure.
+
+Final regression behavior:
+
+- archive is requested through the alias `alias-archive`;
+- a canonical session member exists before the request;
+- the forced audit failure removes that member before throwing;
+- rollback leaves the canonical session unarchived with no `archivedBy`;
+- the removed member remains absent;
+- alias canonicalization may remain under the primary key by design.
+
+Final proof:
+
+```text
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts -- --reporter=verbose
+Test Files 1 passed
+Tests 4 passed
+[test] passed 1 Vitest shard in 13.59s (exit 0)
+
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json
+exit 0 (no diagnostics)
+
+OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- src/config/sessions/session-accessor.lifecycle.ts src/config/sessions/session-accessor.sqlite-projection.ts src/config/sessions/session-accessor.sqlite.ts src/config/sessions/session-accessor.ts src/config/sessions/session-accessor.types.ts src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/server-methods/sessions-mutations.ts
+lanes=core, coreTests
+format, core/core-test typechecks, changed-file lint, database-first guard, runtime sidecar loader guard, import-cycle guard, webhook and pairing guards passed
+exit 0
+
+.agents/skills/autoreview/scripts/autoreview --mode uncommitted --engine codex
+trufflehog: clean
+autoreview clean: no accepted/actionable findings reported
+overall: patch is correct (0.98)
+```
+
+Final redesign LOC from `git show --numstat b5cc8061a9b`:
+
+```text
+prod 45 added, 166 deleted, net -121
+test 24 added, 62 deleted, net -38
+total 69 added, 228 deleted, net -159
+```
+
+No push was performed. `SPEC.md` remains the only untracked file.
