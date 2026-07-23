@@ -608,6 +608,96 @@ function cleanStreamingScratchBuffers(output: AssistantMessage): void {
   }
 }
 
+function readErrorCode(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const code = (value as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function readErrorMessage(value: unknown): string | undefined {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const message = (value as { message?: unknown }).message;
+  return typeof message === "string" ? message : undefined;
+}
+
+function isInvalidEncryptedContentError(error: unknown): boolean {
+  const code = readErrorCode(error);
+  if (code === "invalid_encrypted_content" || code === "thinking_signature_invalid") {
+    return true;
+  }
+
+  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  const nestedError = record.error;
+  const nestedCode = readErrorCode(nestedError);
+  if (nestedCode === "invalid_encrypted_content" || nestedCode === "thinking_signature_invalid") {
+    return true;
+  }
+
+  const message = [
+    readErrorMessage(error),
+    readErrorMessage(nestedError),
+    readErrorMessage(record.cause),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  const normalizedMessage = message.toLowerCase();
+  return (
+    message.includes("invalid_encrypted_content") ||
+    message.includes("thinking_signature_invalid") ||
+    normalizedMessage.includes("could not decrypt the provided encrypted_content") ||
+    (normalizedMessage.includes("encrypted content") &&
+      normalizedMessage.includes("could not be verified") &&
+      normalizedMessage.includes("could not be decrypted or parsed"))
+  );
+}
+
+function dropResponsesRequestEncryptedReplayItems(
+  params: ResponseCreateParamsStreaming,
+): ResponseCreateParamsStreaming {
+  let changed = false;
+  let droppedReasoningBeforeNextItem = false;
+  const input: ResponseInput = [];
+  const requestInput = Array.isArray(params.input) ? params.input : [];
+
+  for (const value of requestInput) {
+    const item =
+      value && typeof value === "object"
+        ? (value as unknown as Record<string, unknown>)
+        : undefined;
+    const type = typeof item?.type === "string" ? item.type : undefined;
+    if (type === "reasoning" || type === "compaction") {
+      changed = true;
+      droppedReasoningBeforeNextItem ||= type === "reasoning";
+      continue;
+    }
+
+    if (
+      droppedReasoningBeforeNextItem &&
+      type === "message" &&
+      item?.role === "assistant" &&
+      "id" in item
+    ) {
+      const message = { ...item };
+      // Signed assistant message ids are replayable only with their paired reasoning item.
+      delete message.id;
+      input.push(message as unknown as ResponseInputItem);
+      changed = true;
+    } else {
+      input.push(value);
+    }
+    droppedReasoningBeforeNextItem = false;
+  }
+
+  return changed ? { ...params, input } : params;
+}
+
 export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
@@ -630,35 +720,62 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     }
 
     firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-    const { data: openaiStream, response } = await client.responses
-      .create(requestParams, {
-        ...buildResponsesRequestOptions(options),
-        signal: firstEventAbort.signal,
-      })
-      .withResponse();
-    await options?.onResponse?.(
-      { status: response.status, headers: headersToRecord(response.headers) },
-      model,
-    );
-    stream.push({ type: "start", partial: output });
-
     const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
     const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
-    const processStreamOptions =
-      params.processStreamOptions ||
+    const needsProcessStreamOptions =
+      params.processStreamOptions !== undefined ||
       firstEventTimeoutMs !== undefined ||
-      onFirstEventTimeout !== undefined
-        ? {
-            ...params.processStreamOptions,
-            firstEventTimeoutMs:
-              params.processStreamOptions?.firstEventTimeoutMs ?? firstEventTimeoutMs,
-            abortFirstEventStream:
-              params.processStreamOptions?.abortFirstEventStream ?? firstEventAbort.abort,
-            onFirstEventTimeout:
-              params.processStreamOptions?.onFirstEventTimeout ?? onFirstEventTimeout,
-          }
-        : undefined;
-    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
+      onFirstEventTimeout !== undefined;
+    const processStreamOptions = needsProcessStreamOptions
+      ? {
+          ...params.processStreamOptions,
+          firstEventTimeoutMs:
+            params.processStreamOptions?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+          abortFirstEventStream:
+            params.processStreamOptions?.abortFirstEventStream ?? firstEventAbort.abort,
+          onFirstEventTimeout:
+            params.processStreamOptions?.onFirstEventTimeout ?? onFirstEventTimeout,
+        }
+      : undefined;
+    let retryUsed = false;
+    let startEmitted = false;
+    while (true) {
+      try {
+        const { data: openaiStream, response } = await client.responses
+          .create(requestParams, {
+            ...buildResponsesRequestOptions(options),
+            signal: firstEventAbort.signal,
+          })
+          .withResponse();
+        await options?.onResponse?.(
+          { status: response.status, headers: headersToRecord(response.headers) },
+          model,
+        );
+        if (!startEmitted) {
+          stream.push({ type: "start", partial: output });
+          startEmitted = true;
+        }
+
+        await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
+        break;
+      } catch (error) {
+        if (
+          retryUsed ||
+          options?.signal?.aborted ||
+          output.content.length > 0 ||
+          !isInvalidEncryptedContentError(error)
+        ) {
+          throw error;
+        }
+        const retryParams = dropResponsesRequestEncryptedReplayItems(requestParams);
+        if (retryParams === requestParams) {
+          throw error;
+        }
+        retryUsed = true;
+        requestParams = retryParams;
+        delete output.responseId;
+      }
+    }
 
     if (options?.signal?.aborted) {
       throw new Error("Request was aborted");
