@@ -1,5 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 
 function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalString(raw);
@@ -11,16 +15,15 @@ export function normalizeToolProgressDetail(value: unknown): "explain" | "raw" |
 }
 
 export function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
-  return (
-    normalizePromptRouteChannel(entry?.origin?.provider) ??
-    normalizePromptRouteChannel(entry?.channel) ??
-    normalizePromptRouteChannel(entry?.lastChannel) ??
-    normalizePromptRouteChannel(entry?.deliveryContext?.channel)
+  const origin = sessionDeliveryOrigin(entry);
+  return normalizePromptRouteChannel(
+    origin?.provider ?? deliveryContextFromSession(entry)?.channel,
   );
 }
 
 export function resolvePersistedPromptSurface(entry?: SessionEntry): string | undefined {
   return (
-    normalizePromptRouteChannel(entry?.origin?.surface) ?? resolvePersistedPromptProvider(entry)
+    normalizePromptRouteChannel(sessionDeliveryOrigin(entry)?.surface) ??
+    resolvePersistedPromptProvider(entry)
   );
 }

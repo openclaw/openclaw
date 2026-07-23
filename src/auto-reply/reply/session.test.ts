@@ -5645,8 +5645,7 @@ describe("initSessionState internal channel routing preservation", () => {
         OriginatingTo: "session:dashboard",
         Surface: "webchat",
       },
-      expected: { lastChannel: "webchat", lastTo: "session:dashboard" },
-      expectedDelivery: { channel: "webchat", to: "session:dashboard" },
+      expected: { delivery: { kind: "internal" } },
     },
     {
       name: "keeps persisted external route when OriginatingChannel is non-deliverable",
@@ -5678,14 +5677,14 @@ describe("initSessionState internal channel routing preservation", () => {
         OriginatingChannel: "sessions_send",
         OriginatingTo: "session:handoff",
       },
-      expected: { lastChannel: "sessions_send", lastTo: "session:handoff" },
+      expected: { delivery: { kind: "internal" } },
     },
     {
       name: "keeps webchat channel for webchat/main sessions",
       prefix: "preserve-webchat-main-",
       sessionKey: "agent:main:main",
       ctx: { Body: "hello", OriginatingChannel: "webchat" },
-      expected: { lastChannel: "webchat" },
+      expected: { delivery: { kind: "internal" } },
     },
     {
       name: "preserves external route for main session when webchat accesses without destination (fixes #47745)",

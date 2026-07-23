@@ -3,8 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import {
   buildTestAllowedModelSet,
+  type CommandSessionEntryFixture,
   buildTestConfiguredModelCatalog,
   buildTestModelAliasIndex,
   createChannelModelRuntimeConfig,
@@ -782,7 +784,7 @@ function runInternalModelCommand(runId: string) {
 }
 
 function setupStoredSession(
-  overrides: Partial<SessionEntry> = {},
+  overrides: CommandSessionEntryFixture = {},
   storePath = "/tmp/openclaw-sessions.json",
   sessionKey = "agent:main:main",
 ): { entry: SessionEntry; store: Record<string, SessionEntry> } {
@@ -794,7 +796,7 @@ function setupStoredSession(
 }
 
 function setupBareStoredSession(
-  overrides: Partial<SessionEntry> = {},
+  overrides: CommandSessionEntryFixture = {},
   storePath = "/tmp/openclaw-sessions.json",
   sessionKey = "agent:main:main",
 ): { entry: SessionEntry; store: Record<string, SessionEntry> } {
@@ -950,17 +952,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         requestedChannel?: string;
         sessionEntry?: SessionEntry;
       }) => {
-        const context = params.sessionEntry?.deliveryContext;
-        const channel =
-          params.requestedChannel ??
-          context?.channel ??
-          params.sessionEntry?.lastChannel ??
-          "internal";
-        const to = params.explicitTo ?? context?.to ?? params.sessionEntry?.lastTo;
-        const accountId =
-          params.accountId ?? context?.accountId ?? params.sessionEntry?.lastAccountId;
-        const threadId =
-          params.explicitThreadId ?? context?.threadId ?? params.sessionEntry?.lastThreadId;
+        const context = deliveryContextFromSession(params.sessionEntry);
+        const channel = params.requestedChannel ?? context?.channel ?? "internal";
+        const to = params.explicitTo ?? context?.to;
+        const accountId = params.accountId ?? context?.accountId;
+        const threadId = params.explicitThreadId ?? context?.threadId;
         return {
           baseDelivery: {},
           resolvedChannel: channel,
@@ -1050,13 +1046,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
     };
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: Date.now(),
       authProfileOverride: "anthropic:stale-auto",
       authProfileOverrideSource: "auto",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
@@ -1101,12 +1097,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       provider: "openai",
       model: "gpt-5.4",
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       modelSelectionLocked: true,
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.isModelSelectionLockedMock.mockReturnValue(true);
 
     await expect(runBasicAgentCommand()).rejects.toMatchObject({
@@ -1128,7 +1124,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
     };
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       agentHarnessId: "codex",
@@ -1142,7 +1138,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         },
       },
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.isModelSelectionLockedMock.mockReturnValue(true);
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
@@ -1168,7 +1164,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSingleAttemptFallback();
     state.resolvedSessionKeyMock = "agent:main:plugin-owned";
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       agentHarnessId: "codex",
@@ -1177,7 +1173,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "stale-fallback-model",
       modelOverrideSource: "auto",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
 
     await runBasicAgentCommand();
@@ -1744,7 +1740,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createChannelModelRuntimeConfig({
       additionalModels: { "anthropic/fallback-model": {} },
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "discord",
@@ -1755,7 +1751,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "channel-model",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
 
     await runBasicAgentCommand();
@@ -1777,13 +1773,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "openai/parent-channel-model",
     });
     state.resolvedSessionKeyMock = "agent:main:slack:channel:general:thread:thread-1";
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "slack",
       groupId: "thread-1",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(
       makeSuccessResult("openai", "parent-channel-model"),
     );
@@ -1800,7 +1796,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createChannelModelRuntimeConfig({
       additionalModels: { "anthropic/stored-model": {} },
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "discord",
@@ -1809,7 +1805,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "stored-model",
       modelOverrideSource: "user",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "stored-model"));
 
     await runBasicAgentCommand();
@@ -1824,13 +1820,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createChannelModelRuntimeConfig({
       additionalModels: { "openai/explicit-model": {} },
     });
-    state.sessionEntryMock = {
+    state.sessionEntryMock = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 1,
       channel: "discord",
       groupId: "channel-123",
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
+    });
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "explicit-model"));
 
     await agentCommand({
@@ -2552,7 +2548,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
     setupBareStoredSession();
-    const freshEntry: SessionEntry = {
+    const freshEntry = createCommandSessionEntry({
       sessionId: "session-1",
       updatedAt: 2,
       deliveryContext: {
@@ -2560,7 +2556,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         to: "discord:dm:sqlite",
         accountId: "main",
       },
-    };
+    });
     state.loadSessionEntryMock.mockReturnValue(freshEntry);
     state.deliverAgentCommandResultMock.mockImplementation(async (params: unknown) => {
       const resolver = (

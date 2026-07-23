@@ -374,8 +374,11 @@ function migratedSessionScope(
 }
 
 function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
-  const deliveryContext = migratedObjectField(entry, "deliveryContext");
-  const origin = migratedObjectField(entry, "origin");
+  const delivery = migratedObjectField(entry, "delivery");
+  const deliveryContext =
+    migratedObjectField(delivery ?? {}, "context") ?? migratedObjectField(entry, "deliveryContext");
+  const origin =
+    migratedObjectField(delivery ?? {}, "origin") ?? migratedObjectField(entry, "origin");
   return (
     migratedText(entry.channel) ??
     migratedText(deliveryContext?.channel) ??
@@ -385,8 +388,11 @@ function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
 }
 
 function migratedEntryAccountId(entry: MigratedSessionEntry): string | null {
-  const deliveryContext = migratedObjectField(entry, "deliveryContext");
-  const origin = migratedObjectField(entry, "origin");
+  const delivery = migratedObjectField(entry, "delivery");
+  const deliveryContext =
+    migratedObjectField(delivery ?? {}, "context") ?? migratedObjectField(entry, "deliveryContext");
+  const origin =
+    migratedObjectField(delivery ?? {}, "origin") ?? migratedObjectField(entry, "origin");
   return (
     migratedText(deliveryContext?.accountId) ??
     migratedText(entry.lastAccountId) ??

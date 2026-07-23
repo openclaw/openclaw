@@ -502,7 +502,7 @@ describe("SessionManager.open", () => {
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
       {
-        channel: "dashboard",
+        delivery: { kind: "internal" },
         sessionFile: marker,
         sessionId,
         updatedAt: 10,

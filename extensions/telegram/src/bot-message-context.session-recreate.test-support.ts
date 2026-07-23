@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   deleteSessionEntry,
+  normalizeSessionDeliveryState,
   getSessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -86,7 +87,7 @@ describe("Telegram direct session recreation after delete", () => {
         sessionId: "old-session",
         updatedAt: 1_700_000_000_000,
         chatType: "direct",
-        channel: "telegram",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       },
     });
     await deleteSessionEntry({ storePath, sessionKey: TELEGRAM_DIRECT_KEY });

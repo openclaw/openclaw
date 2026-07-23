@@ -5,15 +5,18 @@ import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
+import type { SessionOrigin } from "../config/sessions/types.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 
 const loadSessionStoreMock = vi.fn();
@@ -393,7 +396,16 @@ beforeAll(async () => {
   await getSessionStatusTool("agent:main:spawned").execute("warm-spawned-workspace-status", {});
 });
 
-function resetSessionStore(store: Record<string, SessionEntry>) {
+type SessionEntryFixture = SessionEntry & {
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  lastChannel?: string;
+};
+
+function resetSessionStore(store: Record<string, SessionEntryFixture>) {
+  store = Object.fromEntries(
+    Object.entries(store).map(([key, entry]) => [key, normalizeLegacySessionEntryDelivery(entry)]),
+  ) as Record<string, SessionEntryFixture>;
   buildStatusMessageMock.mockClear();
   resolveQueueSettingsMock.mockClear();
   resolveQueueSettingsMock.mockReturnValue({ mode: "interrupt" });

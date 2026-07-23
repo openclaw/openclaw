@@ -30,6 +30,7 @@ import {
   toPluginConversationBinding,
 } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
@@ -198,7 +199,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
     channel:
       (shouldRouteToOriginating ? routeReplyChannel : undefined) ??
-      sessionStoreEntry.entry?.channel ??
+      sessionDeliveryChannel(sessionStoreEntry.entry) ??
       replyRoute.channel ??
       ctx.Surface ??
       ctx.Provider ??

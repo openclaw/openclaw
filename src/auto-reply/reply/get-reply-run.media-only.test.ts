@@ -11,6 +11,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
@@ -3000,15 +3001,15 @@ describe("runPreparedReply media-only handling", () => {
         updatedAt: 1,
         systemSent: true,
         chatType: "group",
-        channel: "telegram",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        origin: {
-          provider: "telegram",
-          surface: "telegram",
-          chatType: "group",
-          to: "-100123",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "-100123" },
+          origin: {
+            provider: "telegram",
+            surface: "telegram",
+            chatType: "group",
+            to: "-100123",
+          },
+        }),
       };
 
       await runPreparedReply(
@@ -3228,15 +3229,15 @@ describe("runPreparedReply media-only handling", () => {
       updatedAt: 1,
       systemSent: true,
       chatType: "group",
-      channel: "telegram",
-      lastChannel: "telegram",
-      lastTo: "-100123",
-      origin: {
-        provider: "telegram",
-        surface: "telegram",
-        chatType: "group",
-        to: "-100123",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "-100123" },
+        origin: {
+          provider: "telegram",
+          surface: "telegram",
+          chatType: "group",
+          to: "-100123",
+        },
+      }),
     };
 
     await runPreparedReply(

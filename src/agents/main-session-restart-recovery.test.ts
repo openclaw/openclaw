@@ -64,6 +64,7 @@ import {
   createAssistantToolCallMessage,
   createSessionEntry,
   createSessionStore,
+  type SessionEntryFixture,
   expectRecord,
   mockCallArg,
   waitForFast,
@@ -182,20 +183,23 @@ async function makeSessionsDir(agentId = "main"): Promise<string> {
 
 async function writeStorePath(
   storePath: string,
-  store: Record<string, SessionEntry>,
+  store: Record<string, SessionEntryFixture>,
 ): Promise<void> {
   await Promise.all(
     Object.entries(store).map(([sessionKey, entry]) =>
-      replaceSessionEntry({ storePath, sessionKey }, entry),
+      replaceSessionEntry({ storePath, sessionKey }, createSessionEntry(entry)),
     ),
   );
 }
 
-async function writeStore(sessionsDir: string, store: Record<string, SessionEntry>): Promise<void> {
+async function writeStore(
+  sessionsDir: string,
+  store: Record<string, SessionEntryFixture>,
+): Promise<void> {
   await writeStorePath(path.join(sessionsDir, "sessions.json"), store);
 }
 
-function mainSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+function mainSessionEntry(overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId: "main-session",
     updatedAt: Date.now() - 10_000,
@@ -205,10 +209,7 @@ function mainSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   });
 }
 
-function runningSessionEntry(
-  sessionId: string,
-  overrides: Partial<SessionEntry> = {},
-): SessionEntry {
+function runningSessionEntry(sessionId: string, overrides: SessionEntryFixture = {}): SessionEntry {
   return createSessionEntry({
     sessionId,
     updatedAt: Date.now() - 10_000,
@@ -218,7 +219,7 @@ function runningSessionEntry(
 }
 
 function mainSessionStore(
-  overrides: Partial<SessionEntry> = {},
+  overrides: SessionEntryFixture = {},
   sessionKey = "agent:main:main",
 ): Record<string, SessionEntry> {
   return createSessionStore(mainSessionEntry(overrides), sessionKey);
@@ -242,7 +243,7 @@ async function writeMainSession({
   sessionsDir,
   sessionKey = "agent:main:main",
   ...entry
-}: Partial<SessionEntry> & { sessionsDir: string; sessionKey?: string }): Promise<void> {
+}: SessionEntryFixture & { sessionsDir: string; sessionKey?: string }): Promise<void> {
   await writeStore(sessionsDir, mainSessionStore(entry, sessionKey));
 }
 

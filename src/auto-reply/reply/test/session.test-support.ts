@@ -9,14 +9,25 @@ import {
   replaceSessionEntry,
   upsertSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
+import { projectSessionDeliveryFields } from "../../../utils/delivery-context.shared.js";
 import { finalizeInboundContext } from "../inbound-context.js";
 import { initSessionState as initSessionStateRaw } from "../session.js";
 
-export const initSessionState = (
+type ProjectedSessionEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
+
+function projectSessionEntry(entry: SessionEntry): ProjectedSessionEntry {
+  return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
+}
+
+export const initSessionState = async (
   params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
     ctx: Record<string, unknown>;
   },
-) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
+) => {
+  const result = await initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
+  return { ...result, sessionEntry: projectSessionEntry(result.sessionEntry) };
+};
 
 export async function writeSessionStore(
   storePath: string,
@@ -25,18 +36,22 @@ export async function writeSessionStore(
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(store)) {
     const patch = entry as Partial<SessionEntry>;
+    const canonical = normalizeLegacySessionEntryDelivery(patch as SessionEntry);
     if (typeof patch.sessionId === "string" && patch.sessionId.trim()) {
-      await replaceSessionEntry({ storePath, sessionKey }, patch as SessionEntry);
+      await replaceSessionEntry({ storePath, sessionKey }, canonical);
     } else {
-      await upsertSessionEntry({ storePath, sessionKey }, patch);
+      await upsertSessionEntry({ storePath, sessionKey }, canonical);
     }
   }
 }
 
-export function readSessionStore(storePath: string): Record<string, SessionEntry> {
+export function readSessionStore(storePath: string): Record<string, ProjectedSessionEntry> {
   const entries = Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  ) as Record<string, SessionEntry>;
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      projectSessionEntry(entry),
+    ]),
+  ) as Record<string, ProjectedSessionEntry>;
   return new Proxy(entries, {
     get(target, prop, receiver) {
       if (typeof prop !== "string" || prop in target) {
@@ -44,7 +59,7 @@ export function readSessionStore(storePath: string): Record<string, SessionEntry
       }
       const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
       if (entry) {
-        target[prop] = entry;
+        target[prop] = projectSessionEntry(entry);
       }
       return Reflect.get(target, prop, receiver);
     },

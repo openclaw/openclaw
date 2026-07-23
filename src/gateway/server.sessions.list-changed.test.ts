@@ -16,6 +16,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -808,10 +809,9 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
     responseUsage: "full",
     fastMode: true,
-    lastChannel: "telegram",
-    lastTo: "-100123",
-    lastAccountId: "acct-1",
-    lastThreadId: 42,
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "-100123", accountId: "acct-1", threadId: 42 },
+    }),
   } satisfies SessionStoreEntryOptions;
   await writeMainSessionStore(sessionSettings);
 

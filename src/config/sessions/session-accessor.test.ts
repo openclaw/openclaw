@@ -9,6 +9,10 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
@@ -524,7 +528,7 @@ describe("session accessor seam", () => {
     };
 
     const recorded = await recordInboundSessionMeta({ storePath, sessionKey, ctx });
-    expect(recorded?.origin?.provider).toBe("webchat");
+    expect(recorded?.delivery).toEqual({ kind: "internal" });
     expect(recorded).toMatchObject({
       createdVia: "channel",
       createdActor: { type: "human", id: "webchat:user-1" },
@@ -545,9 +549,9 @@ describe("session accessor seam", () => {
 
     // Detached result: caller mutations must never leak into cached store state.
     if (recorded) {
-      recorded.origin = { provider: "mutated" };
+      recorded.delivery = { kind: "none" };
     }
-    expect(loadSessionEntry({ sessionKey, storePath })?.origin?.provider).toBe("webchat");
+    expect(loadSessionEntry({ sessionKey, storePath })?.delivery).toEqual({ kind: "internal" });
 
     const operatorKey = "agent:main:dashboard:operator-created";
     const operator = await recordInboundSessionMeta({
@@ -604,7 +608,7 @@ describe("session accessor seam", () => {
       },
     });
     const afterMeta = loadSessionEntry({ sessionKey, storePath });
-    expect(afterMeta?.origin?.provider).toBe("webchat");
+    expect(afterMeta?.delivery).toEqual({ kind: "internal" });
     // Inbound metadata must not count as activity; idle reset relies on
     // updatedAt moving only for real session turns.
     expect(afterMeta?.updatedAt).toBe(anchorUpdatedAt);
@@ -615,10 +619,10 @@ describe("session accessor seam", () => {
       channel: "webchat",
       to: "webchat:user-2",
     });
-    expect(routed?.lastChannel).toBe("webchat");
+    expect(routed?.delivery).toEqual({ kind: "internal" });
     const afterRoute = loadSessionEntry({ sessionKey, storePath });
-    expect(afterRoute?.lastTo).toBe("webchat:user-2");
-    expect(afterRoute?.route).toEqual({ channel: "webchat", target: { to: "webchat:user-2" } });
+    expect(deliveryContextFromSession(afterRoute)).toBeUndefined();
+    expect(sessionDeliveryRoute(afterRoute)).toBeUndefined();
     expect(afterRoute?.updatedAt).toBe(anchorUpdatedAt);
   });
 

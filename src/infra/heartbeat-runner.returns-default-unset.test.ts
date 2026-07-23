@@ -21,6 +21,7 @@ import {
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   type HeartbeatDeps,
   isHeartbeatEnabledForAgent,
@@ -680,7 +681,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(
       resolveHeartbeatDeliveryTarget({
         cfg,
-        entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1999" },
+        entry: {
+          ...baseEntry,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "whatsapp", to: "+1999" },
+          }),
+        },
         heartbeat,
       }),
     ).toEqual({

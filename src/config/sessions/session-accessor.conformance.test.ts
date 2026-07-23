@@ -15,6 +15,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   appendTranscriptEvent,
@@ -1160,13 +1161,14 @@ describe("sqlite session normalization", () => {
       {
         agentHarnessId: "codex",
         chatType: "group",
-        channel: "discord",
-        deliveryContext: {
-          accountId: "acct-1",
-          channel: "discord",
-          threadId: "thread-1",
-          to: "group-1",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            accountId: "acct-1",
+            channel: "discord",
+            threadId: "thread-1",
+            to: "group-1",
+          },
+        }),
         displayName: "Example group",
         endedAt: 90,
         model: "gpt-5.5",
@@ -1256,7 +1258,7 @@ describe("sqlite session normalization", () => {
     };
 
     await upsertSqliteSessionEntry(scope, {
-      channel: "telegram",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       createdVia: "channel",
       createdActor: { type: "human", id: "telegram-sender" },
@@ -1277,7 +1279,7 @@ describe("sqlite session normalization", () => {
     );
 
     await upsertSqliteSessionEntry(scope, {
-      channel: "telegram",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       chatType: "group",
       displayName: "telegram:g-bucephalus-+-topics",
       sessionId: newSessionId,
@@ -1768,11 +1770,13 @@ describe("sqlite session normalization", () => {
         storePath: paths.sqlitePath,
       },
       {
-        deliveryContext: {
-          accountId: "acct-1",
-          channel: "matrix",
-          to: "!MixedCase:example.org",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            accountId: "acct-1",
+            channel: "matrix",
+            to: "!MixedCase:example.org",
+          },
+        }),
         sessionId: "legacy-alias-session",
         updatedAt: 10,
       },

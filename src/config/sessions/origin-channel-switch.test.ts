@@ -3,18 +3,28 @@
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
+import {
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
 
 const sessionKey = "agent:user";
 
-function applyOrigin(existing: SessionEntry | undefined, ctx: Partial<MsgContext>): SessionEntry {
+type ProjectedSessionEntry = SessionEntry & { origin?: SessionOrigin };
+
+function applyOrigin(
+  existing: SessionEntry | undefined,
+  ctx: Partial<MsgContext>,
+): ProjectedSessionEntry {
   const patch = deriveSessionMetaPatch({
     ctx: ctx as MsgContext,
     sessionKey,
     existing,
   });
-  return { ...existing, ...patch } as SessionEntry;
+  const entry = { ...existing, ...patch } as SessionEntry;
+  return { ...entry, origin: sessionDeliveryOrigin(entry) };
 }
 
 const slackTurn = {
@@ -135,11 +145,14 @@ describe("session origin across a channel switch", () => {
     const existing = {
       sessionId: "session-1",
       updatedAt: 1,
-      origin: {
-        provider: "slack",
-        nativeChannelId: "D111SLACK",
-        threadId: "1700000000.000100",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "slack", to: "slack:D111SLACK" },
+        origin: {
+          provider: "slack",
+          nativeChannelId: "D111SLACK",
+          threadId: "1700000000.000100",
+        },
+      }),
     } satisfies SessionEntry;
     const slackFollowUp = {
       Provider: "slack",
