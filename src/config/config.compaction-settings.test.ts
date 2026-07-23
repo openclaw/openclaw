@@ -54,6 +54,23 @@ describe("config compaction settings", () => {
     expect(compaction?.mode).toBe("safeguard");
   });
 
+  it("accepts compaction.enabled to disable auto-compaction", () => {
+    const compaction = materializeCompactionConfig({
+      enabled: false,
+    });
+
+    expect(compaction?.enabled).toBe(false);
+    expect(compaction?.mode).toBe("safeguard");
+  });
+
+  it("accepts compaction.enabled: true explicitly", () => {
+    const compaction = materializeCompactionConfig({
+      enabled: true,
+    });
+
+    expect(compaction?.enabled).toBe(true);
+  });
+
   it("preserves recent turn safeguard values during materialization", () => {
     const compaction = materializeCompactionConfig({
       mode: "safeguard",

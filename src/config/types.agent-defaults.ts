@@ -376,6 +376,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /** Enable or disable auto-compaction. Default: true. Set to false to disable compaction entirely. */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */
