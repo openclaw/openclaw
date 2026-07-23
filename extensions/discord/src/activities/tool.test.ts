@@ -347,6 +347,80 @@ describe("discord_widget", () => {
       "requires a concrete Discord channel",
     );
   });
+
+  it("accepts emoji titles that exceed 80 UTF-16 code units", async () => {
+    const runtime = createActivityTestRuntime();
+    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
+      messageId: "1000000000000000001",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    await expect(
+      tool.execute("emoji-title", { html: "<p>hi</p>", title: "😀".repeat(65) }),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects titles exceeding 80 code points", async () => {
+    const tool = createDiscordWidgetTool(discordContext({ nativeChannelId: undefined }), {
+      runtime: createActivityTestRuntime(),
+      sendComponentMessage: vi.fn() as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+    await expect(
+      tool.execute("long-title", { html: "<p>hi</p>", title: "a".repeat(81) }),
+    ).rejects.toThrow("title must be 80 characters or fewer");
+  });
+
+  it("accepts emoji button labels that exceed 80 UTF-16 code units", async () => {
+    const runtime = createActivityTestRuntime();
+    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
+      messageId: "1000000000000000001",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    await expect(
+      tool.execute("emoji-label", {
+        html: "<p>hi</p>",
+        title: "Title",
+        button_label: "🎃".repeat(60),
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects button labels exceeding 80 code points", async () => {
+    const tool = createDiscordWidgetTool(discordContext({ nativeChannelId: undefined }), {
+      runtime: createActivityTestRuntime(),
+      sendComponentMessage: vi.fn() as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+    await expect(
+      tool.execute("long-label", {
+        html: "<p>hi</p>",
+        title: "Title",
+        button_label: "a".repeat(81),
+      }),
+    ).rejects.toThrow("button_label must be 1 to 80 characters");
+  });
 });
 
 describe("show_widget", () => {
