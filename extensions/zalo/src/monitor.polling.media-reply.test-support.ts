@@ -21,6 +21,7 @@ import {
 } from "./test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
+  installLifecycleIngressState,
   loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendPhotoMock,
@@ -151,6 +152,7 @@ describe("Zalo polling media replies", () => {
           createPluginStateKeyedStoreForTests<T>("zalo", options),
       } as PluginRuntime["state"],
     );
+    await installLifecycleIngressState();
   });
 
   afterAll(async () => {
