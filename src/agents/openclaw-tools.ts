@@ -255,9 +255,6 @@ export function createOpenClawTools(
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
   );
-  const runtimeCwd = resolveWorkspaceRoot(
-    options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir,
-  );
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
@@ -530,7 +527,7 @@ export function createOpenClawTools(
       ? createTaskSuggestionTools({
           sessionKey: taskKey,
           agentId: sessionAgentId,
-          cwd: runtimeCwd,
+          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
@@ -648,12 +645,15 @@ export function createOpenClawTools(
             config: resolvedConfig,
             senderIsOwner: options?.senderIsOwner,
           }),
+          // No explicit callGateway: the tool defaults to the same in-process
+          // caller, and an injected override would disable the trusted creation
+          // stamp for materialized agent roots (opts.callGateway === undefined
+          // is the gate in ensureConfiguredAgentMainSession).
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            callGateway,
           }),
         ]),
     ...(includeSubagentSpawnTool
@@ -708,6 +708,7 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       activeDeliveryContext: {
         channel: options?.agentChannel,
         to: options?.currentChannelId ?? options?.agentTo,

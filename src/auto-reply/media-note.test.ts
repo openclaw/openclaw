@@ -111,7 +111,7 @@ describe("buildInboundMediaNote", () => {
   });
 
   it("keeps image attachments after image descriptions are added", () => {
-    const note = buildInboundMediaNote({
+    const projection = buildInboundMediaNoteProjection({
       MediaPaths: ["/tmp/photo.png"],
       MediaUrls: ["https://example.com/photo.png"],
       MediaTypes: ["image/png"],
@@ -124,9 +124,20 @@ describe("buildInboundMediaNote", () => {
         },
       ],
     });
-    expect(note).toBe(
+    expect(projection.text).toBe(
       "[media attached: /tmp/photo.png (image/png) | https://example.com/photo.png]",
     );
+    expect(projection.media).toEqual([
+      {
+        path: "/tmp/photo.png",
+        url: "https://example.com/photo.png",
+        contentType: "image/png",
+        kind: "image",
+        transcribed: false,
+        messageId: undefined,
+        hydrationSuppressed: true,
+      },
+    ]);
   });
 
   it("keeps image attachments when image understanding succeeds via decisions", () => {

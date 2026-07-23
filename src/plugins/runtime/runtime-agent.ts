@@ -303,6 +303,13 @@ async function createSessionEntry(
             },
             ...(harnessInitial ? { authorizedAgentHarnessId: harnessInitial.agentHarnessId } : {}),
             ...(cliInitial?.pluginOwnerId ? { authorizedPluginId: cliInitial.pluginOwnerId } : {}),
+            creation: {
+              via: "plugin",
+              actor: {
+                type: "system",
+                ...(cliInitial?.pluginOwnerId ? { id: cliInitial.pluginOwnerId } : {}),
+              },
+            },
             commandSource: "plugin-runtime",
             ...(afterCreate ? { afterCreate: runAfterCreate } : {}),
           });

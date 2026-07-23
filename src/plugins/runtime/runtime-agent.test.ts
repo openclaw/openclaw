@@ -145,6 +145,9 @@ describe("plugin runtime session creation", () => {
         },
       });
       expect(created.entry).toMatchObject({
+        createdVia: "plugin",
+        createdActor: { type: "system", id: "anthropic" },
+        createdAt: expect.any(Number),
         pluginOwnerId: "anthropic",
         providerOverride: "claude-cli",
         modelOverride: "claude-opus-4-8",

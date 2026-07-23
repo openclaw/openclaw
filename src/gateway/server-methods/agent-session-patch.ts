@@ -50,7 +50,6 @@ export function buildAgentSessionPatch(params: {
   requestLabel?: string;
   recipientChannel?: string;
   pluginOwnerId?: string;
-  createdBy?: SessionEntry["createdBy"];
   expectedExistingSessionId?: string;
   hasRestoredCronContinuation: boolean;
   resetPolicy: ReturnType<typeof import("../../config/sessions.js").resolveSessionResetPolicy>;
@@ -210,9 +209,6 @@ export function buildAgentSessionPatch(params: {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
-    ...(freshIsNewSession && !freshSessionRotatedSinceLoad
-      ? { createdBy: params.createdBy ? { ...params.createdBy } : undefined }
-      : {}),
     ...(params.touchInteraction
       ? {
           lastInteractionAt: params.now,

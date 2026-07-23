@@ -14,6 +14,7 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
@@ -161,6 +162,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
+  const promptMedia = await preparePluginHarnessPromptImages({
+    runParams: params,
+    runtime,
+    pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
+  });
   const attemptParams: EmbeddedRunAttemptParams = {
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -223,8 +229,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
-    images: params.images,
-    imageOrder: params.imageOrder,
+    images: promptMedia.images,
+    imageOrder: promptMedia.imageOrder,
+    media: promptMedia.media,
     clientTools: params.clientTools,
     disableTools: params.disableTools,
     provider: runtime.provider,

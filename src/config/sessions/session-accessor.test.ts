@@ -56,6 +56,7 @@ import {
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -105,7 +106,6 @@ describe("session accessor seam", () => {
     };
 
     await upsertSessionEntry(scope, {
-      createdBy: { id: "profile-ada", label: "Ada Lovelace" },
       model: "gpt-5.5",
       sessionId: "session-1",
       updatedAt: 10,
@@ -113,20 +113,10 @@ describe("session accessor seam", () => {
 
     expect(loadSessionEntry(scope)).toMatchObject({
       model: "gpt-5.5",
-      createdBy: { id: "profile-ada", label: "Ada Lovelace" },
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
     expect(readSessionUpdatedAt(scope)).toEqual(expect.any(Number));
-    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: "main",
-    }).path;
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    expect(
-      database.db
-        .prepare("SELECT created_by_json FROM session_entries WHERE session_key = ?")
-        .get(scope.sessionKey),
-    ).toEqual({ created_by_json: '{"id":"profile-ada","label":"Ada Lovelace"}' });
     expect(listSessionEntries({ storePath })).toEqual([
       {
         sessionKey: "agent:main:main",
@@ -138,17 +128,6 @@ describe("session accessor seam", () => {
       },
     ]);
 
-    // A downgraded writer knows only entry_json and can leave the additive
-    // projection untouched. Re-upgrade must not resurrect that stale creator.
-    database.db
-      .prepare("UPDATE session_entries SET entry_json = ?, updated_at = ? WHERE session_key = ?")
-      .run(
-        JSON.stringify({ model: "legacy-reset", sessionId: "session-1", updatedAt: 15 }),
-        15,
-        scope.sessionKey,
-      );
-    expect(loadSessionEntry(scope)).not.toHaveProperty("createdBy");
-
     await upsertSessionEntry(scope, { model: "sonnet-4.6", updatedAt: 20 });
 
     expect(loadSessionEntry(scope)).toMatchObject({
@@ -156,7 +135,6 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
-    expect(loadSessionEntry(scope)).not.toHaveProperty("createdBy");
   });
 
   it("lists retained transcript instances across same-key session rotation", async () => {
@@ -496,12 +474,48 @@ describe("session accessor seam", () => {
 
     const recorded = await recordInboundSessionMeta({ storePath, sessionKey, ctx });
     expect(recorded?.origin?.provider).toBe("webchat");
+    expect(recorded).toMatchObject({
+      createdVia: "channel",
+      createdActor: { type: "human", id: "webchat:user-1" },
+      createdAt: expect.any(Number),
+    });
+    const creationStamp = {
+      createdVia: recorded?.createdVia,
+      createdActor: recorded?.createdActor,
+      createdAt: recorded?.createdAt,
+    };
+
+    await recordInboundSessionMeta({
+      storePath,
+      sessionKey,
+      ctx: { ...ctx, From: "webchat:different-sender" },
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(creationStamp);
 
     // Detached result: caller mutations must never leak into cached store state.
     if (recorded) {
       recorded.origin = { provider: "mutated" };
     }
     expect(loadSessionEntry({ sessionKey, storePath })?.origin?.provider).toBe("webchat");
+
+    const operatorKey = "agent:main:dashboard:operator-created";
+    const operator = await recordInboundSessionMeta({
+      storePath,
+      sessionKey: operatorKey,
+      ctx: {
+        ...ctx,
+        SessionKey: operatorKey,
+        SessionCreation: {
+          via: "operator",
+          actor: { type: "human", id: "profile-ada" },
+        },
+      },
+    });
+    expect(operator).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-ada" },
+      createdAt: expect.any(Number),
+    });
   });
 
   it("does not create sessions when inbound meta recording opts out of upsert", async () => {
@@ -2132,19 +2146,22 @@ describe("session accessor seam", () => {
     ).resolves.toEqual([]);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
+  it("persists reset lifecycle entry changes with an in-log boundary", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
-    const nextTranscript = path.join(tempDir, "next-session.jsonl");
     const previousEntry: SessionEntry = {
       sessionFile: previousTranscript,
       sessionId: "previous-session",
       updatedAt: now,
     };
     const nextEntry: SessionEntry = {
-      sessionFile: nextTranscript,
-      sessionId: "next-session",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: previousEntry.sessionId,
+        storePath,
+      }),
+      sessionId: previousEntry.sessionId,
       updatedAt: now + 1,
     };
     fs.writeFileSync(
@@ -2174,33 +2191,36 @@ describe("session accessor seam", () => {
       agentId: "main",
       cleanupPreviousTranscript: true,
       nextEntry,
-      nextSessionFile: nextTranscript,
+      nextSessionFile: nextEntry.sessionFile!,
       previousEntry,
       previousSessionId: previousEntry.sessionId,
       sessionKey,
       storePath,
     });
 
-    expect(result.replayedMessages).toBe(2);
+    expect(result.replayedMessages).toBe(0);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
-    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.existsSync(previousTranscript)).toBe(true);
     const archivedPreviousTranscripts = fs
       .readdirSync(tempDir)
       .filter((file) => file.startsWith("previous-session.jsonl.reset."));
-    expect(archivedPreviousTranscripts).toHaveLength(1);
-    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
-    const archivedPreviousTranscript = path.join(
-      tempDir,
-      expectDefined(
-        archivedPreviousTranscriptName,
-        "archivedPreviousTranscriptName test invariant",
-      ),
-    );
-    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
-      '"id":"previous-session"',
-    );
-    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
-    expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
+    expect(archivedPreviousTranscripts).toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: previousEntry.sessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "msg-user", parentId: null }),
+      expect.objectContaining({ id: "msg-assistant", parentId: "msg-user" }),
+      expect.objectContaining({
+        type: "reset",
+        reason: "reset",
+        firstKeptEntryId: "msg-user",
+      }),
+    ]);
   });
 
   it("trims a manual compact transcript and clears stale token metadata", async () => {

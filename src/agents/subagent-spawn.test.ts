@@ -884,7 +884,15 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(persistedStore?.[childSessionKey]).toMatchObject({
+      spawnedBy: "agent:main:main",
+      completionOwnerSessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: expect.any(Number),
+    });
     const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(registerInput.runId).toBe("run-1");

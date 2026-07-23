@@ -394,7 +394,9 @@ describe("AppSidebar custom group reordering", () => {
     }
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
-    expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
+    await waitForFast(() =>
+      expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]),
+    );
   });
 });
 describe("AppSidebar catalog session rows", () => {

@@ -125,10 +125,6 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
-extensions/google-meet/index.ts
-extensions/google-meet/src/cli.test.ts
-extensions/google-meet/src/cli.ts
-extensions/google-meet/src/meet.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -364,7 +360,6 @@ packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
 packages/speech-core/src/tts.test.ts
-packages/speech-core/src/tts.ts
 packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
@@ -737,7 +732,6 @@ src/config/sessions/transcript.ts
 src/config/validation.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.core.ts
-src/config/zod-schema.providers-core.ts
 src/context-engine/context-engine.test.ts
 src/context-engine/registry.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
@@ -869,7 +863,6 @@ src/gateway/session-utils.test.ts
 src/gateway/session-utils.ts
 src/gateway/sessions-history-http.test.ts
 src/gateway/sessions-patch.test.ts
-src/gateway/sessions-patch.ts
 src/gateway/talk-realtime-relay.test.ts
 src/gateway/talk-realtime-relay.ts
 src/gateway/test-helpers.server.ts
@@ -1082,7 +1075,6 @@ ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
-ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
 ui/src/e2e/new-session-page.e2e.test.ts

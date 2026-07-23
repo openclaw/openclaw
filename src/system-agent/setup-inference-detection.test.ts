@@ -119,6 +119,7 @@ describe("isolated setup inference detection", () => {
     expect(detection.candidates).toEqual([
       {
         kind: "openai-api-key",
+        brandId: "openai",
         modelRef: "openai/gpt-5.6",
         label: "OpenAI API key",
         detail: "OPENAI_API_KEY set",
@@ -127,6 +128,7 @@ describe("isolated setup inference detection", () => {
       },
       {
         kind: "anthropic-api-key",
+        brandId: "anthropic",
         modelRef: "anthropic/claude-opus-4-8",
         label: "Anthropic API key",
         detail: "ANTHROPIC_API_KEY set",

@@ -15,7 +15,7 @@ describe("AppSidebar session ownership", () => {
     if (!ada) {
       throw new Error("expected creator row");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
       { id: "profile-bob", label: "Bob" },
@@ -25,7 +25,7 @@ describe("AppSidebar session ownership", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    expect(sidebar.sessionsResult?.creators).toHaveLength(2);
+    expect(sidebar.sessionData.sessionsResult?.creators).toHaveLength(2);
     expect(sidebar.querySelector('[data-session-key="agent:main:ada"]')).not.toBeNull();
     expect(sidebar.querySelectorAll("openclaw-session-owner-chip")).toHaveLength(1);
     const select = sidebar.querySelector<HTMLSelectElement>(
@@ -55,7 +55,7 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected session list");
     }
     for (const row of result.sessions) {
-      row.createdBy = { id: "profile-ada", label: "Ada" };
+      row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     }
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
@@ -81,9 +81,9 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob) {
       throw new Error("expected creator rows");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     ada.category = "Research";
-    bob.createdBy = { id: "profile-bob", label: "Bob" };
+    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     bob.category = "Operations";
     harness.publish({ groups: ["Research", "Operations"] });
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -123,15 +123,15 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !adopted) {
       throw new Error("expected ownership rows");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
-    adopted.createdBy = { id: "profile-bob", label: "Bob" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    adopted.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
       { id: "profile-bob", label: "Bob" },
     ];
 
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -149,7 +149,7 @@ describe("AppSidebar session ownership", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: backingSessionKey,
-                createdBy: { id: "profile-bob", label: "Bob" },
+                createdActor: { type: "human", id: "profile-bob", label: "Bob" },
                 canContinue: true,
                 canArchive: false,
               },
@@ -166,6 +166,7 @@ describe("AppSidebar session ownership", () => {
         ],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
@@ -207,8 +208,8 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob) {
       throw new Error("expected creator rows");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
-    bob.createdBy = { id: "profile-bob", label: "Bob" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
       { id: "profile-bob", label: "Bob" },
@@ -216,7 +217,7 @@ describe("AppSidebar session ownership", () => {
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "claude",
         label: "Claude Code",
@@ -234,7 +235,7 @@ describe("AppSidebar session ownership", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: unloadedSessionKey,
-                createdBy: { id: "profile-ada", label: "Ada" },
+                createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                 canContinue: true,
                 canArchive: false,
               },
@@ -243,6 +244,7 @@ describe("AppSidebar session ownership", () => {
         ],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 

@@ -7,8 +7,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -34,6 +34,8 @@ import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.js";
+import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -77,6 +79,7 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
   classifySessionStateActor,
   registerMainSessionGroupWatch,
@@ -477,6 +480,10 @@ async function initSessionStateAttemptLocked(
   let persistedSpawnedCwd: SessionEntry["spawnedCwd"];
   let persistedParentSessionKey: SessionEntry["parentSessionKey"];
   let persistedForkedFromParent: SessionEntry["forkedFromParent"];
+  let persistedForkSource: SessionEntry["forkSource"];
+  let persistedCreatedVia: SessionEntry["createdVia"];
+  let persistedCreatedActor: SessionEntry["createdActor"];
+  let persistedCreatedAt: SessionEntry["createdAt"];
   let persistedSpawnDepth: SessionEntry["spawnDepth"];
   let persistedSubagentRole: SessionEntry["subagentRole"];
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
@@ -584,6 +591,7 @@ async function initSessionStateAttemptLocked(
     ctx,
   });
   const entry = initializationSnapshot.currentEntry;
+  const createdNewEntry = entry === undefined;
   const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
@@ -734,10 +742,6 @@ async function initSessionStateAttemptLocked(
       sessionKey,
     };
   }
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey,
-    previousSessionId: previousSessionEntry?.sessionId,
-  });
   if (previousSessionEntry) {
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
@@ -768,7 +772,7 @@ async function initSessionStateAttemptLocked(
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
     persistedLabel = reusableEntry.label;
   } else {
-    sessionId = crypto.randomUUID();
+    sessionId = entry?.sessionId ?? crypto.randomUUID();
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
@@ -804,17 +808,18 @@ async function initSessionStateAttemptLocked(
       persistedResponseUsage = entry.responseUsage;
       persistedLabel = entry.label;
       persistedDisplayName = entry.displayName;
-    }
-    // When a reset trigger (/new, /reset) starts a new session, also rotate the
-    // underlying CLI conversation and carry forward spawn lineage.
-    if (resetTriggered && entry) {
-      // Explicit /new and /reset should rotate the underlying CLI conversation too.
-      // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
+      // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
+      // Lineage/control facts belong to the session node and survive ANY rollover
+      // from an existing entry, following the #90119 carry pattern.
       persistedSpawnedBy = entry.spawnedBy;
       persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
       persistedSpawnedCwd = entry.spawnedCwd;
       persistedParentSessionKey = entry.parentSessionKey;
       persistedForkedFromParent = entry.forkedFromParent;
+      persistedForkSource = entry.forkSource;
+      persistedCreatedVia = entry.createdVia;
+      persistedCreatedActor = entry.createdActor;
+      persistedCreatedAt = entry.createdAt;
       persistedSpawnDepth = entry.spawnDepth;
       persistedSubagentRole = entry.subagentRole;
       persistedSubagentControlScope = entry.subagentControlScope;
@@ -902,16 +907,12 @@ async function initSessionStateAttemptLocked(
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const creationStamp =
+    !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
   sessionEntry = {
     ...baseEntry,
     sessionId,
-    ...(isNewSession
-      ? ctx.SessionCreator
-        ? { createdBy: { ...ctx.SessionCreator } }
-        : {}
-      : baseEntry?.createdBy
-        ? { createdBy: baseEntry.createdBy }
-        : {}),
+    lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
     updatedAt: Date.now(),
     sessionStartedAt: isNewSession
       ? now
@@ -930,6 +931,7 @@ async function initSessionStateAttemptLocked(
     pinnedAt: entry?.pinnedAt,
     usageFamilyKey,
     usageFamilySessionIds,
+    previousSessionId: baseEntry?.previousSessionId,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
@@ -947,6 +949,10 @@ async function initSessionStateAttemptLocked(
     spawnedCwd: persistedSpawnedCwd ?? baseEntry?.spawnedCwd,
     parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
     forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
+    forkSource: persistedForkSource ?? baseEntry?.forkSource,
+    createdVia: persistedCreatedVia ?? baseEntry?.createdVia ?? creationStamp?.createdVia,
+    createdActor: persistedCreatedActor ?? baseEntry?.createdActor ?? creationStamp?.createdActor,
+    createdAt: persistedCreatedAt ?? baseEntry?.createdAt ?? creationStamp?.createdAt,
     spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
     subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
     subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
@@ -999,7 +1005,7 @@ async function initSessionStateAttemptLocked(
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
-  const alreadyForked = sessionEntry.forkedFromParent === true;
+  const alreadyForked = sessionEntryForkedFromParent(sessionEntry);
   if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");
   }
@@ -1042,10 +1048,18 @@ async function initSessionStateAttemptLocked(
     // snapshot through /new; the next turn must rebuild the visible skill list.
     sessionEntry.skillsSnapshot = undefined;
   }
-  // Archive old transcript so it doesn't accumulate on disk (#14869).
+  const resetReason =
+    previousSessionEndReason === "new" ||
+    previousSessionEndReason === "reset" ||
+    previousSessionEndReason === "idle" ||
+    previousSessionEndReason === "daily"
+      ? previousSessionEndReason
+      : "reset";
+  const resetBoundaryAppended = previousSessionEntry !== undefined;
   const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
+    archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
@@ -1076,6 +1090,16 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
+    ...(previousSessionEntry ? { resetBoundaryReason: resetReason } : {}),
+    beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
+      if (!previousSessionEntry || !currentEntry) {
+        return;
+      }
+      if (resetBoundaryAppended) {
+        clearAllCliSessions(entryToCommit);
+        entryToCommit.agentHarnessId = undefined;
+      }
+    },
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
@@ -1093,6 +1117,13 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  clearBootstrapSnapshotOnSessionBoundary({
+    boundaryAppended: resetBoundaryAppended,
+    sessionKey,
+  });
+  if (createdNewEntry) {
+    recordSessionCreated({ sessionKey, agentId, entry: sessionEntry });
+  }
   if (
     !isSystemEvent &&
     classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
@@ -1168,7 +1199,7 @@ async function initSessionStateAttemptLocked(
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
-    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+    if (previousSessionEntry?.sessionId) {
       // The shutdown finalizer must not re-fire session_end for a session
       // that is being replaced here; forget unconditionally so the next drain
       // skips this id even when no `session_end` plugin is currently attached.
