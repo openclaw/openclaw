@@ -383,6 +383,8 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Thread list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+const NEW_SESSION_RENAME_FAILED_MESSAGE =
+  "New Chat reset the thread but could not apply the name. Try renaming it again.";
 
 function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -2243,11 +2245,26 @@ class ChatPane extends OpenClawLightDomElement {
           const labelAgentId =
             scopedAgentParamsForSession(state, previousSessionKey).agentId ??
             resolveAgentIdFromSessionKey(previousSessionKey);
-          await sessions.patch(
-            previousSessionKey,
-            { label: options.label },
-            labelAgentId ? { agentId: labelAgentId } : undefined,
-          );
+          // The reset already landed, so a failed label patch is a partial failure:
+          // surface it explicitly instead of rejecting the promise or silently
+          // reporting success without the requested name.
+          let labelPatched: Awaited<ReturnType<typeof sessions.patch>> = null;
+          try {
+            labelPatched = await sessions.patch(
+              previousSessionKey,
+              { label: options.label },
+              labelAgentId ? { agentId: labelAgentId } : undefined,
+            );
+          } catch (error: unknown) {
+            this.publishHeaderError(error);
+            return false;
+          }
+          if (!labelPatched) {
+            state.lastError = NEW_SESSION_RENAME_FAILED_MESSAGE;
+            state.chatError = state.lastError;
+            state.requestUpdate?.();
+            return false;
+          }
         }
       }
       return resetResult !== "failed";

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import {
@@ -12,6 +13,8 @@ import {
   parseDeleteSessionCommand,
 } from "./commands-delete-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const DELETE_CALL_TIMEOUT_MS = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000;
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -127,6 +130,7 @@ describe("delete session command", () => {
     });
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.delete",
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
       params: { key: sessionKey, deleteTranscript: true },
     });
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
@@ -149,6 +153,7 @@ describe("delete session command", () => {
 
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.delete",
+      timeoutMs: DELETE_CALL_TIMEOUT_MS,
       params: {
         key: sessionKey,
         deleteTranscript: true,

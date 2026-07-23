@@ -172,7 +172,7 @@ describe("chat pane board shell", () => {
 
   it("applies a /new --name label to a board-bearing session reset in place", async () => {
     const reset = vi.fn(async () => "completed" as const);
-    const patch = vi.fn(async () => undefined);
+    const patch = vi.fn(async () => ({ key: "agent:main:current" }));
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
       reset,
@@ -206,6 +206,40 @@ describe("chat pane board shell", () => {
       { label: "Planning notes" },
       { agentId: "main" },
     );
+  });
+
+  it("reports partial failure when a board-session label patch does not apply", async () => {
+    const reset = vi.fn(async () => "completed" as const);
+    const patch = vi.fn(async () => null);
+    const sessions = {
+      create: vi.fn(async () => "agent:main:new"),
+      reset,
+      patch,
+    } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    pane.state.client = client;
+    pane.context = {
+      ...pane.context,
+      gateway: { snapshot: { client, connected: true } },
+    } as unknown as ApplicationContext;
+    pane.connectedClient = client;
+    pane.boardProvider = mockBoardProvider("agent:main:current");
+
+    const pending = pane.createSession({ label: "Planning notes" });
+    await Promise.resolve();
+    pane.settleResetConfirmation(true);
+
+    await expect(pending).resolves.toBe(false);
+    expect(reset).toHaveBeenCalledWith("agent:main:current", {});
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(pane.state.chatError).toContain("could not apply the name");
   });
 
   it("does not reset when a run starts during confirmation", async () => {

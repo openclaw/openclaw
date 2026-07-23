@@ -2,6 +2,7 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store-entry.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { rejectUnauthorizedCommand, requireGatewayClientScope } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -79,6 +80,11 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   const targetEntry = resolved.existing ?? params.sessionEntry;
   const deletion = await callGateway<{ deleted?: boolean }>({
     method: "sessions.delete",
+    // The gateway may drain competing admitted work for up to
+    // SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS before returning success or its
+    // canonical "still active" response. Allow more than that full contract so the
+    // client does not time out (default 10s) before the lifecycle mutation reports back.
+    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000,
     params: {
       key: resolved.normalizedKey,
       deleteTranscript: true,

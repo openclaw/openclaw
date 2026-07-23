@@ -9,6 +9,10 @@ import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
@@ -77,16 +81,12 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
   }
   // Configured primary/fallback models may not be duplicated under models.providers,
   // but the reset-model resolver still honors them, so treat them as model refs here.
-  const defaultsModel = (
-    params.cfg as {
-      agents?: { defaults?: { model?: { primary?: unknown; fallbacks?: unknown[] } } };
-    }
-  ).agents?.defaults?.model;
-  if (defaultsModel) {
-    addModelRefValue(defaultsModel.primary);
-    for (const fallback of Array.isArray(defaultsModel.fallbacks) ? defaultsModel.fallbacks : []) {
-      addModelRefValue(fallback);
-    }
+  // Use the canonical helpers so the supported string shorthand for agents.defaults.model
+  // is resolved too, not just the object form.
+  const defaultsModel = params.cfg.agents?.defaults?.model;
+  addModelRefValue(resolveAgentModelPrimaryValue(defaultsModel));
+  for (const fallback of resolveAgentModelFallbackValues(defaultsModel)) {
+    addModelRefValue(fallback);
   }
   // Per-agent overrides (agents.entries.*.model / agents.list[].model) are honored by the
   // canonical reset-model resolver but are absent from models.providers and the defaults

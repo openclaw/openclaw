@@ -836,6 +836,29 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps native /new tails using a string-form default model available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new custom/private-model summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        // agents.defaults.model supports a bare string shorthand; classification must
+        // resolve it too, not just the { primary, fallbacks } object form.
+        agents: { defaults: { model: "custom/private-model" } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "custom/private-model summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
   it("allows slashes in native structured /new title args", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry(
