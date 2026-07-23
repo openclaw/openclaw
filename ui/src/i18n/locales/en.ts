@@ -3781,6 +3781,22 @@ export const en: TranslationMap = {
       noPeople: "No paired people found.",
       readOnlyNotice: "Only the thread owner and members can act in this thread.",
     },
+    sessionSuggestions: {
+      suggest: "Suggest",
+      suggestMessage: "Suggest message",
+      attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
+      sendNow: "Send {author}'s suggestion now",
+      queue: "Queue {author}'s suggestion",
+      edit: "Edit {author}'s suggestion",
+      dismiss: "Dismiss {author}'s suggestion",
+      typing: "{name} is typing…",
+      typingMany: "{names} are typing…",
+      state: {
+        pending: "Pending",
+        accepted: "Accepted",
+        dismissed: "Dismissed",
+      },
+    },
     loadOlder: "Load older",
     sessionHeader: {
       renameTooltip: "Rename thread",

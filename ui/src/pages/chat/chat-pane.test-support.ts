@@ -1,6 +1,8 @@
 import type { TemplateResult } from "lit";
 import { vi } from "vitest";
 import type {
+  SessionSuggestion,
+  SessionSuggestionEvent,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   TaskSuggestion,
@@ -39,6 +41,14 @@ export type TestChatPane = HTMLElement & {
   refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
   sessionPullRequests: ControlUiSessionPullRequest[];
   taskSuggestions: TaskSuggestion[];
+  presencePayload?: { presence: unknown[] };
+  sessionSuggestionAddOperation: symbol | undefined;
+  addCurrentSessionSuggestion: () => Promise<void>;
+  resetSessionSuggestions: () => void;
+  sessionSuggestions: SessionSuggestion[];
+  sessionSuggestionsRequestVersion: number;
+  handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
+  refreshSessionSuggestions: () => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;
@@ -97,7 +107,11 @@ export function createSessionContext(
       snapshot: {
         client,
         phase: "connected" as const,
-        hello: { features: { methods: ["taskSuggestions.list"] } },
+        hello: {
+          features: {
+            methods: ["taskSuggestions.list", "session.suggestions.list"],
+          },
+        },
       },
     },
     agents: { state: { agentsList: null } },

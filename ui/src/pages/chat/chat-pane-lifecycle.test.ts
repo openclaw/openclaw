@@ -4,6 +4,10 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  SessionSuggestion,
+  SessionSuggestionsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
@@ -15,6 +19,141 @@ import * as chatThread from "./components/chat-thread.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+describe("chat pane session suggestion lifecycle", () => {
+  it("does not let a stale add completion clear a newer session operation", async () => {
+    const first = createDeferred<{ suggestion: SessionSuggestion }>();
+    const second = createDeferred<{ suggestion: SessionSuggestion }>();
+    const client = {
+      request: vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
+    } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.chatAttachments = [];
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    const row = (id: string, text: string): SessionSuggestion => ({
+      id,
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text,
+      createdAt: 1,
+      state: "pending",
+    });
+
+    state.chatMessage = "first";
+    const firstPending = pane.addCurrentSessionSuggestion();
+    pane.resetSessionSuggestions();
+    state.chatMessage = "second";
+    const secondPending = pane.addCurrentSessionSuggestion();
+
+    first.resolve({ suggestion: row("first", "first") });
+    await firstPending;
+    expect(pane.sessionSuggestionAddOperation).toBeDefined();
+    expect(pane.sessionSuggestions.some((suggestion) => suggestion.id === "first")).toBe(false);
+    second.resolve({ suggestion: row("second", "second") });
+    await secondPending;
+    expect(pane.sessionSuggestionAddOperation).toBeUndefined();
+  });
+
+  it("rejects suggestion submission while attachments remain", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    state.chatMessage = "text only";
+    state.chatAttachments = [{ id: "attachment" } as never];
+
+    await pane.addCurrentSessionSuggestion();
+    expect(request).not.toHaveBeenCalled();
+    expect(state.chatError).toContain("Remove attachments");
+  });
+
+  it("does not let a stale list response erase a newer suggestion event", async () => {
+    const listed = createDeferred<SessionSuggestionsListResult>();
+    const client = {
+      request: vi.fn(() => listed.promise),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    state.sessionsResult = {
+      count: 1,
+      path: "",
+      sessions: [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "suggest",
+          sharingRole: "viewer",
+        },
+      ],
+    } as never;
+    const eventSuggestion: SessionSuggestion = {
+      id: "event",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text: "new event",
+      createdAt: 1,
+      state: "pending",
+    };
+
+    const pending = pane.refreshSessionSuggestions();
+    pane.handleSessionSuggestionEvent({ action: "added", suggestion: eventSuggestion });
+    listed.resolve({ suggestions: [], role: "viewer" });
+    await pending;
+    expect(pane.sessionSuggestions).toEqual([eventSuggestion]);
+  });
+
+  it("preserves an author's resolved event while its role is still loading", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    pane.context.gateway.snapshot.selfUser = { id: "alice" } as never;
+    const pending: SessionSuggestion = {
+      id: "mine",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text: "my suggestion",
+      createdAt: 1,
+      state: "pending",
+    };
+    pane.sessionSuggestions = [pending];
+
+    pane.handleSessionSuggestionEvent({
+      action: "resolved",
+      suggestion: { ...pending, state: "accepted" },
+    });
+    expect(pane.sessionSuggestions).toEqual([{ ...pending, state: "accepted" }]);
+  });
+});
 
 function createConfirmationOwner() {
   const owner = document.createElement("span");
