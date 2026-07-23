@@ -59,6 +59,8 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  allowedSessionVisibilities?: Array<"shared" | "read-only" | "suggest" | "draft">;
+  sessionSharingIdentityCount?: number;
   featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
@@ -279,6 +281,13 @@ function normalizeScenario(
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
     controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+    allowedSessionVisibilities: scenario.allowedSessionVisibilities ?? [
+      "shared",
+      "read-only",
+      "suggest",
+      "draft",
+    ],
+    sessionSharingIdentityCount: scenario.sessionSharingIdentityCount ?? 1,
     featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
@@ -893,6 +902,13 @@ function installControlUiMockGateway(input: {
             : {}),
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
+          policy: {
+            maxPayload: 1_048_576,
+            maxBufferedBytes: 1_048_576,
+            tickIntervalMs: 30_000,
+            allowedSessionVisibilities: scenario.allowedSessionVisibilities,
+            sessionSharingIdentityCount: scenario.sessionSharingIdentityCount,
+          },
           snapshot: {
             ...presenceSnapshot(params),
             sessionDefaults: {

@@ -169,6 +169,11 @@ export function renderRecentSession(params: {
     session.pinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.visibility === "draft" ? "session-row-host--draft" : "",
+    session.visibility === "draft"
+      ? session.draftOwnedBySelf
+        ? "session-row-host--draft-owner"
+        : "session-row-host--draft-other"
+      : "",
     session.attention.kind === "error"
       ? "sidebar-recent-session--attention-danger"
       : session.attention.kind !== "none"

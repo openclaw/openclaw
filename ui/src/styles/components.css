@@ -5445,17 +5445,34 @@ td.data-table-key-col {
 }
 
 .session-row-host--draft {
-  opacity: 0.68;
+  --draft-row-opacity: 1;
+  opacity: var(--draft-row-opacity);
 }
 
-.session-row-host--draft:hover,
-.session-row-host--draft:focus-within,
-.session-row-host--draft.sidebar-recent-session--selected {
-  opacity: 1;
+.session-row-host--draft-owner .session-row-draft-indicator {
+  opacity: 0.55;
+}
+
+.session-row-host--draft-other {
+  --draft-row-opacity: 0.58;
+  background: color-mix(in srgb, var(--bg-muted) 44%, transparent);
+}
+
+.session-row-host--draft-other:hover,
+.session-row-host--draft-other:focus-within,
+.session-row-host--draft-other.sidebar-recent-session--selected {
+  --draft-row-opacity: 0.88;
 }
 
 .session-row-draft-indicator {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
   flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
   font-size: 12px;
 }
 

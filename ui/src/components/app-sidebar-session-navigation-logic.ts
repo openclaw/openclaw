@@ -49,6 +49,16 @@ import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
+export function isSidebarDraftOwnedBySelf(
+  row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
+  selfUserId: string | undefined,
+): boolean {
+  return (
+    row.visibility === "draft" &&
+    (row.sharingRole === "owner" || Boolean(selfUserId && row.createdActor?.id === selfUserId))
+  );
+}
+
 export type SidebarSessionNavigationState = {
   routeSessionKey: string;
   selectedAgentId: string;
@@ -113,6 +123,7 @@ export function buildSidebarSessionNavigationState(input: {
       pinned: row.pinned === true,
       archived: row.archived === true,
       visibility: row.visibility,
+      draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       icon: row.icon,
       category: normalizeOptionalString(row.category),
       channel: channelInfo.channel,

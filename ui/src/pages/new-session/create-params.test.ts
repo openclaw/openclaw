@@ -1,6 +1,34 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+
+describe("create-as-draft availability", () => {
+  it("requires both draft policy and multiple creator identities", () => {
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared", "draft"],
+        identityCount: 2,
+      }),
+    ).toBe(true);
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared"],
+        identityCount: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("stays dormant when the gateway has fewer than two identities", () => {
+    for (const identityCount of [undefined, 0, 1]) {
+      expect(
+        canStartSessionAsDraft({
+          allowedVisibilities: ["shared", "draft"],
+          identityCount,
+        }),
+      ).toBe(false);
+    }
+  });
+});
 
 describe("buildDraftSessionCreateParams", () => {
   it("keeps plain chats minimal", () => {
@@ -26,6 +54,21 @@ describe("buildDraftSessionCreateParams", () => {
         worktree: false,
       }),
     ).toEqual({ agentId: "main", message: "private task", incognito: true });
+  });
+
+  it("adds draft visibility only when selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private work in progress",
+        worktree: false,
+        startAsDraft: true,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "private work in progress",
+      visibility: "draft",
+    });
   });
 
   it("includes initial-message attachments", () => {
