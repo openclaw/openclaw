@@ -17,7 +17,6 @@ import {
   ensureExecApprovalsSnapshot,
   readExecApprovalsForNoPersistenceUnlocked,
 } from "./exec-approvals-store.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export * from "./exec-approvals-analysis.js";
