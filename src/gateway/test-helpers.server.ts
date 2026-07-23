@@ -58,8 +58,8 @@ import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import type { GatewayServerOptions } from "./server.js";
+import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
