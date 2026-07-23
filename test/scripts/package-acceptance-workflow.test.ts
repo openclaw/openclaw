@@ -3187,6 +3187,8 @@ describe("package artifact reuse", () => {
       'candidate_manifest="${package_dir}/package-candidate.json"',
       'find "${package_dir}" -type f -name "*.tgz"',
       "package artifact manifest contains duplicate package metadata",
+      "Array.isArray(manifest.corePackageTarballs)",
+      "manifest.corePackageTarballs === undefined",
       "package artifact tarball set does not match preflight manifest",
       "package candidate manifest does not match the OpenClaw tarball",
       "Package Telegram artifact SHA-256 differs from package_sha256.",
