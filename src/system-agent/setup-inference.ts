@@ -2701,6 +2701,8 @@ export async function verifySetupInferenceConfig(params: {
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
   authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
+  /** Explicit isolated agent directory for staged onboarding verification. */
+  agentDir?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -2747,7 +2749,9 @@ export async function verifySetupInferenceConfig(params: {
         error: builtPlan.error,
       };
     }
-    let plan: SetupInferenceTestPlan = builtPlan;
+    let plan: SetupInferenceTestPlan = params.agentDir
+      ? { ...builtPlan, agentDir: params.agentDir }
+      : builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
       const selectedProfile = plan.authProfileId
         ? params.authProfiles.find((profile) => profile.profileId === plan.authProfileId)

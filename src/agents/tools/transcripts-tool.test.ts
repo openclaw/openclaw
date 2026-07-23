@@ -3,7 +3,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptStopRequest } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
@@ -38,7 +39,15 @@ async function createHarness(stateDir: string, pluginConfig: Record<string, unkn
   };
 }
 
+function storeFor(stateDir: string): TranscriptsStore {
+  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
+
 describe("transcripts tool", () => {
+  afterEach(() => closeOpenClawStateDatabaseForTest());
+
   beforeEach(() => {
     getTranscriptSourceProviderMock.mockReset();
   });
@@ -141,12 +150,14 @@ describe("transcripts tool", () => {
     expect(startupSignal?.aborted).toBe(false);
     await emitAfterStart?.();
 
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "transcript.jsonl"),
-        "utf8",
-      ),
-    ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
+    const ongoingStore = storeFor(stateDir);
+    const ongoingSession = await ongoingStore.readSession("ongoing-meeting");
+    expect(ongoingSession).toBeDefined();
+    await expect(ongoingStore.readUtterancesForSession(ongoingSession!)).resolves.toEqual([
+      expect.objectContaining({
+        text: "captured after the start action completed\nsecond\tcolumn",
+      }),
+    ]);
     await tool.execute(
       "call-2",
       { action: "stop", sessionId: "ongoing-meeting" },
@@ -200,18 +211,10 @@ describe("transcripts tool", () => {
       ),
     ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup failed");
 
-    await expect(
-      fs.readFile(
-        path.join(
-          stateDir,
-          "transcripts",
-          currentDateDir(),
-          "cancelled-meeting-retry",
-          "transcript.jsonl",
-        ),
-        "utf8",
-      ),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    const cancelledStore = storeFor(stateDir);
+    const cancelledSession = await cancelledStore.readSession("cancelled-meeting-retry");
+    expect(cancelledSession).toBeDefined();
+    await expect(cancelledStore.readUtterancesForSession(cancelledSession!)).resolves.toEqual([]);
     expect(stop).toHaveBeenCalledOnce();
 
     await expect(
@@ -440,12 +443,12 @@ describe("transcripts tool", () => {
         "utf8",
       ),
     ).resolves.toContain('"Alex: We decided to ship Discord first."');
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "transcript.jsonl"),
-        "utf8",
-      ),
-    ).resolves.toContain("Alex");
+    const stored = await storeFor(stateDir).readSession("design-review");
+    expect(stored).toBeDefined();
+    await expect(storeFor(stateDir).readUtterancesForSession(stored!)).resolves.toEqual([
+      expect.objectContaining({ text: "We decided to ship Discord first." }),
+      expect.objectContaining({ text: "Action item: add Slack import later." }),
+    ]);
   });
 
   it("bounds summary input while retaining the full transcript", async () => {
@@ -477,17 +480,16 @@ describe("transcripts tool", () => {
     );
     expect(summary).not.toContain("transcript line 0\n");
     expect(summary).toContain("transcript line 2000");
-    const storedTranscript = await fs.readFile(
-      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "transcript.jsonl"),
-      "utf8",
-    );
-    expect(storedTranscript).toContain("transcript line 0");
-    expect(storedTranscript).toContain("transcript line 2000");
+    const stored = await storeFor(stateDir).readSession("long-meeting");
+    expect(stored).toBeDefined();
+    const storedTranscript = await storeFor(stateDir).readUtterancesForSession(stored!);
+    expect(storedTranscript[0]?.text).toContain("transcript line 0");
+    expect(storedTranscript.at(-1)?.text).toContain("transcript line 2000");
   });
 
   it("requires date-qualified selectors for repeated stored session ids", async () => {
     const stateDir = await makeStateDir();
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
+    const store = storeFor(stateDir);
     await store.writeSession({
       sessionId: "standup",
       title: "Tuesday standup",
@@ -618,17 +620,14 @@ describe("transcripts tool", () => {
         "utf8",
       ),
     ).resolves.toContain("publish the notes");
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "standup", "metadata.json"),
-        "utf8",
-      ),
-    ).resolves.toContain("providerStopError");
+    await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
+      metadata: { providerStopError: "Discord voice manager is unavailable" },
+    });
   });
 
   it("does not stop a current active session when summarizing an older dated duplicate", async () => {
     const stateDir = await makeStateDir();
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
+    const store = storeFor(stateDir);
     const olderSession = {
       sessionId: "standup",
       title: "Older standup",
@@ -745,12 +744,9 @@ describe("transcripts tool", () => {
       },
     });
     expect(request.startupWaitMs).toBe(30_000);
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "standup", "metadata.json"),
-        "utf8",
-      ),
-    ).resolves.toContain("Standup");
+    await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
+      title: "Standup",
+    });
     await service.stop();
     expect(stop).toHaveBeenCalledOnce();
   });
