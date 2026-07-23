@@ -1,5 +1,6 @@
 /** Auto-reply dispatch orchestration, hook composition, and foreground delivery fencing. */
 import { normalizeChatType } from "../channels/chat-type.js";
+import { isChannelPartialDeliveryError } from "../channels/turn/delivery-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveInboundMessageHookContext,
@@ -263,6 +264,9 @@ function isExplicitlyVisibleDelivery(deliveryResult: unknown): boolean {
 function isVisiblePartialDeliveryError(error: unknown): boolean {
   if (isOutboundDeliveryError(error)) {
     return error.sentBeforeError;
+  }
+  if (isChannelPartialDeliveryError(error)) {
+    return true;
   }
   return (
     typeof error === "object" &&

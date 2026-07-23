@@ -104,13 +104,12 @@ event. If a native send became visible before a later operation failed,
 preserve the visible subset on the error:
 
 ```ts
-Object.assign(new Error("native finalization failed", { cause }), {
-  code: "CHANNEL_PARTIAL_DELIVERY",
-  deliveryResult: {
-    visibleReplySent: true,
-    content: finalizedVisibleText,
-    receipt,
-  },
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+
+throw createChannelPartialDeliveryError(cause, {
+  visibleReplySent: true,
+  content: finalizedVisibleText,
+  receipt,
 });
 ```
 

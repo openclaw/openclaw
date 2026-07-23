@@ -13,6 +13,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
+import { isChannelPartialDeliveryError } from "./delivery-result.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
@@ -37,25 +38,10 @@ type PendingChannelDeliveryAttempt = {
   error?: unknown;
 };
 
-const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
-
 function resolvePartialChannelDeliveryResult(
   error: unknown,
 ): (ChannelDeliveryOutcome & { visibleReplySent: true }) | undefined {
-  if (!error || typeof error !== "object" || Array.isArray(error)) {
-    return undefined;
-  }
-  const candidate = error as { code?: unknown; deliveryResult?: unknown };
-  if (
-    candidate.code !== CHANNEL_PARTIAL_DELIVERY_ERROR_CODE ||
-    !candidate.deliveryResult ||
-    typeof candidate.deliveryResult !== "object" ||
-    Array.isArray(candidate.deliveryResult) ||
-    (candidate.deliveryResult as { visibleReplySent?: unknown }).visibleReplySent !== true
-  ) {
-    return undefined;
-  }
-  return candidate.deliveryResult as ChannelDeliveryOutcome & { visibleReplySent: true };
+  return isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
 }
 
 export function assembleResolvedChannelTurn<TDispatchResult>(
@@ -174,7 +160,7 @@ async function settleChannelDeliveryAttempts(params: {
   delivery: ChannelEventDeliveryAdapter;
   emitMessageSent?: ReturnType<typeof createMessageSentEmitter>["emitMessageSent"];
 }): Promise<void> {
-  let firstSettlementError: unknown;
+  let preferredSettlementError: unknown;
 
   for (const attempt of params.attempts) {
     try {
@@ -184,12 +170,20 @@ async function settleChannelDeliveryAttempts(params: {
         emitMessageSent: params.emitMessageSent,
       });
     } catch (error: unknown) {
-      firstSettlementError ??= error;
+      // Any visible partial outcome must win over an earlier generic failure so callers
+      // retain provider identity and do not retry an already-visible logical payload.
+      if (
+        preferredSettlementError === undefined ||
+        (resolvePartialChannelDeliveryResult(error) !== undefined &&
+          resolvePartialChannelDeliveryResult(preferredSettlementError) === undefined)
+      ) {
+        preferredSettlementError = error;
+      }
     }
   }
 
-  if (firstSettlementError !== undefined) {
-    throw toErrorObject(firstSettlementError, "channel delivery settlement failed");
+  if (preferredSettlementError !== undefined) {
+    throw toErrorObject(preferredSettlementError, "channel delivery settlement failed");
   }
 }
 
