@@ -408,9 +408,14 @@ export function createTelegramBotCore(
   });
 
   const originalStop = bot.stop.bind(bot);
-  bot.stop = ((...args: Parameters<typeof originalStop>) => {
+  bot.stop = (async (...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
     unregisterOutboundGroupHistoryRecorder();
+    // Dispose the tracker before shutdown completes: this clears any pending
+    // offset-persistence retry and fences an in-flight write so it cannot wake
+    // after shutdown and write a retired offset back into the shared account
+    // store (account removal and token changes delete that offset on purpose).
+    await updateTracker.dispose();
     return originalStop(...args);
   }) as typeof bot.stop;
 
