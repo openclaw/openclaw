@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHyphenSlug } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { listChannelPlugins } from "../../channels/plugins/registry.js";
 import { normalizeSessionPeerId } from "../../sessions/session-key-utils.js";
@@ -69,7 +70,7 @@ function resolveOriginatingGroupTargetId(params: {
   return null;
 }
 
-function shortenGroupId(value?: string) {
+export function shortenGroupId(value?: string) {
   const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return "";
@@ -77,7 +78,7 @@ function shortenGroupId(value?: string) {
   if (trimmed.length <= 14) {
     return trimmed;
   }
-  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+  return `${truncateUtf16Safe(trimmed, 6)}...${sliceUtf16Safe(trimmed, -4)}`;
 }
 
 /**
