@@ -4,6 +4,8 @@ scenario:
   surface: channels
   coverage:
     primary:
+      - discord.thread-actions
+    secondary:
       - discord.media-and-rich-content
   execution:
     kind: flow
