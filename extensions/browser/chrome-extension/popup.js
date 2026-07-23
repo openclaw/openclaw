@@ -27,6 +27,19 @@ async function activeTab() {
   return tab ?? null;
 }
 
+// Buttons render for the tab sampled at the last refresh (id kept in dataset). If the
+// active tab changed since then, acting on the stale id would target the wrong tab —
+// and for the share toggle would invert the intent. Re-render for the current tab and
+// abort instead; the user re-clicks with correct context.
+async function currentTabIfUnchanged(expectedId) {
+  const tab = await activeTab();
+  if (!Number.isInteger(expectedId) || tab?.id !== expectedId) {
+    await refresh();
+    return null;
+  }
+  return tab.id;
+}
+
 async function refresh() {
   const status = await chrome.runtime.sendMessage({ type: "getStatus" });
   statusDot.className = `dot ${status.state}`;
@@ -58,8 +71,13 @@ async function refresh() {
 }
 
 async function onSendPage() {
-  const tabId = Number.parseInt(sendPageButton.dataset.tabId ?? "", 10);
-  if (!Number.isInteger(tabId) || sendingPage) {
+  if (sendingPage) {
+    return;
+  }
+  const tabId = await currentTabIfUnchanged(
+    Number.parseInt(sendPageButton.dataset.tabId ?? "", 10),
+  );
+  if (tabId === null) {
     return;
   }
   sendingPage = true;
@@ -106,17 +124,18 @@ async function onUnpair() {
 }
 
 async function onToggleShare() {
-  const tabId = Number.parseInt(shareButton.dataset.tabId ?? "", 10);
-  if (Number.isFinite(tabId)) {
-    await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
+  const tabId = await currentTabIfUnchanged(Number.parseInt(shareButton.dataset.tabId ?? "", 10));
+  if (tabId === null) {
+    return;
   }
+  await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
   await refresh();
 }
 
 async function onOpenCopilot() {
-  const tabId = Number.parseInt(copilotButton.dataset.tabId ?? "", 10);
   const path = copilotButton.dataset.path;
-  if (!Number.isInteger(tabId) || !path) {
+  const tabId = await currentTabIfUnchanged(Number.parseInt(copilotButton.dataset.tabId ?? "", 10));
+  if (tabId === null || !path) {
     return;
   }
   await chrome.sidePanel.setOptions({ tabId, path, enabled: true });
