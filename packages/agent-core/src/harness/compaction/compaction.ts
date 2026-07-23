@@ -763,13 +763,18 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
-
-  const cutPoint = findCutPoint(
-    effectiveEntries,
-    boundaryStart,
-    boundaryEnd,
-    settings.keepRecentTokens,
+  const resetPreludeTokens = resetPreludeMessages.reduce(
+    (total, message) => total + estimateTokens(message),
+    0,
   );
+  // The reset prelude is always part of the summarization request. Count it like
+  // other model-visible boundary context so a large kept tail moves the cut earlier.
+  const keepRecentTokens = Math.min(
+    Number.MAX_SAFE_INTEGER,
+    settings.keepRecentTokens + resetPreludeTokens,
+  );
+
+  const cutPoint = findCutPoint(effectiveEntries, boundaryStart, boundaryEnd, keepRecentTokens);
   const firstKeptEntry = effectiveEntries[cutPoint.firstKeptEntryIndex];
   if (!firstKeptEntry?.id) {
     return err(

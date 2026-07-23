@@ -295,6 +295,45 @@ describe("session-entry compaction budgeting", () => {
     expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("hidden tool result");
     expect(["entry-5", "entry-6"]).toContain(result.value.firstKeptEntryId);
   });
+
+  it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {
+    const largePrelude = "kept context ".repeat(4_000);
+    const postResetEntries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "post one ".repeat(500), timestamp: 4 }, 3),
+      createMessageEntry(createAssistant("answer one ".repeat(500), createUsage(2), 5), 4),
+      createMessageEntry({ role: "user", content: "post two ".repeat(500), timestamp: 6 }, 5),
+      createMessageEntry(createAssistant("answer two ".repeat(500), createUsage(2), 7), 6),
+    ];
+    const buildEntries = (firstKeptEntryId?: string): SessionTreeEntry[] => [
+      createMessageEntry({ role: "user", content: largePrelude, timestamp: 1 }, 0),
+      {
+        type: "reset",
+        id: "entry-1",
+        parentId: "entry-0",
+        timestamp: new Date(2).toISOString(),
+        reason: "new",
+        ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+      },
+      ...postResetEntries.map((entry, index) => ({
+        ...entry,
+        id: `entry-${index + 2}`,
+        parentId: `entry-${index + 1}`,
+      })),
+    ];
+    const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 500 };
+    const withoutPrelude = prepareCompaction(buildEntries(), settings);
+    const withPrelude = prepareCompaction(buildEntries("entry-0"), settings);
+
+    expect(withoutPrelude.ok && withoutPrelude.value).toBeTruthy();
+    expect(withPrelude.ok && withPrelude.value).toBeTruthy();
+    if (!withoutPrelude.ok || !withoutPrelude.value || !withPrelude.ok || !withPrelude.value) {
+      throw new Error("expected both reset transcripts to be compactable");
+    }
+    const cutIndex = (entryId: string) => Number.parseInt(entryId.slice("entry-".length), 10);
+    expect(cutIndex(withPrelude.value.firstKeptEntryId)).toBeLessThan(
+      cutIndex(withoutPrelude.value.firstKeptEntryId),
+    );
+  });
 });
 
 describe("generateSummary thinking options", () => {
