@@ -150,6 +150,55 @@ func normalizeMaskedListMarkerPlaceholders(text string, mapping map[string]strin
 	return strings.Join(lines, "")
 }
 
+func maskedListMarkerPlaceholders(mapping map[string]string) map[string]struct{} {
+	placeholders := make(map[string]struct{})
+	for placeholder, original := range mapping {
+		markerSpan := listMarkerRe.FindStringIndex(original)
+		if markerSpan != nil && markerSpan[0] == 0 && markerSpan[1] == len(original) {
+			placeholders[placeholder] = struct{}{}
+		}
+	}
+	return placeholders
+}
+
+func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]struct{}) string {
+	ranges := markdownListMarkerRanges(text)
+	if len(ranges) == 0 {
+		return text
+	}
+	var out strings.Builder
+	position := 0
+	for _, span := range ranges {
+		lineEnd := strings.IndexByte(text[span[1]:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(text)
+		} else {
+			lineEnd += span[1]
+		}
+		if placeholder := placeholderRe.FindString(text[span[1]:lineEnd]); placeholder != "" {
+			if _, ok := listPlaceholders[placeholder]; ok && strings.HasPrefix(text[span[1]:lineEnd], placeholder) {
+				continue
+			}
+		}
+		value := text[span[0]:span[1]]
+		match := listMarkerRe.FindStringSubmatchIndex(value)
+		if len(match) < 6 {
+			continue
+		}
+		markerStart, markerEnd := match[4], match[5]
+		insertAt := markerStart
+		if markerEnd-markerStart > 1 {
+			insertAt = markerEnd - 1
+		}
+		absolute := span[0] + insertAt
+		out.WriteString(text[position:absolute])
+		out.WriteByte('\\')
+		position = absolute
+	}
+	out.WriteString(text[position:])
+	return out.String()
+}
+
 func protectedMarkdownLinkRanges(text string) [][2]int {
 	ranges := make([][2]int, 0)
 	for _, match := range linkLabelRe.FindAllStringSubmatchIndex(text, -1) {
