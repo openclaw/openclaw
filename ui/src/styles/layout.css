@@ -1685,7 +1685,7 @@ html.openclaw-native-macos
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -1701,6 +1701,10 @@ html.openclaw-native-macos
 
 .sidebar-session-catalog-host__sessions .sidebar-recent-session__link {
   padding-left: 18px;
+}
+
+.sidebar-recent-session--catalog-project-child .sidebar-recent-session__name {
+  font-size: 10px;
 }
 
 .sidebar-session-pagination {

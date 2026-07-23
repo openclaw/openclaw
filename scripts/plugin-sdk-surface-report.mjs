@@ -95,38 +95,38 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   routing: 1,
-  health: 1,
+  health: 0,
   "channel-streaming": 54,
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
-  "approval-reply-runtime": 1,
-  "config-runtime": 116,
-  "config-contracts": 1,
-  "inbound-reply-dispatch": 26,
+  "approval-reply-runtime": 0,
+  "config-runtime": 115,
+  "config-contracts": 0,
+  "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
-  "interactive-runtime": 13,
-  "infra-runtime": 594,
+  "interactive-runtime": 11,
+  "infra-runtime": 593,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
   "text-runtime": 191,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
-  "agent-harness-runtime": 5,
+  "agent-harness-runtime": 4,
   "agent-config-primitives": 2,
   "command-auth": 78,
-  discord: 48,
+  discord: 47,
   matrix: 1,
-  "channel-inbound": 15,
+  "channel-inbound": 14,
   "channel-logging": 4,
   "channel-lifecycle": 23,
   "channel-message": 129,
-  "channel-pairing": 1,
-  "channel-policy": 8,
+  "channel-pairing": 0,
+  "channel-policy": 7,
   "channel-send-result": 1,
   "session-store-runtime": 4,
   "group-access": 13,
-  "reply-history": 8,
+  "reply-history": 6,
   "messaging-targets": 12,
   "provider-auth": 19,
   "telegram-account": 3,
@@ -146,7 +146,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
-      4723,
+      // +1: channel-owned setup contract factory.
+      // +18: generic schema primitives needed by plugin-owned channel config schemas.
+      // +2: shared Teams reply-style and TTS schema leaves.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +2: attributed-range renderer and its options contract.
+      4689,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -154,12 +159,17 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: settled-turn full-attempt projector.
-      2881,
+      // +1: channel-owned setup contract factory.
+      // +4: generic channel schema shape builders.
+      // +1: plugin-owned sensitive-schema registration.
+      // +2: generic inbound-root and SCP-host schema validators.
+      // +1: attributed-range renderer.
+      2839,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1697,
+      1683,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

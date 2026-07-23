@@ -34,9 +34,9 @@ import {
   type SessionsPatchResult,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
-import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
@@ -400,7 +400,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       ...(p.agentId ? { agentId: p.agentId } : {}),
       reason,
       commandSource: "gateway:sessions.reset",
-      createdBy: gatewayClientSessionCreator(client),
+      creation: resolveOperatorSessionCreation(client),
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

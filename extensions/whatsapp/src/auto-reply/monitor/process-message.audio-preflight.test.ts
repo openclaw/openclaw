@@ -80,7 +80,6 @@ vi.mock("./runtime-api.js", () => ({
     previousTimestamp: undefined,
   }),
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  resolveDmGroupAccessWithCommandGate: () => ({ commandAuthorized: true }),
   shouldComputeCommandAuthorized: (body: string) => {
     shouldComputeCommandBodies.push(body);
     return shouldComputeCommandResult || body.startsWith("/");

@@ -23,9 +23,14 @@ export type {
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
+  WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
-export { SessionCreatorIdentitySchema, type SessionCreatorIdentity } from "./schema/sessions.js";
+export {
+  SessionCreatedActorSchema,
+  type SessionCreatedActor,
+  type SessionRow,
+} from "./schema/sessions-row.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -278,6 +283,7 @@ import {
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
   EnvironmentsCreateResultSchema,
@@ -411,6 +417,7 @@ import {
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
   SessionBranchSchema,
+  SessionRowSchema,
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
   SessionsCleanupParamsSchema,
@@ -1005,6 +1012,7 @@ export {
   ErrorShapeSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
   WorkerAdmissionFailureReasonSchema,
   WorkerAdmissionHandshakeSchema,
   WorkerAdmissionResponseFrameSchema,
@@ -1153,6 +1161,7 @@ export {
   SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParamsSchema,
   SessionBranchSchema,
+  SessionRowSchema,
   SessionsBranchesListParamsSchema,
   SessionsBranchesListResultSchema,
   SessionsBranchesSwitchParamsSchema,

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -26,6 +27,7 @@ import {
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
+  hasQuickstartGatewayOverrides,
   readSetupConfigFileSnapshot,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
@@ -52,7 +54,6 @@ async function offerLiveModelVerification(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   required?: boolean;
 }): Promise<{ config: OpenClawConfig; verified: boolean }> {
@@ -129,7 +130,6 @@ async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
-      workspaceDir: params.workspaceDir,
     });
     shouldPersistCandidate = true;
   }
@@ -343,8 +343,13 @@ async function runSetupWizardOnce(
     flow = "quickstart";
   }
   const wizardFlow: WizardFlow = flow === "advanced" ? "advanced" : "quickstart";
+  const hasExplicitQuickstartGatewayOverrides =
+    wizardFlow === "quickstart" && hasQuickstartGatewayOverrides(opts);
 
-  const quickstartGateway: QuickstartGatewayDefaults = resolveQuickstartGatewayDefaults(baseConfig);
+  const quickstartGateway: QuickstartGatewayDefaults = resolveQuickstartGatewayDefaults(
+    baseConfig,
+    wizardFlow === "quickstart" ? opts : undefined,
+  );
 
   if (flow === "quickstart") {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
@@ -371,37 +376,27 @@ async function runSetupWizardOnce(
     const formatTailscale = (value: "off" | "serve" | "funnel") => {
       return t(`wizard.gatewayTailscale.${value}`);
     };
-    const quickstartLines = quickstartGateway.hasExisting
-      ? [
-          t("wizard.setup.quickstartKeepSettings"),
-          t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
-          t("wizard.setup.quickstartGatewayBind", { bind: formatBind(quickstartGateway.bind) }),
-          ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
-            ? [
-                t("wizard.setup.quickstartGatewayCustomIp", {
-                  host: quickstartGateway.customBindHost,
-                }),
-              ]
-            : []),
-          t("wizard.setup.quickstartGatewayAuth", {
-            auth: formatAuth(quickstartGateway.authMode),
-          }),
-          t("wizard.setup.quickstartTailscaleExposure", {
-            exposure: formatTailscale(quickstartGateway.tailscaleMode),
-          }),
-          t("wizard.setup.quickstartDirectChannels"),
-        ]
-      : [
-          t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
-          t("wizard.setup.quickstartGatewayBind", { bind: t("wizard.gateway.bindLoopback") }),
-          t("wizard.setup.quickstartGatewayAuth", {
-            auth: t("wizard.setup.quickstartAuthTokenDefault"),
-          }),
-          t("wizard.setup.quickstartTailscaleExposure", {
-            exposure: t("wizard.gatewayTailscale.off"),
-          }),
-          t("wizard.setup.quickstartDirectChannels"),
-        ];
+    const quickstartLines = [
+      ...(quickstartGateway.hasExisting && !hasExplicitQuickstartGatewayOverrides
+        ? [t("wizard.setup.quickstartKeepSettings")]
+        : []),
+      t("wizard.setup.quickstartGatewayPort", { port: quickstartGateway.port }),
+      t("wizard.setup.quickstartGatewayBind", { bind: formatBind(quickstartGateway.bind) }),
+      ...(quickstartGateway.bind === "custom" && quickstartGateway.customBindHost
+        ? [
+            t("wizard.setup.quickstartGatewayCustomIp", {
+              host: quickstartGateway.customBindHost,
+            }),
+          ]
+        : []),
+      t("wizard.setup.quickstartGatewayAuth", {
+        auth: formatAuth(quickstartGateway.authMode),
+      }),
+      t("wizard.setup.quickstartTailscaleExposure", {
+        exposure: formatTailscale(quickstartGateway.tailscaleMode),
+      }),
+      t("wizard.setup.quickstartDirectChannels"),
+    ];
     await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
@@ -570,7 +565,7 @@ async function runSetupWizardOnce(
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+  const { allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
     prompter,
@@ -590,7 +585,6 @@ async function runSetupWizardOnce(
       opts,
       prompter,
       runtime,
-      workspaceDir,
     });
     await modelAuth.persistAuthProfiles();
     nextConfig = modelAuth.config;
@@ -630,7 +624,6 @@ async function runSetupWizardOnce(
       opts,
       prompter,
       runtime,
-      workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
       required: usedImportFlow && keepExistingModelConfig,
@@ -666,11 +659,13 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    agentId: onboardingTarget.agentId,
   });
 
   if (!usedImportFlow) {
@@ -692,7 +687,7 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipSkills"), t("wizard.setup.skillsTitle"));
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
-    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter, {
+    nextConfig = await setupSkills(nextConfig, onboardingTarget.workspaceDir, runtime, prompter, {
       nodeManager: opts.nodeManager,
     });
   }
@@ -704,14 +699,14 @@ async function runSetupWizardOnce(
       config: nextConfig,
       prompter,
       runtime,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
     });
     const { setupAppRecommendations } = await import("./setup.app-recommendations.js");
     const recommendationOutcome = await setupAppRecommendations({
       config: nextConfig,
       prompter,
       runtime,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
       modelRouteVerified: liveModelVerified,
     });
     nextConfig = recommendationOutcome.config;
@@ -720,7 +715,7 @@ async function runSetupWizardOnce(
     nextConfig = await setupPluginConfig({
       config: nextConfig,
       prompter,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
     });
   }
 
@@ -733,6 +728,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
@@ -742,7 +738,7 @@ async function runSetupWizardOnce(
     baseConfig,
     hadExistingConfig: snapshot.exists,
     nextConfig,
-    workspaceDir,
+    workspaceDir: onboardingTarget.workspaceDir,
     settings,
     prompter,
     runtime,

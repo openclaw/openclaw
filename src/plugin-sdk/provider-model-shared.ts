@@ -67,7 +67,6 @@ export {
   GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
-  renderGpt5PromptOverlay,
   resolveGpt5PromptOverlayMode,
   resolveGpt5SystemPromptContribution,
   type Gpt5PromptOverlayMode,

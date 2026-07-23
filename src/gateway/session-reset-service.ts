@@ -1,11 +1,7 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import {
-  ErrorCodes,
-  errorShape,
-  type SessionCreatorIdentity,
-} from "../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
@@ -39,6 +35,12 @@ import {
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import {
+  buildSessionCreationStamp,
+  type SessionCreatedActor,
+  type SessionCreatedVia,
+} from "../config/sessions/session-entry-provenance.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -66,7 +68,10 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
-import { handleSessionStateSessionReset } from "../sessions/session-state-events.js";
+import {
+  handleSessionStateSessionReset,
+  recordSessionCreated,
+} from "../sessions/session-state-events.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -912,7 +917,8 @@ export async function performGatewaySessionReset(params: {
   clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
-  createdBy?: SessionCreatorIdentity;
+  /** Trusted provenance for a reset that materializes a previously missing row. */
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
@@ -1166,6 +1172,7 @@ export async function performGatewaySessionReset(params: {
           })
         : undefined;
 
+      let createdNewEntry = false;
       const lifecycle = await resetSessionEntryLifecycle({
         agentId: target.agentId,
         storePath,
@@ -1174,6 +1181,7 @@ export async function performGatewaySessionReset(params: {
           storeKeys: target.storeKeys,
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
+          createdNewEntry = currentEntry === undefined;
           if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
             // A newer owner already replaced or removed the session while cleanup
             // targeted the old id. Preserve that newer state instead of resetting it.
@@ -1193,9 +1201,17 @@ export async function performGatewaySessionReset(params: {
             sessionId: nextSessionId,
             storePath,
           });
+          const creationStamp = currentEntry
+            ? {
+                createdVia: currentEntry.createdVia,
+                createdActor: currentEntry.createdActor,
+                createdAt: currentEntry.createdAt,
+              }
+            : params.creation
+              ? buildSessionCreationStamp(params.creation)
+              : {};
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
-            ...(params.createdBy ? { createdBy: { ...params.createdBy } } : {}),
             sessionFile,
             updatedAt: now,
             systemSent: false,
@@ -1249,7 +1265,10 @@ export async function performGatewaySessionReset(params: {
               ? undefined
               : (params.worktree ?? currentEntry?.worktree),
             parentSessionKey: currentEntry?.parentSessionKey,
-            forkedFromParent: currentEntry?.forkedFromParent,
+            ...creationStamp,
+            forkSource: currentEntry?.forkSource,
+            previousSessionId: currentEntry?.sessionId,
+            forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
             spawnDepth: currentEntry?.spawnDepth,
             subagentRole: currentEntry?.subagentRole,
             subagentControlScope: currentEntry?.subagentControlScope,
@@ -1295,6 +1314,13 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
+          if (createdNewEntry) {
+            recordSessionCreated({
+              sessionKey: target.canonicalKey ?? params.key,
+              agentId,
+              entry: mutation.nextEntry,
+            });
+          }
           let committedAcpResetState: { sessionKey: string; meta: SessionAcpMeta } | undefined;
           if (deferredAcpResetState) {
             const identity = deferredAcpResetState.meta.identity;

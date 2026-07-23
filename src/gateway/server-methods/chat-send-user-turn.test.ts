@@ -163,6 +163,12 @@ describe("prepareChatSendUserTurn", () => {
       }),
       client: {
         connId: "conn-1",
+        authenticatedUserProfile: {
+          profileId: "profile-ada",
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
         connect: {
           device: { id: "device-1" },
           scopes: ["operator.admin"],
@@ -190,6 +196,10 @@ describe("prepareChatSendUserTurn", () => {
       MediaStaged: true,
       GatewayClientScopes: ["operator.admin"],
       GatewayClientCaps: ["tool-events"],
+      SessionCreation: {
+        via: "operator",
+        actor: { type: "human", id: "profile-ada" },
+      },
     });
     expect(prepared.ctx).not.toHaveProperty("SenderId");
     expect(prepared.queuedFollowupOwnerKey).toBe("device:device-1");

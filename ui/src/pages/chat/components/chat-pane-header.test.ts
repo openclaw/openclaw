@@ -112,13 +112,13 @@ describe("chat pane header", () => {
   it("renders the permanent owner chip only when attribution chrome is enabled", () => {
     const shown = mount({
       showOwnerChip: true,
-      session: row({ createdBy: { id: "profile-ada", label: "Ada" } }),
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
     });
     expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
 
     const dormant = mount({
       showOwnerChip: false,
-      session: row({ createdBy: { id: "profile-ada", label: "Ada" } }),
+      session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
     });
     expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
   });

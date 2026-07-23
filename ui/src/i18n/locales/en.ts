@@ -214,6 +214,8 @@ export const en: TranslationMap = {
       subtitle: "A short guided setup — you can fine-tune everything later.",
       starting: "Starting setup…",
       working: "Working…",
+      sessionExpired:
+        "This setup session expired after the Gateway restarted. Close this dialog, then start channel setup again.",
       continue: "Continue",
       finish: "Finish",
       copyText: "Copy",
@@ -644,6 +646,8 @@ export const en: TranslationMap = {
     openWorkboardCard: "Open Workboard card",
     dashboardAvailable: "Dashboard available",
     approvalNeeded: "Approval needed",
+    queuedMessage: "{count} message queued to send",
+    queuedMessages: "{count} messages queued to send",
     noSessions: "No threads found.",
     noActiveSessions: "No active threads.",
     noArchivedSessions: "No archived sessions.",
@@ -1914,6 +1918,8 @@ export const en: TranslationMap = {
       copy: "Copy",
       expires: "Expires in {count} minutes",
       cancelled: "Provider sign-in was cancelled.",
+      sessionExpired:
+        "This setup session expired after the Gateway restarted. Close this dialog, then start model setup again.",
       notComplete: "Sign-in finished, but model setup is not complete yet.",
     },
   },
@@ -2970,6 +2976,7 @@ export const en: TranslationMap = {
     eventStale: "Stale thread",
   },
   connection: {
+    queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     retryNow: "Retry now",
     access: {
@@ -3634,6 +3641,15 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    deviceAuthMigration: {
+      banner: "This browser still needs one-time device approval after the update.",
+      action: "Secure this browser",
+      secureContextRequired:
+        "This legacy browser remains available temporarily. Reopen it over HTTPS or localhost to secure it with device identity.",
+      pendingUnavailable: "The browser pairing request is not available yet. Retry in a moment.",
+      loadFailed: "Could not load this browser's pairing request: {error}",
+      approvalFailed: "Could not secure this browser: {error}",
+    },
     passwordPlaceholder: "optional",
     showToken: "Show token",
     hideToken: "Hide token",
@@ -4140,6 +4156,7 @@ export const en: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "Offline — messages will be queued and sent when the connection returns.",
+      offlineQueuedHint: "Offline — {count} queued; messages send when the connection returns.",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",
@@ -4353,6 +4370,7 @@ export const en: TranslationMap = {
     sessionDiscussion: {
       title: "Discussion",
       show: "Show discussion",
+      hide: "Hide discussion",
       disconnected: "Gateway is disconnected.",
       loading: "Loading discussion…",
       opening: "Opening discussion…",
