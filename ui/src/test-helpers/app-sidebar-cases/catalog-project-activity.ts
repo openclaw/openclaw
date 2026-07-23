@@ -7,7 +7,7 @@ describe("AppSidebar project session activity", () => {
   it("shows thread-style activity indicators", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.sessionCatalogs = [
+    sidebar.sessionData.sessionCatalogs = [
       {
         id: "codex",
         label: "Codex",
@@ -42,6 +42,7 @@ describe("AppSidebar project session activity", () => {
         ],
       },
     ];
+    sidebar.sessionData.requestSessionDataUpdate();
     await sidebar.updateComplete;
 
     const project = sidebar.querySelector('[data-session-catalog-project="/work/openclaw"]');
