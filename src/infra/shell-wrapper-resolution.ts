@@ -11,6 +11,7 @@ import {
   hasFishInitCommandOption,
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
+  NUSHELL_INLINE_COMMAND_FLAGS,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
@@ -52,8 +53,6 @@ const POSIX_PARSEABLE_SHELL_WRAPPER_NAMES = [
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
 const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
-const NUSHELL_INLINE_COMMAND_FLAGS = new Set([...POSIX_INLINE_COMMAND_FLAGS, "-e", "--execute"]);
-
 function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
   for (const name of names) {

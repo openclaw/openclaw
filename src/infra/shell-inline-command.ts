@@ -10,6 +10,11 @@ export const POSIX_INLINE_COMMAND_FLAGS = new Set([
   "--commands",
   "--cmdline",
 ]);
+export const NUSHELL_INLINE_COMMAND_FLAGS = new Set([
+  ...POSIX_INLINE_COMMAND_FLAGS,
+  "-e",
+  "--execute",
+]);
 
 function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
   const forms: string[] = [];

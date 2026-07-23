@@ -116,6 +116,11 @@ describe("system run command public boundary", () => {
       rawCommand: '$0 "$1"',
     },
     {
+      name: "opaque shell positional-argv carrier",
+      argv: ["tcsh", "-c", "source $argv[1]", "/tmp/evil.csh"],
+      rawCommand: "source $argv[1]",
+    },
+    {
       name: "environment prelude",
       argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
       rawCommand: "echo hi",

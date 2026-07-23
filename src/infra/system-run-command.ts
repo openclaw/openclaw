@@ -7,12 +7,13 @@ import {
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
 import {
+  NUSHELL_INLINE_COMMAND_FLAGS,
   POSIX_INLINE_COMMAND_FLAGS,
   isPowerShellInlineRestCommandFlag,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
 // System-run command helpers keep argv authoritative while still exposing a
 // human-readable shell preview when the wrapper shape is unambiguous.
@@ -71,7 +72,7 @@ type SystemRunCommandDisplay = {
 };
 
 const POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES = new Set([
-  ...POSIX_PARSEABLE_SHELL_WRAPPERS,
+  ...POSIX_SHELL_WRAPPERS,
   "powershell",
   "pwsh",
 ]);
@@ -97,9 +98,13 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
   const inlineCommandIndex =
     wrapper === "powershell" || wrapper === "pwsh"
       ? resolvePowerShellInlineCommandMatch(wrapperArgv).valueTokenIndex
-      : resolveInlineCommandMatch(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
-          allowCombinedC: true,
-        }).valueTokenIndex;
+      : resolveInlineCommandMatch(
+          wrapperArgv,
+          wrapper === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS,
+          {
+            allowCombinedC: true,
+          },
+        ).valueTokenIndex;
   if (inlineCommandIndex === null) {
     return false;
   }
