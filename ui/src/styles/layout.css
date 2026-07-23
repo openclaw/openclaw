@@ -130,12 +130,14 @@ html.openclaw-native-macos .shell-chrome-controls {
 }
 
 /* Newer Mac apps host a native sidebar toggle in the titlebar next to
-   back/forward and add openclaw-native-nav; the in-page toggles (desktop
-   collapse/expand plus the drawer hamburger in compact layouts) would duplicate
-   it, so they disappear entirely (⌘B and the accessible titlebar button
-   cover keyboard/screen-reader use). Older apps only add
-   openclaw-native-macos and keep the web controls visible. */
-html.openclaw-native-nav .shell-chrome-controls,
+   back/forward and add openclaw-native-nav; the in-page nav toggles would
+   duplicate it, so they disappear (⌘B and the accessible titlebar button
+   cover keyboard/screen-reader use). Search stays: native-nav-only hosts
+   provide native search/new-thread controls only while the rail is
+   collapsed, so the expanded cluster keeps the pointer path to the palette.
+   Older apps only add openclaw-native-macos and keep all web controls. */
+html.openclaw-native-nav .shell-chrome-controls__nav-toggle,
+html.openclaw-native-nav .shell--nav-collapsed .shell-chrome-controls,
 html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }

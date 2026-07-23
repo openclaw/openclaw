@@ -149,10 +149,15 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
+    // Expanded native-nav hosts keep the cluster's search (no native search
+    // control exists while the rail is open) but hide the duplicate nav toggle.
+    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
+      .toBe(false);
 
-    // Collapse through the native titlebar path; the web chrome cluster
-    // must stay hidden (the titlebar button is the only expand affordance).
+    // Collapse through the native titlebar path; the whole web chrome cluster
+    // hides (native titlebar provides search and new-thread while collapsed).
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
     });

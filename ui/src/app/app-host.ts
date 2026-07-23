@@ -1591,8 +1591,11 @@ class OpenClawShell extends OpenClawLightDomElement {
       mobileNavLayout,
     });
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // Mirror the sidebar brand action: an open new-session draft wins over the
+    // persisted selection so the collapsed cluster "+" targets the same agent.
     const selectedAgentId = normalizeAgentId(
-      context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId,
+      this.draftSessionAgentId() ||
+        (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
     );
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
