@@ -1321,7 +1321,7 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
   it("closes the sandbox exec-server release path used by startup timeout cleanup", async () => {
-    const { environment, request, sandbox } = await createSandboxReleaseFixture((method) => {
+    const { request, sandbox } = await createSandboxReleaseFixture((method) => {
       if (method === "environment/add") {
         return {};
       }
@@ -1959,7 +1959,7 @@ describe("runCodexAppServerAttempt", () => {
         : []),
     ]);
     const { sessionFile, workspaceDir } = createRunPaths();
-    const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
+    const createHeartbeatRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
@@ -1974,14 +1974,14 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("heartbeat_respond"),
     ];
     const normalBridge = createCodexToolBridgeForTest(
-      createRunParams(),
+      createHeartbeatRunParams(),
       [createRuntimeDynamicTool("message")],
       registeredTools,
     );
-    const normalInstructions = testing.buildDeveloperInstructions(createRunParams(), {
+    const normalInstructions = testing.buildDeveloperInstructions(createHeartbeatRunParams(), {
       dynamicTools: normalBridge.availableSpecs,
     });
-    const heartbeatParams = createRunParams("heartbeat");
+    const heartbeatParams = createHeartbeatRunParams("heartbeat");
     const heartbeatBridge = createCodexToolBridgeForTest(
       heartbeatParams,
       [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
@@ -1990,7 +1990,7 @@ describe("runCodexAppServerAttempt", () => {
     const heartbeatInstructions = testing.buildDeveloperInstructions(heartbeatParams, {
       dynamicTools: heartbeatBridge.availableSpecs,
     });
-    const nextNormalParams = createRunParams();
+    const nextNormalParams = createHeartbeatRunParams();
     const nextNormalBridge = createCodexToolBridgeForTest(
       nextNormalParams,
       [createRuntimeDynamicTool("message")],
@@ -2104,7 +2104,7 @@ describe("runCodexAppServerAttempt", () => {
         : []),
     ]);
     const { sessionFile, workspaceDir } = createRunPaths();
-    const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
+    const createHeartbeatRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       const runtimePlan = createCodexRuntimePlanFixture();
@@ -2129,17 +2129,17 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("heartbeat_respond"),
     ];
     const normalBridge = createCodexToolBridgeForTest(
-      createRunParams(),
+      createHeartbeatRunParams(),
       registeredTools,
       registeredTools,
     );
     const heartbeatBridge = createCodexToolBridgeForTest(
-      createRunParams("heartbeat"),
+      createHeartbeatRunParams("heartbeat"),
       [createRuntimeDynamicTool("heartbeat_respond")],
       registeredTools,
     );
     const nextNormalBridge = createCodexToolBridgeForTest(
-      createRunParams(),
+      createHeartbeatRunParams(),
       registeredTools,
       registeredTools,
     );
@@ -5610,8 +5610,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
   it("announces Codex app-server fast auto progress for raw function call outputs", async () => {
-    const { harness, now, onAgentEvent, onToolResult, run, workspaceDir } =
-      await startFastAutoProgressTest();
+    const { harness, now, onAgentEvent, onToolResult, run } = await startFastAutoProgressTest();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
