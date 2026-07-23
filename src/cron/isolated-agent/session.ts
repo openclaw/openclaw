@@ -1,6 +1,11 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import {
+  clearBootstrapSnapshotOnSessionBoundary,
+  clearBootstrapSnapshotOnSessionRollover,
+} from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { appendSessionResetBoundary } from "../../agents/sessions/reset-boundary.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   resolveSessionLifecycleTimestamps,
@@ -14,6 +19,7 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
 import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -165,6 +171,8 @@ export function resolveCronSession(params: {
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
+  let resetBoundaryAppended = false;
+  let staleBoundaryReset = false;
 
   if (!params.forceNew && entry?.sessionId) {
     // Cron/webhook sessions follow the direct reset policy so scheduled turns
@@ -192,9 +200,22 @@ export function resolveCronSession(params: {
       isNewSession = false;
       systemSent = entry.systemSent ?? false;
     } else {
-      sessionId = crypto.randomUUID();
+      sessionId = sourceSessionDiffers ? crypto.randomUUID() : entry.sessionId;
       isNewSession = true;
       systemSent = false;
+      if (!sourceSessionDiffers) {
+        staleBoundaryReset = true;
+        const sessionFile =
+          entry.sessionFile ??
+          formatSqliteSessionFileMarker({
+            agentId: params.agentId,
+            sessionId,
+            storePath,
+          });
+        resetBoundaryAppended = Boolean(
+          appendSessionResetBoundary({ reason: "cron-stale", sessionFile }),
+        );
+      }
     }
   } else {
     sessionId = crypto.randomUUID();
@@ -202,10 +223,15 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
-  const previousSessionId = isNewSession && !sourceSessionDiffers ? entry?.sessionId : undefined;
+  const previousSessionId =
+    isNewSession && !sourceSessionDiffers && !staleBoundaryReset ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,
+  });
+  clearBootstrapSnapshotOnSessionBoundary({
+    boundaryAppended: resetBoundaryAppended,
+    sessionKey: params.sessionKey,
   });
 
   const baseEntry = entry
@@ -236,6 +262,11 @@ export function resolveCronSession(params: {
       : {}),
     systemSent,
   };
+  if (resetBoundaryAppended) {
+    clearAllCliSessions(sessionEntry);
+    sessionEntry.agentHarnessId = undefined;
+    sessionEntry.compactionCount = 0;
+  }
   return {
     storePath,
     store,
@@ -244,6 +275,7 @@ export function resolveCronSession(params: {
     systemSent,
     isNewSession,
     previousSessionId,
+    resetBoundaryAppended,
     initialSessionEntry: targetEntry,
   };
 }

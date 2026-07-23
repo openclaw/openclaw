@@ -253,6 +253,7 @@ export type ForkSessionEntryFromParentTargetParams = {
 };
 
 export type ResetSessionEntryLifecycleParams = {
+  archivePreviousTranscript?: boolean;
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {

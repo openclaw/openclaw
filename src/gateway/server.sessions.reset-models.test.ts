@@ -291,7 +291,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
+  expect(reset.payload?.entry.sessionId).toBe("sess-stale-model");
   const sessionFile = reset.payload?.entry.sessionFile;
   if (!sessionFile) {
     throw new Error("expected reset session file");
@@ -354,7 +354,7 @@ test("sessions.reset clears stale estimated context budget status", async () => 
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-budget");
+  expect(reset.payload?.entry.sessionId).toBe("sess-stale-budget");
   expect(reset.payload?.entry.contextBudgetStatus).toBeUndefined();
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
 
@@ -395,7 +395,7 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-skills");
+  expect(reset.payload?.entry.sessionId).toBe("sess-stale-skills");
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
 
   const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath }) as
@@ -435,7 +435,7 @@ test("sessions.reset rotates generated topic transcript files with the new sessi
   if (!nextSessionId || !nextSessionFile) {
     throw new Error("expected reset session id and file");
   }
-  expect(nextSessionId).not.toBe(previousSessionId);
+  expect(nextSessionId).toBe(previousSessionId);
   expect(nextSessionFile).toContain(`sqlite:main:${nextSessionId}:`);
 
   const persistedEntry = loadSessionEntry({
@@ -479,7 +479,7 @@ test("sessions.reset rotates an already-stale generated transcript file to the n
   if (!nextSessionId || !nextSessionFile) {
     throw new Error("expected reset session id and file");
   }
-  expect(nextSessionId).not.toBe(currentSessionId);
+  expect(nextSessionId).toBe(currentSessionId);
   expect(nextSessionFile).toContain(`sqlite:main:${nextSessionId}:`);
   expect(nextSessionFile).not.toContain(staleFileSessionId);
 
@@ -588,7 +588,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       sessionId: "root-session",
       entryId: "root-entry",
     },
-    previousSessionId: "sess-owned-child",
   });
 
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath }) as
@@ -604,6 +603,5 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       sessionId: "root-session",
       entryId: "root-entry",
     },
-    previousSessionId: "sess-owned-child",
   });
 });

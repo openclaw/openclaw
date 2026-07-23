@@ -1,5 +1,8 @@
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
+import { appendSessionResetBoundary } from "../../agents/sessions/reset-boundary.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
@@ -64,18 +67,15 @@ export async function resetReplyRunSession(params: {
   if (isModelSelectionLocked(prevEntry)) {
     throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
-  const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
-  const nextSessionId = deps.generateSecureUuid();
+  const nextSessionId = prevEntry.sessionId;
   const now = Date.now();
   const nextEntry: SessionEntry = {
     ...prevEntry,
     sessionId: nextSessionId,
+    previousSessionId: undefined,
+    lifecycleRevision: deps.generateSecureUuid(),
     updatedAt: now,
     sessionStartedAt: now,
-    usageFamilyKey: prevEntry.usageFamilyKey ?? params.sessionKey,
-    usageFamilySessionIds: Array.from(
-      new Set([...(prevEntry.usageFamilySessionIds ?? []), prevEntry.sessionId, nextSessionId]),
-    ),
     lastInteractionAt: now,
     systemSent: false,
     abortedLastRun: false,
@@ -102,23 +102,32 @@ export async function resetReplyRunSession(params: {
     memoryFlushLastFailedAt: undefined,
     memoryFlushLastFailureError: undefined,
   };
+  clearAllCliSessions(nextEntry);
+  nextEntry.agentHarnessId = undefined;
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const nextSessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: nextSessionId,
-    storePath: params.storePath,
-  });
+  const nextSessionFile =
+    prevEntry.sessionFile ??
+    formatSqliteSessionFileMarker({
+      agentId,
+      sessionId: nextSessionId,
+      storePath: params.storePath,
+    });
   nextEntry.sessionFile = nextSessionFile;
+  const resetBoundaryAppended = Boolean(
+    appendSessionResetBoundary({ reason: "reset", sessionFile: nextSessionFile }),
+  );
+  clearBootstrapSnapshotOnSessionBoundary({
+    boundaryAppended: resetBoundaryAppended,
+    sessionKey: params.sessionKey,
+  });
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
     await deps.persistSessionResetLifecycle({
       agentId,
-      cleanupPreviousTranscript: params.options.cleanupTranscripts,
       nextEntry,
       nextSessionFile,
       previousEntry: prevEntry,
-      previousSessionId: prevSessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });

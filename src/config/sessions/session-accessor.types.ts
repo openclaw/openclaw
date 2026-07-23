@@ -835,7 +835,9 @@ export type {
 };
 
 export type ResetSessionEntryLifecycleParams = {
-  /** Runs after the persisted entry rotates and retired transcripts are archived. */
+  /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
+  archivePreviousTranscript?: boolean;
+  /** Runs after the persisted entry changes and any requested archival completes. */
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;

@@ -990,6 +990,7 @@ export async function updateSessionStore<T>(
 
 /** Resets one persisted session entry and rotates its file-backed transcript artifacts. */
 export async function resetSessionEntryLifecycle(params: {
+  archivePreviousTranscript?: boolean;
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {
@@ -1043,14 +1044,17 @@ export async function resetSessionEntryLifecycle(params: {
       });
     }
     await params.afterEntryMutation?.(mutation);
-    const archivedTranscripts = await archiveLifecycleSessionTranscripts({
-      sessionId: previousSessionId,
-      storePath: params.storePath,
-      sessionFile: previousSessionFile,
-      agentId: params.agentId,
-      reason: "reset",
-    });
-    if (reusesTranscriptPath) {
+    const archivedTranscripts =
+      params.archivePreviousTranscript === false
+        ? []
+        : await archiveLifecycleSessionTranscripts({
+            sessionId: previousSessionId,
+            storePath: params.storePath,
+            sessionFile: previousSessionFile,
+            agentId: params.agentId,
+            reason: "reset",
+          });
+    if (reusesTranscriptPath && params.archivePreviousTranscript !== false) {
       ensureLifecycleTranscriptHeader({
         sessionFile: nextSessionFile,
         sessionId: nextEntry.sessionId,

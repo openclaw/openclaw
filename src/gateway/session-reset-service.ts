@@ -14,11 +14,15 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import {
+  clearBootstrapSnapshot,
+  clearBootstrapSnapshotOnSessionBoundary,
+} from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
+import { appendSessionResetBoundary } from "../agents/sessions/reset-boundary.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -1173,12 +1177,20 @@ export async function performGatewaySessionReset(params: {
         : undefined;
 
       let createdNewEntry = false;
+      let resetBoundaryAppended = false;
       const lifecycle = await resetSessionEntryLifecycle({
+        archivePreviousTranscript: false,
         agentId: target.agentId,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
-          storeKeys: target.storeKeys,
+          storeKeys: [
+            ...new Set(
+              [...target.storeKeys, canonicalKey, legacyKey, params.key].filter(
+                (key): key is string => Boolean(key),
+              ),
+            ),
+          ],
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
           createdNewEntry = currentEntry === undefined;
@@ -1195,12 +1207,19 @@ export async function performGatewaySessionReset(params: {
             entry: currentEntry,
           });
           const now = Date.now();
-          const nextSessionId = randomUUID();
-          const sessionFile = formatSqliteSessionFileMarker({
-            agentId: sessionAgentId,
-            sessionId: nextSessionId,
-            storePath,
-          });
+          const nextSessionId = currentEntry?.sessionId ?? randomUUID();
+          const sessionFile =
+            currentEntry?.sessionFile ??
+            formatSqliteSessionFileMarker({
+              agentId: sessionAgentId,
+              sessionId: nextSessionId,
+              storePath,
+            });
+          if (currentEntry) {
+            resetBoundaryAppended = Boolean(
+              appendSessionResetBoundary({ reason: params.reason, sessionFile }),
+            );
+          }
           const creationStamp = currentEntry
             ? {
                 createdVia: currentEntry.createdVia,
@@ -1213,7 +1232,9 @@ export async function performGatewaySessionReset(params: {
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
             sessionFile,
+            lifecycleRevision: randomUUID(),
             updatedAt: now,
+            sessionStartedAt: now,
             systemSent: false,
             abortedLastRun: false,
             thinkingLevel: currentEntry?.thinkingLevel,
@@ -1249,8 +1270,7 @@ export async function performGatewaySessionReset(params: {
             groupActivation: currentEntry?.groupActivation,
             groupActivationNeedsSystemIntro: currentEntry?.groupActivationNeedsSystemIntro,
             chatType: currentEntry?.chatType,
-            compactionCount: currentEntry?.compactionCount,
-            compactionCheckpoints: currentEntry?.compactionCheckpoints,
+            compactionCount: 0,
             sendPolicy: currentEntry?.sendPolicy,
             queueMode: currentEntry?.queueMode,
             queueDebounceMs: currentEntry?.queueDebounceMs,
@@ -1267,7 +1287,6 @@ export async function performGatewaySessionReset(params: {
             parentSessionKey: currentEntry?.parentSessionKey,
             ...creationStamp,
             forkSource: currentEntry?.forkSource,
-            previousSessionId: currentEntry?.sessionId,
             forkedFromParent: sessionEntryForkedFromParent(currentEntry) ? true : undefined,
             spawnDepth: currentEntry?.spawnDepth,
             subagentRole: currentEntry?.subagentRole,
@@ -1288,6 +1307,8 @@ export async function performGatewaySessionReset(params: {
             lastTo: currentEntry?.lastTo,
             lastAccountId: currentEntry?.lastAccountId,
             lastThreadId: currentEntry?.lastThreadId,
+            usageFamilyKey: currentEntry?.usageFamilyKey,
+            usageFamilySessionIds: currentEntry?.usageFamilySessionIds,
             // Do not carry the cached skills catalog across /new. Long-lived channel
             // sessions (Signal DMs/groups in particular) otherwise keep advertising a
             // stale <available_skills> block even after reset/restart, because the
@@ -1303,7 +1324,7 @@ export async function performGatewaySessionReset(params: {
           // regression fix intentionally protects CLI continuity for
           // orchestration-driven resets. Non-subagent sessions that happen to set
           // `parentSessionKey` (e.g. dashboard children) are not exempt.
-          if (!isSubagentSessionKey(primaryKey)) {
+          if (resetBoundaryAppended && !isSubagentSessionKey(primaryKey)) {
             clearAllCliSessions(nextEntry);
           } else {
             nextEntry.cliSessionBindings = rebindCliSessionReseedReceiptsForReset(
@@ -1314,6 +1335,10 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
+          clearBootstrapSnapshotOnSessionBoundary({
+            boundaryAppended: resetBoundaryAppended,
+            sessionKey: target.canonicalKey ?? params.key,
+          });
           if (createdNewEntry) {
             recordSessionCreated({
               sessionKey: target.canonicalKey ?? params.key,
@@ -1337,7 +1362,7 @@ export async function performGatewaySessionReset(params: {
               // new session never observes an unreadable old-session row.
               writeAcpSessionMetaForMigration({
                 sessionKey: committedAcpResetState.sessionKey,
-                sessionId: mutation.nextEntry.sessionId,
+                lifecycleRevision: mutation.nextEntry.lifecycleRevision,
                 meta: committedAcpResetState.meta,
               });
             }

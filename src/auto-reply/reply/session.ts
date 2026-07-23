@@ -7,9 +7,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
+import { appendSessionResetBoundary } from "../../agents/sessions/reset-boundary.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -742,10 +743,6 @@ async function initSessionStateAttemptLocked(
       sessionKey,
     };
   }
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey,
-    previousSessionId: previousSessionEntry?.sessionId,
-  });
   if (previousSessionEntry) {
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
@@ -776,7 +773,7 @@ async function initSessionStateAttemptLocked(
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
     persistedLabel = reusableEntry.label;
   } else {
-    sessionId = crypto.randomUUID();
+    sessionId = entry?.sessionId ?? crypto.randomUUID();
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
@@ -916,6 +913,7 @@ async function initSessionStateAttemptLocked(
   sessionEntry = {
     ...baseEntry,
     sessionId,
+    lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
     updatedAt: Date.now(),
     sessionStartedAt: isNewSession
       ? now
@@ -934,7 +932,7 @@ async function initSessionStateAttemptLocked(
     pinnedAt: entry?.pinnedAt,
     usageFamilyKey,
     usageFamilySessionIds,
-    previousSessionId: previousSessionEntry?.sessionId ?? baseEntry?.previousSessionId,
+    previousSessionId: baseEntry?.previousSessionId,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
@@ -1052,9 +1050,11 @@ async function initSessionStateAttemptLocked(
     sessionEntry.skillsSnapshot = undefined;
   }
   // Archive old transcript so it doesn't accumulate on disk (#14869).
+  let resetBoundaryAppended = false;
   const committed = await commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
+    archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
@@ -1085,6 +1085,28 @@ async function initSessionStateAttemptLocked(
         warn: (message) => log.warn(message),
       });
     },
+    beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
+      if (!previousSessionEntry || !currentEntry) {
+        return;
+      }
+      const reason =
+        previousSessionEndReason === "new" ||
+        previousSessionEndReason === "reset" ||
+        previousSessionEndReason === "idle" ||
+        previousSessionEndReason === "daily"
+          ? previousSessionEndReason
+          : "reset";
+      resetBoundaryAppended = Boolean(
+        appendSessionResetBoundary({
+          reason,
+          sessionFile: currentEntry.sessionFile ?? entryToCommit.sessionFile,
+        }),
+      );
+      if (resetBoundaryAppended) {
+        clearAllCliSessions(entryToCommit);
+        entryToCommit.agentHarnessId = undefined;
+      }
+    },
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
@@ -1102,6 +1124,10 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  clearBootstrapSnapshotOnSessionBoundary({
+    boundaryAppended: resetBoundaryAppended,
+    sessionKey,
+  });
   if (createdNewEntry) {
     recordSessionCreated({ sessionKey, agentId, entry: sessionEntry });
   }
@@ -1180,7 +1206,7 @@ async function initSessionStateAttemptLocked(
     const effectiveSessionId = sessionId ?? "";
 
     // If replacing an existing session, fire session_end for the old one
-    if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+    if (previousSessionEntry?.sessionId) {
       // The shutdown finalizer must not re-fire session_end for a session
       // that is being replaced here; forget unconditionally so the next drain
       // skips this id even when no `session_end` plugin is currently attached.
