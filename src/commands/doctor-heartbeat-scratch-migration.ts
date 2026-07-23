@@ -36,6 +36,8 @@ type HeartbeatScratchMigrationResult = {
 
 type HeartbeatSource = {
   path: string;
+  /** Canonical parent directory + basename: the identity of the removable entry. */
+  entryKey: string;
   content: string;
   sha256: string;
 };
@@ -98,6 +100,7 @@ async function readHeartbeatSource(
   }
   return {
     path: heartbeatPath,
+    entryKey: path.join(workspaceRealPath, DEFAULT_HEARTBEAT_FILENAME),
     content,
     sha256: hashCronScratchSource(content),
   };
@@ -181,7 +184,32 @@ async function findStaleHeartbeatClaim(heartbeatPath: string): Promise<string | 
     );
   }
   const claim = claims[0];
-  return claim ? path.join(dir, claim) : undefined;
+  if (!claim) {
+    return undefined;
+  }
+  // The claim name embeds the owning PID. A live owner means another doctor
+  // run is mid-migration; stealing its claim could delete both copies.
+  const ownerPid = Number(
+    claim
+      .slice(claim.lastIndexOf(HEARTBEAT_CLAIM_INFIX) + HEARTBEAT_CLAIM_INFIX.length)
+      .split("-")[0],
+  );
+  if (Number.isSafeInteger(ownerPid) && ownerPid !== process.pid && isProcessAlive(ownerPid)) {
+    throw new Error(
+      `a migration claim for ${heartbeatPath} is held by running process ${ownerPid}; wait for that doctor run to finish`,
+    );
+  }
+  return path.join(dir, claim);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but is not signalable by this user.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 /**
@@ -436,12 +464,13 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     if (!source) {
       continue;
     }
-    // Group by the directory entry being removed, not its resolved target:
-    // two distinct symlinks pointing at one shared file must each be claimed
-    // and removed, while agents sharing the same workspace path dedupe.
-    const group = groups.get(source.path) ?? { source, agents: [] };
+    // Group by the directory entry being removed (canonical parent directory +
+    // basename), not its resolved file target: two distinct symlinks pointing
+    // at one shared file are each claimed and removed, while agents reaching
+    // the same workspace through path aliases dedupe onto one entry.
+    const group = groups.get(source.entryKey) ?? { source, agents: [] };
     group.agents.push([agentId, monitor]);
-    groups.set(source.path, group);
+    groups.set(source.entryKey, group);
   }
 
   for (const { source, agents } of groups.values()) {

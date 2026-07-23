@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -275,8 +276,10 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     const fixture = await createFixture();
     const content = "interrupted checklist\n";
     // Simulate a crash after the claim rename: only the claim file exists.
+    // Use a provably dead PID so recovery does not treat it as an active run.
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
     await fs.writeFile(
-      `${fixture.heartbeatPath}.doctor-importing-1234-deadbeefdead`,
+      `${fixture.heartbeatPath}.doctor-importing-${deadPid}-deadbeefdead`,
       content,
       "utf8",
     );
@@ -298,6 +301,22 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(content);
     const workspaceEntries = await fs.readdir(fixture.workspace);
     expect(workspaceEntries.filter((entry) => entry.includes(".doctor-importing-"))).toEqual([]);
+  });
+
+  it("refuses to steal a claim held by a live doctor process", async () => {
+    const fixture = await createFixture();
+    // This test's own PID is trivially alive and not ours-by-name.
+    const claimPath = `${fixture.heartbeatPath}.doctor-importing-1-abcdefabcdef`;
+    await fs.writeFile(claimPath, "in-flight migration\n", "utf8");
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("held by running process 1");
+    await expect(fs.readFile(claimPath, "utf8")).resolves.toBe("in-flight migration\n");
   });
 
   it("migrates a contained symlinked HEARTBEAT.md and removes the link", async () => {
