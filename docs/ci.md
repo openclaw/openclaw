@@ -164,14 +164,15 @@ gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_andro
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
-The monthly npm-only extended-stable path is the exception: dispatch both `OpenClaw NPM
+The monthly Gateway extended-stable path is the exception: dispatch both `OpenClaw NPM
 Release` preflight and `Full Release Validation` from the exact
 `extended-stable/YYYY.M.33` branch, preserve their run IDs, and pass both IDs to the
-direct npm publish run. See [Monthly npm-only extended-stable
-publication](/reference/RELEASING#monthly-npm-only-extended-stable-publication) for
+direct npm publish run. See [Monthly Gateway extended-stable
+publication](/reference/RELEASING#monthly-gateway-extended-stable-publication) for
 the commands, exact identity requirements, registry readback, and selector
-repair procedure. This path does not dispatch plugin, macOS, Windows, GitHub
-Release, private dist-tag, or other platform publication.
+repair procedure. It publishes the `openclaw` npm package, official npm plugins,
+and Gateway Docker images. It does not publish the macOS app, Windows Hub,
+mobile apps, a GitHub Release, ClawHub packages, or website artifacts.
 
 ## Runners
 

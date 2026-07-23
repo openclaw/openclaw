@@ -141,11 +141,15 @@ describe("config footprint guardrails", () => {
 
   it("keeps canonical nested streaming paths in channel-owned schemas", () => {
     const source = readSource("src/config/zod-schema.providers-core.ts");
+    const discordSource = readSource("extensions/discord/src/config-schema.ts");
+    const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
     const slackSource = readSource("extensions/slack/src/config-schema.ts");
 
-    expect(source).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
+    expect(source).toContain("streaming: TelegramPreviewStreamingConfigSchema.optional(),");
+    expect(discordSource).toContain("streaming: DiscordPreviewStreamingConfigSchema.optional(),");
+    expect(msTeamsSource).toContain("streaming: ChannelPreviewStreamingConfigSchema.optional(),");
     expect(slackSource).toContain("streaming: SlackStreamingConfigSchema.optional(),");
-    for (const schemaSource of [source, slackSource]) {
+    for (const schemaSource of [source, discordSource, msTeamsSource, slackSource]) {
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
       );
@@ -206,10 +210,8 @@ describe("config footprint guardrails", () => {
       .toSorted((left, right) => left.localeCompare(right));
 
     expect(exportedSchemaNames).toEqual([
-      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
-      "MSTeamsConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);

@@ -15,8 +15,8 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
   },
   {
     path: "extensions/discord/src/config-schema.ts",
-    allowedSpecifier: "../config-api.js",
-    forbiddenSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    allowedSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    forbiddenSpecifier: "openclaw/plugin-sdk/bundled-channel-config-schema",
   },
   {
     path: "extensions/slack/src/config-schema.ts",
@@ -43,12 +43,10 @@ const BUNDLED_EXTENSION_CONFIG_IMPORT_GUARDS = [
     allowedSpecifier: "../config-api.js",
     forbiddenSpecifier: "openclaw/plugin-sdk/channel-config-schema",
   },
-  // Teams keeps a package-local config barrel so production code does not
-  // reach through a public plugin-sdk helper seam from inside the same extension.
   {
     path: "extensions/msteams/src/config-schema.ts",
-    allowedSpecifier: "../config-api.js",
-    forbiddenSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    allowedSpecifier: "openclaw/plugin-sdk/channel-config-schema",
+    forbiddenSpecifier: "openclaw/plugin-sdk/bundled-channel-config-schema",
   },
 ] as const;
 
