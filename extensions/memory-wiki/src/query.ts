@@ -919,6 +919,30 @@ function shouldEnforceSessionVisibility(params: {
   );
 }
 
+function createWikiPageVisibilityFilter(params: {
+  appConfig?: OpenClawConfig;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): (page: QueryableWikiPage) => boolean {
+  if (params.sandboxed !== true) {
+    return () => true;
+  }
+  const sessionKey = params.agentSessionKey?.trim();
+  const scopedAgentId = normalizeLowercaseStringOrEmpty(
+    params.agentId?.trim() ||
+      (params.appConfig && sessionKey
+        ? resolveSessionAgentId({ sessionKey, config: params.appConfig })
+        : undefined),
+  );
+  return (page) =>
+    page.bridgeAgentIds.length === 0 ||
+    (scopedAgentId.length > 0 &&
+      page.bridgeAgentIds.some(
+        (agentId) => normalizeLowercaseStringOrEmpty(agentId) === scopedAgentId,
+      ));
+}
+
 function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
   return config.search.corpus === "memory" || config.search.corpus === "all";
 }
@@ -1347,6 +1371,7 @@ async function searchWikiCorpus(params: {
   query: string;
   maxResults: number;
   mode: WikiSearchMode;
+  canReadPage: (page: QueryableWikiPage) => boolean;
 }): Promise<WikiSearchResult[]> {
   const digest = await readQueryDigestBundle(params.config);
   const rootDir = params.config.vault.path;
@@ -1359,10 +1384,11 @@ async function searchWikiCorpus(params: {
       })
     : [];
   const seenPaths = new Set<string>();
-  const candidatePages =
+  const candidatePages = (
     candidatePaths.length > 0
       ? await readQueryableWikiPagesByPaths(rootDir, candidatePaths)
-      : await readQueryableWikiPages(rootDir);
+      : await readQueryableWikiPages(rootDir)
+  ).filter(params.canReadPage);
   for (const page of candidatePages) {
     seenPaths.add(page.relativePath);
   }
@@ -1377,7 +1403,9 @@ async function searchWikiCorpus(params: {
   const remainingPaths = (await listWikiMarkdownFiles(rootDir)).filter(
     (relativePath) => !seenPaths.has(relativePath),
   );
-  const remainingPages = await readQueryableWikiPagesByPaths(rootDir, remainingPaths);
+  const remainingPages = (await readQueryableWikiPagesByPaths(rootDir, remainingPaths)).filter(
+    params.canReadPage,
+  );
   return [
     ...results,
     ...remainingPages
@@ -1440,6 +1468,7 @@ export async function searchMemoryWiki(params: {
         query: params.query,
         maxResults,
         mode,
+        canReadPage: createWikiPageVisibilityFilter(params),
       })
     : [];
 
@@ -1505,16 +1534,17 @@ export async function getMemoryWikiPage(params: {
   const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
+    const canReadPage = createWikiPageVisibilityFilter(params);
     const digest = await readQueryDigestBundle(effectiveConfig);
     const digestClaimPagePath = digest ? resolveDigestClaimLookup(digest, params.lookup) : null;
     const digestLookupPage = digestClaimPagePath
       ? ((
           await readQueryableWikiPagesByPaths(effectiveConfig.vault.path, [digestClaimPagePath])
-        )[0] ?? null)
+        ).find(canReadPage) ?? null)
       : null;
     const pages = digestLookupPage
       ? [digestLookupPage]
-      : await readQueryableWikiPages(effectiveConfig.vault.path);
+      : (await readQueryableWikiPages(effectiveConfig.vault.path)).filter(canReadPage);
     const page = digestLookupPage ?? resolveQueryableWikiPageByLookup(pages, params.lookup);
     if (page) {
       const parsed = parseWikiMarkdown(page.raw);

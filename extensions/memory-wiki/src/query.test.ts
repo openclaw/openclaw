@@ -1957,4 +1957,240 @@ describe("getMemoryWikiPage", () => {
     expect(manager.readFile).toHaveBeenCalled();
   });
 });
+
+describe("wiki corpus bridge page agent scoping", () => {
+  async function writeBridgePage(params: {
+    rootDir: string;
+    slug: string;
+    title: string;
+    agentIds: string[];
+    marker: string;
+  }) {
+    await fs.writeFile(
+      path.join(params.rootDir, "sources", `${params.slug}.md`),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: `source.${params.slug}`,
+          title: params.title,
+          sourceType: "memory-bridge",
+          sourcePath: `/tmp/workspace/${params.slug}.md`,
+          bridgeRelativePath: `${params.slug}.md`,
+          bridgeWorkspaceDir: "/tmp/workspace",
+          bridgeAgentIds: params.agentIds,
+        },
+        body: `# ${params.title}\n\n${params.marker}\n`,
+      }),
+      "utf8",
+    );
+  }
+
+  it("hides another agent's bridge page from a sandboxed caller", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await writeBridgePage({
+      rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "secondary private marker",
+    });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "main",
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("returns the caller's own bridge page and unowned pages", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await writeBridgePage({
+      rootDir,
+      slug: "main-daily-note",
+      title: "Main Daily Note",
+      agentIds: ["Main"],
+      marker: "main own marker",
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "shared-note.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.shared-note", title: "Shared Note" },
+        body: "# Shared Note\n\nshared marker\n",
+      }),
+      "utf8",
+    );
+
+    const owned = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "main",
+      sandboxed: true,
+      lookup: "main-daily-note",
+    });
+    const shared = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "main",
+      sandboxed: true,
+      lookup: "shared-note",
+    });
+
+    expect(owned?.content).toContain("main own marker");
+    expect(shared?.content).toContain("shared marker");
+  });
+
+  it("keeps owned bridge pages readable for callers without any agent scope", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await writeBridgePage({
+      rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "secondary private marker",
+    });
+
+    const result = await getMemoryWikiPage({
+      config,
+      lookup: "secondary-daily-note",
+    });
+
+    expect(result?.content).toContain("secondary private marker");
+  });
+
+  it("preserves cross-agent bridge reads for non-sandboxed callers in global scope", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+      config: { vault: { scope: "global" } },
+    });
+    await writeBridgePage({
+      rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "global cross-agent marker",
+    });
+
+    const page = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "main",
+      agentSessionKey: "agent:main:thread",
+      sandboxed: false,
+      lookup: "secondary-daily-note",
+    });
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "main",
+      agentSessionKey: "agent:main:thread",
+      sandboxed: false,
+      query: "global cross-agent marker",
+    });
+
+    expect(page?.content).toContain("global cross-agent marker");
+    expect(collectWikiResultPaths(results)).toContain("sources/secondary-daily-note.md");
+  });
+
+  it("hides owned bridge pages from a sandboxed caller with no resolvable agent", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await writeBridgePage({
+      rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "secondary private marker",
+    });
+
+    const result = await getMemoryWikiPage({
+      config,
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("resolves the caller agent from the session key when agentId is absent", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await writeBridgePage({
+      rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "secondary private marker",
+    });
+
+    const denied = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+    const allowed = await getMemoryWikiPage({
+      config,
+      appConfig: createAppConfig(),
+      agentSessionKey: "agent:secondary:child-session",
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+
+    expect(denied).toBeNull();
+    expect(allowed?.content).toContain("secondary private marker");
+  });
+
+  it("filters cross-agent bridge pages out of wiki search results", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await writeBridgePage({
+      rootDir,
+      slug: "main-daily-note",
+      title: "Main Daily Note",
+      agentIds: ["main"],
+      marker: "wikiscope marker main",
+    });
+    await writeBridgePage({
+      rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "wikiscope marker secondary",
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "shared-note.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.shared-note", title: "Shared Note" },
+        body: "# Shared Note\n\nwikiscope marker shared\n",
+      }),
+      "utf8",
+    );
+
+    const scoped = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "main",
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      query: "wikiscope marker",
+    });
+    const unscoped = await searchMemoryWiki({
+      config,
+      query: "wikiscope marker",
+    });
+
+    expect(collectWikiResultPaths(scoped).toSorted()).toEqual([
+      "sources/main-daily-note.md",
+      "sources/shared-note.md",
+    ]);
+    expect(collectWikiResultPaths(unscoped).toSorted()).toEqual([
+      "sources/main-daily-note.md",
+      "sources/secondary-daily-note.md",
+      "sources/shared-note.md",
+    ]);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

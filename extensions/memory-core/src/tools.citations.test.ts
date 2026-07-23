@@ -454,6 +454,106 @@ describe("memory tools", () => {
     },
   );
 
+  it("enforces sandbox context across memory_search and memory_get corpus fallback", async () => {
+    setMemorySearchImpl(async () => []);
+    setMemoryReadFileImpl(async () => {
+      throw new Error("memory path missing");
+    });
+    const search = vi.fn(async (input: { sandboxed?: boolean }) =>
+      input.sandboxed
+        ? []
+        : [
+            {
+              corpus: "wiki" as const,
+              path: "sources/secondary-private.md",
+              score: 10,
+              snippet: "REDACTED-FOREIGN-MARKER",
+            },
+          ],
+    );
+    const get = vi.fn(async (input: { sandboxed?: boolean }) =>
+      input.sandboxed
+        ? null
+        : {
+            corpus: "wiki" as const,
+            path: "sources/secondary-private.md",
+            content: "REDACTED-FOREIGN-MARKER",
+            fromLine: 1,
+            lineCount: 1,
+          },
+    );
+    registerMemoryCorpusSupplement("memory-wiki", { search, get });
+    const config = asOpenClawConfig({
+      agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+    });
+    const createTools = (sandboxed: boolean) => {
+      const options = {
+        config,
+        agentId: "main",
+        agentSessionKey: "agent:main:child-session",
+        sandboxed,
+      };
+      const searchTool = createMemorySearchTool(options);
+      const getTool = createMemoryGetTool(options);
+      if (!searchTool || !getTool) {
+        throw new Error("expected memory corpus tools");
+      }
+      return { searchTool, getTool };
+    };
+
+    const sandboxedTools = createTools(true);
+    const sandboxedSearch = await sandboxedTools.searchTool.execute("sandboxed-search", {
+      query: "REDACTED-FOREIGN-MARKER",
+      corpus: "all",
+    });
+    const sandboxedGet = await sandboxedTools.getTool.execute("sandboxed-get", {
+      path: "sources/secondary-private.md",
+      corpus: "all",
+    });
+    const globalTools = createTools(false);
+    const globalSearch = await globalTools.searchTool.execute("global-search", {
+      query: "REDACTED-FOREIGN-MARKER",
+      corpus: "all",
+    });
+    const globalGet = await globalTools.getTool.execute("global-get", {
+      path: "sources/secondary-private.md",
+      corpus: "all",
+    });
+
+    expect((sandboxedSearch.details as { results: unknown[] }).results).toEqual([]);
+    expect(sandboxedGet.details).toEqual({
+      path: "sources/secondary-private.md",
+      text: "",
+      disabled: true,
+      error: "memory path missing",
+    });
+    expect((globalSearch.details as { results: Array<{ path: string }> }).results).toEqual([
+      expect.objectContaining({ path: "sources/secondary-private.md" }),
+    ]);
+    expect(globalGet.details).toEqual(
+      expect.objectContaining({
+        path: "sources/secondary-private.md",
+        text: "REDACTED-FOREIGN-MARKER",
+      }),
+    );
+    expect(search).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: "main", sandboxed: true, corpus: "all" }),
+    );
+    expect(get).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ agentId: "main", sandboxed: true, corpus: "all" }),
+    );
+    expect(search).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: "main", sandboxed: false, corpus: "all" }),
+    );
+    expect(get).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ agentId: "main", sandboxed: false, corpus: "all" }),
+    );
+  });
+
   it("includes memory results in corpus=all even when wiki scores are numerically higher (#77337)", async () => {
     // Wiki uses integer point scores (up to ~100+); memory uses cosine similarity (0-1).
     // Raw-score sort would starve memory hits when maxResults <= number of wiki hits.
