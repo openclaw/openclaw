@@ -162,6 +162,29 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("issue8…7890");
   });
 
+  it("masks AWS secret access keys in labeled and bare credential text", () => {
+    const secret = ["wJalrXUtnFEMI", "/K7MDENG", "/bPxRfiCY", "EXAMPLEKEY"].join("");
+    const input = [
+      `aws_secret_access_key = ${secret}`,
+      JSON.stringify({ SecretAccessKey: secret }),
+      `bare ${secret}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain("aws_secret_access_key = wJalrX…EKEY");
+    expect(output).toContain('"SecretAccessKey":"wJalrX…EKEY"');
+    expect(output).toContain("bare wJalrX…EKEY");
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks structured AWS secret access key fields", () => {
+    const secret = ["AbCdEfGhIj", "KlMnOpQrSt", "UvWxYz01/+", "23456789AB"].join("");
+
+    expect(redactSecrets({ awsSecretAccessKey: secret })).toEqual({
+      awsSecretAccessKey: "AbCdEf…89AB",
+    });
+  });
+
   it("masks CLI flags", () => {
     const input = "curl --token abcdef1234567890ghij https://api.test";
     const output = redactSensitiveText(input, { mode: "tools" });

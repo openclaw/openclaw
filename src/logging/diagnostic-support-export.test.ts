@@ -692,6 +692,7 @@ describe("diagnostic support export", () => {
 
   it("redacts support text identifiers without hiding useful URL hosts", () => {
     const fakeAwsKey = ["ASIA", "IOSFODNN7EXAMPLE"].join("");
+    const fakeAwsSecretKey = ["wJalrXUtnFEMI", "/K7MDENG", "/bPxRfiCY", "EXAMPLEKEY"].join("");
     const fakeJwt = [
       "eyJhbGciOiJIUzI1NiIs",
       "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4i",
@@ -714,6 +715,7 @@ describe("diagnostic support export", () => {
       ["auth Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==", "auth Basic <redacted>"],
       ["Cookie: sid=secret; theme=light", "Cookie: <redacted>"],
       [`aws ${fakeAwsKey}`, "aws <redacted-aws-key>"],
+      [`aws secret ${fakeAwsSecretKey}`, "aws secret <redacted-aws-secret-key>"],
       [`jwt ${fakeJwt}`, "jwt <redacted-jwt>"],
       ["email alice@example.com", "email <redacted-email>"],
       ["matrix @support-user:matrix.example.com", "matrix <redacted-matrix-user>"],
