@@ -44,14 +44,14 @@ describe("github-copilot provider-policy-api", () => {
     ).toContain("max");
   });
 
-  it("does not expose max for non-Anthropic Copilot transports", () => {
+  it("appends max when GPT catalog compat advertises it", () => {
     expect(
       resolveThinkingProfile({
         provider: "github-copilot",
-        modelId: "future-copilot-model",
+        modelId: "gpt-5.6-sol",
         compat: { supportedReasoningEfforts: ["low", "medium", "high", "max"] },
       })?.levels.map((level) => level.id),
-    ).not.toContain("max");
+    ).toContain("max");
   });
 
   it("does not expose adaptive effort for older Claude models", () => {
