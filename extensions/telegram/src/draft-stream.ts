@@ -234,6 +234,7 @@ export function createTelegramDraftStream(params: {
   replyToMessageId?: number;
   replyToMode?: ReplyToMode;
   richMessages?: boolean;
+  linkPreview?: boolean;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -247,6 +248,7 @@ export function createTelegramDraftStream(params: {
   warn?: (message: string) => void;
 }): TelegramDraftStream {
   const richMessages = params.richMessages === true;
+  const disableLinkPreview = params.linkPreview === false;
   const transportLimit = richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
   const maxChars = Math.min(params.maxChars ?? transportLimit, transportLimit);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
@@ -362,6 +364,7 @@ export function createTelegramDraftStream(params: {
           message: await getTelegramRichRawApi(params.api).sendRichMessage({
             chat_id: chatId,
             rich_message: page.richMessage,
+            ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
             ...sendMessageParams,
           }),
           snapshot: page,
@@ -377,14 +380,20 @@ export function createTelegramDraftStream(params: {
           throw err;
         }
         return {
-          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, sendMessageParams),
+          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, {
+            ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
+            ...sendMessageParams,
+          }),
           snapshot: fallbackSnapshot(fallbackPlan.plainText),
         };
       }
     }
     if (page.sourceTextMode !== "html") {
       return {
-        message: await params.api.sendMessage(chatId, page.text, sendMessageParams),
+        message: await params.api.sendMessage(chatId, page.text, {
+          ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
+          ...sendMessageParams,
+        }),
         snapshot: page,
       };
     }
@@ -392,6 +401,7 @@ export function createTelegramDraftStream(params: {
       return {
         message: await params.api.sendMessage(chatId, page.sourceText, {
           parse_mode: "HTML" as const,
+          ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
           ...sendMessageParams,
         }),
         snapshot: page,
@@ -401,7 +411,10 @@ export function createTelegramDraftStream(params: {
         throw err;
       }
       return {
-        message: await params.api.sendMessage(chatId, page.text, sendMessageParams),
+        message: await params.api.sendMessage(chatId, page.text, {
+          ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
+          ...sendMessageParams,
+        }),
         snapshot: fallbackSnapshot(page.text),
       };
     }
@@ -425,6 +438,7 @@ export function createTelegramDraftStream(params: {
             chat_id: chatId,
             message_id: targetMessageId,
             rich_message: page.richMessage,
+            ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
           });
         } catch (err) {
           const fallbackPlan = buildTelegramPlainFallbackPlan({
@@ -436,23 +450,39 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, fallbackPlan.plainText);
+          await params.api.editMessageText(
+            chatId,
+            targetMessageId,
+            fallbackPlan.plainText,
+            ...(disableLinkPreview ? [{ link_preview_options: { is_disabled: true } }] : []),
+          );
           acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
         }
       } else if (page.sourceTextMode === "html") {
         try {
           await params.api.editMessageText(chatId, targetMessageId, page.sourceText, {
             parse_mode: "HTML" as const,
+            ...(disableLinkPreview ? { link_preview_options: { is_disabled: true } } : {}),
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, page.text);
+          await params.api.editMessageText(
+            chatId,
+            targetMessageId,
+            page.text,
+            ...(disableLinkPreview ? [{ link_preview_options: { is_disabled: true } }] : []),
+          );
           acceptedSnapshot = fallbackSnapshot(page.text);
         }
       } else {
-        await params.api.editMessageText(chatId, targetMessageId, page.sourceText);
+        await params.api.editMessageText(
+          chatId,
+          targetMessageId,
+          page.sourceText,
+          ...(disableLinkPreview ? [{ link_preview_options: { is_disabled: true } }] : []),
+        );
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;
