@@ -58,10 +58,7 @@ export const FORBIDDEN_RELEASE_ALIASES = [
 
 export const FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES = ["sessionKey"] as const;
 export const FORBIDDEN_HISTORY_CAMEL_ALIASES = ["session_key"] as const;
-export const FORBIDDEN_ALL_CAMEL_ALIASES = [
-  ...FORBIDDEN_LEASE_CAMEL_ALIASES,
-  "clientRequestId",
-] as const;
+const FORBIDDEN_ALL_CAMEL_ALIASES = [...FORBIDDEN_LEASE_CAMEL_ALIASES, "clientRequestId"] as const;
 
 export type RuntimeMetadata = {
   metadata_contract_version: "v1";

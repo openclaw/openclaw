@@ -133,8 +133,6 @@ describe("Agentic OS runtime contract v1", () => {
     vi.resetModules();
     const contract = await import("./agentic-os-runtime-contract.js");
     ({ agenticOsRuntimeContractHandlers } = contract);
-    const runtimeContract = await import("../agentic-os-runtime-contract.js");
-    runtimeContract.resetAgenticOsRuntimeContractForTest();
     spawnSubagentDirectMock.mockClear();
     spawnSubagentDirectMock.mockResolvedValue({
       status: "accepted",

@@ -29,7 +29,6 @@ import {
 } from "./agentic-os-runtime-contract-shared.js";
 import {
   loadAgenticOsRuntimeSnapshot,
-  resetAgenticOsRuntimeStoreForTest,
   runtimeSnapshotPath,
   saveAgenticOsRuntimeSnapshot,
 } from "./agentic-os-runtime-contract-store.js";
@@ -109,12 +108,6 @@ function persistRuntimeState(): void {
   ensureRuntimeStateLoaded();
   saveAgenticOsRuntimeSnapshot(snapshotRuntimeState());
   loadedSnapshotPath = runtimeSnapshotPath();
-}
-
-export function resetAgenticOsRuntimeContractForTest(): void {
-  resetAgenticOsRuntimeStoreForTest();
-  loadedSnapshotPath = runtimeSnapshotPath();
-  hydrateRuntimeSnapshot({ leases: [], releaseReplays: [], sessions: [] });
 }
 
 function metadataEnvelope(normalized: Record<string, unknown>): RuntimeMetadata {

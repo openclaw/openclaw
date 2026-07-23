@@ -1,7 +1,6 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -10,7 +9,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 const SNAPSHOT_KEY = "agentic-os-runtime-contract-v1";
 type RuntimeSnapshotDatabase = Pick<OpenClawStateKyselyDatabase, "agentic_os_runtime_snapshots">;
 
-export type AgenticOsRuntimeSnapshot = {
+type AgenticOsRuntimeSnapshot = {
   leases: unknown[];
   releaseReplays: unknown[];
   sessions: unknown[];
@@ -57,20 +56,4 @@ export function saveAgenticOsRuntimeSnapshot(snapshot: AgenticOsRuntimeSnapshot)
     {},
     { operationLabel: "agentic-os-runtime-contract.snapshot.save" },
   );
-}
-
-export function resetAgenticOsRuntimeStoreForTest(): void {
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      executeSqliteQuerySync(
-        database.db,
-        getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
-          .deleteFrom("agentic_os_runtime_snapshots")
-          .where("key", "=", SNAPSHOT_KEY),
-      );
-    },
-    {},
-    { operationLabel: "agentic-os-runtime-contract.snapshot.reset" },
-  );
-  closeOpenClawStateDatabaseForTest();
 }
