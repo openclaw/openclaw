@@ -3,7 +3,6 @@ import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -12,6 +11,11 @@ import {
   prepareSessionConversation,
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
+import {
+  clearSessionMembersForKey,
+  deleteSessionNodeArtifacts,
+  rehomeLegacySessionNodeArtifacts,
+} from "./session-accessor.sqlite-node-artifacts.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import { collectSqliteSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
@@ -476,138 +480,6 @@ export function deleteLegacySessionEntryRows(
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
   }
-}
-
-// session_members is an additive sharing surface with a lazy ensure, so a DB
-// that predates the feature may lack the table; such a DB also has no members
-// to drop. Guard on existence rather than forcing the sharing schema here.
-function clearSessionMembersForKey(database: OpenClawAgentDatabase, sessionKey: string): void {
-  const tableExists =
-    database.db /* sqlite-allow-raw: sqlite_master table-existence probe for the additive session_members lazy-ensure */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_members'")
-      .get();
-  if (!tableExists) {
-    return;
-  }
-  const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_members">>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("session_members").where("session_key", "=", sessionKey),
-  );
-}
-
-function rehomeLegacySessionNodeArtifacts(
-  database: OpenClawAgentDatabase,
-  legacyKey: string,
-  canonicalKey: string,
-  options: { rehomeMembers?: boolean },
-): void {
-  const db = getSessionKysely(database.db);
-  const presentTables = readSessionNodeArtifactTables(database);
-  if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {
-    const tabs = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("board_tabs").selectAll().where("session_key", "=", legacyKey),
-    ).rows;
-    for (const tab of tabs) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("board_tabs")
-          .values({ ...tab, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.columns(["session_key", "tab_id"]).doNothing()),
-      );
-    }
-    const widgets = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("board_widgets").selectAll().where("session_key", "=", legacyKey),
-    ).rows;
-    for (const widget of widgets) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("board_widgets")
-          .values({ ...widget, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.columns(["session_key", "name"]).doNothing()),
-      );
-    }
-  }
-  if (presentTables.has("heartbeat_outcomes")) {
-    const heartbeat = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db.selectFrom("heartbeat_outcomes").selectAll().where("session_key", "=", legacyKey),
-    );
-    if (heartbeat) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("heartbeat_outcomes")
-          .values({ ...heartbeat, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.column("session_key").doNothing()),
-      );
-    }
-  }
-  if (options.rehomeMembers !== false && presentTables.has("session_members")) {
-    const members = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("session_members").selectAll().where("session_key", "=", legacyKey),
-    ).rows;
-    for (const member of members) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_members")
-          .values({ ...member, session_key: canonicalKey })
-          .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
-      );
-    }
-  }
-}
-
-function deleteSessionNodeArtifacts(database: OpenClawAgentDatabase, sessionKey: string): void {
-  const db = getSessionKysely(database.db);
-  const presentTables = readSessionNodeArtifactTables(database);
-  if (presentTables.has("board_tabs") && presentTables.has("board_widgets")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("board_widgets").where("session_key", "=", sessionKey),
-    );
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("board_tabs").where("session_key", "=", sessionKey),
-    );
-  }
-  if (presentTables.has("heartbeat_outcomes")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("heartbeat_outcomes").where("session_key", "=", sessionKey),
-    );
-  }
-  if (presentTables.has("session_members")) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_members").where("session_key", "=", sessionKey),
-    );
-  }
-}
-
-function readSessionNodeArtifactTables(database: OpenClawAgentDatabase): Set<string> {
-  const db = getSessionKysely(database.db);
-  return new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "in", [
-          "board_tabs",
-          "board_widgets",
-          "heartbeat_outcomes",
-          "session_members",
-        ]),
-    ).rows.flatMap((row) => (row.name ? [row.name] : [])),
-  );
 }
 
 /** Move retained generations to the canonical node before removing key aliases. */
