@@ -30,6 +30,7 @@ import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript
 import {
   normalizeCodexResponseTokenUsage,
   normalizeCodexThreadTokenUsage,
+  readCodexThreadContextSnapshot,
   readCodexThreadTokenUsage,
 } from "./event-projector-usage.js";
 import {
@@ -275,9 +276,14 @@ export class CodexAppServerEventProjector {
       case "hook/completed":
         this.eventProjection.handleHook(notification.method, params);
         break;
-      case "thread/tokenUsage/updated":
+      case "thread/tokenUsage/updated": {
         this.tokenUsage = readCodexThreadTokenUsage(params) ?? this.tokenUsage;
+        const context = readCodexThreadContextSnapshot(params);
+        if (context.modelContextWindow !== undefined || context.promptTokens !== undefined) {
+          this.emitAgentEvent({ stream: "codex_app_server.usage", data: context });
+        }
         break;
+      }
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;

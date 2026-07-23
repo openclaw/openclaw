@@ -13,6 +13,22 @@ export function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof
   return last ? normalizeCodexThreadTokenUsage(last) : undefined;
 }
 
+export function readCodexThreadContextSnapshot(params: JsonObject): {
+  modelContextWindow?: number;
+  promptTokens?: number;
+} {
+  const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
+  const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+  const modelContextWindow = tokenUsage
+    ? readTokenCount(tokenUsage, "modelContextWindow")
+    : undefined;
+  const promptTokens = last ? readTokenCount(last, "inputTokens") : undefined;
+  return {
+    ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
+    ...(promptTokens !== undefined ? { promptTokens } : {}),
+  };
+}
+
 export function normalizeCodexThreadTokenUsage(
   record: JsonObject,
 ): ReturnType<typeof normalizeUsage> {

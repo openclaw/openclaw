@@ -7,6 +7,7 @@ import {
   requireSuccessfulPersistedNativeCommandExecution,
 } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
+  buildCodexHarnessAppServerArgs,
   buildCodexHarnessLargeOutputCommand,
   CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
@@ -40,6 +41,16 @@ function expectStrictCodexModelsCommandText(text: string): void {
 }
 
 describe("gateway codex harness live helpers", () => {
+  it("places app-server config overrides after the subcommand", () => {
+    expect(buildCodexHarnessAppServerArgs(["model_context_window=922000"])).toEqual([
+      "app-server",
+      "--listen",
+      "stdio://",
+      "-c",
+      "model_context_window=922000",
+    ]);
+  });
+
   it("builds an exact large-output command without escape-sensitive newlines", () => {
     const command = buildCodexHarnessLargeOutputCommand({
       commandMarker: "OPENCLAW-LARGE-OUTPUT-ABC",
