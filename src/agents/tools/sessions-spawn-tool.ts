@@ -11,7 +11,7 @@ import {
 } from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSnakeCaseParamKey } from "../../param-key.js";
+import { readSnakeCaseParamRaw, resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
@@ -90,6 +90,24 @@ function addRoleToFailureResult<T extends { status: string }>(
     return result;
   }
   return { ...result, role };
+}
+
+function readToolsAllowParam(params: Record<string, unknown>): string[] | undefined {
+  const raw = readSnakeCaseParamRaw(params, "toolsAllow");
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    throw new ToolInputError("toolsAllow must be an array of strings.");
+  }
+  return raw
+    .map((entry, index) => {
+      if (typeof entry !== "string") {
+        throw new ToolInputError(`toolsAllow[${index}] must be a string.`);
+      }
+      return entry.trim();
+    })
+    .filter(Boolean);
 }
 
 type SessionsSpawnThreadAvailability = {
@@ -188,6 +206,17 @@ function createSessionsSpawnToolSchema(params: {
         }
       : {}),
     ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
+    toolsAllow: Type.Optional(
+      Type.Array(
+        Type.String({
+          description: "Allowed tool id for the spawned native subagent run.",
+        }),
+        {
+          description:
+            'Allowed tool ids for embedded runtime="subagent" runs. Omit to use the default tool set; pass [] to disable all tools. Persistent native thread/session spawns store the allowlist on the child session and reuse it on follow-up turns. ACP and CLI-backed native runs reject this field.',
+        },
+      ),
+    ),
 
     // Inline attachments (snapshot-by-value).
     attachments: Type.Optional(
@@ -358,6 +387,7 @@ export function createSessionsSpawnTool(
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
+      const toolsAllow = readToolsAllowParam(params);
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       const visibleResult = await maybeSpawnVisibleSession({
         raw: params,
@@ -405,6 +435,9 @@ export function createSessionsSpawnTool(
       }
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
+      if (runtime === "acp" && toolsAllow !== undefined) {
+        throw new ToolInputError("toolsAllow is only supported for runtime='subagent'.");
       }
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
@@ -506,6 +539,7 @@ export function createSessionsSpawnTool(
           sandbox,
           context,
           lightContext,
+          toolsAllow,
           expectsCompletionMessage,
           attachments,
           attachMountPath:

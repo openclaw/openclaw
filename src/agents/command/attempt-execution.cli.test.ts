@@ -355,6 +355,7 @@ describe("CLI attempt execution", () => {
     body: string;
     runId: string;
     cwd?: string;
+    opts?: Partial<Parameters<typeof runAgentAttempt>[0]["opts"]>;
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -373,7 +374,10 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: params.runId,
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {
+        senderIsOwner: false,
+        ...params.opts,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -425,6 +429,38 @@ describe("CLI attempt execution", () => {
       claudeCliSessionId: cliSessionId,
     };
   }
+
+  it.each([
+    { label: "non-empty", toolsAllow: ["read"] },
+    { label: "empty", toolsAllow: [] },
+  ])(
+    "rejects $label toolsAllow for CLI-backed native runs before dispatch",
+    async ({ toolsAllow }) => {
+      const sessionKey = "agent:main:subagent:cli-tools-allow";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session-cli-tools-allow",
+        updatedAt: Date.now(),
+      };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+      await expect(
+        runClaudeCliAttempt({
+          sessionKey,
+          sessionEntry,
+          sessionStore,
+          body: "use only read",
+          runId: "run-cli-tools-allow",
+          opts: { toolsAllow },
+        }),
+      ).rejects.toThrow(
+        "toolsAllow is only supported for embedded native runs; CLI-backed native runs cannot enforce runtime tool allowlists.",
+      );
+
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears stale Claude CLI session IDs before a fresh retry after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
@@ -3556,6 +3592,53 @@ describe("embedded attempt harness pinning", () => {
       authProfileId: "openai:work",
       authProfileIdSource: "user",
     });
+  });
+
+  it("passes runtime tool allowlists to embedded runs", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "tools-allow-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:subagent:tools-allow",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "use only read and exec",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-tools-allow",
+      opts: {
+        senderIsOwner: false,
+        toolsAllow: ["read", "exec"],
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolsAllow: ["read", "exec"],
+      }),
+    );
   });
 
   it("does not pass CLI runtime aliases as embedded harness ids for fallback providers", async () => {

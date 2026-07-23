@@ -32,6 +32,7 @@ export type AgentRunRequest = {
   extraSystemPrompt?: string;
   modelRun?: boolean;
   promptMode?: "full" | "minimal" | "none";
+  toolsAllow?: string[];
   bootstrapContextMode?: "full" | "lightweight";
   // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";

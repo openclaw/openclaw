@@ -145,6 +145,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         images: opts.images,
         imageOrder: opts.imageOrder,
         clientTools: opts.clientTools,
+        toolsAllow: opts.toolsAllow,
         provider: providerOverride,
         model: params.modelOverride,
         authProfileId,
@@ -861,6 +862,25 @@ describe("agentCommand", () => {
         "http://x.test/a.jpg",
       );
       expect(parsed.meta.durationMs).toBe(42);
+    });
+  });
+
+  it("inherits durable runtime toolsAllow from subagent session entries", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sessionKey = "agent:main:subagent:tools-policy";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "tools-policy-session",
+          updatedAt: Date.now(),
+          runtimeToolsAllow: ["read", "exec"],
+        },
+      });
+
+      await agentCommand({ message: "continue", sessionKey }, runtime);
+
+      expect(getLastEmbeddedCall()?.toolsAllow).toEqual(["read", "exec"]);
     });
   });
 

@@ -13,6 +13,7 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery-store.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { normalizeToolName } from "../../agents/tool-policy-shared.js";
 import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
@@ -346,7 +347,16 @@ export function startAgentRunExecution(params: {
           extraSystemPrompt: params.request.extraSystemPrompt,
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-          toolsAllow: params.restoredCronContinuation?.toolsAllow,
+          toolsAllow:
+            params.request.toolsAllow === undefined
+              ? params.restoredCronContinuation?.toolsAllow
+              : Array.from(
+                  new Set(
+                    params.request.toolsAllow
+                      .map((entry) => normalizeToolName(entry))
+                      .filter(Boolean),
+                  ),
+                ),
           runtimePluginToolGrant,
           trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,

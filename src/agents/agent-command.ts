@@ -151,6 +151,13 @@ async function agentCommandInternal(
     | RestartRecoveryTerminalDeliveryEvidenceResult
     | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
+  // Fall back to the durable runtime toolsAllow persisted on the session entry
+  // when the caller did not pass an explicit toolsAllow.
+  const inheritedRuntimeToolsAllow = sessionEntry?.runtimeToolsAllow;
+  const effectiveOpts =
+    opts.toolsAllow === undefined && inheritedRuntimeToolsAllow !== undefined
+      ? { ...opts, toolsAllow: inheritedRuntimeToolsAllow }
+      : opts;
   const internalModelRunTargets =
     initialOpts.modelRun === true && suppressVisibleSessionEffects
       ? new Map<string, AgentRunSessionTarget>()
@@ -414,7 +421,7 @@ async function agentCommandInternal(
       sessionEntry = modelSelection.sessionEntry;
       const embeddedAttempt = await runEmbeddedAgentAttempt({
         prepared,
-        opts,
+        opts: effectiveOpts,
         sessionEntry,
         lifecycleGeneration,
         onLifecycleGenerationChanged: (nextLifecycleGeneration) => {
