@@ -87,9 +87,7 @@ describe("nostr outbound cfg threading", () => {
 
   it("converts tables before projecting markdown to Nostr plain text", async () => {
     const { resolveMarkdownTableMode, convertMarkdownTables } = installOutboundRuntime(
-      vi.fn((text: string) =>
-        text === "***" ? text : "**Table:** [docs](https://example.com)",
-      ),
+      vi.fn((text: string) => (text === "***" ? text : "**Table:** [docs](https://example.com)")),
     );
     const { cleanup, sendDm } = await startOutboundAccount();
 
