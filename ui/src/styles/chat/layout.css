@@ -1371,11 +1371,12 @@ openclaw-chat-page {
 }
 
 .session-suggestion__text {
-  overflow: hidden;
+  max-height: 12rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
   color: var(--text);
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
 }
 
 .session-suggestion__actions {
