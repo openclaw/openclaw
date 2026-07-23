@@ -474,7 +474,10 @@ describe("imessageApprovalNativeRuntime", () => {
       expect(sendMock.sendMessageIMessage).toHaveBeenLastCalledWith(
         "+15551230000",
         expect.stringContaining("👍 Allow Once"),
-        expect.objectContaining({ replyToId: "prompt-guid" }),
+        expect.objectContaining({
+          conversationReadOrigin: "direct-operator",
+          replyToId: "prompt-guid",
+        }),
       );
     });
 
@@ -531,6 +534,31 @@ describe("imessageApprovalNativeRuntime", () => {
 
       expect(entry).toMatchObject({ messageId: "prompt-guid" });
       expect(entry?.poll).toBeUndefined();
+    });
+
+    it("attests resolved and expired threaded replies as host-originated", async () => {
+      await imessageApprovalNativeRuntime.transport.updateEntry?.({
+        cfg: {} as never,
+        accountId: "default",
+        context: { accountId: "default" },
+        entry: {
+          accountId: "default",
+          to: "+15551230000",
+          conversation: { chatIdentifier: "iMessage;-;+15551230000" },
+          messageId: "prompt-guid",
+        },
+        payload: { text: "Canonical result: Denied" },
+        phase: "resolved",
+      });
+
+      expect(sendMock.sendMessageIMessage).toHaveBeenCalledWith(
+        "+15551230000",
+        "Canonical result: Denied",
+        expect.objectContaining({
+          conversationReadOrigin: "direct-operator",
+          replyToId: "prompt-guid",
+        }),
+      );
     });
   });
 });

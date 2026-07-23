@@ -423,6 +423,9 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     updateEntry: async ({ cfg, entry, payload }) => {
       await sendMessageIMessage(entry.to, payload.text, {
         config: cfg,
+        // The entry and reply target were created by this host-owned approval
+        // delivery. Preserve that authority when cache/database proof is gone.
+        conversationReadOrigin: "direct-operator",
         ...(entry.accountId ? { accountId: entry.accountId } : {}),
         ...(shouldThreadApprovalUpdate(entry.to) ? { replyToId: entry.messageId } : {}),
       });
