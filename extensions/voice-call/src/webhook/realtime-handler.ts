@@ -720,7 +720,7 @@ export class RealtimeCallHandler {
         },
       },
       onTranscript: (role, text, isFinal) => {
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureTurn().turnId;
         const eventType =
           role === "assistant"
             ? isFinal
@@ -799,7 +799,7 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent, sessionLocal) => {
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureTurn().turnId;
         harness.emit({
           type: "tool.call",
           turnId,

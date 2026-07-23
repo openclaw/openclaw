@@ -123,7 +123,7 @@ export async function startMeetingAgentRealtimeEngine(params: {
             normalized,
           ),
         );
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureTurn().turnId;
         harness.emit({
           type: "output.text.done",
           turnId,
@@ -232,7 +232,7 @@ export async function startMeetingAgentRealtimeEngine(params: {
         }
         // Shipped Meet semantics keep assistant echoes in transcript history and events.
         // Echo suppression only prevents the recorded line from entering talkback.
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureTurn().turnId;
         harness.emit({
           type: "input.audio.committed",
           turnId,

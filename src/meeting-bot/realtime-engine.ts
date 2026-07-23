@@ -508,7 +508,7 @@ export async function startMeetingRealtimeEngine(params: {
         },
       },
       onTranscript: (role, text, isFinal) => {
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureTurn().turnId;
         const eventType =
           role === "assistant"
             ? isFinal
@@ -596,12 +596,12 @@ export async function startMeetingRealtimeEngine(params: {
       onToolCall: (event, session) => {
         harness.emit({
           type: "tool.call",
-          turnId: harness.ensureTurn(),
+          turnId: harness.ensureTurn().turnId,
           itemId: event.itemId,
           callId: event.callId,
           payload: { name: event.name, args: event.args },
         });
-        const turnId = harness.ensureTurn();
+        const turnId = harness.ensureTurn().turnId;
         return params.handleToolCall({
           strategy,
           session,
