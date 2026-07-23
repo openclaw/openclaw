@@ -55,6 +55,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
+import { resolveSessionsGetMessageLimit } from "../sessions-get-limit.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -551,10 +552,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const limit =
-      typeof p.limit === "number" && Number.isFinite(p.limit)
-        ? Math.max(1, Math.floor(p.limit))
-        : 200;
+    // Mirror chat.history / sessions-history HTTP: keep transcript reads bounded
+    // even when callers pass Number.MAX_SAFE_INTEGER-sized limits.
+    const limit = resolveSessionsGetMessageLimit(p.limit);
 
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(
