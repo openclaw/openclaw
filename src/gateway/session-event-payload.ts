@@ -97,6 +97,9 @@ export function buildGatewaySessionEventFields(params: {
     lastRunError: sessionRow.lastRunError ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
     hasAutomation: sessionRow.hasAutomation ?? false,
+    // Paused (sessions_yield) rows must broadcast their reason with the status;
+    // dropping it here would strand UI reducers without the pause context.
+    pauseReason: sessionRow.pauseReason,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
     ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,

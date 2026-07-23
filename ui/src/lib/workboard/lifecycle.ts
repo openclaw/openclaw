@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { isFailedSessionStatus, staleSessionState, workboardCardSessionKey } from "./card-state.ts";
 import { isRecord } from "./normalization-utils.ts";
 import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
@@ -78,7 +79,12 @@ export function getWorkboardLifecycle(
       sourceUpdatedAt: sessionUpdatedAtValue(session),
     };
   }
-  if (session.hasActiveRun === true || session.status === "running") {
+  // Paused (sessions_yield) rows report hasActiveRun:false while a queued
+  // continuation is pending; `isSessionRunActive` keeps them in the running
+  // lifecycle so preset/health filters and execution-status sync do not
+  // resolve the card to idle mid-yield. Keep the raw running-status check so
+  // a running row without a live-run flag stays running until staleness.
+  if (isSessionRunActive(session) || session.status === "running") {
     return {
       session,
       state: "running",

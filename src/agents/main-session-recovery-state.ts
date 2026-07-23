@@ -148,6 +148,12 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
   if (entry.subagentRole != null) {
     return false;
   }
+  // Sessions paused via `sessions_yield` are intentionally awaiting a queued
+  // continuation. Restart recovery would otherwise re-prompt them with the
+  // generic "previous turn was interrupted" message and race the follow-up.
+  if (entry.pauseReason === "sessions_yield") {
+    return false;
+  }
   return (
     !isSubagentSessionKey(sessionKey) &&
     !isCronSessionKey(sessionKey) &&

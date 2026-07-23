@@ -4914,6 +4914,7 @@ public struct SessionRow: Codable, Sendable {
     public let lastactivityat: Double?
     public let lastinteractionat: Double?
     public let status: AnyCodable?
+    public let pausereason: AnyCodable?
     public let lastrunerror: String?
     public let spawnedby: String?
     public let parentsessionkey: String?
@@ -4967,6 +4968,7 @@ public struct SessionRow: Codable, Sendable {
         lastactivityat: Double? = nil,
         lastinteractionat: Double? = nil,
         status: AnyCodable? = nil,
+        pausereason: AnyCodable? = nil,
         lastrunerror: String? = nil,
         spawnedby: String? = nil,
         parentsessionkey: String? = nil,
@@ -5019,6 +5021,7 @@ public struct SessionRow: Codable, Sendable {
         self.lastactivityat = lastactivityat
         self.lastinteractionat = lastinteractionat
         self.status = status
+        self.pausereason = pausereason
         self.lastrunerror = lastrunerror
         self.spawnedby = spawnedby
         self.parentsessionkey = parentsessionkey
@@ -5073,6 +5076,7 @@ public struct SessionRow: Codable, Sendable {
         case lastactivityat = "lastActivityAt"
         case lastinteractionat = "lastInteractionAt"
         case status
+        case pausereason = "pauseReason"
         case lastrunerror = "lastRunError"
         case spawnedby = "spawnedBy"
         case parentsessionkey = "parentSessionKey"

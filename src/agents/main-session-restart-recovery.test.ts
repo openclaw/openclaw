@@ -4710,5 +4710,66 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it("skips sessions paused via sessions_yield instead of forcing a resume", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        pauseReason: "sessions_yield",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "kick off long-running work" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "sessions_yield" }] },
+      {
+        role: "toolResult",
+        content: JSON.stringify({ status: "yielded", message: "waiting" }),
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const entry = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(entry?.pauseReason).toBe("sessions_yield");
+    expect(entry?.status).toBe("running");
+    // Recovery left the session entry alone — the queued continuation drains
+    // through the next legitimate run, not through a forced resume here.
+    expect(entry?.abortedLastRun).toBe(true);
+  });
+
+  it("does not mark sessions with sessions_yield pauseReason as restart-aborted from cleaned locks", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:paused": {
+        sessionId: "paused-session",
+        updatedAt: Date.now() - 10_000,
+        // Status is still `running` because the queued continuation has not
+        // drained yet; pauseReason is the marker that recovery must honor.
+        status: "running",
+        pauseReason: "sessions_yield",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessionsFromLocks({
+      sessionsDir,
+      cleanedLocks: [cleanedLock(sessionsDir, "paused-session")],
+    });
+
+    expect(result).toEqual({ marked: 0, skipped: 1 });
+    const entry = loadSessionEntry({
+      sessionKey: "agent:main:paused",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    expect(entry?.abortedLastRun).toBeUndefined();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

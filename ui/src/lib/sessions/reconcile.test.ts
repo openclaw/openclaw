@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
+import {
+  readSessionChangedEvent,
+  reconcileSessionChanged,
+  reconcileSessionHistory,
+} from "./reconcile.ts";
 
 function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -344,5 +348,28 @@ describe("reconcileSessionChanged", () => {
     expect(next?.sessions).toEqual([
       expect.objectContaining({ key, archived: true, updatedAt: 2 }),
     ]);
+  });
+});
+
+describe("readSessionChangedEvent status parsing", () => {
+  it("parses a paused (sessions_yield) status like the other run statuses", () => {
+    // Regression for the #75662 P2: dropping "paused" to null here strips the
+    // pause state from session-change reconciliation and the row looks idle
+    // while a queued continuation is still pending.
+    const info = readSessionChangedEvent({
+      sessionKey: "agent:main:main",
+      reason: "lifecycle",
+      session: { key: "agent:main:main", status: "paused", pauseReason: "sessions_yield" },
+    });
+    expect(info?.status).toBe("paused");
+  });
+
+  it("still rejects unknown status strings", () => {
+    const info = readSessionChangedEvent({
+      sessionKey: "agent:main:main",
+      reason: "lifecycle",
+      session: { key: "agent:main:main", status: "hibernating" },
+    });
+    expect(info?.status ?? null).toBeNull();
   });
 });

@@ -40,7 +40,9 @@ export type GatewaySessionsDefaults = {
 };
 
 /** Runtime status surfaced for the latest session run. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout" | "paused";
+
+type SessionPauseReason = "sessions_yield";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
@@ -137,6 +139,7 @@ export type GatewaySessionRow = {
   activeRunIds?: string[];
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
+  pauseReason?: SessionPauseReason;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;

@@ -183,7 +183,11 @@ function stringValue(value: unknown): string | undefined {
 }
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
+  // "paused" (sessions_yield) must parse like the other statuses: dropping it
+  // to null would strip the pause state from session-change reconciliation
+  // and leave the row looking idle while a queued continuation is pending.
   return value === "running" ||
+    value === "paused" ||
     value === "done" ||
     value === "failed" ||
     value === "killed" ||

@@ -691,6 +691,7 @@ export const en: TranslationMap = {
     statusFailed: "Failed",
     statusKilled: "Killed",
     statusTimeout: "Timed out",
+    statusPaused: "Paused",
     waitingForAnswer: "Waiting for your answer",
     waitingForApproval: "Waiting for approval",
     runFailedReason: "Run failed: {reason}",

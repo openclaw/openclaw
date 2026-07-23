@@ -196,6 +196,9 @@ describe("session lifecycle state", () => {
       runtimeMs: 750,
       abortedLastRun,
     });
+    // Terminal outcomes (including stale yield metadata on aborted/error
+    // ends) must never leak the sessions_yield pause marker.
+    expect(persisted.pauseReason).toBeUndefined();
   });
 
   it("persists a compact failure reason and clears it when a new run starts", async () => {
@@ -252,8 +255,12 @@ describe("session lifecycle state", () => {
       },
     );
 
+    // A yielded parent surfaces as paused (sessions_yield) instead of a
+    // generic running row so restart recovery and dashboards can tell the
+    // queued-continuation state apart from an active model turn.
     expect(yielded).toMatchObject({
-      status: "running",
+      status: "paused",
+      pauseReason: "sessions_yield",
       endedAt: 1_800,
       runtimeMs: 750,
       abortedLastRun: false,
@@ -266,6 +273,7 @@ describe("session lifecycle state", () => {
     });
     expect(resumed.status).toBe("running");
     expect(resumed.endedAt).toBeUndefined();
+    expect(resumed.pauseReason).toBeUndefined();
   });
 
   it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {

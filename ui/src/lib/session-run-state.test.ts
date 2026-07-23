@@ -19,4 +19,14 @@ describe("isSessionRunActive", () => {
     expect(isSessionRunActive({ status: "running" })).toBe(true);
     expect(isSessionRunActive({ hasActiveRun: true })).toBe(true);
   });
+
+  it("treats paused (sessions_yield) sessions as active so the UI does not reconcile them to terminal", () => {
+    // Paused sessions ended via sessions_yield with a queued continuation
+    // still pending. Treating them as inactive would let the UI fall through
+    // to the "interrupted/killed" reconciler path. Mirrors the gateway-side
+    // nonterminal set (running + paused).
+    expect(isSessionRunActive({ status: "paused" })).toBe(true);
+    expect(isSessionRunActive({ status: "paused", hasActiveRun: false })).toBe(true);
+    expect(isSessionRunActive({ status: "paused", hasActiveRun: true })).toBe(true);
+  });
 });
