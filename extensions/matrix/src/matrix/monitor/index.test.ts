@@ -129,6 +129,8 @@ const hoisted = vi.hoisted(() => {
     resolveTextChunkLimit,
     runMatrixStartupMaintenance,
     registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
+    registeredE2eeDegraded: undefined as undefined | ((error: string) => void),
+    registeredE2eeRecovered: undefined as undefined | (() => void),
     setActiveMatrixClient,
     setMatrixRuntime,
     setStatus,
@@ -325,11 +327,15 @@ vi.mock("./events.js", () => ({
   registerMatrixMonitorEvents: vi.fn(
     (params: {
       getHealthySyncSinceMs?: () => number | undefined;
+      onE2eeDegraded?: (error: string) => void;
+      onE2eeRecovered?: () => void;
       onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
       runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
     }) => {
       hoisted.callOrder.push("register-events");
       hoisted.registeredHealthySyncGetter = params.getHealthySyncSinceMs;
+      hoisted.registeredE2eeDegraded = params.onE2eeDegraded;
+      hoisted.registeredE2eeRecovered = params.onE2eeRecovered;
       hoisted.registeredOnRoomMessage = (roomId: string, event: unknown) =>
         params.runDetachedTask
           ? params.runDetachedTask("test room message", async () => {
@@ -562,6 +568,44 @@ describe("monitorMatrixProvider", () => {
 
     hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
 
+    expectStatusCallFields({
+      accountId: "default",
+      connected: true,
+      healthState: "healthy",
+      lastError: null,
+    });
+
+    abortController.abort();
+    await expect(monitorPromise).resolves.toBeUndefined();
+  });
+
+  it("keeps E2EE degradation across sync and clears it only after encrypted recovery", async () => {
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({
+      abortSignal: abortController.signal,
+      setStatus: hoisted.setStatus,
+    });
+
+    await waitForCallOrderEntry("start-client");
+    hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
+
+    hoisted.registeredE2eeDegraded?.("Matrix E2EE could not decrypt fresh messages");
+    expectStatusCallFields({
+      accountId: "default",
+      connected: true,
+      healthState: "degraded",
+      lastError: "Matrix E2EE could not decrypt fresh messages",
+    });
+
+    hoisted.client.emit("sync.state", "SYNCING", "SYNCING", undefined);
+    expectStatusCallFields({
+      accountId: "default",
+      connected: true,
+      healthState: "degraded",
+      lastError: "Matrix E2EE could not decrypt fresh messages",
+    });
+
+    hoisted.registeredE2eeRecovered?.();
     expectStatusCallFields({
       accountId: "default",
       connected: true,

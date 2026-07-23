@@ -69,6 +69,8 @@ function createHarness(params?: {
   startupMs?: number;
   startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
+  onE2eeDegraded?: (error: string) => void;
+  onE2eeRecovered?: () => void;
   allowFrom?: string[];
   dmEnabled?: boolean;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
@@ -191,6 +193,7 @@ function createHarness(params?: {
     auth: {
       accountId: params?.accountId ?? "default",
       encryption: params?.authEncryption ?? true,
+      userId: params?.selfUserId ?? "@bot:example.org",
     } as MatrixAuth,
     allowFrom,
     dmEnabled: params?.dmEnabled ?? true,
@@ -208,6 +211,8 @@ function createHarness(params?: {
     getHealthySyncSinceMs:
       params?.getHealthySyncSinceMs ??
       (typeof params?.startupMs === "number" ? () => params.startupMs : undefined),
+    onE2eeDegraded: params?.onE2eeDegraded,
+    onE2eeRecovered: params?.onE2eeRecovered,
     formatNativeDependencyHint,
     onRoomMessage,
     runDetachedTask,
@@ -233,6 +238,9 @@ function createHarness(params?: {
     flushTasks,
     runDetachedTask,
     roomMessageListener: listeners.get("room.message") as RoomEventListener | undefined,
+    roomEncryptedEventListener: listeners.get("room.encrypted_event") as
+      | RoomEventListener
+      | undefined,
     roomDecryptedEventListener: listeners.get("room.decrypted_event") as
       | RoomEventListener
       | undefined,
@@ -245,6 +253,58 @@ function createHarness(params?: {
     roomInviteListener: listeners.get("room.invite") as RoomEventListener | undefined,
     roomJoinListener: listeners.get("room.join") as RoomEventListener | undefined,
   };
+}
+
+function createEncryptedTestEvent(
+  eventId: string,
+  originServerTs = Date.now(),
+  sender = "@alice:matrix.example.org",
+  content: Record<string, unknown> = {},
+): MatrixRawEvent {
+  return {
+    event_id: eventId,
+    sender,
+    type: EventType.RoomMessageEncrypted,
+    origin_server_ts: originServerTs,
+    content,
+  };
+}
+
+async function emitFailedDecryption(
+  harness: Pick<
+    ReturnType<typeof createHarness>,
+    "failedDecryptListener" | "flushTasks" | "roomEncryptedEventListener"
+  >,
+  eventId: string,
+  originServerTs = Date.now(),
+) {
+  if (!harness.failedDecryptListener || !harness.roomEncryptedEventListener) {
+    throw new Error("expected Matrix encryption listeners to be registered");
+  }
+  const event = createEncryptedTestEvent(eventId, originServerTs);
+  harness.roomEncryptedEventListener("!room:example.org", event);
+  harness.failedDecryptListener("!room:example.org", event, new Error("missing key"));
+  await harness.flushTasks();
+}
+
+function emitSuccessfulDecryption(
+  harness: Pick<
+    ReturnType<typeof createHarness>,
+    "roomEncryptedEventListener" | "roomDecryptedEventListener"
+  >,
+  eventId: string,
+  originServerTs = Date.now(),
+) {
+  if (!harness.roomEncryptedEventListener || !harness.roomDecryptedEventListener) {
+    throw new Error("expected Matrix encryption listeners to be registered");
+  }
+  const event = createEncryptedTestEvent(eventId, originServerTs);
+  harness.roomEncryptedEventListener("!room:example.org", event);
+  harness.roomDecryptedEventListener("!room:example.org", {
+    ...event,
+    type: EventType.RoomMessage,
+    content: { body: "decrypted" },
+  });
 }
 
 describe("registerMatrixMonitorEvents verification routing", () => {
@@ -1566,12 +1626,15 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
     try {
       const healthySyncSinceMs = Date.now() - 60_000;
-      const { logger, failedDecryptListener, flushTasks } = createHarness({
-        accountId: "ops",
-        getHealthySyncSinceMs: () => healthySyncSinceMs,
-      });
-      if (!failedDecryptListener) {
-        throw new Error("room.failed_decryption listener was not registered");
+      const onE2eeDegraded = vi.fn();
+      const { logger, failedDecryptListener, flushTasks, roomEncryptedEventListener } =
+        createHarness({
+          accountId: "ops",
+          getHealthySyncSinceMs: () => healthySyncSinceMs,
+          onE2eeDegraded,
+        });
+      if (!failedDecryptListener || !roomEncryptedEventListener) {
+        throw new Error("Matrix encryption listeners were not registered");
       }
 
       for (const [index, roomId] of [
@@ -1579,19 +1642,31 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         "!room-b:example.org",
         "!room-c:example.org",
       ].entries()) {
+        const event = createEncryptedTestEvent(
+          `$enc-fresh-${index + 1}`,
+          Date.now() - 1_000 * (index + 1),
+          `@alice${index + 1}:matrix.example.org`,
+        );
+        roomEncryptedEventListener(roomId, event);
         failedDecryptListener(
           roomId,
-          {
-            event_id: `$enc-fresh-${index + 1}`,
-            sender: `@alice${index + 1}:matrix.example.org`,
-            type: EventType.RoomMessageEncrypted,
-            origin_server_ts: Date.now() - 1_000 * (index + 1),
-            content: {},
-          },
+          event,
           new Error("The sender's device has not sent us the keys for this message."),
         );
         await flushTasks();
       }
+      failedDecryptListener(
+        "!room-c:example.org",
+        {
+          event_id: "$enc-fresh-3",
+          sender: "@alice3:matrix.example.org",
+          type: EventType.RoomMessageEncrypted,
+          origin_server_ts: Date.now() - 3_000,
+          content: {},
+        },
+        new Error("missing key"),
+      );
+      await flushTasks();
 
       expectWarnContextFields(logger, 1, "Failed to decrypt fresh post-healthy-sync message", {
         eventId: "$enc-fresh-1",
@@ -1620,9 +1695,217 @@ describe("registerMatrixMonitorEvents verification routing", () => {
           sampleEventIds: ["$enc-fresh-1", "$enc-fresh-2", "$enc-fresh-3"],
         },
       );
+      expect(onE2eeDegraded).toHaveBeenCalledTimes(1);
+      expect(onE2eeDegraded).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw matrix verify status --verbose --account ops"),
+      );
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("ignores self-sent decrypt failures for E2EE health while retaining diagnostics", async () => {
+    const onE2eeDegraded = vi.fn();
+    const harness = createHarness({
+      selfUserId: "@bot:example.org",
+      getHealthySyncSinceMs: () => Date.now() - 60_000,
+      onE2eeDegraded,
+    });
+    if (!harness.failedDecryptListener || !harness.roomEncryptedEventListener) {
+      throw new Error("expected Matrix encryption listeners to be registered");
+    }
+
+    for (const eventId of ["$enc-self-1", "$enc-self-2", "$enc-self-3"]) {
+      const failedSelfEvent = createEncryptedTestEvent(eventId, Date.now(), "@bot:example.org");
+      harness.roomEncryptedEventListener("!room:example.org", failedSelfEvent);
+      harness.failedDecryptListener("!room:example.org", failedSelfEvent, new Error("missing key"));
+    }
+    await harness.flushTasks();
+
+    expect(onE2eeDegraded).not.toHaveBeenCalled();
+    expect(
+      harness.logger.warn.mock.calls.filter(([message]) => message === "Failed to decrypt message"),
+    ).toHaveLength(3);
+    expect(
+      harness.logger.warn.mock.calls.filter(([message]) =>
+        String(message).startsWith(
+          "matrix: failed to decrypt a message from this same Matrix user",
+        ),
+      ),
+    ).toHaveLength(3);
+  });
+
+  it("does not clear E2EE degradation after decrypting a self-sent encrypted echo", async () => {
+    const onE2eeDegraded = vi.fn();
+    const onE2eeRecovered = vi.fn();
+    const healthySyncSinceMs = Date.now() - 60_000;
+    const harness = createHarness({
+      selfUserId: "@bot:example.org",
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
+      onE2eeDegraded,
+      onE2eeRecovered,
+    });
+
+    for (const eventId of ["$enc-1", "$enc-2", "$enc-3"]) {
+      await emitFailedDecryption(harness, eventId);
+    }
+    expect(onE2eeDegraded).toHaveBeenCalledTimes(1);
+
+    const selfEcho = createEncryptedTestEvent("$enc-self-echo", Date.now() + 1, "@bot:example.org");
+    harness.roomEncryptedEventListener?.("!room:example.org", selfEcho);
+    harness.roomDecryptedEventListener?.("!room:example.org", {
+      ...selfEcho,
+      type: EventType.RoomMessage,
+      content: { body: "outbound echo" },
+    });
+
+    expect(onE2eeRecovered).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failure callback generic after success consumed the same encrypted arrival", async () => {
+    const onE2eeDegraded = vi.fn();
+    const healthySyncSinceMs = Date.now() - 60_000;
+    const harness = createHarness({
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
+      onE2eeDegraded,
+    });
+    if (
+      !harness.failedDecryptListener ||
+      !harness.roomEncryptedEventListener ||
+      !harness.roomDecryptedEventListener
+    ) {
+      throw new Error("expected Matrix decryption listeners to be registered");
+    }
+
+    await emitFailedDecryption(harness, "$valid-failure-1");
+    await emitFailedDecryption(harness, "$valid-failure-2");
+    const contradictoryEvent = createEncryptedTestEvent("$success-then-failure");
+    harness.roomEncryptedEventListener("!room:example.org", contradictoryEvent);
+    harness.roomDecryptedEventListener("!room:example.org", {
+      ...contradictoryEvent,
+      type: EventType.RoomMessage,
+      content: { body: "success" },
+    });
+    harness.failedDecryptListener(
+      "!room:example.org",
+      contradictoryEvent,
+      new Error("late contradictory failure"),
+    );
+    await harness.flushTasks();
+
+    expect(onE2eeDegraded).not.toHaveBeenCalled();
+    expectWarnContextFields(harness.logger, 3, "Failed to decrypt message", {
+      eventId: "$success-then-failure",
+      freshAfterHealthySync: false,
+    });
+  });
+
+  it("keeps an arrival-less failure on the generic diagnostic path", async () => {
+    const onE2eeDegraded = vi.fn();
+    const healthySyncSinceMs = Date.now() - 60_000;
+    const harness = createHarness({
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
+      onE2eeDegraded,
+    });
+    if (!harness.failedDecryptListener) {
+      throw new Error("expected Matrix failed-decryption listener to be registered");
+    }
+
+    await emitFailedDecryption(harness, "$valid-failure-1");
+    await emitFailedDecryption(harness, "$valid-failure-2");
+    harness.failedDecryptListener(
+      "!room:example.org",
+      createEncryptedTestEvent("$arrival-less"),
+      new Error("missing arrival"),
+    );
+    await harness.flushTasks();
+
+    expect(onE2eeDegraded).not.toHaveBeenCalled();
+    expectWarnContextFields(harness.logger, 3, "Failed to decrypt message", {
+      eventId: "$arrival-less",
+      freshAfterHealthySync: false,
+    });
+  });
+
+  it("orders synchronous decrypt failures before a later encrypted recovery", async () => {
+    const transitions: string[] = [];
+    const healthySyncSinceMs = Date.now() - 60_000;
+    const harness = createHarness({
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
+      onE2eeDegraded: () => transitions.push("degraded"),
+      onE2eeRecovered: () => transitions.push("recovered"),
+    });
+    if (
+      !harness.failedDecryptListener ||
+      !harness.roomEncryptedEventListener ||
+      !harness.roomDecryptedEventListener
+    ) {
+      throw new Error("expected Matrix decryption listeners to be registered");
+    }
+
+    for (const eventId of ["$enc-1", "$enc-2", "$enc-3"]) {
+      const failedEvent = createEncryptedTestEvent(eventId);
+      harness.roomEncryptedEventListener("!room:example.org", failedEvent);
+      harness.failedDecryptListener("!room:example.org", failedEvent, new Error("missing key"));
+    }
+    emitSuccessfulDecryption(harness, "$enc-recovered");
+    await harness.flushTasks();
+
+    expect(transitions).toEqual(["degraded", "recovered"]);
+  });
+
+  it("stays degraded when unresolved room and sender cohorts exceed bounded capacity", async () => {
+    const onE2eeDegraded = vi.fn();
+    const onE2eeRecovered = vi.fn();
+    const healthySyncSinceMs = Date.now() - 60_000;
+    const harness = createHarness({
+      getHealthySyncSinceMs: () => healthySyncSinceMs,
+      onE2eeDegraded,
+      onE2eeRecovered,
+    });
+    if (
+      !harness.failedDecryptListener ||
+      !harness.roomEncryptedEventListener ||
+      !harness.roomDecryptedEventListener
+    ) {
+      throw new Error("expected Matrix decryption listeners to be registered");
+    }
+
+    const cohortCount = 520;
+    for (let index = 0; index < cohortCount; index += 1) {
+      const failedEvent = createEncryptedTestEvent(
+        `$enc-failed-${index}`,
+        Date.now(),
+        `@sender-${index}:example.org`,
+      );
+      harness.roomEncryptedEventListener(`!room-${index}:example.org`, failedEvent);
+      harness.failedDecryptListener(
+        `!room-${index}:example.org`,
+        failedEvent,
+        new Error("missing key"),
+      );
+    }
+    await harness.flushTasks();
+    expect(onE2eeDegraded).toHaveBeenCalledTimes(2);
+    expect(onE2eeDegraded).toHaveBeenLastCalledWith(
+      expect.stringContaining("automatic recovery is disabled until the Matrix monitor restarts"),
+    );
+
+    for (let index = 0; index < cohortCount; index += 1) {
+      const recoveredEvent = createEncryptedTestEvent(
+        `$enc-recovered-${index}`,
+        Date.now() + 1,
+        `@sender-${index}:example.org`,
+      );
+      harness.roomEncryptedEventListener(`!room-${index}:example.org`, recoveredEvent);
+      harness.roomDecryptedEventListener(`!room-${index}:example.org`, {
+        ...recoveredEvent,
+        type: EventType.RoomMessage,
+        content: { body: "decrypted" },
+      });
+    }
+
+    expect(onE2eeRecovered).not.toHaveBeenCalled();
   });
 
   it("keeps decrypt failures before healthy sync on the generic warning path", async () => {
@@ -1630,23 +1913,24 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
     try {
       const healthySync = { sinceMs: undefined as number | undefined };
-      const { logger, failedDecryptListener, flushTasks } = createHarness({
-        accountId: "ops",
-        getHealthySyncSinceMs: () => healthySync.sinceMs,
-      });
-      if (!failedDecryptListener) {
-        throw new Error("room.failed_decryption listener was not registered");
+      const { logger, failedDecryptListener, flushTasks, roomEncryptedEventListener } =
+        createHarness({
+          accountId: "ops",
+          getHealthySyncSinceMs: () => healthySync.sinceMs,
+        });
+      if (!failedDecryptListener || !roomEncryptedEventListener) {
+        throw new Error("Matrix encryption listeners were not registered");
       }
 
+      const oldEvent = createEncryptedTestEvent(
+        "$enc-old",
+        Date.now() - 5 * 60_000,
+        "@alice:matrix.example.org",
+      );
+      roomEncryptedEventListener("!room:example.org", oldEvent);
       failedDecryptListener(
         "!room:example.org",
-        {
-          event_id: "$enc-old",
-          sender: "@alice:matrix.example.org",
-          type: EventType.RoomMessageEncrypted,
-          origin_server_ts: Date.now() - 5 * 60_000,
-          content: {},
-        },
+        oldEvent,
         new Error("The sender's device has not sent us the keys for this message."),
       );
       await flushTasks();
@@ -1659,15 +1943,15 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
       healthySync.sinceMs = Date.now();
 
+      const freshEvent = createEncryptedTestEvent(
+        "$enc-fresh-after-ready",
+        Date.now() + 1,
+        "@alice:matrix.example.org",
+      );
+      roomEncryptedEventListener("!room:example.org", freshEvent);
       failedDecryptListener(
         "!room:example.org",
-        {
-          event_id: "$enc-fresh-after-ready",
-          sender: "@alice:matrix.example.org",
-          type: EventType.RoomMessageEncrypted,
-          origin_server_ts: Date.now() + 1,
-          content: {},
-        },
+        freshEvent,
         new Error("The sender's device has not sent us the keys for this message."),
       );
       await flushTasks();
@@ -1687,25 +1971,27 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
     try {
       const healthySyncSinceMs = Date.now() - 60_000;
-      const { logger, failedDecryptListener, flushTasks } = createHarness({
-        accountId: "ops",
-        getHealthySyncSinceMs: () => healthySyncSinceMs,
-      });
-      if (!failedDecryptListener) {
-        throw new Error("room.failed_decryption listener was not registered");
+      const { logger, failedDecryptListener, flushTasks, roomEncryptedEventListener } =
+        createHarness({
+          accountId: "ops",
+          getHealthySyncSinceMs: () => healthySyncSinceMs,
+        });
+      if (!failedDecryptListener || !roomEncryptedEventListener) {
+        throw new Error("Matrix encryption listeners were not registered");
       }
 
       for (const wave of [1, 2]) {
         for (const index of [1, 2, 3]) {
+          const roomId = `!room-${wave}-${index}:example.org`;
+          const event = createEncryptedTestEvent(
+            `$enc-wave-${wave}-${index}`,
+            Date.now() - index * 1_000,
+            `@alice${wave}${index}:matrix.example.org`,
+          );
+          roomEncryptedEventListener(roomId, event);
           failedDecryptListener(
-            `!room-${wave}-${index}:example.org`,
-            {
-              event_id: `$enc-wave-${wave}-${index}`,
-              sender: `@alice${wave}${index}:matrix.example.org`,
-              type: EventType.RoomMessageEncrypted,
-              origin_server_ts: Date.now() - index * 1_000,
-              content: {},
-            },
+            roomId,
+            event,
             new Error("The sender's device has not sent us the keys for this message."),
           );
           await flushTasks();
@@ -1742,24 +2028,26 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     vi.setSystemTime(new Date("2026-04-10T16:21:00.000Z"));
     try {
       let healthySyncSinceMs = Date.now() - 60_000;
-      const { logger, failedDecryptListener, flushTasks } = createHarness({
-        accountId: "ops",
-        getHealthySyncSinceMs: () => healthySyncSinceMs,
-      });
-      if (!failedDecryptListener) {
-        throw new Error("room.failed_decryption listener was not registered");
+      const { logger, failedDecryptListener, flushTasks, roomEncryptedEventListener } =
+        createHarness({
+          accountId: "ops",
+          getHealthySyncSinceMs: () => healthySyncSinceMs,
+        });
+      if (!failedDecryptListener || !roomEncryptedEventListener) {
+        throw new Error("Matrix encryption listeners were not registered");
       }
 
       for (const index of [1, 2, 3]) {
+        const roomId = `!room-first-${index}:example.org`;
+        const event = createEncryptedTestEvent(
+          `$enc-first-${index}`,
+          Date.now() - index * 1_000,
+          `@alice-first-${index}:matrix.example.org`,
+        );
+        roomEncryptedEventListener(roomId, event);
         failedDecryptListener(
-          `!room-first-${index}:example.org`,
-          {
-            event_id: `$enc-first-${index}`,
-            sender: `@alice-first-${index}:matrix.example.org`,
-            type: EventType.RoomMessageEncrypted,
-            origin_server_ts: Date.now() - index * 1_000,
-            content: {},
-          },
+          roomId,
+          event,
           new Error("The sender's device has not sent us the keys for this message."),
         );
         await flushTasks();
@@ -1768,15 +2056,16 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       healthySyncSinceMs = Date.now();
 
       for (const index of [1, 2, 3]) {
+        const roomId = `!room-second-${index}:example.org`;
+        const event = createEncryptedTestEvent(
+          `$enc-second-${index}`,
+          Date.now() + index,
+          `@alice-second-${index}:matrix.example.org`,
+        );
+        roomEncryptedEventListener(roomId, event);
         failedDecryptListener(
-          `!room-second-${index}:example.org`,
-          {
-            event_id: `$enc-second-${index}`,
-            sender: `@alice-second-${index}:matrix.example.org`,
-            type: EventType.RoomMessageEncrypted,
-            origin_server_ts: Date.now() + index,
-            content: {},
-          },
+          roomId,
+          event,
           new Error("The sender's device has not sent us the keys for this message."),
         );
         await flushTasks();
