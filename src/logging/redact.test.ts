@@ -1303,8 +1303,10 @@ describe("redactSensitiveText", () => {
     const dashToken = (prefix: string, suffix: string): string => [prefix, suffix].join("-");
     const repeatedDashToken = (prefix: string, length: number): string =>
       dashToken(prefix, "A".repeat(length));
+    const mixedOauthToken = dashToken("gloas", `${"a".repeat(32)}Z${"b".repeat(31)}`);
     const tokens = [
       dashToken("gloas", "a".repeat(32)),
+      mixedOauthToken,
       repeatedDashToken("gldt", 20),
       dashToken("glcbt", `a1B2_${"A".repeat(20)}`),
       repeatedDashToken("glptt", 40),
@@ -1327,6 +1329,9 @@ describe("redactSensitiveText", () => {
     for (const token of tokens) {
       expect(redactSensitiveText(token, { mode: "tools" }), token).not.toContain(token);
     }
+    expect(redactSensitiveText(mixedOauthToken, { mode: "tools" })).not.toContain(
+      mixedOauthToken.slice("gloas-".length + 32),
+    );
   });
 
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
