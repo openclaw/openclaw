@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectCodexNativeExecutionReceipts } from "./native-subagent-execution-receipts.js";
+import type { JsonObject } from "./protocol.js";
 
 describe("projectCodexNativeExecutionReceipts", () => {
   it("projects readable diff evidence from the completed file-change item, not prose", () => {
@@ -60,7 +61,7 @@ describe("projectCodexNativeExecutionReceipts", () => {
     });
   });
 
-  it.each([
+  it.each<{ label: string; item: JsonObject; kind: string }>([
     {
       label: "dynamic deploy with success=false",
       item: {
