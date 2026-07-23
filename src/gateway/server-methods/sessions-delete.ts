@@ -13,6 +13,10 @@ import {
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
+import {
+  lookupIncognitoSessionAgentId,
+  unregisterIncognitoSession,
+} from "../../config/sessions/incognito-session-registry.js";
 import { rollbackPluginOwnedSessionEntryLifecycle } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAgentHarnessSessionKey } from "../../sessions/agent-harness-session-key.js";
@@ -340,9 +344,13 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+        const incognito =
+          postCleanupEntry?.incognito === true ||
+          lookupIncognitoSessionAgentId(target.canonicalKey) !== undefined;
         const deletionParams = {
           agentId: target.agentId,
-          archiveTranscript: deleteTranscript,
+          archiveTranscript: incognito ? false : deleteTranscript,
+          deleteTranscriptWithoutArchive: incognito,
           expectedEntry: postCleanupEntry,
           expectedLifecycleRevision,
           expectedSessionId,
@@ -372,6 +380,12 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (result.deleted) {
+          if (
+            result.deletedEntry?.incognito === true ||
+            lookupIncognitoSessionAgentId(target.canonicalKey) !== undefined
+          ) {
+            unregisterIncognitoSession(target.canonicalKey);
+          }
           emitGatewaySessionEndPluginHook({
             cfg,
             sessionKey: target.canonicalKey ?? key,

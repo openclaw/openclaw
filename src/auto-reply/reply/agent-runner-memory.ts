@@ -37,6 +37,7 @@ import {
   resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { lookupIncognitoSessionAgentId } from "../../config/sessions/incognito-session-registry.js";
 import {
   readTranscriptStatsSync,
   updateSessionEntry,
@@ -1120,6 +1121,12 @@ export async function runMemoryFlushIfNeeded(params: {
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  if (
+    entry?.incognito === true ||
+    (params.sessionKey && lookupIncognitoSessionAgentId(params.sessionKey) !== undefined)
+  ) {
+    return { sessionEntry: entry, outcome: "skipped" };
+  }
   const isCli = followupUsesCliRuntime({
     cfg: params.cfg,
     followupRun: params.followupRun,

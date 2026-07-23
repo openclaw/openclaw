@@ -2,6 +2,7 @@
 // persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -32,6 +33,7 @@ const hoisted = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let incognitoRegistry: typeof import("../config/sessions/incognito-session-registry.js");
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -95,6 +97,7 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
+    incognitoRegistry = await import("../config/sessions/incognito-session-registry.js");
   });
 
   beforeEach(() => {
@@ -136,6 +139,9 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   afterEach(() => {
+    for (const sessionKey of incognitoRegistry.listIncognitoSessionsForAgent("main")) {
+      incognitoRegistry.unregisterIncognitoSession(sessionKey);
+    }
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
   });
@@ -255,6 +261,39 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
+  });
+
+  it("inherits incognito storage ownership for direct children", async () => {
+    const requesterSessionKey = "agent:main:dashboard:incognito-parent";
+    const sessionPatches: Record<string, unknown>[] = [];
+    const sessionStorePaths: string[] = [];
+    incognitoRegistry.registerIncognitoSession(requesterSessionKey, "main");
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (
+        storePath: string,
+        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
+      ) => {
+        sessionStorePaths.push(storePath);
+        const store: Record<string, Record<string, unknown>> = {};
+        await mutator(store);
+        sessionPatches.push(...Object.values(store));
+        return store;
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "keep this child in memory" },
+      { agentSessionKey: requesterSessionKey },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(incognitoRegistry.listIncognitoSessionsForAgent("main")).toContain(
+      result.childSessionKey,
+    );
+    expect(sessionPatches).toContainEqual(expect.objectContaining({ incognito: true }));
+    expect(sessionStorePaths).toContain(
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
   });
 
   it("defaults collector group id from requester session and requesting run", async () => {

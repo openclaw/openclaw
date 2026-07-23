@@ -28,6 +28,10 @@ import {
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  lookupIncognitoSessionAgentId,
+  registerIncognitoSession,
+} from "../config/sessions/incognito-session-registry.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   createSessionEntryWithTranscript,
@@ -64,6 +68,7 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
@@ -264,6 +269,7 @@ export async function createGatewaySession(params: {
   label?: string;
   model?: string;
   thinkingLevel?: string;
+  incognito?: boolean;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -368,6 +374,36 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
+  if (
+    explicitTargetKey &&
+    params.incognito !== true &&
+    lookupIncognitoSessionAgentId(explicitTargetKey) !== undefined
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "incognito is immutable and requires a new session key",
+      ),
+    };
+  }
+  if (params.incognito === true && explicitTargetKey) {
+    if (!explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
+      };
+    }
+    if (loadSessionEntryReadOnly(explicitTargetKey).entry) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "incognito is immutable and requires a new session key",
+        ),
+      };
+    }
+  }
   if (
     params.catalogTarget &&
     explicitTargetKey &&
@@ -500,6 +536,17 @@ export async function createGatewaySession(params: {
         : {}),
     });
   }
+  const parentIncognito =
+    parentSessionEntry?.incognito === true ||
+    (canonicalParentSessionKey !== undefined &&
+      lookupIncognitoSessionAgentId(canonicalParentSessionKey) !== undefined);
+  if (parentIncognito && explicitTargetKey) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions are web-only"),
+    };
+  }
+
   if (
     canonicalParentSessionKey &&
     explicitTargetKey &&
@@ -521,6 +568,7 @@ export async function createGatewaySession(params: {
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    !parentIncognito &&
     // Catalog targets need a fresh locked row; resetting main would return before
     // the catalog-owned model/runtime pair is persisted.
     !params.catalogTarget &&
@@ -553,6 +601,12 @@ export async function createGatewaySession(params: {
       });
       if (!resetResult.ok) {
         return resetResult;
+      }
+      if ("incognitoDeleted" in resetResult) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, "incognito sessions cannot reset in place"),
+        };
       }
       return {
         ok: true,
@@ -646,7 +700,19 @@ export async function createGatewaySession(params: {
     }
 
     const key = targetSessionKey;
-    const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
+    const incognito =
+      params.incognito === true ||
+      currentParentSessionEntry?.incognito === true ||
+      (canonicalParentSessionKey !== undefined &&
+        lookupIncognitoSessionAgentId(canonicalParentSessionKey) !== undefined);
+    const target = incognito
+      ? {
+          agentId,
+          canonicalKey: key,
+          storeKeys: [key],
+          storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+        }
+      : resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
         agentId: target.agentId,
@@ -829,6 +895,7 @@ export async function createGatewaySession(params: {
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
           // their stored depth.
           ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
@@ -920,6 +987,9 @@ export async function createGatewaySession(params: {
               )
             : created.error,
       };
+    }
+    if (incognito) {
+      registerIncognitoSession(target.canonicalKey, target.agentId);
     }
 
     createdContext = {

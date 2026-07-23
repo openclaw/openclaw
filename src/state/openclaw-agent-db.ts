@@ -40,7 +40,10 @@ import {
   assertAgentDatabaseIntegrityBeforeMutation,
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import {
   clearOpenClawDatabaseQuarantine,
   readOpenClawDatabaseQuarantine,
@@ -65,7 +68,11 @@ export {
 export { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 export { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 export { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
-export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+export {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 
 /**
  * Per-agent SQLite database lifecycle and shared-state registration.
@@ -162,6 +169,7 @@ export function openOpenClawAgentDatabase(
   const agentId = normalizeAgentId(options.agentId);
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
+  const incognito = isIncognitoOpenClawAgentSqlitePath(pathname, databaseOptions);
   // A live successful cache entry is authoritative; failed entries remain only for disposal.
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
@@ -176,6 +184,31 @@ export function openOpenClawAgentDatabase(
     cachedDatabases.delete(pathname);
     cachedDatabases.set(pathname, cached);
     return cached;
+  }
+  if (incognito) {
+    if (cached) {
+      closeCachedOpenClawAgentDatabase(cached);
+      cachedDatabases.delete(pathname);
+      cachedDatabaseOpenFailures.delete(pathname);
+    }
+    const sqlite = requireNodeSqlite();
+    // This sentinel is only a cache key: SQLite opens :memory:, and no path probe,
+    // directory creation, lease, registry row, WAL sidecar, or file write may occur.
+    const db = new sqlite.DatabaseSync(":memory:");
+    configureSqlitePreSchemaPragmas(db, {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    });
+    const walMaintenance = configureSqliteConnectionPragmas(db, {
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      databaseLabel: `openclaw-agent-incognito:${agentId}`,
+      foreignKeys: true,
+      synchronous: "NORMAL",
+    });
+    ensureOpenClawAgentSchema(db, agentId, pathname);
+    const database = { agentId, db, path: pathname, walMaintenance };
+    unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
+    cachedDatabases.set(pathname, database);
+    return database;
   }
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
@@ -360,7 +393,9 @@ export function runOpenClawAgentWriteTransaction<T>(
         if (!enteredNestedTransaction) {
           // Permission failure must roll back with the write. Repairing after
           // COMMIT could make callers retry a transaction already durable in SQLite.
-          ensureOpenClawAgentDatabasePermissions(database.path, options);
+          if (!isIncognitoOpenClawAgentSqlitePath(database.path, options)) {
+            ensureOpenClawAgentDatabasePermissions(database.path, options);
+          }
         }
         return operationResult;
       },
@@ -417,6 +452,13 @@ function evictLruAgentDatabaseHandles(): void {
       // A synchronous transaction owns its handle through COMMIT or ROLLBACK;
       // closing it here would violate the transaction commit-section contract.
       if (database.db.isTransaction) {
+        continue;
+      }
+      if (
+        isIncognitoOpenClawAgentSqlitePath(pathname, {
+          agentId: database.agentId,
+        })
+      ) {
         continue;
       }
       // Registry rows are durable discovery metadata; only explicit disposal
@@ -486,6 +528,9 @@ export function disposeOpenClawAgentDatabaseByPath(
   const database = cachedDatabases.get(resolvedPath);
   if (!database || database.path !== resolvedPath) {
     return false;
+  }
+  if (isIncognitoOpenClawAgentSqlitePath(resolvedPath, { agentId: database.agentId })) {
+    return closeOpenClawAgentDatabaseByPath(resolvedPath);
   }
   try {
     unregisterOpenClawAgentDatabase({

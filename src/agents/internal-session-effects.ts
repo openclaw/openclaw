@@ -11,6 +11,7 @@ import { buildSessionCreationStamp } from "../config/sessions/session-entry-prov
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 
 type InternalSessionEffectsTarget = Required<
@@ -96,6 +97,9 @@ export async function prepareInternalSessionEffectsSession(params: {
   const entry = await upsertSessionEntry(scope, {
     ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
     sessionId: scope.sessionId,
+    ...(isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
+      ? { incognito: true as const }
+      : {}),
     sessionStartedAt: now,
     updatedAt: now,
   });

@@ -92,6 +92,7 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import { lookupIncognitoSessionAgentId } from "../config/sessions/incognito-session-registry.js";
 import {
   listSessionEntries as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
@@ -108,6 +109,7 @@ import {
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -1546,6 +1548,20 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     (isAgentScopedSentinelSessionKey(canonicalKey) || !parseAgentSessionKey(key))
       ? normalizeAgentId(requestedAgentId)
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const incognitoAgentId = lookupIncognitoSessionAgentId(canonicalKey);
+  if (incognitoAgentId) {
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId });
+    const store = loadGatewaySessionLookupStore(storePath, params.clone, incognitoAgentId, {
+      readOnly: false,
+    });
+    return {
+      agentId: incognitoAgentId,
+      storePath,
+      canonicalKey,
+      storeKeys: [canonicalKey],
+      store,
+    };
+  }
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,
@@ -2256,6 +2272,7 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
+    incognito: entry?.incognito,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     // The live registry controller takes precedence over the persisted spawner.
     controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,

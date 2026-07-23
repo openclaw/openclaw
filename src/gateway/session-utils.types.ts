@@ -55,6 +55,7 @@ export type GatewaySessionRow = {
   visibility?: SessionVisibility;
   /** Caller-relative role used by Control UI participation controls. */
   sharingRole?: SessionSharingRole;
+  incognito?: true;
   spawnedBy?: string;
   /** Current runtime controller, falling back to the durable spawning session. */
   controlOwnerSessionKey?: string;

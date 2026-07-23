@@ -415,6 +415,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, result.error);
       return;
     }
+    if ("incognitoDeleted" in result) {
+      respond(true, { ok: true, key: result.key, deleted: true }, undefined);
+      emitSessionsChanged(context, {
+        sessionKey: result.key,
+        reason,
+      });
+      return;
+    }
     respond(
       true,
       { ok: true, key: result.key, entry: result.entry, resolved: result.resolved },

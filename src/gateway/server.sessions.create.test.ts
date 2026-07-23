@@ -12,11 +12,26 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { listIncognitoSessionsForAgent } from "../config/sessions/incognito-session-registry.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommand,
   agentDiscoveryMock,
@@ -39,6 +54,181 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
+  const { storePath } = await createSessionStoreDir();
+  try {
+    const created = await directSessionReq<{
+      key: string;
+      entry: { incognito?: true; sessionFile?: string; sessionId: string };
+    }>("sessions.create", { agentId: "main", incognito: true });
+    expect(created.ok).toBe(true);
+    const key = requireNonEmptyString(created.payload?.key, "incognito session key");
+    const entry = created.payload?.entry;
+    expect(entry?.incognito).toBe(true);
+    expect(parseSqliteSessionFileMarker(entry?.sessionFile)?.storePath).toBe(
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
+    expect(listIncognitoSessionsForAgent("main")).toContain(key);
+    const openedIncognitoDatabase = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    expect(
+      openedIncognitoDatabase.db
+        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .get(key),
+    ).toEqual({ session_key: key });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.incognito).toBe(true);
+    expect(loadCombinedSessionStoreForGateway(getRuntimeConfig()).store[key]?.incognito).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.incognito).toBe(true);
+    const persistentDatabase = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    });
+    expect(
+      persistentDatabase.db
+        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .get(key),
+    ).toBeUndefined();
+
+    const listed = await directSessionReq<{ sessions: Array<{ key: string; incognito?: true }> }>(
+      "sessions.list",
+      {},
+    );
+    expect(listed.payload?.sessions).toContainEqual(
+      expect.objectContaining({ key, incognito: true }),
+    );
+
+    const rejectedReuse = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key,
+    });
+    expect(rejectedReuse).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "incognito is immutable and requires a new session key",
+      },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.sessionId).toBe(
+      entry?.sessionId,
+    );
+
+    const child = await directSessionReq<{
+      key: string;
+      entry: { incognito?: true; sessionFile?: string };
+    }>("sessions.create", { agentId: "main", parentSessionKey: key });
+    expect(child.ok).toBe(true);
+    const childKey = requireNonEmptyString(child.payload?.key, "incognito child key");
+    expect(child.payload?.entry.incognito).toBe(true);
+    expect(parseSqliteSessionFileMarker(child.payload?.entry.sessionFile)?.storePath).toBe(
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
+
+    const rejectedInheritedChannel = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key: "agent:main:discord:channel:inherited",
+      parentSessionKey: key,
+    });
+    expect(rejectedInheritedChannel).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
+    });
+    const durableSubagentKey = "agent:main:subagent:durable-existing";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: durableSubagentKey, storePath },
+      { sessionId: "durable-subagent", updatedAt: Date.now() },
+    );
+    const rejectedInheritedExisting = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key: durableSubagentKey,
+      parentSessionKey: key,
+    });
+    expect(rejectedInheritedExisting).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
+    });
+    expect(
+      persistentDatabase.db
+        .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
+        .get(durableSubagentKey),
+    ).toEqual({ session_id: "durable-subagent" });
+
+    const deleted = await directSessionReq<{ archived: string[]; deleted: boolean }>(
+      "sessions.delete",
+      { key: childKey },
+    );
+    expect(deleted.payload).toMatchObject({ archived: [], deleted: true });
+
+    const reset = await directSessionReq<{ deleted?: boolean }>("sessions.reset", { key });
+    expect(reset.payload).toMatchObject({ deleted: true });
+    expect(listIncognitoSessionsForAgent("main")).not.toContain(key);
+    expect(resolveGatewaySessionStoreTarget({ cfg: getRuntimeConfig(), key }).storePath).toBe(
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
+    const incognitoDatabase = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    for (const table of ["session_entries", "sessions", "transcript_events"] as const) {
+      expect(incognitoDatabase.db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
+    const afterReset = await directSessionReq<{ sessions: Array<{ key: string }> }>(
+      "sessions.list",
+      {},
+    );
+    expect(afterReset.payload?.sessions.some((session) => session.key === key)).toBe(false);
+
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: key, storePath },
+      { sessionId: "rematerialized-incognito", updatedAt: Date.now() },
+    );
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.incognito).toBe(
+      undefined,
+    );
+    const resetRematerialized = await directSessionReq<{ deleted?: boolean }>("sessions.reset", {
+      key,
+    });
+    expect(resetRematerialized.payload).toMatchObject({ deleted: true });
+    expect(
+      openedIncognitoDatabase.db
+        .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+        .get(key),
+    ).toBeUndefined();
+
+    const rejected = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key: "agent:main:discord:channel:123",
+      incognito: true,
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "incognito sessions are web-only" },
+    });
+    const durableCollisionKey = "agent:main:dashboard:durable-collision";
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: durableCollisionKey, storePath },
+      { sessionId: "durable-collision", updatedAt: Date.now() },
+    );
+    const rejectedExplicitDashboard = await directSessionReq("sessions.create", {
+      agentId: "main",
+      key: durableCollisionKey,
+      incognito: true,
+    });
+    expect(rejectedExplicitDashboard).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "incognito is immutable and requires a new session key",
+      },
+    });
+  } finally {
+    closeOpenClawAgentDatabasesForTest();
+  }
+});
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,

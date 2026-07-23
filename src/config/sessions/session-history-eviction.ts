@@ -5,6 +5,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
+  isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -213,6 +214,12 @@ export function kickSessionHistoryDiskBudgetMaintenance(params: {
       explicit deletion, which can double usage via freshly written archives. */
   force?: boolean;
 }): void {
+  if (
+    params.agentId &&
+    isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
+  ) {
+    return;
+  }
   const maintenance = params.maintenanceConfig ?? resolveMaintenanceConfig();
   if (
     maintenance.mode !== "enforce" ||

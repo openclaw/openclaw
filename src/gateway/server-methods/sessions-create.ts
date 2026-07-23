@@ -335,6 +335,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
+      incognito: p.incognito,
       allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
       spawnDepth: p.spawnDepth,

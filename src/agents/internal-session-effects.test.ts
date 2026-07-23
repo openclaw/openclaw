@@ -7,6 +7,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   prepareInternalSessionEffectsSession,
@@ -14,6 +18,21 @@ import {
 } from "./internal-session-effects.js";
 
 describe("internal session effects", () => {
+  it("keeps hidden effects from an incognito run in the sentinel store", async () => {
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    try {
+      const target = await prepareInternalSessionEffectsSession({
+        agentId: "main",
+        runId: "incognito-run",
+        storePath,
+      });
+
+      expect(loadExactSessionEntry(target)?.entry.incognito).toBe(true);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+  });
+
   it("creates a hidden deterministic SQLite session", async () => {
     await withTempDir({ prefix: "openclaw-internal-session-effects-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

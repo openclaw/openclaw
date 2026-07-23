@@ -3,9 +3,9 @@ import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { getRuntimeConfig } from "../io.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { lookupIncognitoSessionAgentId } from "./incognito-session-registry.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
 import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
@@ -40,6 +40,7 @@ import type {
   SessionEntryPatchResult,
   SessionEntryTargetPatchScope,
 } from "./session-accessor.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { resolveSessionStoreEntry } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
@@ -56,14 +57,7 @@ export function resolveSessionEntryFromStore(params: {
 }
 
 export function resolveAccessStorePath(scope: SessionAccessScope): string {
-  if (scope.storePath) {
-    return scope.storePath;
-  }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  return resolveStorePath(getRuntimeConfig().session?.store, {
-    agentId,
-    env: scope.env,
-  });
+  return resolveSessionStorePathForScope(scope);
 }
 
 function isStorePathTemplate(store?: string): boolean {
@@ -158,16 +152,22 @@ export function resolveSessionEntryAccessTarget(
 export function resolveSessionEntryCandidateTarget(
   scope: SessionEntryCandidateAccessScope,
 ): ResolvedSessionEntryCandidateTarget | null {
-  const storePath = resolveStorePath(scope.cfg.session?.store, {
-    agentId: scope.agentId,
-    env: scope.env,
-  });
+  const candidateKeys = uniqueStrings(scope.candidateKeys.map((key) => key.trim()));
+  const incognitoAgentId = candidateKeys
+    .map(lookupIncognitoSessionAgentId)
+    .find((agentId) => agentId !== undefined);
+  const storePath = incognitoAgentId
+    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
+    : resolveStorePath(scope.cfg.session?.store, {
+        agentId: scope.agentId,
+        env: scope.env,
+      });
   const store = Object.fromEntries(
     listSessionEntriesReadOnly({ agentId: scope.agentId, storePath }).map(
       ({ sessionKey, entry }) => [sessionKey, entry],
     ),
   );
-  for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
+  for (const candidateKey of candidateKeys) {
     if (!candidateKey) {
       continue;
     }
@@ -208,6 +208,25 @@ function resolveSessionEntryStoreTarget(
     cfg: scope.cfg,
     requestedKey,
   });
+  const incognitoAgentId = lookupIncognitoSessionAgentId(canonicalKey);
+  if (incognitoAgentId) {
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: incognitoAgentId,
+      env: scope.env,
+    });
+    const selectedMatch = findFreshestSessionEntryMatch(
+      listSessionEntries({ agentId: incognitoAgentId, storePath }),
+      scanTargets,
+    );
+    return {
+      agentId: incognitoAgentId,
+      canonicalKey,
+      entry: selectedMatch?.entry,
+      requestedKey,
+      storeKey: selectedMatch?.sessionKey ?? canonicalKey,
+      storePath,
+    };
+  }
   const candidates = resolveLogicalSessionStoreCandidates({
     agentId,
     cfg: scope.cfg,

@@ -2,15 +2,17 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   canonicalizeSpawnedByForAgent,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { listIncognitoSessionsForAgent } from "./incognito-session-registry.js";
 import { resolveStorePath } from "./paths.js";
-import { listSessionEntriesReadOnly } from "./session-accessor.js";
+import { listSessionEntries, listSessionEntriesReadOnly } from "./session-accessor.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -29,6 +31,19 @@ function loadGatewayStoreEntries(params: {
 }): Record<string, SessionEntry> {
   return Object.fromEntries(
     listSessionEntriesReadOnly({
+      agentId: params.agentId,
+      clone: false,
+      storePath: params.storePath,
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+function loadIncognitoGatewayStoreEntries(params: {
+  agentId: string;
+  storePath: string;
+}): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({
       agentId: params.agentId,
       clone: false,
       storePath: params.storePath,
@@ -106,7 +121,32 @@ export function loadCombinedSessionStoreForGateway(
         canonicalKey,
       });
     }
-    return { storePath, store: combined };
+    const incognitoAgentIds = opts.agentId ? [normalizeAgentId(opts.agentId)] : listAgentIds(cfg);
+    let hasIncognitoSessions = false;
+    for (const agentId of incognitoAgentIds) {
+      const incognitoSessionKeys = listIncognitoSessionsForAgent(agentId);
+      if (incognitoSessionKeys.length === 0) {
+        continue;
+      }
+      hasIncognitoSessions = true;
+      const incognitoStore = loadIncognitoGatewayStoreEntries({
+        agentId,
+        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+      });
+      for (const sessionKey of incognitoSessionKeys) {
+        const entry = incognitoStore[sessionKey];
+        if (entry) {
+          mergeSessionEntryIntoCombined({
+            cfg,
+            combined,
+            entry,
+            agentId,
+            canonicalKey: sessionKey,
+          });
+        }
+      }
+    }
+    return { storePath: hasIncognitoSessions ? "(multiple)" : storePath, store: combined };
   }
 
   const requestedAgentId =
@@ -139,9 +179,44 @@ export function loadCombinedSessionStoreForGateway(
     }
   }
 
+  const incognitoTargets = (requestedAgentId ? [requestedAgentId] : listAgentIds(cfg)).flatMap(
+    (agentId) => {
+      const sessionKeys = listIncognitoSessionsForAgent(agentId);
+      return sessionKeys.length > 0
+        ? [
+            {
+              agentId,
+              sessionKeys,
+              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+            },
+          ]
+        : [];
+    },
+  );
+  for (const target of incognitoTargets) {
+    const store = loadIncognitoGatewayStoreEntries(target);
+    for (const sessionKey of target.sessionKeys) {
+      const entry = store[sessionKey];
+      if (!entry) {
+        continue;
+      }
+      mergeSessionEntryIntoCombined({
+        cfg,
+        combined,
+        entry,
+        agentId: target.agentId,
+        canonicalKey: sessionKey,
+      });
+    }
+  }
+
+  const allStorePaths = [
+    ...targets.map((target) => target.storePath),
+    ...incognitoTargets.map((target) => target.storePath),
+  ];
   const storePath =
-    targets.length === 1
-      ? expectDefined(targets[0], "targets entry at 0").storePath
+    allStorePaths.length === 1
+      ? expectDefined(allStorePaths[0], "store path at 0")
       : typeof storeConfig === "string" && storeConfig.trim()
         ? storeConfig.trim()
         : "(multiple)";

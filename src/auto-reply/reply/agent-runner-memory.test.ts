@@ -9,6 +9,10 @@ import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/r
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  registerIncognitoSession,
+  unregisterIncognitoSession,
+} from "../../config/sessions/incognito-session-registry.js";
+import {
   loadSessionEntry,
   readTranscriptStatsSync,
   upsertSessionEntry,
@@ -1181,6 +1185,63 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionEntry,
       sessionStore: { main: sessionEntry },
       sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("skips memory flush for incognito sessions", async () => {
+    const sessionEntry: SessionEntry = {
+      incognito: true,
+      sessionId: "incognito-session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(ensureMemoryFlushTargetFileMock).not.toHaveBeenCalled();
+  });
+
+  it("skips memory flush for a deleted incognito key tombstone", async () => {
+    const sessionKey = "agent:main:dashboard:deleted-incognito-memory";
+    registerIncognitoSession(sessionKey, "main");
+    unregisterIncognitoSession(sessionKey);
+    const sessionEntry: SessionEntry = {
+      sessionId: "rematerialized-session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "webchat" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
     });

@@ -259,6 +259,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
     updatedAt: number;
+    /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
+    incognito?: true;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB

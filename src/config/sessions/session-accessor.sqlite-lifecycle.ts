@@ -299,14 +299,16 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       database,
       params.target,
     );
+    const deleteTranscriptState =
+      params.archiveTranscript || params.deleteTranscriptWithoutArchive === true;
     // SQLite transcript state is keyed by session id; sessionFile is only its
     // marker. Materialization dedupes aliases that share the same state owner.
     const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(resolved);
-    const entryPlans = params.archiveTranscript
+    const entryPlans = deleteTranscriptState
       ? targetSnapshot.rows.flatMap(({ entry }) =>
           planSqliteSessionStateAfterEntryRemoval({
             archiveDirectory,
-            archiveTranscript: true,
+            archiveTranscript: params.archiveTranscript,
             database,
             entry,
             reason: "deleted",
@@ -317,7 +319,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     const entryPlanIds = new Set(entryPlans.map((plan) => plan.sessionId));
     // Ids only — planning (which loads full transcript content) happens
     // lazily one generation at a time after the main transaction.
-    const historicalGenerationIds = params.archiveTranscript
+    const historicalGenerationIds = deleteTranscriptState
       ? readSqliteSessionGenerationIdsForKeys(database, [
           params.target.canonicalKey,
           ...params.target.storeKeys,
@@ -364,7 +366,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       }
       const plan = planSqliteSessionStateDeleteIfUnreferenced({
         archiveDirectory,
-        archiveTranscript: true,
+        archiveTranscript: params.archiveTranscript,
         database,
         reason: "deleted",
         referencedSessionIds: referencedAfterDelete,

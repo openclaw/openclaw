@@ -859,6 +859,8 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
   archiveTranscript: boolean;
+  /** Delete transcript rows without writing an archive artifact. */
+  deleteTranscriptWithoutArchive?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
   /** Optional provider-run identity guard checked under the storage writer lock. */

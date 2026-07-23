@@ -268,6 +268,7 @@ export type ResetSessionEntryLifecycleParams = {
 export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
+  deleteTranscriptWithoutArchive?: boolean;
   expectedEntry?: SessionEntry;
   expectedSessionId?: string | null;
   expectedLifecycleRevision?: string;

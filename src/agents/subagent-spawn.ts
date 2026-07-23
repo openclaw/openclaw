@@ -18,6 +18,11 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
+import {
+  lookupIncognitoSessionAgentId,
+  registerIncognitoSession,
+  unregisterIncognitoSession,
+} from "../config/sessions/incognito-session-registry.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,6 +38,7 @@ import {
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import type { FastMode } from "../shared/fast-mode.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -385,6 +391,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (patch.inheritedToolPolicyVersion === 1) {
     entry.inheritedToolPolicyVersion = 1;
+  }
+  if (patch.incognito === true) {
+    entry.incognito = true;
   }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
@@ -1348,16 +1357,27 @@ export async function spawnSubagentDirect(
       }
     }
     const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
+    const incognito = lookupIncognitoSessionAgentId(requesterInternalKey) !== undefined;
+    if (incognito) {
+      registerIncognitoSession(childSessionKey, targetAgentId);
+    }
     let childCreationEntry: SessionEntry | undefined;
     const patchChildSession = async (
       patch: Record<string, unknown>,
       creationStamp?: ReturnType<typeof buildSessionCreationStamp>,
     ): Promise<string | undefined> => {
       try {
-        const target = resolveGatewaySessionStoreTarget({
-          cfg,
-          key: childSessionKey,
-        });
+        const target = incognito
+          ? {
+              agentId: targetAgentId,
+              canonicalKey: childSessionKey,
+              storeKeys: [childSessionKey],
+              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: targetAgentId }),
+            }
+          : resolveGatewaySessionStoreTarget({
+              cfg,
+              key: childSessionKey,
+            });
         const updatedEntry = await upsertSessionEntry(
           {
             storePath: target.storePath,
@@ -1390,6 +1410,7 @@ export async function spawnSubagentDirect(
       ...(swarmGroupId ? { swarmGroupId } : {}),
       ...(params.collect ? { swarmCollector: true } : {}),
       ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
+      ...(incognito ? { incognito: true } : {}),
     };
 
     const initialPatchError = await patchChildSession(
@@ -1400,6 +1421,9 @@ export async function spawnSubagentDirect(
       }),
     );
     if (initialPatchError) {
+      if (incognito) {
+        unregisterIncognitoSession(childSessionKey);
+      }
       return {
         status: "error",
         error: initialPatchError,
