@@ -449,6 +449,7 @@ export async function importNewestInboundDedupeMarkers(params: {
         key: entry.key,
         value: entry.value,
         createdAt: marker.ts,
+        ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
       })),
     );
     const importedKeys = new Set((await store.entries()).map((entry) => entry.key));

@@ -901,4 +901,45 @@ describe("matrix doctor contract state migrations", () => {
       ].toSorted(),
     );
   });
+
+  it("preserves a legacy inbound dedupe marker's remaining TTL", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const io = { context: createContext(), env };
+    const now = 2_000_000_000_000;
+    const remainingTtlMs = 1_000;
+    const roomId = "!room:example.org";
+    const eventId = "$near-expiry";
+    const key = `ops\0${roomId}\0${eventId}`;
+    const markerTs = now - MATRIX_INBOUND_DEDUPE_TTL_MS + remainingTtlMs;
+    const storedEntry = createPersistentDedupeImportEntry({ key, seenAt: markerTs });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+    await expect(
+      importNewestInboundDedupeMarkers({
+        io,
+        now,
+        markers: [
+          {
+            accountId: "ops",
+            roomId,
+            eventId,
+            ts: markerTs,
+          },
+        ],
+      }),
+    ).resolves.toEqual({ imported: 1, total: 1 });
+
+    const store = createPluginStateKeyedStoreForTests<PersistentDedupeEntry>("matrix", {
+      namespace: resolveMatrixInboundDedupeStateNamespace(),
+      maxEntries: 20_000,
+      defaultTtlMs: MATRIX_INBOUND_DEDUPE_TTL_MS,
+      env,
+    });
+    nowSpy.mockReturnValue(now + remainingTtlMs - 1);
+    await expect(store.lookup(storedEntry.key)).resolves.toEqual(storedEntry.value);
+    nowSpy.mockReturnValue(now + remainingTtlMs + 1);
+    await expect(store.lookup(storedEntry.key)).resolves.toBeUndefined();
+  });
 });
