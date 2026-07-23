@@ -61,7 +61,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
-import { msteamsSetupAdapter } from "./setup-core.js";
+import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -479,6 +479,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
       setup: msteamsSetupAdapter,
+      setupContract: msteamsSetupContract,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
         directTargetStyle: "user-prefixed",

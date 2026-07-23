@@ -861,7 +861,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it is
   - H2: Setup path A: link existing Signal account (QR)
   - H2: Setup path B: register dedicated bot number (SMS, Linux)
-  - H2: External daemon mode (httpUrl)
+  - H2: External native daemon mode
   - H2: Container mode (bbernhard/signal-cli-rest-api)
   - H2: Access control (DMs + groups)
   - H2: How it works (behavior)
@@ -7634,6 +7634,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Package metadata
   - H3: openclaw fields
   - H3: openclaw.channel
+  - H3: Channel-owned setup fields
   - H3: openclaw.install
   - H3: Deferred full load
   - H2: Plugin manifest

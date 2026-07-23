@@ -117,6 +117,14 @@ vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
 }));
 
+vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/gateway-entrypoint.js")>();
+  return {
+    ...actual,
+    resolveGatewayInstallEntrypoint: vi.fn(actual.resolveGatewayInstallEntrypoint),
+  };
+});
+
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => {
     if (process.env.OPENCLAW_NIX_MODE === "1") {
@@ -419,6 +427,7 @@ vi.mock("../runtime.js", () => ({
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+const { resolveGatewayInstallEntrypoint } = await import("../daemon/gateway-entrypoint.js");
 const {
   mutateConfigFileWithRetry,
   readConfigFileSnapshot,
@@ -439,6 +448,8 @@ const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
 const { defaultRuntime } = await import("../runtime.js");
 const postCorePluginConvergence = await import("./update-cli/post-core-plugin-convergence.js");
+const { completePostCorePluginUpdate } =
+  await import("./update-cli/update-command-fresh-doctor.js");
 const runPostCorePluginConvergenceSpy = vi.spyOn(
   postCorePluginConvergence,
   "runPostCorePluginConvergence",
@@ -882,6 +893,32 @@ describe("update-cli", () => {
       programArguments: ["node", entrypoints[0], "gateway", "run"],
     });
     return { root, entrypoints };
+  };
+
+  const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
+
+  const mockCurrentProcessFreshDoctor = (params: { postCoreResumeAttempt?: boolean } = {}) => {
+    if (params.postCoreResumeAttempt !== false) {
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
+    }
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+  };
+
+  const expectFreshPostUpdateDoctor = (params: { yes: boolean }) => {
+    const calls = vi
+      .mocked(runExec)
+      .mock.calls.filter(
+        ([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT && args[1] === "doctor",
+      );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toEqual([
+      FRESH_POST_UPDATE_ENTRYPOINT,
+      "doctor",
+      "--repair",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+      ...(params.yes ? ["--yes"] : []),
+    ]);
   };
 
   beforeEach(() => {
@@ -1486,6 +1523,7 @@ describe("update-cli", () => {
       tag: "latest",
       version: "2026.4.10",
     });
+    mockCurrentProcessFreshDoctor();
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
@@ -1508,7 +1546,32 @@ describe("update-cli", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expectFreshPostUpdateDoctor({ yes: true });
     expectNoSideEffects(runDaemonInstall, probeGateway);
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("runs the fresh doctor for a core-changing downgrade without plugin changes", async () => {
+    const downgradedRoot = createCaseDir("openclaw-downgraded-fresh-doctor-root");
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: downgradedRoot,
+          before: { version: "2026.4.14" },
+          after: { version: "2026.4.10" },
+        }),
+    });
+    readPackageVersion.mockResolvedValue("2026.4.14");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "latest", version: "2026.4.10" });
+    mockCurrentProcessFreshDoctor();
+
+    await updateCommand({ yes: true, tag: "2026.4.10", restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expectFreshPostUpdateDoctor({ yes: true });
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
@@ -1551,6 +1614,215 @@ describe("update-cli", () => {
     } finally {
       delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     }
+  });
+
+  it("runs updated plugin migrations for a plugin-only current-process update", async () => {
+    mockGitUpdateAfterMutation();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [],
+    });
+    let strictValidationEnv: string | undefined;
+    vi.mocked(readConfigFileSnapshot).mockImplementation(async (options) => {
+      if (!options) {
+        strictValidationEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+      }
+      return baseSnapshot;
+    });
+    vi.mocked(runExec).mockImplementationOnce(async (_file, args) => {
+      expect(args).toEqual([
+        "/tmp/openclaw-updated-entry.mjs",
+        "doctor",
+        "--repair",
+        "--non-interactive",
+        "--no-workspace-suggestions",
+        "--yes",
+      ]);
+      return { stdout: "", stderr: "" };
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
+    expect(runExec).toHaveBeenCalledTimes(2);
+    expect(strictValidationEnv).toBe("0");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("runs the fresh plugin doctor with the selected Node runner", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+      nodeRunner: "/opt/openclaw-service/bin/node",
+    });
+
+    expect(vi.mocked(runExec).mock.calls[0]?.[0]).toBe("/opt/openclaw-service/bin/node");
+  });
+
+  it("runs the fresh plugin doctor when the migration owner changed even if config is valid", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    const result = await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+    });
+
+    expect(result.pluginUpdate.status).toBe("ok");
+    expect(runExec).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a structured error when the fresh plugin doctor cannot run", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(new Error("doctor process failed"));
+    const result = await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+    });
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-execution-failed",
+    });
+    expect(result.pluginUpdate.warnings?.at(-1)?.reason).toContain("doctor process failed");
+  });
+
+  it("keeps an invalid config authoritative after a fresh plugin doctor failure", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    vi.mocked(runExec)
+      .mockRejectedValueOnce(new Error("doctor process failed"))
+      .mockRejectedValueOnce(new Error("config invalid"));
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      valid: false,
+      issues: [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }],
+    } as ConfigFileSnapshot);
+
+    const result = await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+    });
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+    });
+  });
+
+  it("keeps entrypoint resolution failures structured and fail-closed", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockRejectedValueOnce(
+      new Error("entrypoint lookup failed"),
+    );
+
+    const result = await completePostCorePluginUpdate({
+      root: "/tmp/openclaw-updated-root",
+      pluginUpdate: {
+        status: "ok",
+        changed: true,
+        warnings: [],
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: { changed: true, outcomes: [] },
+        integrityDrifts: [],
+      },
+      freshDoctorRequired: true,
+      yes: true,
+      json: true,
+      timeoutMs: 30_000,
+    });
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+    });
+    expect(result.pluginUpdate.warnings?.[0]?.reason).toContain("entrypoint lookup failed");
+    expect(runExec).not.toHaveBeenCalled();
   });
 
   it("fails the update when the fresh process exits non-zero", async () => {
@@ -2023,6 +2295,9 @@ describe("update-cli", () => {
   });
 
   it("includes colored ClawHub trust warnings in json post-core plugin output", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
     const trustWarning =
       "╭─ WARNING - ClawHub found security risks in this release ─╮\n" +
       "│ • Security scan:     suspicious                                      │\n" +
@@ -2236,6 +2511,9 @@ describe("update-cli", () => {
   });
 
   it("marks disabled-after-failure plugin skips as post-update warnings", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
     updateNpmInstalledPlugins.mockResolvedValueOnce({
       changed: true,
       config: baseConfig,
@@ -3118,12 +3396,14 @@ describe("update-cli", () => {
       tag: "latest",
       version: null,
     });
+    mockCurrentProcessFreshDoctor();
 
     await updateCommand({});
 
     expect(getErrorOutput()).not.toContain("Downgrade confirmation required.");
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expectPackageInstallSpec("openclaw@latest");
+    expectFreshPostUpdateDoctor({ yes: false });
   });
 
   it("blocks the package update when a non-latest dist-tag lookup is unresolved", async () => {
@@ -3147,6 +3427,7 @@ describe("update-cli", () => {
   it("warns but still runs package updates when disk space looks low", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    mockCurrentProcessFreshDoctor();
     vi.spyOn(fsSync, "statfsSync").mockReturnValue(
       statfsFixture({
         bavail: 256,
@@ -4574,6 +4855,38 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("restarts a stopped git service when the fresh plugin doctor cannot run", async () => {
+    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", serviceEntrypoint, "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    mockGitUpdateAfterMutation();
+    updateNpmInstalledPlugins.mockResolvedValueOnce({
+      changed: true,
+      config: baseConfig,
+      outcomes: [],
+    });
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(new Error("doctor process failed"));
+    await updateCommand({ yes: true });
+
+    expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("keeps managed service stop output off stdout during json package updates", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-json-stop-service-");
     const nodeModules = path.join(tempDir, "node_modules");
@@ -4787,6 +5100,7 @@ describe("update-cli", () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(pkgRoot);
+    mockCurrentProcessFreshDoctor();
     await fs.mkdir(pkgRoot, { recursive: true });
     await fs.writeFile(
       path.join(pkgRoot, "package.json"),
@@ -5522,6 +5836,7 @@ describe("update-cli", () => {
   it("repairs legacy config before persisting a requested update channel", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    mockCurrentProcessFreshDoctor();
     const legacyConfig = {
       channels: {
         slack: {
@@ -6953,6 +7268,7 @@ describe("update-cli", () => {
   it("restores an unknown package service without rewriting its missing updated entrypoint", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
+    mockCurrentProcessFreshDoctor();
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(runDaemonInstall).mockRejectedValueOnce(new Error("refresh failed"));
 
@@ -7713,6 +8029,7 @@ describe("update-cli", () => {
   });
 
   it("updateFinalizeCommand repairs doctor by default and refreshes plugin state after doctor", async () => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce("/tmp/openclaw-entry.mjs");
     const preDoctorConfig = {
       update: { channel: "stable" },
       plugins: { entries: { pre: { enabled: true } } },
@@ -7745,6 +8062,7 @@ describe("update-cli", () => {
     } satisfies Record<string, PluginInstallRecord>;
     vi.mocked(readConfigFileSnapshot)
       .mockResolvedValueOnce(preDoctorSnapshot)
+      .mockResolvedValueOnce(postDoctorSnapshot)
       .mockResolvedValueOnce(postDoctorSnapshot);
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
     syncPluginsForUpdateChannel.mockImplementationOnce(
@@ -7767,6 +8085,25 @@ describe("update-cli", () => {
       nonInteractive: true,
       repair: true,
       yes: false,
+    });
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const freshDoctorCall = vi
+      .mocked(runExec)
+      .mock.calls.find(([, args]) => args.includes("doctor"));
+    expect(freshDoctorCall?.[1]).toEqual([
+      "/tmp/openclaw-entry.mjs",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+    ]);
+    expect(freshDoctorCall?.[2]).toMatchObject({
+      cwd: process.cwd(),
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
     });
     expect(syncPluginCall()?.channel).toBe("beta");
     expect(syncPluginCall()?.config).toEqual({
@@ -7957,6 +8294,9 @@ describe("update-cli", () => {
     },
   ])("$name in non-interactive mode", async ({ options, shouldExit, shouldRunPackageUpdate }) => {
     await setupNonInteractiveDowngrade();
+    if (shouldRunPackageUpdate) {
+      mockCurrentProcessFreshDoctor({ postCoreResumeAttempt: false });
+    }
     await updateCommand(options);
 
     const downgradeMessageSeen = vi

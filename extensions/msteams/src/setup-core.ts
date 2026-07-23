@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Msteams plugin module implements setup core behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -230,6 +231,11 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
+export const msteamsSetupContract = defineChannelSetupContract({
+  fields: {},
+  legacyAdapter: msteamsSetupAdapter,
+});
+
 function enableMSTeamsAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchMSTeamsAccountConfig({
     cfg,
@@ -293,7 +299,6 @@ async function promptMSTeamsWebhookPort(params: {
   });
   return Number.parseInt(raw.trim(), 10);
 }
-
 async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
   appId: string;
   appPassword: string;

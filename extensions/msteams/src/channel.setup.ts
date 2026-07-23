@@ -17,7 +17,7 @@ import {
   type ResolvedMSTeamsAccount,
 } from "./accounts.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
-import { msteamsSetupAdapter } from "./setup-core.js";
+import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 
 const meta = {
@@ -116,4 +116,5 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   setupWizard: msteamsSetupWizard,
   setup: msteamsSetupAdapter,
+  setupContract: msteamsSetupContract,
 };
