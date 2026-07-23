@@ -489,7 +489,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 128 },
+        stream: { deliveryMode: "live" },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -556,7 +556,7 @@ describe("dispatchReplyFromConfig", () => {
         acp: {
           enabled: true,
           dispatch: { enabled: true },
-          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+          stream: {},
         },
       } as OpenClawConfig,
       dispatcher,
@@ -622,7 +622,7 @@ describe("dispatchReplyFromConfig", () => {
         acp: {
           enabled: true,
           dispatch: { enabled: true },
-          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+          stream: {},
         },
       } as OpenClawConfig,
       dispatcher,
@@ -710,7 +710,7 @@ describe("dispatchReplyFromConfig", () => {
         acp: {
           enabled: true,
           dispatch: { enabled: true },
-          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+          stream: {},
         },
       } as OpenClawConfig,
       dispatcher: createDispatcher(),
@@ -1019,7 +1019,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live" },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -1108,7 +1108,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live" },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -1164,7 +1164,7 @@ describe("dispatchReplyFromConfig", () => {
       acp: {
         enabled: true,
         dispatch: { enabled: true },
-        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 256 },
+        stream: { deliveryMode: "live" },
       },
     } as OpenClawConfig;
     const dispatcher = createDispatcher();

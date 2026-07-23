@@ -3,7 +3,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -13,7 +16,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
-import { isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { isReplyPayloadStatusNotice, isReplyPayloadTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -21,7 +24,10 @@ import {
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
+import {
+  readDispatcherCancelledCounts,
+  readDispatcherFailedCounts,
+} from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -164,8 +170,11 @@ type AcpDispatchDeliveryState = {
   cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   blockCount: number;
   deliveredFinalReply: boolean;
+  deliveredFinalReplyToUser: boolean;
+  deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
+  failedFinalDelivery: boolean;
   queuedDirectVisibleTextDeliveries: number;
   settledDirectVisibleText: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
@@ -188,8 +197,11 @@ export type AcpDispatchDeliveryCoordinator = {
   resolveAccumulatedDeliveredTranscriptText: () => Promise<string>;
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
+  hasDeliveredFinalReplyToUser: () => boolean;
+  hasDeliveredFinalTtsMedia: () => boolean;
   hasDeliveredVisibleText: () => boolean;
   hasFailedVisibleTextDelivery: () => boolean;
+  hasFailedFinalDelivery: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -204,6 +216,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressBlockUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -257,8 +270,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       : undefined,
     blockCount: 0,
     deliveredFinalReply: false,
+    deliveredFinalReplyToUser: false,
+    deliveredFinalTtsMedia: false,
     deliveredVisibleText: false,
     failedVisibleTextDelivery: false,
+    failedFinalDelivery: false,
     queuedDirectVisibleTextDeliveries: 0,
     settledDirectVisibleText: false,
     routedCounts: {
@@ -306,11 +322,21 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
     const failedCounts = readDispatcherFailedCounts(params.dispatcher);
-    const failedVisibleCount = failedCounts.block + failedCounts.final;
-    if (failedVisibleCount > 0) {
+    // A beforeDeliver / reply_payload_sending hook that returns null cancels the
+    // send after enqueue() already reported acceptance. That is tracked as
+    // cancelled, not failed, yet nothing reached the user — so cancelled counts
+    // must fold into the undelivered accounting alongside failed counts.
+    const cancelledCounts = readDispatcherCancelledCounts(params.dispatcher);
+    const undeliveredVisibleCount =
+      failedCounts.block + failedCounts.final + cancelledCounts.block + cancelledCounts.final;
+    const undeliveredFinal = failedCounts.final + cancelledCounts.final;
+    if (undeliveredVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;
     }
-    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
+    if (undeliveredFinal > 0) {
+      state.failedFinalDelivery = true;
+    }
+    if (state.queuedDirectVisibleTextDeliveries > undeliveredVisibleCount) {
       state.deliveredVisibleText = true;
     }
   };
@@ -428,6 +454,31 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (params.suppressUserDelivery) {
       return false;
     }
+    if (kind === "block" && params.suppressBlockUserDelivery) {
+      const hasNonTextContent =
+        visiblePayload.mediaUrl ||
+        (visiblePayload.mediaUrls && visiblePayload.mediaUrls.length > 0) ||
+        visiblePayload.presentation ||
+        visiblePayload.interactive ||
+        visiblePayload.channelData;
+      if (!hasNonTextContent) {
+        // Text-only block: suppress delivery, text accumulates for the caption
+        return false;
+      }
+      // Strip text from media blocks — caption goes on the final TTS voice note
+      visiblePayload = { ...visiblePayload, text: undefined };
+    }
+    if (kind === "tool" && params.suppressBlockUserDelivery) {
+      // Tool results carrying media drop their text so the caption is not
+      // duplicated by the final TTS voice note. Text-only tool results stay
+      // intact — they are progress/status, not the final caption content.
+      // Uses media-only check (not the broader block check) to preserve text
+      // on interactive/approval tool results that have no media.
+      const hasMedia = resolveSendableOutboundReplyParts(visiblePayload).hasMedia;
+      if (hasMedia) {
+        visiblePayload = { ...visiblePayload, text: undefined };
+      }
+    }
 
     const ttsPayload = await maybeApplyAcpTts({
       payload: visiblePayload,
@@ -440,6 +491,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
       skipTts: meta?.skipTts,
     });
+    // ACP only emits text finals plus the genuine synthesized voice supplement
+    // today, so a final's media must be a TTS supplement to count as delivered TTS
+    // media. This defends the deliveredFinalTtsMedia writes below against a
+    // hypothetical ordinary media-only final falsely satisfying the TTS-media gate.
+    const hasFinalMedia =
+      kind === "final" &&
+      resolveSendableOutboundReplyParts(ttsPayload).hasMedia &&
+      isReplyPayloadTtsSupplement(ttsPayload);
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = normalizeOptionalString(meta?.toolCallId);
@@ -494,6 +553,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         return false;
       }
       if (result.suppressed) {
+        // Suppression means the route-reply hook cancelled the actual send, so
+        // nothing reached the user. Treat it as a handled final reply for
+        // reply-tracking, but leave deliveredFinalTtsMedia false: no media was
+        // delivered, so the downstream text fallback must still be able to fire.
         if (kind === "final") {
           state.deliveredFinalReply = true;
         }
@@ -514,6 +577,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       appendDeliveredTranscriptText(kind, rawBlockText, rawFinalText);
       if (kind === "final") {
         state.deliveredFinalReply = true;
+        // Genuine (non-suppressed) routed final actually reached the user, so the
+        // text fallback must not double-send. Suppression above leaves this false.
+        state.deliveredFinalReplyToUser = true;
+        if (hasFinalMedia) {
+          state.deliveredFinalTtsMedia = true;
+        }
       }
       if (tracksVisibleText) {
         state.deliveredVisibleText = true;
@@ -553,6 +622,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
+      // Direct dispatcher accepted the final, so it reached the user. Drives the
+      // text fallback gate; suppression never takes this branch.
+      state.deliveredFinalReplyToUser = true;
+      if (hasFinalMedia) {
+        state.deliveredFinalTtsMedia = true;
+      }
     }
     if (delivered && tracksVisibleText) {
       state.queuedDirectVisibleTextDeliveries += 1;
@@ -581,8 +656,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
+    hasDeliveredFinalReplyToUser: () => state.deliveredFinalReplyToUser,
+    hasDeliveredFinalTtsMedia: () => state.deliveredFinalTtsMedia,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
+    hasFailedFinalDelivery: () => state.failedFinalDelivery,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

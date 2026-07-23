@@ -62,3 +62,9 @@ export function readDispatcherFailedCounts(
 ): Record<ReplyDispatchKind, number> {
   return dispatcher.getFailedCounts?.() ?? { tool: 0, block: 0, final: 0 };
 }
+
+export function readDispatcherCancelledCounts(
+  dispatcher: DispatcherOutcomeCountsView,
+): Record<ReplyDispatchKind, number> {
+  return dispatcher.getCancelledCounts?.() ?? { tool: 0, block: 0, final: 0 };
+}

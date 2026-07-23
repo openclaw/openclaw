@@ -168,6 +168,7 @@ export function createTelegramPluginBase(params: {
       tts: {
         voice: {
           synthesisTarget: "voice-note",
+          captionedFinalText: true,
         },
       },
       polls: true,

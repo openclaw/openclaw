@@ -37,6 +37,7 @@ import {
 } from "../../bindings/records.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
+import { resolveChannelTtsVoiceDelivery } from "../../channels/plugins/index.js";
 import {
   type AgentPlanStep,
   formatPlanChecklistLines,
@@ -79,7 +80,11 @@ import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
-import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
+import {
+  createTtsDirectiveTextStreamCleaner,
+  resolveDirectiveOnlyTtsCaptionText,
+} from "../../tts/directives.js";
+import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import {
   normalizeTtsAutoMode,
   resolveConfiguredTtsMode,
@@ -668,6 +673,30 @@ async function dispatchReplyFromConfigInner(
         replyRoute.chatType,
       )
     : undefined;
+
+  const supportsCaptionedVoice =
+    resolveChannelTtsVoiceDelivery(deliveryChannel)?.captionedFinalText ?? false;
+  const captionedFinalTtsMode = resolveConfiguredTtsMode(cfg, {
+    agentId: sessionAgentId,
+    channelId: deliveryChannel,
+    accountId: replyRoute.accountId,
+  });
+  const captionedFinalTtsStatus = resolveStatusTtsSnapshot({
+    cfg,
+    sessionAuto: sessionTtsAuto,
+    agentId: sessionAgentId,
+    channelId: deliveryChannel,
+    accountId: replyRoute.accountId,
+  });
+  const canCaptionFinalTts =
+    supportsCaptionedVoice &&
+    captionedFinalTtsMode === "final" &&
+    captionedFinalTtsStatus != null &&
+    captionedFinalTtsStatus.autoMode !== "off" &&
+    !(captionedFinalTtsStatus.autoMode === "inbound" && !inboundAudio);
+  const willUseCaptionedFinalTts =
+    canCaptionFinalTts && captionedFinalTtsStatus?.autoMode !== "tagged";
+
   let normalizeReplyMediaPaths:
     | ReturnType<
         (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
@@ -1586,6 +1615,9 @@ async function dispatchReplyFromConfigInner(
     ): Promise<{
       queuedFinal: boolean;
       routedFinalCount: number;
+      deliveredMedia: boolean;
+      deliveredFinal: boolean;
+      deliveredFinalVisibleText: boolean;
       dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
     }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
@@ -1619,6 +1651,11 @@ async function dispatchReplyFromConfigInner(
         markInboundDedupeReplayUnsafe();
         finalReplyDeliveryStarted = true;
       }
+      // Capture the original reply's media before TTS so we can tell a genuinely
+      // synthesized captioned voice (no media in, media out) apart from an ordinary
+      // image/file final. Only synthesized media should count as delivered TTS media
+      // for the captioned block-text fallback gate.
+      const replyHadOwnMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
       const ttsPayload =
         payload.isReasoning === true || payload.isCommentary === true
           ? payload
@@ -1632,7 +1669,17 @@ async function dispatchReplyFromConfigInner(
               accountId: replyRoute.accountId,
             });
       throwIfFinalDeliveryAborted();
-      const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+      const directiveOnlyCaptionText =
+        canCaptionFinalTts && ttsPayload.mediaUrl && !normalizeOptionalString(ttsPayload.text)
+          ? resolveDirectiveOnlyTtsCaptionText(payload.text)
+          : undefined;
+      const finalTtsPayload = directiveOnlyCaptionText
+        ? { ...ttsPayload, text: directiveOnlyCaptionText }
+        : ttsPayload;
+      const normalizedPayload = await normalizeReplyMediaPayload(finalTtsPayload);
+      const normalizedFinalParts = resolveSendableOutboundReplyParts(normalizedPayload);
+      const payloadHasMedia = normalizedFinalParts.hasMedia;
+      const payloadHasVisibleText = normalizedFinalParts.hasText;
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
@@ -1654,6 +1701,18 @@ async function dispatchReplyFromConfigInner(
         return {
           queuedFinal: result.ok,
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+          // Only treat media as delivered when the route actually delivered it, so a
+          // failed/suppressed final send still lets the accumulated-text fallback run.
+          // Restrict to TTS-synthesized media (original had none) so an ordinary
+          // image/file final does not falsely satisfy the captioned TTS-media gate.
+          deliveredMedia: payloadHasMedia && isRoutedReplyDelivered(result) && !replyHadOwnMedia,
+          // Delivered-to-user: false on suppress/fail. Drives the accumulated-block
+          // fallback so a hook-suppressed final (ok but not delivered) is not dropped.
+          deliveredFinal: isRoutedReplyDelivered(result),
+          // Whether the delivered final actually carried visible text/caption. Lets
+          // the captioned fallback gate distinguish a text-bearing final from an
+          // ordinary media-only final that left accumulated block text undelivered.
+          deliveredFinalVisibleText: payloadHasVisibleText && isRoutedReplyDelivered(result),
         };
       }
       throwIfFinalDeliveryAborted();
@@ -1729,6 +1788,9 @@ async function dispatchReplyFromConfigInner(
       return {
         queuedFinal,
         routedFinalCount: 0,
+        deliveredMedia: payloadHasMedia && queuedFinal && !replyHadOwnMedia,
+        deliveredFinal: queuedFinal,
+        deliveredFinalVisibleText: payloadHasVisibleText && queuedFinal,
         ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
       };
     };
@@ -1977,6 +2039,7 @@ async function dispatchReplyFromConfigInner(
     let accumulatedBlockText = "";
     let accumulatedBlockTtsText = "";
     let blockCount = 0;
+    let deliveredAnyVisibleBlockText = false;
     const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
       cfg,
       ttsAuto: sessionTtsAuto,
@@ -2303,7 +2366,9 @@ async function dispatchReplyFromConfigInner(
                   shouldSuppressToolErrorWarnings,
                   typingPolicy: typing.typingPolicy,
                   suppressTyping: typing.suppressTyping,
-                  onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
+                  onPartialReply: canCaptionFinalTts
+                    ? undefined
+                    : wrapProgressCallback(params.replyOptions?.onPartialReply),
                   onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
                   streamReasoningInNonStreamModes:
                     params.replyOptions?.streamReasoningInNonStreamModes,
@@ -2414,11 +2479,26 @@ async function dispatchReplyFromConfigInner(
                       ) {
                         return;
                       }
-                      const visibleToolPayload = isForcedToolProgress
+                      let visibleToolPayload = isForcedToolProgress
                         ? payload
                         : resolveToolDeliveryPayload(payload);
                       if (!visibleToolPayload) {
                         return;
+                      }
+                      if (willUseCaptionedFinalTts) {
+                        // Tool results that carry media must drop their text so the caption
+                        // is not duplicated by the final TTS voice note caption. Text-only
+                        // tool results stay intact — they are progress/status, not the
+                        // caption content owned by the final reply.
+                        // NOTE: uses media-only check (not the broader block-path check that
+                        // also covers presentation/interactive/channelData) because tool
+                        // results with interactive/approval content but no media need their
+                        // text preserved — it IS the content, not a duplicate caption.
+                        const hasMedia =
+                          resolveSendableOutboundReplyParts(visibleToolPayload).hasMedia;
+                        if (hasMedia) {
+                          visibleToolPayload = { ...visibleToolPayload, text: undefined };
+                        }
                       }
                       const ttsPayload = await maybeApplyTtsWithFinalizationLease({
                         payload: visibleToolPayload,
@@ -2658,7 +2738,18 @@ async function dispatchReplyFromConfigInner(
                         accumulatedBlockTtsText += payload.text;
                         blockCount++;
                       }
-                      const visiblePayload =
+                      if (willUseCaptionedFinalTts) {
+                        const hasNonTextContent =
+                          payload.mediaUrl ||
+                          (payload.mediaUrls && payload.mediaUrls.length > 0) ||
+                          payload.presentation ||
+                          payload.interactive ||
+                          payload.channelData;
+                        if (!hasNonTextContent) {
+                          return;
+                        }
+                      }
+                      let visiblePayload =
                         payload.text &&
                         cleanBlockTtsDirectiveText &&
                         !isStatusNotice &&
@@ -2672,9 +2763,14 @@ async function dispatchReplyFromConfigInner(
                               });
                             })()
                           : payload;
+                      if (willUseCaptionedFinalTts) {
+                        // Strip text from media blocks — caption goes on the final TTS voice note
+                        visiblePayload = { ...visiblePayload, text: undefined };
+                      }
                       if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                         return;
                       }
+                      deliveredAnyVisibleBlockText = true;
                       // Channels that keep a live draft preview may need to rotate their
                       // preview state at the logical block boundary before queued block
                       // delivery drains asynchronously through the dispatcher.
@@ -2837,6 +2933,13 @@ async function dispatchReplyFromConfigInner(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
+    let deliveredFinalTtsMedia = false;
+    let deliveredFinalToUser = false;
+    // Tracks whether any delivered final carried visible text/caption. In
+    // captioned-final mode an ordinary media-only final delivers to the user but
+    // carries no text, so deliveredFinalToUser alone would wrongly suppress the
+    // accumulated block-text fallback. This signal keeps that text flowing.
+    let deliveredFinalVisibleText = false;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
     const finalDeliveries: Array<{
@@ -2844,6 +2947,39 @@ async function dispatchReplyFromConfigInner(
       payload: ReplyPayload;
     }> = [];
     let allQueuedFinalsObserved = true;
+    // Captioned-final mode suppresses the streamed block text so the final voice can
+    // carry it as a caption. A voice sent through the raw dispatcher only proves
+    // admission when sendFinalReply returns — the visible send (e.g. Telegram
+    // sendVoice) settles async and can still fail. This registers a post-settlement
+    // recovery (a sibling of the transcript-mirror settle task) that re-sends the
+    // accumulated block text as a text-only final when THIS voice's own outcome
+    // failed/cancelled, so suppressed content is never silently dropped. Scoping to
+    // the voice's per-payload delivery outcome — not an aggregate final-outcome delta —
+    // keeps a sibling final's failure from re-sending duplicate block text (#83511). It
+    // runs after waitForIdle inside settleReplyDispatcher, off the reply hot path, so it
+    // never blocks completion the way an inline waitForIdle would (#99549).
+    const registerCaptionedFinalTextRecovery = (
+      voiceOutcome: Promise<ReplyDispatchDeliveryOutcome>,
+    ) => {
+      const directiveFallbackText =
+        !deliveredAnyVisibleBlockText && cleanBlockTtsDirectiveText
+          ? resolveDirectiveOnlyTtsCaptionText(accumulatedBlockText)
+          : undefined;
+      const fallbackText = directiveFallbackText ?? accumulatedBlockText;
+      if (!fallbackText.trim()) {
+        return;
+      }
+      registerReplyDispatcherSettledTask(dispatcher, async () => {
+        // The captioned voice reached the user; its caption already carried the text.
+        if ((await voiceOutcome) === "delivered") {
+          return;
+        }
+        dispatcher.sendFinalReply({ text: fallbackText });
+        // Re-drain so the recovery text flushes before settle completes; the enqueue
+        // extends the same send chain waitForIdle returns.
+        await dispatcher.waitForIdle();
+      });
+    };
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
     // room_event suppression. Ambient marked notices (no CommandTurn) stay
@@ -2891,6 +3027,9 @@ async function dispatchReplyFromConfigInner(
       attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
+      deliveredFinalTtsMedia = finalReply.deliveredMedia || deliveredFinalTtsMedia;
+      deliveredFinalToUser = finalReply.deliveredFinal || deliveredFinalToUser;
+      deliveredFinalVisibleText = finalReply.deliveredFinalVisibleText || deliveredFinalVisibleText;
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         if (finalReply.dispatcherOutcome) {
@@ -2898,6 +3037,14 @@ async function dispatchReplyFromConfigInner(
         } else {
           allQueuedFinalsObserved = false;
         }
+      }
+      // A captioned final voice admitted through the raw dispatcher is only queued
+      // here, not confirmed delivered. Recover the suppressed block text if THIS
+      // voice's own outcome fails/cancels async. deliveredMedia is set only for a
+      // genuinely synthesized voice on the direct-dispatcher path (dispatcherOutcome
+      // present); the routed path already knows delivery synchronously.
+      if (willUseCaptionedFinalTts && finalReply.deliveredMedia && finalReply.dispatcherOutcome) {
+        registerCaptionedFinalTextRecovery(finalReply.dispatcherOutcome);
       }
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
@@ -2947,15 +3094,22 @@ async function dispatchReplyFromConfigInner(
         channelId: deliveryChannel,
         accountId: replyRoute.accountId,
       });
-      // Generate TTS-only reply after block streaming completes (when there's no final reply).
-      // This handles the case where block streaming succeeds and drops final payloads,
-      // but we still want TTS audio to be generated from the accumulated block content.
       if (
         ttsMode === "final" &&
-        replies.length === 0 &&
+        !deliveredFinalTtsMedia &&
+        // Gate on delivered-to-user, not the handled flag: a hook-suppressed final
+        // sets queuedFinal (handled) but never reaches the user, so the synth + text
+        // fallback must still run. Genuine deliveries keep this blocked. In
+        // captioned-final mode an ordinary media-only final delivers to the user but
+        // carries no visible text, so block on delivered visible text/TTS media there
+        // instead — otherwise the accumulated assistant text would be dropped.
+        (willUseCaptionedFinalTts
+          ? !(deliveredFinalTtsMedia || deliveredFinalVisibleText)
+          : !deliveredFinalToUser) &&
         blockCount > 0 &&
         accumulatedBlockTtsText.trim()
       ) {
+        let ttsMediaDelivered = false;
         try {
           await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
@@ -2969,23 +3123,36 @@ async function dispatchReplyFromConfigInner(
             accountId: replyRoute.accountId,
           });
           throwIfDispatchOperationAborted();
-          // Only send if TTS was actually applied (mediaUrl exists)
           if (ttsSyntheticReply.mediaUrl) {
-            // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
-            // Keep the spoken text only for hooks/archive consumers.
-            const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
+            const directiveConsumedAllText =
+              !deliveredAnyVisibleBlockText && cleanBlockTtsDirectiveText != null;
+            const directiveCaptionText =
+              canCaptionFinalTts && directiveConsumedAllText
+                ? resolveDirectiveOnlyTtsCaptionText(accumulatedBlockText)
+                : undefined;
+            const finalCaptionText = directiveCaptionText
+              ? directiveCaptionText
+              : canCaptionFinalTts && willUseCaptionedFinalTts
+                ? accumulatedBlockText
+                : undefined;
+            const textAlreadyDelivered =
+              canCaptionFinalTts && finalCaptionText
+                ? undefined
+                : { visibleTextAlreadyDelivered: true };
+            const ttsPayload = markReplyPayloadAsTtsSupplement(
               {
+                ...(finalCaptionText ? { text: finalCaptionText } : {}),
                 mediaUrl: ttsSyntheticReply.mediaUrl,
                 audioAsVoice: ttsSyntheticReply.audioAsVoice,
                 spokenText: accumulatedBlockTtsText,
                 trustedLocalMedia: true,
               },
               accumulatedBlockTtsText,
-              { visibleTextAlreadyDelivered: true },
+              textAlreadyDelivered,
             );
-            const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
+            const normalizedTtsPayload = await normalizeReplyMediaPayload(ttsPayload);
             throwIfDispatchOperationAborted();
-            const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
+            const result = await routeReplyToOriginating(normalizedTtsPayload, {
               abortSignal: getDispatchAbortSignal(),
               kind: "final",
             });
@@ -2993,6 +3160,7 @@ async function dispatchReplyFromConfigInner(
               queuedFinal = result.ok || queuedFinal;
               if (isRoutedReplyDelivered(result)) {
                 routedFinalCount += 1;
+                ttsMediaDelivered = true;
               }
               if (!result.ok) {
                 logVerbose(
@@ -3002,8 +3170,19 @@ async function dispatchReplyFromConfigInner(
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
-              const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
+              // sendFinalReply only proves admission; the synthesized voice settles
+              // async and can still fail. Optimistically suppress the inline text
+              // fallback and register a post-settlement recovery that re-sends the block
+              // text if THIS voice's own outcome fails/cancels — mirroring the
+              // direct-final recovery, and keeping the reply operation off waitForIdle
+              // (the deadlock removed in #99549).
+              const ttsVoiceOutcome = captureReplyDispatchDeliveryOutcome(normalizedTtsPayload);
+              const didQueue = dispatcher.sendFinalReply(normalizedTtsPayload);
               queuedFinal = didQueue || queuedFinal;
+              ttsMediaDelivered = didQueue;
+              if (didQueue && ttsVoiceOutcome.isTracked()) {
+                registerCaptionedFinalTextRecovery(ttsVoiceOutcome.promise);
+              }
             }
           }
         } catch (err) {
@@ -3013,6 +3192,46 @@ async function dispatchReplyFromConfigInner(
           logVerbose(
             `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
           );
+        }
+        if (
+          !ttsMediaDelivered &&
+          accumulatedBlockText.trim() &&
+          (willUseCaptionedFinalTts ||
+            (!deliveredAnyVisibleBlockText && cleanBlockTtsDirectiveText != null))
+        ) {
+          try {
+            throwIfDispatchOperationAborted();
+            const directiveFallbackText =
+              !deliveredAnyVisibleBlockText && cleanBlockTtsDirectiveText
+                ? resolveDirectiveOnlyTtsCaptionText(accumulatedBlockText)
+                : undefined;
+            const fallbackText = directiveFallbackText ?? accumulatedBlockText;
+            if (fallbackText) {
+              const fallbackPayload: ReplyPayload = { text: fallbackText };
+              const result = await routeReplyToOriginating(fallbackPayload, {
+                abortSignal: getDispatchAbortSignal(),
+                kind: "final",
+              });
+              if (result) {
+                queuedFinal = result.ok || queuedFinal;
+                if (isRoutedReplyDelivered(result)) {
+                  routedFinalCount += 1;
+                }
+              } else {
+                throwIfDispatchOperationAborted();
+                markInboundDedupeReplayUnsafe();
+                const didQueue = dispatcher.sendFinalReply(fallbackPayload);
+                queuedFinal = didQueue || queuedFinal;
+              }
+            }
+          } catch (err) {
+            if (isDispatchReplyOperationAbortedError(err)) {
+              throw err;
+            }
+            logVerbose(
+              `dispatch-from-config: TTS text fallback failed: ${formatErrorMessage(err)}`,
+            );
+          }
         }
       }
     }
