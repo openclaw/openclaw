@@ -370,4 +370,66 @@ describe("gateway cli backend live helpers", () => {
     ).toBe(false);
     expect(shouldRetryCliCronMcpProbeReply("live-mcp-abc123")).toBe(false);
   });
+
+  describe("parseJsonStringArray", () => {
+    it("returns undefined for empty input", () => {
+      const { parseJsonStringArray } = liveHelpers;
+      expect(parseJsonStringArray("test", "")).toBeUndefined();
+      expect(parseJsonStringArray("test", "   ")).toBeUndefined();
+      expect(parseJsonStringArray("test", undefined)).toBeUndefined();
+    });
+
+    it("throws for malformed JSON", () => {
+      const { parseJsonStringArray } = liveHelpers;
+      expect(() => parseJsonStringArray("test", "{bad json")).toThrow(
+        "test must be a JSON array of strings.",
+      );
+    });
+
+    it("throws for truncated JSON", () => {
+      const { parseJsonStringArray } = liveHelpers;
+      expect(() => parseJsonStringArray("test", '["item1')).toThrow(
+        "test must be a JSON array of strings.",
+      );
+      expect(() => parseJsonStringArray("test", '["item1", "it')).toThrow(
+        "test must be a JSON array of strings.",
+      );
+    });
+
+    it("throws for valid JSON that is not an array of strings", () => {
+      const { parseJsonStringArray } = liveHelpers;
+      expect(() => parseJsonStringArray("test", "{}")).toThrow(
+        "test must be a JSON array of strings.",
+      );
+      expect(() => parseJsonStringArray("test", "[1, 2, 3]")).toThrow(
+        "test must be a JSON array of strings.",
+      );
+      expect(() => parseJsonStringArray("test", "[null]")).toThrow(
+        "test must be a JSON array of strings.",
+      );
+      expect(() => parseJsonStringArray("test", '["ok", 42]')).toThrow(
+        "test must be a JSON array of strings.",
+      );
+    });
+
+    it("returns parsed array for valid JSON array of strings", () => {
+      const { parseJsonStringArray } = liveHelpers;
+      expect(parseJsonStringArray("test", '["a", "b"]')).toEqual(["a", "b"]);
+      expect(parseJsonStringArray("test", "[]")).toEqual([]);
+      expect(parseJsonStringArray("test", '["single"]')).toEqual(["single"]);
+    });
+
+    it("handles special characters in input", () => {
+      const { parseJsonStringArray } = liveHelpers;
+      expect(parseJsonStringArray("test", '["with space", "with.dots", "with_underscore"]')).toEqual([
+        "with space",
+        "with.dots",
+        "with_underscore",
+      ]);
+      expect(parseJsonStringArray("test", '["\\"escaped\\"", "line\\nbreak"]')).toEqual([
+        '"escaped"',
+        "line\nbreak",
+      ]);
+    });
+  });
 });
