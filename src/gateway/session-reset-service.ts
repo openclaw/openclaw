@@ -1087,6 +1087,7 @@ export async function performGatewaySessionReset(params: {
         };
       }
       const hadExistingEntry = Boolean(entry);
+      const resetLifecycleRevision = entry?.lifecycleRevision;
       const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const resetPluginRegistry = getActivePluginRegistry();
@@ -1224,12 +1225,17 @@ export async function performGatewaySessionReset(params: {
             params.assertCurrent?.();
             throw new Error(`Session ${params.key} changed before reset boundary commit.`);
           }
-          resetBoundaryAppended = currentEntry !== undefined;
-          if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
+          if (
+            currentEntry &&
+            !isResetLifecycleCurrent() &&
+            currentEntry.lifecycleRevision !== resetLifecycleRevision
+          ) {
             // A newer owner already replaced or removed the session while cleanup
-            // targeted the old id. Preserve that newer state instead of resetting it.
-            params.assertCurrent?.();
+            // targeted the old lifecycle. Preserve that newer state instead of resetting it.
+            resetSkipped = true;
+            return currentEntry;
           }
+          resetBoundaryAppended = currentEntry !== undefined;
           const parsed = parseAgentSessionKey(primaryKey);
           const sessionAgentId = normalizeAgentId(
             parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
