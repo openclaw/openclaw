@@ -65,7 +65,9 @@ describe("one-shot CLI exit", () => {
       markers: {},
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(exit).not.toHaveBeenCalled();
 
     finishRun?.();
@@ -88,7 +90,9 @@ describe("one-shot CLI exit", () => {
           throw new Error("command failed");
         },
         onError: async () => {
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           order.push("reported");
           process.exitCode = 6;
         },
