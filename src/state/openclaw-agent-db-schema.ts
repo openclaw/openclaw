@@ -13,7 +13,6 @@ import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { VERSION } from "../version.js";
-import { OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL } from "./openclaw-agent-board-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
@@ -39,6 +38,7 @@ import {
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL } from "./openclaw-agent-session-sharing-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
@@ -515,7 +515,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       migrateOpenClawAgentSchema(db);
       db.exec(
         previousVersion === OPENCLAW_AGENT_SCHEMA_VERSION
-          ? OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL
+          ? AGENT_SCHEMA_WITHOUT_LAZY_SURFACES_SQL
           : OPENCLAW_AGENT_SCHEMA_SQL,
       );
       migrateSessionTranscriptGenerations(db, previousVersion);

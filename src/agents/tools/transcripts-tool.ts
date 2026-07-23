@@ -67,7 +67,9 @@ const TranscriptsSchema = Type.Object(
 );
 
 function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
-  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: ctx.stateDir },
+  });
 }
 
 async function waitForPendingAutoStartsToSettle(
@@ -92,28 +94,24 @@ async function waitForPendingAutoStartsToSettle(
   }
 }
 
-// Summaries are persisted beside the session so stop/import/summarize actions
-// return both model-readable details and a durable artifact path.
+// Tool stop/import/summarize actions explicitly materialize artifacts, but a
+// divergent export must not turn a successful canonical summary write into failure.
 async function summarizeAndPersist(params: {
   config: ReturnType<typeof resolveTranscriptsConfig>;
   store: TranscriptsStore;
   session: TranscriptSessionDescriptor;
-  sessionDir?: string;
 }) {
-  const utterances =
-    params.sessionDir !== undefined
-      ? await params.store.readUtterancesFromSessionDir(params.sessionDir, {
-          maxUtterances: params.config.maxUtterances,
-        })
-      : await params.store.readUtterancesForSession(params.session, {
-          maxUtterances: params.config.maxUtterances,
-        });
+  const utterances = await params.store.readUtterancesForSession(params.session, {
+    maxUtterances: params.config.maxUtterances,
+  });
   const summary = summarizeTranscripts({ session: params.session, utterances });
-  const summaryPath =
-    params.sessionDir !== undefined
-      ? await params.store.writeSummaryToDir(summary, params.sessionDir)
-      : await params.store.writeSummary(summary, params.session);
-  return { summary, summaryPath };
+  const intendedSummaryPath = await params.store.writeSummary(summary, params.session);
+  try {
+    const artifacts = await params.store.materializeSessionArtifacts(params.session, "all");
+    return { summary, summaryPath: artifacts.summaryPath };
+  } catch (error) {
+    return { summary, intendedSummaryPath, summaryExportError: String(error) };
+  }
 }
 
 async function stopTranscripts(params: {
@@ -127,9 +125,9 @@ async function stopTranscripts(params: {
   });
   const directActive = activeSessions.get(sessionSelector);
   const resolvedEntry: TranscriptsSessionEntry | undefined = directActive
-    ? { session: directActive.session, sessionDir: params.store.sessionDir(directActive.session) }
+    ? undefined
     : await params.store.readSessionEntry(sessionSelector);
-  const resolvedSession = resolvedEntry?.session;
+  const resolvedSession = directActive?.session ?? resolvedEntry?.session;
   const activeCandidate =
     resolvedSession !== undefined ? activeSessions.get(resolvedSession.sessionId) : undefined;
   const activeMatchesResolved =
@@ -188,18 +186,23 @@ async function stopTranscripts(params: {
   } else {
     await params.store.updateStopped(sessionSelector, stoppedAt);
   }
-  const { summaryPath, summary } = await summarizeAndPersist({
-    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
-    store: params.store,
-    session: stoppedSession,
-    sessionDir: selectedActive ? undefined : resolvedEntry?.sessionDir,
-  });
-  return toolText(`Transcripts stopped: ${sessionId}\nSummary: ${summaryPath}`, {
-    sessionId,
-    ...(providerStopError ? { providerStopError } : {}),
-    summary,
-    summaryPath,
-  });
+  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+    await summarizeAndPersist({
+      config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+      store: params.store,
+      session: stoppedSession,
+    });
+  return toolText(
+    `Transcripts stopped: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
+    {
+      sessionId,
+      ...(providerStopError ? { providerStopError } : {}),
+      ...(summaryExportError ? { summaryExportError } : {}),
+      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
+      summary,
+      ...(summaryPath ? { summaryPath } : {}),
+    },
+  );
 }
 
 async function importTranscripts(params: {
@@ -233,17 +236,23 @@ async function importTranscripts(params: {
   for (const utterance of utterances) {
     await params.store.appendUtteranceForSession(session, utterance);
   }
-  const { summaryPath, summary } = await summarizeAndPersist({
-    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
-    store: params.store,
-    session,
-  });
-  return toolText(`Transcript imported: ${session.sessionId}\nSummary: ${summaryPath}`, {
-    sessionId: session.sessionId,
-    utteranceCount: utterances.length,
-    summary,
-    summaryPath,
-  });
+  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+    await summarizeAndPersist({
+      config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+      store: params.store,
+      session,
+    });
+  return toolText(
+    `Transcript imported: ${session.sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
+    {
+      sessionId: session.sessionId,
+      utteranceCount: utterances.length,
+      ...(summaryExportError ? { summaryExportError } : {}),
+      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
+      summary,
+      ...(summaryPath ? { summaryPath } : {}),
+    },
+  );
 }
 
 async function summarizeExisting(params: {
@@ -259,17 +268,22 @@ async function summarizeExisting(params: {
   if (!entry) {
     throw new Error(`transcripts session not found: ${sessionId}`);
   }
-  const { summaryPath, summary } = await summarizeAndPersist({
-    config: params.config,
-    store: params.store,
-    session: entry.session,
-    sessionDir: entry.sessionDir,
-  });
-  return toolText(`Transcripts summarized: ${sessionId}\nSummary: ${summaryPath}`, {
-    sessionId,
-    summary,
-    summaryPath,
-  });
+  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
+    await summarizeAndPersist({
+      config: params.config,
+      store: params.store,
+      session: entry.session,
+    });
+  return toolText(
+    `Transcripts summarized: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
+    {
+      sessionId,
+      ...(summaryExportError ? { summaryExportError } : {}),
+      ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
+      summary,
+      ...(summaryPath ? { summaryPath } : {}),
+    },
+  );
 }
 
 async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
@@ -412,7 +426,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       if (!config.enabled || config.autoStart.length === 0) {
         return;
       }
-      const store = new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+      const store = createStore(ctx);
       for (const entry of config.autoStart) {
         startEntry(
           {
@@ -441,7 +455,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           }`,
         );
       }
-      const store = new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+      const store = createStore(ctx);
       for (const sessionId of startedSessionIds) {
         await stopTranscripts({
           ctx,

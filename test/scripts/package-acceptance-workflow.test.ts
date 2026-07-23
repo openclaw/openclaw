@@ -870,8 +870,6 @@ describe("package acceptance workflow", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       actions?: { job?: string };
     };
-    const ignoredWorkflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
-    void ignoredWorkflow;
     const workflowText = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
     const hydrate = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate");
     const hydrateWindowsDaemon = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-windows-daemon");
@@ -1180,8 +1178,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
+    expect(workflow).toContain('fallback_version="$(npm view openclaw@latest version)"');
+    expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
     expect(workflow).toContain(
-      "published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}",
+      "published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}",
@@ -1808,6 +1808,7 @@ describe("package artifact reuse", () => {
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
@@ -2507,19 +2508,24 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("rerun_group:");
     expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain("repo_live_suite_filter:");
+    expect(workflow).toContain('repo_filter_tokens+=("$token")');
+    expect(workflow).toContain(
+      'repo_live_suite_filter="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]}")"',
+    );
     expect(workflow).toContain("cross_os_suite_filter:");
     expect(workflow).toContain("advisory: false");
     expect(workflow).toContain(
       "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
     );
     expect(workflow).toContain(
-      "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
+      "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.repo_live_suite_filter == '')",
     );
     expect(workflow).toContain(
-      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''",
+      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.repo_live_suite_filter == ''",
     );
     expect(workflow).toContain(
       'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
@@ -2945,51 +2951,51 @@ describe("package artifact reuse", () => {
   });
 
   it.each([
-    { telegramEnabled: true, telegramResult: "success" },
-    { telegramEnabled: false, telegramResult: "skipped" },
-  ])(
-    "accepts Telegram result $telegramResult when enabled=$telegramEnabled",
-    ({ telegramEnabled, telegramResult }) => {
-      const result = runPackageAcceptanceSummary({ telegramEnabled, telegramResult });
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
+    {
+      expectedOutput: undefined,
+      expectedStatus: 0,
+      name: "accepts Telegram result success when enabled=true",
+      params: { telegramEnabled: true, telegramResult: "success" },
     },
-  );
+    {
+      expectedOutput: undefined,
+      expectedStatus: 0,
+      name: "accepts Telegram result skipped when enabled=false",
+      params: { telegramEnabled: false, telegramResult: "skipped" },
+    },
+    {
+      expectedOutput: "::error::package_telegram ended with skipped",
+      expectedStatus: 1,
+      name: "rejects a skipped Telegram lane when package acceptance enabled it",
+      params: { telegramEnabled: true, telegramResult: "skipped" },
+    },
+    {
+      expectedOutput: "::error::No Docker acceptance transport ran",
+      expectedStatus: 1,
+      name: "rejects package acceptance when no Docker transport ran",
+      params: {
+        dockerArtifactResult: "skipped",
+        dockerRegistryResult: "skipped",
+        telegramEnabled: false,
+        telegramResult: "skipped",
+      },
+    },
+    {
+      expectedOutput:
+        "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
+      expectedStatus: 0,
+      name: "preserves advisory handling for an unexpectedly skipped Telegram lane",
+      params: { advisory: true, telegramEnabled: true, telegramResult: "skipped" },
+    },
+  ] as const)("$name", ({ expectedOutput, expectedStatus, params }) => {
+    const result = runPackageAcceptanceSummary(params);
 
-  it("rejects a skipped Telegram lane when package acceptance enabled it", () => {
-    const result = runPackageAcceptanceSummary({
-      telegramEnabled: true,
-      telegramResult: "skipped",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::package_telegram ended with skipped");
-  });
-
-  it("rejects package acceptance when no Docker transport ran", () => {
-    const result = runPackageAcceptanceSummary({
-      dockerArtifactResult: "skipped",
-      dockerRegistryResult: "skipped",
-      telegramEnabled: false,
-      telegramResult: "skipped",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::No Docker acceptance transport ran");
-  });
-
-  it("preserves advisory handling for an unexpectedly skipped Telegram lane", () => {
-    const result = runPackageAcceptanceSummary({
-      advisory: true,
-      telegramEnabled: true,
-      telegramResult: "skipped",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
-    );
+    expect(result.status).toBe(expectedStatus);
+    if (expectedOutput) {
+      expect(result.stdout).toContain(expectedOutput);
+    } else {
+      expect(result.stderr).toBe("");
+    }
   });
 
   it("allows beta callers to make only Telegram package acceptance advisory", () => {
@@ -3467,65 +3473,62 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("accepts a successful dispatched Telegram child", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "success",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it.each(["cancelled", "failure", "skipped"] as const)(
-    "rejects a %s selected Telegram child",
-    (currentResult) => {
-      const result = runReleaseChecksSummary({
-        currentAttempt: "2",
-        currentResult,
-        telegramSelected: true,
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(
-        `::error::qa_live_telegram_release_checks ended with ${currentResult}`,
-      );
+  it.each([
+    {
+      emptyStderr: true,
+      expected: [],
+      name: "accepts a successful dispatched Telegram child",
+      params: { currentAttempt: "2", currentResult: "success" },
+      status: 0,
     },
-  );
-
-  it("accepts a skipped unselected Telegram dispatch", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "skipped",
-      telegramSelected: false,
-    });
-
-    expect(result.status).toBe(0);
-  });
-
-  it("keeps target resolution blocking before release children", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "skipped",
-      resolveResult: "failure",
-      telegramSelected: false,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::resolve_target ended with failure");
-  });
-
-  it("keeps a cancelled Telegram child non-blocking for Tideclaw alpha", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "cancelled",
-      workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
-    });
-
-    expect(result.status).toBe(0);
+    ...(["cancelled", "failure", "skipped"] as const).map((currentResult) => ({
+      emptyStderr: false,
+      expected: [`::error::qa_live_telegram_release_checks ended with ${currentResult}`],
+      name: `rejects a ${currentResult} selected Telegram child`,
+      params: { currentAttempt: "2", currentResult, telegramSelected: true },
+      status: 1,
+    })),
+    {
+      emptyStderr: false,
+      expected: [],
+      name: "accepts a skipped unselected Telegram dispatch",
+      params: { currentAttempt: "2", currentResult: "skipped", telegramSelected: false },
+      status: 0,
+    },
+    {
+      emptyStderr: false,
+      expected: ["::error::resolve_target ended with failure"],
+      name: "keeps target resolution blocking before release children",
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped",
+        resolveResult: "failure",
+        telegramSelected: false,
+      },
+      status: 1,
+    },
+    {
+      emptyStderr: false,
+      expected: ["qa_live_telegram_release_checks ended with cancelled", "Tideclaw alpha"],
+      name: "keeps a cancelled Telegram child non-blocking for Tideclaw alpha",
+      params: {
+        currentAttempt: "2",
+        currentResult: "cancelled",
+        workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
+      },
+      status: 0,
+    },
+  ] as const)("$name", ({ emptyStderr, expected, params, status }) => {
+    const result = runReleaseChecksSummary(params);
     const output = `${result.stdout}\n${result.stderr}`;
-    expect(output).toContain("qa_live_telegram_release_checks ended with cancelled");
-    expect(output).toContain("Tideclaw alpha");
+
+    expect(result.status).toBe(status);
+    if (emptyStderr) {
+      expect(result.stderr).toBe("");
+    }
+    for (const snippet of expected ?? []) {
+      expect(output).toContain(snippet);
+    }
   });
 
   it("summarizes start delay separately from execution time in full validation", () => {
@@ -3673,6 +3676,7 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(maintainerSkill).toContain("full_release_validation_run_id=<saved-run-id>");
     expect(maintainerSkill).toContain("full_release_validation_run_attempt=<saved-attempt>");
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",

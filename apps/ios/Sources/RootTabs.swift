@@ -135,6 +135,24 @@ struct RootTabs: View {
                 self.rootOverlays(
                     self.sidebarSplitContent
                         .tint(OpenClawBrand.accent))))
+            .overlay(alignment: .topLeading) {
+                self.uiTestReadinessMarker
+            }
+    }
+
+    @ViewBuilder
+    private var uiTestReadinessMarker: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-ui-test-readiness") {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("RootTabs.Ready")
+                .accessibilityLabel(Text(verbatim: "OpenClaw test readiness"))
+                .accessibilityValue(self.scenePhase == .active ? "ready" : "inactive")
+        }
+        #endif
     }
 
     private var sidebarSplitContent: some View {

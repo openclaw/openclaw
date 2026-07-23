@@ -83,7 +83,7 @@ describe("AppSidebar viewer presence", () => {
     });
   });
 
-  it("groups identified viewers for session rows and the footer", async () => {
+  it("groups identified viewers for session rows and keeps the footer identity-only", async () => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -152,13 +152,7 @@ describe("AppSidebar viewer presence", () => {
     const sessionFacepile = sidebar.querySelector<HTMLElement>(
       '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
     );
-    const footerFacepile = sidebar.querySelector<HTMLElement>(
-      ".sidebar-footer-bar openclaw-viewer-facepile",
-    );
-    await Promise.all([
-      (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
-      (footerFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete,
-    ]);
+    await (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
     expect(
       sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
@@ -175,23 +169,6 @@ describe("AppSidebar viewer presence", () => {
       ),
     ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
-    expect(
-      footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
-    ).toBe("6");
-    expect(footerFacepile?.querySelector('.viewer-facepile [data-viewer-id="00-self"]')).toBeNull();
-    expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
-    expect(footerFacepile?.querySelector(".viewer-facepile openclaw-tooltip")).toBeNull();
-    expect(
-      [
-        ...(footerFacepile?.querySelectorAll(
-          ".sidebar-presence-hover-card .sidebar-hover-card__person",
-        ) ?? []),
-      ].map((row) => row.getAttribute("data-viewer-id")),
-    ).toEqual(["00-self", "alice", "bob", "carol", "dave", "erin", "frank"]);
-    expect(footerFacepile?.querySelector(".sidebar-presence-hover-card")?.textContent).toContain(
-      "Server",
-    );
-
     const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
     expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
       "Self User",
@@ -204,6 +181,13 @@ describe("AppSidebar viewer presence", () => {
 
     const avatar = identityChip?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
     expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
+    const footer = sidebar.querySelector(".sidebar-footer-bar");
+    expect(footer?.querySelector("openclaw-viewer-facepile")).toBeNull();
+    expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
+    expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
+    expect(
+      [...(footer?.children ?? [])].map((element) => element.className || element.localName),
+    ).toEqual(["openclaw-tooltip", "sidebar-footer-bar__spacer", "openclaw-tooltip"]);
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
       avatarUrl: "/api/users/00-self/avatar?v=4",
@@ -269,6 +253,9 @@ describe("AppSidebar brand actions", () => {
     );
     expect(brandButton?.getAttribute("aria-label")).toBe("New thread");
     expect(brandButton?.disabled).toBe(true);
+    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-search")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-brand__collapse")).toBeNull();
 
     sidebar.connected = true;
     await sidebar.updateComplete;

@@ -472,6 +472,7 @@ jobs:
             LANG=C.UTF-8 \
             NODE_OPTIONS=--max-old-space-size=8192 \
             NPM_CONFIG_USERCONFIG=/dev/null \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
             pnpm --dir .candidate exec node scripts/build-all.mjs qaRuntime
@@ -1330,10 +1331,12 @@ jobs:
             OPENAI_API_KEY
             OPENAI_BASE_URL
             OPENCLAW_ALLOW_SLOW_REPLY_TESTS
+            OPENCLAW_BUILD_PRIVATE_QA
             OPENCLAW_BUNDLED_PLUGINS_DIR
             OPENCLAW_COMPATIBILITY_HOST_VERSION
             OPENCLAW_CONFIG_PATH
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
             OPENCLAW_LOG_LEVEL

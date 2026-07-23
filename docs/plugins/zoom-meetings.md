@@ -19,14 +19,13 @@ system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin, then check setup:
+The plugin is included and enabled by default. Add an entry only to customize it, then check setup:
 
 ```json5
 {
   plugins: {
     entries: {
       "zoom-meetings": {
-        enabled: true,
         config: {
           defaultMode: "agent",
           chrome: { guestName: "OpenClaw Agent" },
@@ -36,6 +35,8 @@ Enable the plugin, then check setup:
   },
 }
 ```
+
+Run `openclaw plugins disable zoom-meetings` if you do not want the plugin active.
 
 ```bash
 openclaw zoommeetings setup

@@ -143,6 +143,7 @@ export type {
 } from "./capability-provider.types.js";
 export type {
   MigrationApplyResult,
+  MigrationConfigRuntime,
   MigrationDetection,
   MigrationItem,
   MigrationPlan,

@@ -26,6 +26,10 @@ import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import {
+  GatewayDrainingError,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../process/gateway-work-admission.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import type { FastMode } from "../shared/fast-mode.js";
@@ -1846,20 +1850,27 @@ export async function spawnSubagentDirect(
         groupId: swarmSchedulerGroupKey,
         runId: childRunId,
         start: async () => {
-          const response = await launchChildRun();
-          const gatewayRunId = readGatewayRunId(response) ?? childRunId;
-          try {
-            if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
-              throw new Error("collector registry row could not transition from queued to running");
+          await runWithGatewayIndependentRootWorkContinuation(async () => {
+            const response = await launchChildRun();
+            const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+            try {
+              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
+                throw new Error(
+                  "collector registry row could not transition from queued to running",
+                );
+              }
+            } catch (error) {
+              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
+              launchTerminationConfirmed = true;
+              throw error;
             }
-          } catch (error) {
-            await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
-            launchTerminationConfirmed = true;
-            throw error;
-          }
-          await emitSpawnLifecycleHooks(gatewayRunId);
+            await emitSpawnLifecycleHooks(gatewayRunId);
+          });
         },
         onStartFailure: async (error) => {
+          if (error instanceof GatewayDrainingError) {
+            return false;
+          }
           const launchError = summarizeError(error);
           const [contextRollback, sessionCleanup] = await Promise.allSettled([
             rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),

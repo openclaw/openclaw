@@ -132,22 +132,3 @@ export function resolveGpt5SystemPromptContribution(params: {
     sectionOverrides: mode === "friendly" ? { interaction_style: interactionStyle } : {},
   };
 }
-
-/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
-export function renderGpt5PromptOverlay(params: {
-  config?: OpenClawConfig;
-  providerId?: string;
-  modelId?: string;
-  legacyPluginConfig?: Record<string, unknown>;
-  enabled?: boolean;
-}): string | undefined {
-  const contribution = resolveGpt5SystemPromptContribution(params);
-  if (!contribution) {
-    return undefined;
-  }
-  return [contribution.stablePrefix, ...Object.values(contribution.sectionOverrides ?? {})]
-    .filter(
-      (section): section is string => typeof section === "string" && section.trim().length > 0,
-    )
-    .join("\n\n");
-}

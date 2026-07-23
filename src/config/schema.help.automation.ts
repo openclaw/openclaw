@@ -62,6 +62,14 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
     'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+  "session.sharing":
+    "Controls which collaboration modes session owners and administrators may select. Omitted booleans default to enabled; set a mode false to remove it from the picker and reject new selections.",
+  "session.sharing.readOnly":
+    "Allows sessions to be made read-only for non-participants. Default: true.",
+  "session.sharing.suggest":
+    "Allows suggest visibility. In this phase it enforces the same admission policy as read-only; suggestion queues are configured by a later feature. Default: true.",
+  "session.sharing.drafts":
+    "Allows draft visibility, which hides sessions from non-owner, non-admin operators. Default: true.",
   "session.maintenance":
     "Automatic session-store maintenance controls for pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":

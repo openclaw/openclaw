@@ -96,7 +96,7 @@ export function createSessionContext(
     gateway: {
       snapshot: {
         client,
-        connected: true,
+        phase: "connected" as const,
         hello: { features: { methods: ["taskSuggestions.list"] } },
       },
     },
