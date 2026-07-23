@@ -77,4 +77,9 @@ describe("redactSensitiveText token ordering", () => {
     const payload = fakeBase64LikePayload(2048);
     expect(redactSensitiveText(`payload ${payload}`, { mode: "tools" })).toBe(`payload ${payload}`);
   });
+
+  it("does not mask AWS-shaped chunks inside data URLs", () => {
+    const dataUrl = `data:application/octet-stream;base64,${fakeBase64LikePayload(40)}`;
+    expect(redactSensitiveText(dataUrl, { mode: "tools" })).toBe(dataUrl);
+  });
 });

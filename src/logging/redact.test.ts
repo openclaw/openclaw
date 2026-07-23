@@ -1383,14 +1383,6 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(dataUrlWithPlusBoundary, { mode: "tools" })).toBe(
       dataUrlWithPlusBoundary,
     );
-    const awsShapedPayload = Array.from(
-      { length: 40 },
-      (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
-    ).join("");
-    const dataUrlWithAwsShapedPayload = `data:application/octet-stream;base64,${awsShapedPayload}`;
-    expect(redactSensitiveText(dataUrlWithAwsShapedPayload, { mode: "tools" })).toBe(
-      dataUrlWithAwsShapedPayload,
-    );
     expect(redactSensitiveText("aws AKIA_ID=AKIAABCDEFGHIJKLMNOP", { mode: "tools" })).toBe(
       "aws AKIA_ID=AKIAAB…MNOP",
     );
