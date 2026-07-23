@@ -53,6 +53,12 @@ const POSIX_PARSEABLE_SHELL_WRAPPER_NAMES = [
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
 const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
+const NUSHELL_STARTUP_OPTIONS_WITH_VALUE = new Set([
+  "--config",
+  "--env-config",
+  "--plugin-config",
+  "--plugins",
+]);
 function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
   for (const name of names) {
@@ -238,11 +244,32 @@ export function unwrapKnownShellMultiplexerInvocation(
 
 function extractPosixShellInlineCommand(argv: string[], baseExecutable: string): string | null {
   if (baseExecutable === "nu") {
+    if (hasNushellStartupOptionBeforeInlineCommand(argv)) {
+      return null;
+    }
     return extractInlineCommandByFlags(argv, NUSHELL_INLINE_COMMAND_FLAGS, {
       allowCombinedC: true,
     });
   }
   return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
+}
+
+function hasNushellStartupOptionBeforeInlineCommand(argv: string[]): boolean {
+  for (let i = 1; i < argv.length; i += 1) {
+    const token = normalizeLowercaseStringOrEmpty(argv[i]);
+    if (!token || token === "--") {
+      return false;
+    }
+    if (NUSHELL_INLINE_COMMAND_FLAGS.has(token)) {
+      return false;
+    }
+    for (const option of NUSHELL_STARTUP_OPTIONS_WITH_VALUE) {
+      if (token === option || token.startsWith(`${option}=`)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function extractCmdInlineCommand(argv: string[]): string | null {

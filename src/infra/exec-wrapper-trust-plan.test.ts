@@ -123,6 +123,32 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
+      name: "omits nushell config inline-value startup payloads from trust plans",
+      enabled: true,
+      argv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
+      expected: {
+        argv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
+        policyArgv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: null,
+      },
+    },
+    {
+      name: "omits nushell env-config startup payloads from trust plans",
+      enabled: true,
+      argv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
+      expected: {
+        argv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
+        policyArgv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: null,
+      },
+    },
+    {
       name: "recognizes yash cmdline flags before evaluating allowlist policy",
       enabled: true,
       argv: ["yash", "--cmdline", "echo hi"],
