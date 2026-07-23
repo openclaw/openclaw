@@ -569,12 +569,18 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           : skill.clawhub?.status === "invalid"
             ? renderSettingsStatus({ kind: "warn", label: t("skillsPage.invalidLink") })
             : nothing}
-        ${renderSettingsToggle({
-          checked: !skill.disabled,
-          disabled: locked,
-          ariaLabel: t("skillsPage.enabledNamed", { name: skill.name }),
-          onChange: () => props.onToggle(skill.skillKey, skill.disabled),
-        })}
+        <wa-switch
+          class="settings-toggle"
+          size="s"
+          .checked=${!skill.disabled}
+          ?disabled=${locked}
+          @change=${(event: Event) => {
+            props.onToggle(skill.skillKey, skill.disabled);
+          }}
+          key=${skill.skillKey + (skill.disabled ? "-disabled" : "-enabled")}
+        >
+          <span class="settings-control__sr-label">${t("skillsPage.enabledNamed", { name: skill.name })}</span>
+        </wa-switch>
       </div>
     </div>
   `;
