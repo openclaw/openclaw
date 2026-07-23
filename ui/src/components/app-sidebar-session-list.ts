@@ -29,20 +29,20 @@ export abstract class AppSidebarSessionListElement
       this.draftSessionAgentId &&
       this.collapsedSessionSections.has("ungrouped")
     ) {
-      this.sessionGroups.toggleSection("ungrouped");
+      this.sessionOrganizer.toggleSection("ungrouped");
     }
   }
 
   startSessionDrag(session: SidebarRecentSession): void {
-    this.sessionGroups.startSessionDrag(session);
+    this.sessionOrganizer.startSessionDrag(session);
   }
 
   finishSessionDrag(): void {
-    this.sessionGroups.finishSessionDrag();
+    this.sessionOrganizer.finishSessionDrag();
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionMutations.patchSession(session, { pinned: !session.pinned });
+    void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
   }
 
   toggleSessionMenu(
@@ -59,39 +59,39 @@ export abstract class AppSidebarSessionListElement
   }
 
   startSessionGroupDrag(group: string): void {
-    this.sessionGroups.startSessionGroupDrag(group);
+    this.sessionOrganizer.startSessionGroupDrag(group);
   }
 
   finishSessionGroupDrag(): void {
-    this.sessionGroups.finishSessionGroupDrag();
+    this.sessionOrganizer.finishSessionGroupDrag();
   }
 
   sectionDragOver(event: DragEvent, sectionId: string, group?: string): void {
-    this.sessionGroups.sectionDragOver(event, sectionId, group);
+    this.sessionOrganizer.sectionDragOver(event, sectionId, group);
   }
 
   sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void {
-    this.sessionGroups.sectionDragLeave(event, sectionId, group);
+    this.sessionOrganizer.sectionDragLeave(event, sectionId, group);
   }
 
   sectionDrop(event: DragEvent, sectionId: string, group?: string): void {
-    this.sessionGroups.sectionDrop(event, sectionId, group);
+    this.sessionOrganizer.sectionDrop(event, sectionId, group);
   }
 
   toggleSection(sectionId: string): void {
-    this.sessionGroups.toggleSection(sectionId);
+    this.sessionOrganizer.toggleSection(sectionId);
   }
 
   handleSessionListDragOver(event: DragEvent): void {
-    this.sessionGroups.handleSessionListDragOver(event);
+    this.sessionOrganizer.handleSessionListDragOver(event);
   }
 
   handleSessionListDragLeave(event: DragEvent): void {
-    this.sessionGroups.handleSessionListDragLeave(event);
+    this.sessionOrganizer.handleSessionListDragLeave(event);
   }
 
   handleSessionListDrop(event: DragEvent): void {
-    this.sessionGroups.handleSessionListDrop(event);
+    this.sessionOrganizer.handleSessionListDrop(event);
   }
 
   openNewSession(): void {

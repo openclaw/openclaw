@@ -19,7 +19,7 @@ import type {
   SidebarWorkboardRenderers,
 } from "../components/app-sidebar-workboard.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
-import type { SessionGroupsController } from "../components/session-groups-controller.ts";
+import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -57,7 +57,7 @@ export type SidebarLifecycleState = HTMLElement & {
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
   readonly sessionData: SessionDataController;
-  readonly sessionGroups: SessionGroupsController;
+  readonly sessionOrganizer: SessionOrganizerController;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;

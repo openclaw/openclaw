@@ -396,15 +396,16 @@ class AppSidebar extends AppSidebarSessionListElement {
         data-sidebar-entry=${serialized}
         draggable=${draggable ? "true" : "false"}
         @dragstart=${entry.type === "route"
-          ? (event: DragEvent) => this.sessionGroups.startSidebarRouteDrag(event, entry.route)
+          ? (event: DragEvent) => this.sessionOrganizer.startSidebarRouteDrag(event, entry.route)
           : entry.type === "workboard"
             ? (event: DragEvent) =>
-                this.sessionGroups.startSidebarWorkboardDrag(event, entry.boardId)
+                this.sessionOrganizer.startSidebarWorkboardDrag(event, entry.boardId)
             : nothing}
-        @dragend=${draggable ? () => this.sessionGroups.finishSidebarEntryDrag() : nothing}
+        @dragend=${draggable ? () => this.sessionOrganizer.finishSidebarEntryDrag() : nothing}
         @dragover=${(event: DragEvent) =>
-          this.sessionGroups.handleSidebarZoneDragOver(event, serialized)}
-        @drop=${(event: DragEvent) => this.sessionGroups.handleSidebarZoneDrop(event, serialized)}
+          this.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
+        @drop=${(event: DragEvent) =>
+          this.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
       >
         ${content}
       </div>
@@ -455,10 +456,10 @@ class AppSidebar extends AppSidebarSessionListElement {
               <div
                 class="nav-section__items"
                 @dragover=${(event: DragEvent) =>
-                  this.sessionGroups.handleSidebarZoneDragOver(event)}
+                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
                 @dragleave=${(event: DragEvent) =>
-                  this.sessionGroups.handleSidebarZoneDragLeave(event)}
-                @drop=${(event: DragEvent) => this.sessionGroups.handleSidebarZoneDrop(event)}
+                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
               >
                 ${this.renderHomeRow()}
                 ${sidebarZone.entries.map((entry) =>

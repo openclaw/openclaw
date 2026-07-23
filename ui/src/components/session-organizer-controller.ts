@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import type { ReactiveController } from "lit";
 import {
   parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
@@ -6,7 +6,6 @@ import {
   type SidebarNavRoute,
 } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
-import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
   readSessionGroupDragData,
@@ -17,7 +16,6 @@ import {
   writeSidebarRouteDragData,
 } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import {
   loadStoredCollapsedSessionSections,
   storeSidebarSessionStatusFilter,
@@ -31,39 +29,13 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionMenuAction } from "./session-menu.ts";
+import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
 
-interface SessionGroupsControllerHost extends ReactiveControllerHost {
-  readonly sessionData: Pick<
-    SessionDataController,
-    | "beginSessionMutation"
-    | "isSessionMutationScopeCurrent"
-    | "publishSessionMutationError"
-    | "refreshSidebarSessions"
-    | "resetForStatusFilter"
-  >;
-  readonly onUpdateSidebarEntries?: (entries: string[]) => void;
-  sessionsGrouping: SidebarSessionsGrouping;
-  sessionsShowCron: boolean;
-  sessionsStatusFilter: SidebarSessionStatusFilter;
-  clearSessionSelection(): void;
-  findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
-  knownSessionGroups(): string[];
-  patchSession(
-    session: SidebarRecentSession,
-    patch: SidebarSessionPatch,
-    scope?: SidebarSessionMutationScope | null,
-  ): Promise<SidebarSessionMutationResult>;
-  patchSessions(
-    rows: readonly SidebarRecentSession[],
-    patch: SidebarSessionPatch,
-    scope?: SidebarSessionMutationScope | null,
-  ): Promise<SidebarSessionMutationResult>;
-  reconciledSidebarZone(): { sidebarEntries: readonly string[] };
-}
+type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
-export class SessionGroupsController implements ReactiveController {
+export class SessionOrganizerController implements ReactiveController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
   draggingSessionGroup: string | null = null;
@@ -75,12 +47,122 @@ export class SessionGroupsController implements ReactiveController {
     position: "before" | "after";
   } | null = null;
   sessionListRemovalDrop = false;
+  private operationsLoad: Promise<SessionOrganizerOperations> | null = null;
 
-  constructor(private readonly host: SessionGroupsControllerHost) {
+  constructor(private readonly host: SessionOrganizerControllerHost) {
     host.addController(this);
   }
 
   hostConnected(): void {}
+
+  private async loadOperations(
+    scope: SidebarSessionMutationScope,
+  ): Promise<SessionOrganizerOperations | null> {
+    const load = (this.operationsLoad ??= import("./session-organizer-operations.runtime.ts"));
+    try {
+      return await load;
+    } catch (error) {
+      if (this.operationsLoad === load) {
+        this.operationsLoad = null;
+      }
+      if (this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
+        this.host.sessionData.publishSessionMutationError(scope, error);
+      }
+      return null;
+    }
+  }
+
+  readonly patchSession = async (
+    session: SidebarRecentSession,
+    patch: SidebarSessionPatch,
+    scope: SidebarSessionMutationScope | null = this.host.sessionData.beginSessionMutation(),
+  ): Promise<SidebarSessionMutationResult> => {
+    if (!scope) {
+      return "stale";
+    }
+    const operations = await this.loadOperations(scope);
+    if (!operations) {
+      return this.host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
+    }
+    return operations.patchSession(this.host, session, patch, scope);
+  };
+
+  async patchSessions(
+    rows: readonly SidebarRecentSession[],
+    patch: SidebarSessionPatch,
+    scope: SidebarSessionMutationScope | null = this.host.sessionData.beginSessionMutation(),
+  ): Promise<SidebarSessionMutationResult> {
+    if (!scope) {
+      return "stale";
+    }
+    const operations = await this.loadOperations(scope);
+    if (!operations) {
+      return this.host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
+    }
+    return operations.patchSessions(this.host, rows, patch, scope);
+  }
+
+  async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.archiveSessionWithUndo(this.host, session, scope);
+  }
+
+  async deleteSessionsBatch(rows: readonly SidebarRecentSession[]): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.deleteSessionsBatch(this.host, rows, scope);
+  }
+
+  async runBatchSessionAction(
+    action: SessionMenuAction,
+    rows: SidebarRecentSession[],
+    allUnread: boolean,
+  ): Promise<void> {
+    if (action.kind === "new-group") {
+      await this.createSessionGroup(rows);
+      return;
+    }
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.runBatchSessionAction(this.host, action, rows, allUnread, scope);
+  }
+
+  async forkSession(session: SidebarRecentSession): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.forkSession(this.host, session, scope);
+  }
+
+  async stopCloudWorker(session: SidebarRecentSession): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.stopCloudWorker(this.host, session, scope);
+  }
+
+  async deleteSession(session: SidebarRecentSession): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.deleteSession(this.host, session, scope);
+  }
 
   startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
     if (!event.dataTransfer) {
@@ -218,7 +300,7 @@ export class SessionGroupsController implements ReactiveController {
       // against the then-current order: a failed patch must not leave an
       // unpinned slot behind, and a stale snapshot must not undo zone edits
       // that raced the request.
-      void this.host.patchSession(session, { pinned: true }).then((result) => {
+      void this.patchSession(session, { pinned: true }).then((result) => {
         if (result === "completed") {
           this.writeSidebarEntryAt(entry, targetEntry, position);
         }
@@ -279,40 +361,25 @@ export class SessionGroupsController implements ReactiveController {
     if (session?.pinned) {
       event.preventDefault();
       // patchSession prunes the persisted zone entry once the unpin lands.
-      void this.host.patchSession(session, { pinned: false });
+      void this.patchSession(session, { pinned: false });
     }
     this.finishSidebarEntryDrag();
   }
 
-  private async rememberSessionGroup(
-    name: string,
-    scope: SidebarSessionMutationScope,
-  ): Promise<SidebarSessionMutationResult> {
-    const groups = this.host.knownSessionGroups();
-    if (groups.includes(name)) {
-      return "completed";
-    }
-    try {
-      await scope.sessions.groupsPut([...groups, name]);
-      return this.host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
-    } catch (error) {
-      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
-        return "stale";
-      }
-      this.host.sessionData.publishSessionMutationError(scope, error);
-      return "failed";
-    }
-  }
-
-  renameSession(session: SidebarRecentSession) {
+  async renameSession(session: SidebarRecentSession): Promise<void> {
     const nextLabel = window.prompt(t("sessionsView.renameSessionPrompt"), session.label);
     if (nextLabel === null) {
       return;
     }
-    void this.host.patchSession(session, { label: normalizeOptionalString(nextLabel) ?? null });
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (!scope) {
+      return;
+    }
+    const operations = await this.loadOperations(scope);
+    await operations?.renameSession(this.host, session, nextLabel, scope);
   }
 
-  createSessionGroup(sessions: readonly SidebarRecentSession[] = []) {
+  async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
     const name = window.prompt(t("sessionsView.newGroupPrompt"))?.trim();
     if (!name) {
       return;
@@ -321,20 +388,11 @@ export class SessionGroupsController implements ReactiveController {
     if (!scope) {
       return;
     }
-    void (async () => {
-      if ((await this.rememberSessionGroup(name, scope)) !== "completed") {
-        return;
-      }
-      if (sessions.length > 0) {
-        await this.host.patchSessions(sessions, { category: name }, scope);
-      } else if (this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
-        // Header-created groups start empty; re-render so the section shows up.
-        this.host.requestUpdate();
-      }
-    })();
+    const operations = await this.loadOperations(scope);
+    await operations?.createSessionGroup(this.host, name, sessions, scope);
   }
 
-  renameSessionGroupFromMenu(group: string) {
+  async renameSessionGroupFromMenu(group: string): Promise<void> {
     const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
     if (!next || next === group) {
       return;
@@ -343,32 +401,23 @@ export class SessionGroupsController implements ReactiveController {
     if (!scope) {
       return;
     }
+    const operations = await this.loadOperations(scope);
+    if (!operations || !(await operations.renameSessionGroup(this.host, group, next, scope))) {
+      return;
+    }
     // Collapse keys follow only a confirmed Gateway rename. A stale completion
     // must not rewrite storage owned by the replacement connection.
-    void (async () => {
-      try {
-        const outcome = await scope.sessions.groupsRename(group, next);
-        if (
-          outcome !== "completed" ||
-          !this.host.sessionData.isSessionMutationScopeCurrent(scope)
-        ) {
-          return;
-        }
-        const from = `category:${group}`;
-        if (this.collapsedSessionSections.has(from)) {
-          const collapsed = new Set(this.collapsedSessionSections);
-          collapsed.delete(from);
-          collapsed.add(`category:${next}`);
-          this.saveCollapsedSessionSections(collapsed);
-        }
-        this.host.requestUpdate();
-      } catch (error) {
-        this.host.sessionData.publishSessionMutationError(scope, error);
-      }
-    })();
+    const from = `category:${group}`;
+    if (this.collapsedSessionSections.has(from)) {
+      const collapsed = new Set(this.collapsedSessionSections);
+      collapsed.delete(from);
+      collapsed.add(`category:${next}`);
+      this.saveCollapsedSessionSections(collapsed);
+    }
+    this.host.requestUpdate();
   }
 
-  deleteSessionGroupFromMenu(group: string) {
+  async deleteSessionGroupFromMenu(group: string): Promise<void> {
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
@@ -376,23 +425,14 @@ export class SessionGroupsController implements ReactiveController {
     if (!scope) {
       return;
     }
-    void (async () => {
-      try {
-        const outcome = await scope.sessions.groupsDelete(group);
-        if (
-          outcome !== "completed" ||
-          !this.host.sessionData.isSessionMutationScopeCurrent(scope)
-        ) {
-          return;
-        }
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(`category:${group}`);
-        this.saveCollapsedSessionSections(collapsed);
-        this.host.requestUpdate();
-      } catch (error) {
-        this.host.sessionData.publishSessionMutationError(scope, error);
-      }
-    })();
+    const operations = await this.loadOperations(scope);
+    if (!operations || !(await operations.deleteSessionGroup(this.host, group, scope))) {
+      return;
+    }
+    const collapsed = new Set(this.collapsedSessionSections);
+    collapsed.delete(`category:${group}`);
+    this.saveCollapsedSessionSections(collapsed);
+    this.host.requestUpdate();
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
@@ -415,44 +455,30 @@ export class SessionGroupsController implements ReactiveController {
     this.saveCollapsedSessionSections(collapsed);
   }
 
-  private reorderSessionGroup(source: string, target: string, position: "before" | "after") {
-    const groups = reorderSessionCustomGroups(
-      this.host.knownSessionGroups(),
-      source,
-      target,
-      position,
-    );
+  private async reorderSessionGroup(
+    source: string,
+    target: string,
+    position: "before" | "after",
+  ): Promise<void> {
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
-    void (async () => {
-      try {
-        await scope.sessions.groupsPut(groups);
-        if (this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
-          this.host.requestUpdate();
-        }
-      } catch (error) {
-        this.host.sessionData.publishSessionMutationError(scope, error);
-      }
-    })();
+    const operations = await this.loadOperations(scope);
+    await operations?.reorderSessionGroup(this.host, source, target, position, scope);
   }
 
-  assignSessionCategory(
+  async assignSessionCategory(
     session: SidebarRecentSession,
     category: string | null,
     patch: { pinned?: boolean } = {},
-  ) {
+  ): Promise<void> {
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
-    void (async () => {
-      if (category && (await this.rememberSessionGroup(category, scope)) !== "completed") {
-        return;
-      }
-      await this.host.patchSession(session, { category, ...patch }, scope);
-    })();
+    const operations = await this.loadOperations(scope);
+    await operations?.assignSessionCategory(this.host, session, category, patch, scope);
   }
 
   sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
@@ -516,19 +542,19 @@ export class SessionGroupsController implements ReactiveController {
         this.sessionGroupDropTarget?.group === category
           ? this.sessionGroupDropTarget.position
           : "before";
-      this.reorderSessionGroup(sourceGroup, category, position);
+      void this.reorderSessionGroup(sourceGroup, category, position);
     } else {
       // Rows can be dragged from a browsed agent section, so search all caches.
       const session = sessionKey ? this.host.findSidebarSessionByKey(sessionKey) : undefined;
       if (session && sectionId === "pinned") {
         if (!session.pinned) {
-          void this.host.patchSession(session, { pinned: true });
+          void this.patchSession(session, { pinned: true });
         }
       } else if (session) {
         const nextCategory = category ?? null;
         if (session.category !== nextCategory || session.pinned) {
           // The pinned:false leg prunes the persisted zone entry via patchSession.
-          this.assignSessionCategory(
+          void this.assignSessionCategory(
             session,
             nextCategory,
             session.pinned ? { pinned: false } : {},

@@ -37,14 +37,10 @@ import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
   SidebarSessionMenuState,
-  SidebarSessionMutationResult,
-  SidebarSessionMutationScope,
-  SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
-import { SessionGroupsController } from "./session-groups-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
-import { SessionMutationsController } from "./session-mutations-controller.ts";
+import { SessionOrganizerController } from "./session-organizer-controller.ts";
 
 /** Popup ownership and stateless menu-renderer wiring. */
 export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigationElement {
@@ -58,59 +54,38 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigation
   @state() protected agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() protected agentMenuFilter = "";
 
-  protected readonly sessionMutations = new SessionMutationsController(this);
-  readonly sessionGroups = new SessionGroupsController(this);
+  readonly sessionOrganizer = new SessionOrganizerController(this);
 
   get collapsedSessionSections(): ReadonlySet<string> {
-    return this.sessionGroups.collapsedSessionSections;
+    return this.sessionOrganizer.collapsedSessionSections;
   }
 
   get draggingSessionKey(): string | null {
-    return this.sessionGroups.draggingSessionKey;
+    return this.sessionOrganizer.draggingSessionKey;
   }
 
   get draggingSessionGroup(): string | null {
-    return this.sessionGroups.draggingSessionGroup;
+    return this.sessionOrganizer.draggingSessionGroup;
   }
 
   get sessionDropTarget(): string | null {
-    return this.sessionGroups.sessionDropTarget;
+    return this.sessionOrganizer.sessionDropTarget;
   }
 
   get sessionGroupDropTarget() {
-    return this.sessionGroups.sessionGroupDropTarget;
+    return this.sessionOrganizer.sessionGroupDropTarget;
   }
 
   get sessionListRemovalDrop(): boolean {
-    return this.sessionGroups.sessionListRemovalDrop;
+    return this.sessionOrganizer.sessionListRemovalDrop;
   }
 
   protected get draggingSidebarEntry(): string | null {
-    return this.sessionGroups.draggingSidebarEntry;
+    return this.sessionOrganizer.draggingSidebarEntry;
   }
 
   protected get sidebarZoneDropTarget() {
-    return this.sessionGroups.sidebarZoneDropTarget;
-  }
-
-  createSessionGroup(sessions?: readonly SidebarRecentSession[]): void {
-    this.sessionGroups.createSessionGroup(sessions);
-  }
-
-  patchSession(
-    session: SidebarRecentSession,
-    patch: SidebarSessionPatch,
-    scope?: SidebarSessionMutationScope | null,
-  ): Promise<SidebarSessionMutationResult> {
-    return this.sessionMutations.patchSession(session, patch, scope);
-  }
-
-  patchSessions(
-    rows: readonly SidebarRecentSession[],
-    patch: SidebarSessionPatch,
-    scope?: SidebarSessionMutationScope | null,
-  ): Promise<SidebarSessionMutationResult> {
-    return this.sessionMutations.patchSessions(rows, patch, scope);
+    return this.sessionOrganizer.sidebarZoneDropTarget;
   }
 
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -508,7 +483,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigation
           }}
           .onAction=${(action: SessionMenuAction) => {
             if (batchRows) {
-              this.sessionMutations.runBatchSessionAction(action, batchRows, allUnread);
+              void this.sessionOrganizer.runBatchSessionAction(action, batchRows, allUnread);
               return;
             }
             switch (action.kind) {
@@ -522,42 +497,42 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigation
                 openEditor(action.editor, action.path);
                 break;
               case "toggle-pin":
-                void this.sessionMutations.patchSession(session, { pinned: !session.pinned });
+                void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
                 break;
               case "set-icon":
-                void this.sessionMutations.patchSession(session, { icon: action.icon });
+                void this.sessionOrganizer.patchSession(session, { icon: action.icon });
                 break;
               case "toggle-unread":
-                void this.sessionMutations.patchSession(session, { unread: !session.unread });
+                void this.sessionOrganizer.patchSession(session, { unread: !session.unread });
                 break;
               case "rename":
-                this.sessionGroups.renameSession(session);
+                void this.sessionOrganizer.renameSession(session);
                 break;
               case "fork":
-                void this.sessionMutations.forkSession(session);
+                void this.sessionOrganizer.forkSession(session);
                 break;
               case "workboard":
                 break;
               case "move-to-group":
                 if (action.category === null || session.category !== action.category) {
-                  this.sessionGroups.assignSessionCategory(session, action.category);
+                  void this.sessionOrganizer.assignSessionCategory(session, action.category);
                 }
                 break;
               case "new-group":
-                this.sessionGroups.createSessionGroup([session]);
+                void this.sessionOrganizer.createSessionGroup([session]);
                 break;
               case "toggle-archived":
                 if (session.archived) {
-                  void this.sessionMutations.patchSession(session, { archived: false });
+                  void this.sessionOrganizer.patchSession(session, { archived: false });
                 } else {
-                  void this.sessionMutations.archiveSessionWithUndo(session);
+                  void this.sessionOrganizer.archiveSessionWithUndo(session);
                 }
                 break;
               case "stop-cloud-worker":
-                void this.sessionMutations.stopCloudWorker(session);
+                void this.sessionOrganizer.stopCloudWorker(session);
                 break;
               case "delete":
-                void this.sessionMutations.deleteSession(session);
+                void this.sessionOrganizer.deleteSession(session);
                 break;
             }
           }}
@@ -576,13 +551,13 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigation
         this.closeSessionGroupMenu({ restoreFocus: true });
         switch (action) {
           case "rename-group":
-            this.sessionGroups.renameSessionGroupFromMenu(group);
+            void this.sessionOrganizer.renameSessionGroupFromMenu(group);
             break;
           case "new-group":
-            this.sessionGroups.createSessionGroup();
+            void this.sessionOrganizer.createSessionGroup();
             break;
           case "delete-group":
-            this.sessionGroups.deleteSessionGroupFromMenu(group);
+            void this.sessionOrganizer.deleteSessionGroupFromMenu(group);
             break;
         }
       },
@@ -605,7 +580,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigation
       statusFilter: this.sessionsStatusFilter,
       showCron: this.sessionsShowCron,
       onGroupingChange: (grouping) => {
-        this.sessionGroups.setSessionsGrouping(grouping);
+        this.sessionOrganizer.setSessionsGrouping(grouping);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onSortModeChange: (mode) => {
@@ -613,11 +588,11 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigation
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onStatusFilterChange: (statusFilter) => {
-        this.sessionGroups.setSessionsStatusFilter(statusFilter);
+        this.sessionOrganizer.setSessionsStatusFilter(statusFilter);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onShowCronChange: (show) => {
-        this.sessionGroups.setSessionsShowCron(show);
+        this.sessionOrganizer.setSessionsShowCron(show);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onClose: (restoreFocus) => {
