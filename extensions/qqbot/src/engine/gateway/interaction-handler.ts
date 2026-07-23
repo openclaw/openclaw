@@ -432,12 +432,15 @@ async function isImplicitApprovalButtonActorAuthorized(params: {
   senderId: string;
   resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
 }): Promise<boolean> {
+  // Require explicit command authorization in the implicit
+  // same-chat path for C2C and group conversations (#107555).
+  const isGroup = Boolean(params.event.group_openid);
   const accountConfig = resolveApprovalButtonAccountConfig(params.cfg, params.account.accountId);
   const authInput = {
     cfg: params.cfg,
     accountId: params.account.accountId,
     senderId: params.senderId,
-    isGroup: Boolean(params.event.group_openid),
+    isGroup,
     conversationId: params.event.group_openid ?? params.event.user_openid ?? params.senderId,
     allowFrom: accountConfig.allowFrom,
     groupAllowFrom: accountConfig.groupAllowFrom,

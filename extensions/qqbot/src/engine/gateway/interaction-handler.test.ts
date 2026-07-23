@@ -484,6 +484,120 @@ describe("createInteractionHandler approval buttons", () => {
     },
   );
 
+  it.each([
+    [
+      "no allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+          },
+        },
+      },
+    ],
+    [
+      "wildcard allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    ],
+  ] satisfies Array<[string, OpenClawConfig]>)(
+    "rejects fallback approval buttons in direct (C2C) conversations when %s does not grant command auth",
+    async (_name, cfg) => {
+      const handler = createInteractionHandler(account, runtime, undefined, {
+        getActiveCfg: () => cfg,
+      });
+
+      handler(
+        makeApprovalEvent({
+          chat_type: 2,
+          group_openid: undefined,
+          group_member_openid: undefined,
+          user_openid: "C2CUSER_OPENID",
+        }),
+      );
+
+      await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: "You are not authorized to approve this request." },
+      );
+      expect(resolveApprovalMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("resolves fallback approval buttons in direct (C2C) conversations when the sender has explicit command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["C2CUSER_OPENID"],
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(
+      makeApprovalEvent({
+        chat_type: 2,
+        group_openid: undefined,
+        group_member_openid: undefined,
+        user_openid: "C2CUSER_OPENID",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+    );
+  });
+
+  it("rejects fallback approval buttons in direct (C2C) conversations when the sender lacks explicit command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["OWNER_OPENID"],
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(
+      makeApprovalEvent({
+        chat_type: 2,
+        group_openid: undefined,
+        group_member_openid: undefined,
+        user_openid: "UNAUTHORIZED_C2CUSER",
+      }),
+    );
+
+    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "You are not authorized to approve this request." },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+  });
+
   it("rejects fallback approval buttons without a trusted actor id", async () => {
     const handler = createInteractionHandler(account, runtime, undefined, {
       getActiveCfg: () => makeCommandAuthorizedFallbackCfg(),
