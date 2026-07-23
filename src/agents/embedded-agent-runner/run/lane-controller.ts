@@ -1,10 +1,9 @@
 import {
   assertAgentRunLifecycleGenerationCurrent,
+  beginAgentRunContextQueueWait,
   claimAgentRunContext,
-  claimAgentRunContextQueue,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
-  releaseAgentRunContextQueue,
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
@@ -59,22 +58,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     abortError.name = "AbortError";
     throw abortError;
   };
-  const createRunContextQueueClaim = () => {
-    const runId = options.getParams().runId;
-    const lifecycleGeneration = options.getLifecycleGeneration();
-    const queueClaimId = claimAgentRunContextQueue(runId, lifecycleGeneration);
-    return () => {
-      releaseAgentRunContextQueue(runId, queueClaimId, lifecycleGeneration);
-    };
-  };
-  const enqueueWithRunContextQueueState = <T>(
-    releaseQueueClaim: () => void,
+  const enqueueWithRunContextQueueWait = <T>(
+    releaseQueueWait: () => void,
     enqueue: () => Promise<T>,
   ): Promise<T> => {
     try {
-      return enqueue().finally(releaseQueueClaim);
+      return enqueue().finally(releaseQueueWait);
     } catch (error) {
-      releaseQueueClaim();
+      releaseQueueWait();
       throw error;
     }
   };
@@ -120,13 +111,16 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     task: () => Promise<EmbeddedAgentRunResult>,
     opts?: CommandQueueEnqueueOptions,
   ) => {
-    const releaseQueueClaim = createRunContextQueueClaim();
+    const releaseQueueWait = beginAgentRunContextQueueWait(
+      options.getParams().runId,
+      options.getLifecycleGeneration(),
+    );
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = async () => {
-      releaseQueueClaim();
+      releaseQueueWait();
       let params = options.getParams();
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       throwIfAborted();
@@ -178,12 +172,12 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     const params = options.getParams();
     if (params.enqueue) {
       const enqueue = params.enqueue;
-      return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+      return enqueueWithRunContextQueueWait(releaseQueueWait, () =>
         enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts))),
       );
     }
     noteLaneWaitIfBusy(options.globalLane);
-    return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+    return enqueueWithRunContextQueueWait(releaseQueueWait, () =>
       enqueueCommandInLane(
         options.globalLane,
         taskWithCurrentLifecycle,
@@ -192,22 +186,25 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
-    const releaseQueueClaim = createRunContextQueueClaim();
+    const releaseQueueWait = beginAgentRunContextQueueWait(
+      options.getParams().runId,
+      options.getLifecycleGeneration(),
+    );
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
     const taskWithLaneAdmission = () => {
-      releaseQueueClaim();
+      releaseQueueWait();
       options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       return task();
     };
     const params = options.getParams();
     if (params.enqueue) {
       const enqueue = params.enqueue;
-      return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+      return enqueueWithRunContextQueueWait(releaseQueueWait, () =>
         enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts)),
       );
     }
     noteLaneWaitIfBusy(options.sessionLane);
-    return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+    return enqueueWithRunContextQueueWait(releaseQueueWait, () =>
       enqueueCommandInLane(
         options.sessionLane,
         taskWithLaneAdmission,
