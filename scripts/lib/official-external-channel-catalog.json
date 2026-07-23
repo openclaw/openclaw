@@ -499,6 +499,27 @@
           "aliases": ["teams"],
           "order": 60
         },
+        "channelConfigs": {
+          "msteams": {
+            "label": "Microsoft Teams",
+            "description": "Microsoft Teams bot conversation channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "defaultAccount": { "type": "string" },
+                "accounts": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          }
+        },
         "install": {
           "npmSpec": "@openclaw/msteams",
           "defaultChoice": "npm",

@@ -24,7 +24,7 @@ type MSTeamsTestRuntimeOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
-  resolveStorePath?: () => string;
+  resolveStorePath?: () => string | undefined;
 };
 
 const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
@@ -227,6 +227,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   return {
     cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
+    accountId: "default",
     appId: "test-app-id",
     app,
     tokenProvider: {

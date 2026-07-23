@@ -114,6 +114,34 @@ describe("token – secret credentials", () => {
     });
   });
 
+  it("can disable env fallback for named accounts", () => {
+    process.env.MSTEAMS_APP_ID = "env-app-id";
+    process.env.MSTEAMS_APP_PASSWORD = "env-app-pw";
+    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+
+    expect(resolveMSTeamsCredentials(undefined, { allowEnvFallback: false })).toBeUndefined();
+  });
+
+  it("does not inherit env auth type when env fallback is disabled", () => {
+    process.env.MSTEAMS_AUTH_TYPE = "federated";
+
+    expect(
+      resolveMSTeamsCredentials(
+        {
+          appId: "named-app-id",
+          appPassword: "named-app-pw",
+          tenantId: "tenant-id",
+        } satisfies MSTeamsConfig,
+        { allowEnvFallback: false },
+      ),
+    ).toEqual({
+      type: "secret",
+      appId: "named-app-id",
+      appPassword: "named-app-pw",
+      tenantId: "tenant-id",
+    });
+  });
+
   it("returns undefined when appPassword is missing", () => {
     const cfg = { appId: "app-id", tenantId: "tenant-id" } satisfies MSTeamsConfig;
     expect(resolveMSTeamsCredentials(cfg)).toBeUndefined();
@@ -324,6 +352,13 @@ describe("resolveDelegatedAccessToken", () => {
     });
   }
 
+  const delegatedTokens = {
+    accessToken: "stale-access",
+    refreshToken: "refresh-token",
+    expiresAt: Date.now() + 60_000,
+    scopes: ["User.Read"],
+  };
+
   it("roundtrips delegated tokens through plugin-state SQLite without a sidecar", () => {
     writeDelegatedTokens(Date.now() + 60_000);
 
@@ -360,6 +395,20 @@ describe("resolveDelegatedAccessToken", () => {
       }),
     ).resolves.toBeUndefined();
     expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).toHaveBeenCalledOnce();
+  });
+
+  it("stores delegated tokens separately per account in plugin-state SQLite", () => {
+    saveDelegatedTokens({ ...delegatedTokens, accessToken: "default-access" });
+    saveDelegatedTokens(
+      { ...delegatedTokens, accessToken: "secondary-access" },
+      { accountId: "secondary" },
+    );
+
+    expect(loadDelegatedTokens()?.accessToken).toBe("default-access");
+    expect(loadDelegatedTokens({ accountId: "secondary" })?.accessToken).toBe("secondary-access");
+    expect(loadDelegatedTokens({ accountId: "finance" })).toBeUndefined();
+    expect(existsSync(path.join(stateDir ?? "", "state", "openclaw.sqlite"))).toBe(true);
+    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.json"))).toBe(false);
   });
 });
 

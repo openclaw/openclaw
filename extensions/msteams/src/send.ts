@@ -1,13 +1,8 @@
 // Msteams plugin module implements send behavior.
-import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceipt,
-  type MessageReceiptPart,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -31,10 +26,17 @@ import {
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
+import {
+  createMSTeamsSendReceipt,
+  createMSTeamsSendResult,
+  type SendMSTeamsMessageResult,
+} from "./send-result.js";
 
 type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Message text */
@@ -47,14 +49,6 @@ type SendMSTeamsMessageParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
-type SendMSTeamsMessageResult = {
-  messageId: string;
-  conversationId: string;
-  receipt: MessageReceipt;
-  /** If a FileConsentCard was sent instead of the file, this contains the upload ID */
-  pendingUploadId?: string;
-};
-
 /** Threshold for large files that require FileConsentCard flow in personal chats */
 const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
 
@@ -64,73 +58,11 @@ const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024; // 4MB
  */
 const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
-function createMSTeamsSendReceipt(params: {
-  conversationId: string;
-  platformMessageIds: readonly string[];
-  kind: MessageReceiptPartKind;
-  kinds?: readonly MessageReceiptPartKind[];
-}) {
-  const receipt = createMessageReceiptFromOutboundResults({
-    kind: params.kind,
-    results: params.platformMessageIds.map((messageId) => ({
-      channel: "msteams",
-      messageId,
-      conversationId: params.conversationId,
-    })),
-  });
-  if (!params.kinds) {
-    return receipt;
-  }
-  const kinds = params.kinds;
-  return {
-    ...receipt,
-    parts: receipt.parts.map((part, index) => {
-      const nextPart: MessageReceiptPart = {
-        platformMessageId: part.platformMessageId,
-        kind: kinds[index] ?? params.kind,
-        index: part.index,
-      };
-      if (part.threadId) {
-        nextPart.threadId = part.threadId;
-      }
-      if (part.replyToId) {
-        nextPart.replyToId = part.replyToId;
-      }
-      if (part.raw) {
-        nextPart.raw = part.raw;
-      }
-      return nextPart;
-    }),
-  };
-}
-
-function createMSTeamsSendResult(params: {
-  conversationId: string;
-  messageId: string;
-  platformMessageIds?: readonly string[];
-  kind: MessageReceiptPartKind;
-  pendingUploadId?: string;
-}): SendMSTeamsMessageResult {
-  const platformMessageIds = (
-    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
-  )
-    .map((messageId) => messageId.trim())
-    .filter((messageId) => messageId && messageId !== "unknown");
-  return {
-    messageId: params.messageId,
-    conversationId: params.conversationId,
-    receipt: createMSTeamsSendReceipt({
-      conversationId: params.conversationId,
-      platformMessageIds,
-      kind: params.kind,
-    }),
-    ...(params.pendingUploadId ? { pendingUploadId: params.pendingUploadId } : {}),
-  };
-}
-
 type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Poll question */
@@ -150,6 +82,8 @@ type SendMSTeamsPollResult = {
 type SendMSTeamsCardParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Adaptive Card JSON object */
@@ -175,13 +109,24 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const { cfg, accountId, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const scopedCfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: resolveMSTeamsAccountConfig(cfg, accountId),
+    },
+  };
   const tableMode = resolveMarkdownTableMode({
-    cfg,
+    cfg: scopedCfg,
     channel: "msteams",
   });
   const messageText = convertMarkdownTables(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const ctx = await resolveMSTeamsSendContext({
+    cfg,
+    ...(accountId ? { accountId } : {}),
+    to,
+  });
   const {
     app,
     conversationId,
@@ -470,9 +415,10 @@ async function sendProactiveActivity({
 export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
-  const { cfg, to, question, options, maxSelections } = params;
+  const { cfg, accountId, to, question, options, maxSelections } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
@@ -522,9 +468,10 @@ export async function sendPollMSTeams(
 export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
-  const { cfg, to, card } = params;
+  const { cfg, accountId, to, card } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
@@ -564,6 +511,8 @@ export async function sendAdaptiveCardMSTeams(
 type EditMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to edit */
@@ -579,6 +528,8 @@ type EditMSTeamsMessageResult = {
 type DeleteMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to delete */
@@ -598,9 +549,10 @@ type DeleteMSTeamsMessageResult = {
 export async function editMessageMSTeams(
   params: EditMSTeamsMessageParams,
 ): Promise<EditMSTeamsMessageResult> {
-  const { cfg, to, activityId, text } = params;
+  const { cfg, accountId, to, activityId, text } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
@@ -643,9 +595,10 @@ export async function editMessageMSTeams(
 export async function deleteMessageMSTeams(
   params: DeleteMSTeamsMessageParams,
 ): Promise<DeleteMSTeamsMessageResult> {
-  const { cfg, to, activityId } = params;
+  const { cfg, accountId, to, activityId } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 

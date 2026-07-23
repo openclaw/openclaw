@@ -5,28 +5,230 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
+  normalizeAccountId,
+  type ChannelSetupInput,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import type { MSTeamsConfig } from "../runtime-api.js";
+import {
+  resolveDefaultMSTeamsAccountId,
+  resolveMSTeamsAccountConfig,
+  type MSTeamsMultiAccountConfig,
+} from "./accounts.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
+const channel = "msteams" as const;
+
+type MSTeamsSetupInput = ChannelSetupInput & {
+  appId?: string;
+  appPassword?: string;
+  tenantId?: string;
+};
+
+type MSTeamsSetupAccountConfig = Partial<MSTeamsConfig> & {
+  name?: string;
+};
+
+function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): string {
+  return normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
+}
+
+function resolveRawMSTeamsAccountKey(
+  accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
+  accountId: string,
+): string | undefined {
+  const normalized = normalizeAccountId(accountId);
+  if (!accounts) {
+    return undefined;
+  }
+  return Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
+}
+
+function resolveRawMSTeamsAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): MSTeamsSetupAccountConfig {
+  const normalized = normalizeAccountId(accountId);
+  const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
+  if (normalized === DEFAULT_ACCOUNT_ID) {
+    return msteams;
+  }
+  const rawAccountKey = resolveRawMSTeamsAccountKey(msteams.accounts, normalized);
+  return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};
+}
+
+function splitRootIdentity(msteams: MSTeamsMultiAccountConfig): {
+  root: MSTeamsMultiAccountConfig;
+  defaultAccount: MSTeamsSetupAccountConfig;
+} {
+  const { appId, appPassword, webhook, ...root } = msteams;
+  const rootWebhook = webhook ? { ...webhook } : undefined;
+  const defaultWebhook = rootWebhook?.port === undefined ? undefined : { port: rootWebhook.port };
+  if (rootWebhook) {
+    delete rootWebhook.port;
+  }
+  const defaultAccount: MSTeamsSetupAccountConfig = {
+    ...(appId !== undefined ? { appId } : {}),
+    ...(appPassword !== undefined ? { appPassword } : {}),
+    ...(defaultWebhook ? { webhook: defaultWebhook } : {}),
+  };
+  return {
+    root: {
+      ...root,
+      ...(rootWebhook && Object.keys(rootWebhook).length > 0 ? { webhook: rootWebhook } : {}),
+    },
+    defaultAccount,
+  };
+}
+
+export function patchMSTeamsAccountConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  patch: MSTeamsSetupAccountConfig;
+  ensureEnabled?: boolean;
+  scopeDefaultToAccounts?: boolean;
+}): OpenClawConfig {
+  const accountId = normalizeAccountId(params.accountId);
+  const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
+  const ensureEnabled = params.ensureEnabled ?? true;
+  const scopeDefaultToAccounts = params.scopeDefaultToAccounts ?? false;
+  if (accountId === DEFAULT_ACCOUNT_ID && !scopeDefaultToAccounts) {
+    return {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        msteams: {
+          ...msteams,
+          ...(ensureEnabled ? { enabled: true } : {}),
+          ...params.patch,
+        },
+      },
+    };
+  }
+
+  const { root: baseMsteams, defaultAccount } = splitRootIdentity(msteams);
+  const baseAccounts = baseMsteams.accounts ?? {};
+  const hasPromotedDefaultIdentity = Object.keys(defaultAccount).length > 0;
+  const accounts =
+    hasPromotedDefaultIdentity && accountId !== DEFAULT_ACCOUNT_ID
+      ? {
+          ...baseAccounts,
+          default: {
+            ...defaultAccount,
+            ...baseAccounts.default,
+          },
+        }
+      : baseAccounts;
+  const rawAccountKey =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? DEFAULT_ACCOUNT_ID
+      : (resolveRawMSTeamsAccountKey(accounts, accountId) ?? accountId);
+  const existing =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? ({ ...defaultAccount, ...accounts[rawAccountKey] } as MSTeamsSetupAccountConfig)
+      : ((accounts[rawAccountKey] ?? {}) as MSTeamsSetupAccountConfig);
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      msteams: {
+        ...baseMsteams,
+        ...(ensureEnabled ? { enabled: true } : {}),
+        accounts: {
+          ...accounts,
+          [rawAccountKey]: {
+            ...existing,
+            ...(ensureEnabled ? { enabled: true } : {}),
+            ...params.patch,
+          },
+        },
+      } as MSTeamsMultiAccountConfig,
+    },
+  };
+}
+
+function resolveCredentialsForSetup(cfg: OpenClawConfig, accountId: string) {
+  return resolveMSTeamsCredentials(resolveMSTeamsAccountConfig(cfg, accountId), {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix:
+      accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${accountId}`,
+  });
+}
+
+function hasConfiguredCredentialsForSetup(cfg: OpenClawConfig, accountId: string): boolean {
+  const accountConfig = resolveMSTeamsAccountConfig(cfg, accountId);
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return hasConfiguredMSTeamsCredentials(accountConfig);
+  }
+  if (resolveCredentialsForSetup(cfg, accountId)) {
+    return true;
+  }
+  if (accountConfig.authType === "federated") {
+    return Boolean(
+      normalizeSecretInputString(accountConfig.appId) &&
+      normalizeSecretInputString(accountConfig.tenantId) &&
+      (accountConfig.certificatePath || accountConfig.useManagedIdentity),
+    );
+  }
+  return Boolean(
+    normalizeSecretInputString(accountConfig.appId) &&
+    normalizeSecretInputString(accountConfig.tenantId) &&
+    accountConfig.appPassword,
+  );
+}
 
 export const msteamsSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-  applyAccountConfig: ({ cfg }) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-      },
-    },
-  }),
+  resolveAccountId: ({ cfg, accountId }) => resolveSetupAccountId(cfg, accountId),
+  applyAccountName: ({ cfg, accountId, name }) => {
+    const trimmed = name?.trim();
+    return trimmed
+      ? patchMSTeamsAccountConfig({
+          cfg,
+          accountId: resolveSetupAccountId(cfg, accountId),
+          patch: { name: trimmed },
+        })
+      : cfg;
+  },
+  validateInput: ({ accountId, input }) => {
+    const msteamsInput = input as MSTeamsSetupInput;
+    if (msteamsInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+      return "MSTEAMS_* environment variables can only be used for the default account.";
+    }
+    if (
+      !msteamsInput.useEnv &&
+      !(msteamsInput.appId && msteamsInput.appPassword && msteamsInput.tenantId)
+    ) {
+      return "MS Teams requires appId, appPassword, and tenantId (or --use-env for the default account).";
+    }
+    return null;
+  },
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+    const msteamsInput = input as MSTeamsSetupInput;
+    const patch: MSTeamsSetupAccountConfig = {};
+    if (typeof msteamsInput.appId === "string" && msteamsInput.appId.trim()) {
+      patch.appId = msteamsInput.appId.trim();
+    }
+    if (typeof msteamsInput.appPassword === "string" && msteamsInput.appPassword.trim()) {
+      patch.appPassword = msteamsInput.appPassword.trim();
+    }
+    if (typeof msteamsInput.tenantId === "string" && msteamsInput.tenantId.trim()) {
+      patch.tenantId = msteamsInput.tenantId.trim();
+    }
+    return patchMSTeamsAccountConfig({
+      cfg,
+      accountId: resolvedAccountId,
+      patch,
+      scopeDefaultToAccounts: true,
+    });
+  },
 };
 
 export const msteamsSetupContract = defineChannelSetupContract({
@@ -34,8 +236,69 @@ export const msteamsSetupContract = defineChannelSetupContract({
   legacyAdapter: msteamsSetupAdapter,
 });
 
-const channel = "msteams" as const;
+function enableMSTeamsAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
+  return patchMSTeamsAccountConfig({
+    cfg,
+    accountId,
+    patch: {},
+  });
+}
 
+function setMSTeamsAccountCredentials(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  appId: string;
+  appPassword: string;
+  tenantId: string;
+  webhookPort?: number;
+}): OpenClawConfig {
+  const existing = resolveRawMSTeamsAccountConfig(params.cfg, params.accountId);
+  return patchMSTeamsAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    patch: {
+      appId: params.appId,
+      appPassword: params.appPassword,
+      tenantId: params.tenantId,
+      ...(params.webhookPort !== undefined
+        ? { webhook: { ...existing.webhook, port: params.webhookPort } }
+        : {}),
+    },
+    scopeDefaultToAccounts: params.accountId === DEFAULT_ACCOUNT_ID,
+  });
+}
+
+function setMSTeamsAccountWebhookPort(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  port: number;
+}): OpenClawConfig {
+  const existing = resolveRawMSTeamsAccountConfig(params.cfg, params.accountId);
+  return patchMSTeamsAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    patch: { webhook: { ...existing.webhook, port: params.port } },
+  });
+}
+
+async function promptMSTeamsWebhookPort(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  prompter: WizardPrompter;
+}): Promise<number> {
+  const current = resolveMSTeamsAccountConfig(params.cfg, params.accountId).webhook?.port;
+  const raw = await params.prompter.text({
+    message: t("wizard.msteams.webhookPortPrompt"),
+    initialValue: typeof current === "number" ? String(current) : undefined,
+    validate: (value) => {
+      const port = Number.parseInt(value.trim(), 10);
+      return Number.isInteger(port) && port > 0 && port <= 65535
+        ? undefined
+        : t("wizard.msteams.webhookPortInvalid");
+    },
+  });
+  return Number.parseInt(raw.trim(), 10);
+}
 async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
   appId: string;
   appPassword: string;
@@ -86,8 +349,9 @@ export function createMSTeamsSetupWizardBase(): Pick<
 > {
   return {
     channel,
-    resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
-    resolveShouldPromptAccountIds: () => false,
+    resolveAccountIdForConfigure: ({ cfg, accountOverride, defaultAccountId }) =>
+      resolveSetupAccountId(cfg, accountOverride ?? defaultAccountId),
+    resolveShouldPromptAccountIds: ({ shouldPromptAccountIds }) => shouldPromptAccountIds,
     status: createStandardChannelSetupStatus({
       channelLabel: "MS Teams",
       configuredLabel: t("wizard.channels.statusConfigured"),
@@ -97,15 +361,21 @@ export function createMSTeamsSetupWizardBase(): Pick<
       configuredScore: 2,
       unconfiguredScore: 0,
       includeStatusLine: true,
-      resolveConfigured: ({ cfg }) =>
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams),
+      resolveConfigured: ({ cfg, accountId }) => {
+        const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+        return (
+          Boolean(resolveCredentialsForSetup(cfg, resolvedAccountId)) ||
+          hasConfiguredCredentialsForSetup(cfg, resolvedAccountId)
+        );
+      },
     }),
     credentials: [],
-    finalize: async ({ cfg, prompter }) => {
-      const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);
-      const hasConfigCreds = hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
+    finalize: async ({ cfg, accountId, prompter }) => {
+      const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+      const resolved = resolveCredentialsForSetup(cfg, resolvedAccountId);
+      const hasConfigCreds = hasConfiguredCredentialsForSetup(cfg, resolvedAccountId);
       const canUseEnv = Boolean(
+        resolvedAccountId === DEFAULT_ACCOUNT_ID &&
         !hasConfigCreds &&
         normalizeSecretInputString(process.env.MSTEAMS_APP_ID) &&
         normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) &&
@@ -127,11 +397,7 @@ export function createMSTeamsSetupWizardBase(): Pick<
           initialValue: true,
         });
         if (keepEnv) {
-          next = msteamsSetupAdapter.applyAccountConfig({
-            cfg: next,
-            accountId: DEFAULT_ACCOUNT_ID,
-            input: {},
-          });
+          next = enableMSTeamsAccount(next, resolvedAccountId);
         } else {
           ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
         }
@@ -147,23 +413,36 @@ export function createMSTeamsSetupWizardBase(): Pick<
         ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
       }
 
-      if (appId && appPassword && tenantId) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              enabled: true,
-              appId,
-              appPassword,
-              tenantId,
-            },
-          },
-        };
+      let webhookPort: number | undefined;
+      if (
+        resolvedAccountId !== DEFAULT_ACCOUNT_ID &&
+        typeof resolveMSTeamsAccountConfig(next, resolvedAccountId).webhook?.port !== "number"
+      ) {
+        webhookPort = await promptMSTeamsWebhookPort({
+          cfg: next,
+          accountId: resolvedAccountId,
+          prompter,
+        });
       }
 
-      return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
+      if (appId && appPassword && tenantId) {
+        next = setMSTeamsAccountCredentials({
+          cfg: next,
+          accountId: resolvedAccountId,
+          appId,
+          appPassword,
+          tenantId,
+          webhookPort,
+        });
+      } else if (webhookPort !== undefined) {
+        next = setMSTeamsAccountWebhookPort({
+          cfg: next,
+          accountId: resolvedAccountId,
+          port: webhookPort,
+        });
+      }
+
+      return { cfg: next, accountId: resolvedAccountId };
     },
   };
 }

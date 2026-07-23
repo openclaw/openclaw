@@ -679,6 +679,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Bundled plugin
   - H2: Quick setup
+  - H3: Backward-compatible single-bot config
+  - H2: Account routing and bindings
   - H2: Goals
   - H2: Config writes
   - H2: Access control (DMs + groups)

@@ -1,4 +1,5 @@
 // Msteams plugin module implements sent message cache behavior.
+import { createHash } from "node:crypto";
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { getOptionalMSTeamsRuntime } from "./runtime.js";
 
@@ -34,24 +35,56 @@ const sentMessages = createPersistentDedupeCache<MSTeamsSentMessageRecord>({
   },
 });
 
-function makeKey(conversationId: string, messageId: string): string {
-  return `${conversationId}:${messageId}`;
+type MSTeamsSentMessageScope = {
+  accountId?: string | null;
+};
+
+function normalizeSentMessageAccountId(accountId?: string | null): string {
+  const trimmed = accountId?.trim();
+  return trimmed ? trimmed : "default";
 }
 
-export function recordMSTeamsSentMessage(conversationId: string, messageId: string): void {
+function makeKey(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): string {
+  const accountId = normalizeSentMessageAccountId(options?.accountId);
+  const messageKey = `${conversationId}:${messageId}`;
+  if (accountId === "default") {
+    return messageKey;
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify([accountId, conversationId, messageId]))
+    .digest("hex");
+  return `account:v1:${digest}`;
+}
+
+export function recordMSTeamsSentMessage(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): void {
   if (!conversationId || !messageId) {
     return;
   }
   const sentAt = Date.now();
-  void sentMessages.register(makeKey(conversationId, messageId), { sentAt }, { at: sentAt });
+  void sentMessages.register(
+    makeKey(conversationId, messageId, options),
+    { sentAt },
+    {
+      at: sentAt,
+    },
+  );
 }
 
 export async function wasMSTeamsMessageSentWithPersistence(params: {
   conversationId: string;
   messageId: string;
+  accountId?: string | null;
 }): Promise<boolean> {
   if (!params.conversationId || !params.messageId) {
     return false;
   }
-  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId));
+  return await sentMessages.lookup(makeKey(params.conversationId, params.messageId, params));
 }

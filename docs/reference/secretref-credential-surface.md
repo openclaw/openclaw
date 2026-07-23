@@ -104,6 +104,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.qqbot.clientSecret`
 - `channels.qqbot.accounts.*.clientSecret`
 - `channels.msteams.appPassword`
+- `channels.msteams.accounts.*.appPassword`
 - `channels.mattermost.botToken`
 - `channels.mattermost.accounts.*.botToken`
 - `channels.matrix.accessToken`

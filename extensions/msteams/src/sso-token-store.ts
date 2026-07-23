@@ -21,6 +21,8 @@ import {
 } from "./sqlite-state.js";
 
 export type MSTeamsSsoStoredToken = {
+  /** Channel account that owns this token. */
+  accountId?: string;
   /** Connection name from the Bot Framework OAuth connection setting. */
   connectionName: string;
   /** Stable user identifier (AAD object ID preferred). */
@@ -34,9 +36,17 @@ export type MSTeamsSsoStoredToken = {
 };
 
 type MSTeamsSsoTokenStore = {
-  get(params: { connectionName: string; userId: string }): Promise<MSTeamsSsoStoredToken | null>;
-  save(value: MSTeamsSsoStoredToken): Promise<void>;
-  remove(params: { connectionName: string; userId: string }): Promise<boolean>;
+  get(params: {
+    accountId?: string | null;
+    connectionName: string;
+    userId: string;
+  }): Promise<MSTeamsSsoStoredToken | null>;
+  save(token: MSTeamsSsoStoredToken): Promise<void>;
+  remove(params: {
+    accountId?: string | null;
+    connectionName: string;
+    userId: string;
+  }): Promise<boolean>;
 };
 
 type SsoStoreData = {
@@ -53,9 +63,25 @@ const SSO_TOKEN_MUTATION_KEY = "sso-tokens";
 export const MSTEAMS_MAX_SSO_TOKENS = 5000;
 const STORE_KEY_VERSION_PREFIX = "v2:";
 
-export function makeMSTeamsSsoTokenStoreKey(connectionName: string, userId: string): string {
+function normalizeSsoAccountId(accountId?: string | null): string {
+  const trimmed = accountId?.trim();
+  return trimmed || "default";
+}
+
+export function makeMSTeamsSsoTokenStoreKey(
+  connectionName: string,
+  userId: string,
+  accountId?: string | null,
+): string {
+  const normalizedAccountId = normalizeSsoAccountId(accountId);
   return `${STORE_KEY_VERSION_PREFIX}${createHash("sha256")
-    .update(JSON.stringify([connectionName, userId]))
+    .update(
+      JSON.stringify(
+        normalizedAccountId === "default"
+          ? [connectionName, userId]
+          : [normalizedAccountId, connectionName, userId],
+      ),
+    )
     .digest("hex")}`;
 }
 
@@ -90,6 +116,9 @@ export function normalizeMSTeamsSsoStoredToken(value: unknown): MSTeamsSsoStored
     return null;
   }
   return {
+    ...(typeof token.accountId === "string" && token.accountId
+      ? { accountId: token.accountId }
+      : {}),
     connectionName: token.connectionName,
     userId: token.userId,
     token: token.token,
@@ -107,31 +136,50 @@ export function isMSTeamsSsoStoreData(value: unknown): value is MSTeamsSsoStoreD
 }
 
 export function createMSTeamsSsoTokenStoreFs(params?: {
+  accountId?: string | null;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
   storePath?: string;
 }): MSTeamsSsoTokenStore {
   const tokenStore = createTokenStore(params);
+  const defaultAccountId = params?.accountId;
 
   return {
-    async get({ connectionName, userId }) {
-      return (await tokenStore.lookup(makeMSTeamsSsoTokenStoreKey(connectionName, userId))) ?? null;
+    async get({ accountId, connectionName, userId }) {
+      return (
+        (await tokenStore.lookup(
+          makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId ?? defaultAccountId),
+        )) ?? null
+      );
     },
 
     async save(token) {
       await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
         await tokenStore.register(
-          makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
-          toPluginJsonValue({ ...token }),
+          makeMSTeamsSsoTokenStoreKey(
+            token.connectionName,
+            token.userId,
+            token.accountId ?? defaultAccountId,
+          ),
+          toPluginJsonValue({
+            ...token,
+            ...(token.accountId
+              ? { accountId: token.accountId }
+              : normalizeSsoAccountId(defaultAccountId) === "default"
+                ? {}
+                : { accountId: normalizeSsoAccountId(defaultAccountId) }),
+          }),
         );
       });
     },
 
-    async remove({ connectionName, userId }) {
+    async remove({ accountId, connectionName, userId }) {
       let removed = false;
       await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
-        removed = await tokenStore.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
+        removed = await tokenStore.delete(
+          makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId ?? defaultAccountId),
+        );
       });
       return removed;
     },
