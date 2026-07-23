@@ -79,6 +79,7 @@ function resolveGitCommit(rootDir: string, execFileSyncImpl: ExecFileSync): stri
       cwd: rootDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
     }).toString();
   } catch {
     return null;
