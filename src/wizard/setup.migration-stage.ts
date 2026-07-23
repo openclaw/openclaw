@@ -39,7 +39,6 @@ import {
 
 export { recoverSetupMigrationPromotion } from "./setup.migration-promotion.js";
 export type {
-  SetupMigrationPromotionContinuation,
   SetupMigrationPromotionOutcome,
   SetupMigrationPromotionResume,
 } from "./setup.migration-promotion.js";
@@ -53,7 +52,7 @@ type SetupMigrationStagePaths = {
   reportDir: string;
 };
 
-export type SetupMigrationStage = {
+type SetupMigrationStage = {
   staged: SetupMigrationStagePaths;
   final: SetupMigrationStagePaths;
   configRuntime: MigrationConfigRuntime;

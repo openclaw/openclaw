@@ -32,10 +32,10 @@ type MigrationItemAction =
   | "skip"
   | "manual";
 
-export type MigrationApplyPhase = "before-promotion" | "after-promotion";
+type MigrationApplyPhase = "before-promotion" | "after-promotion";
 
 /** Provider guarantee required before onboarding defers non-rollbackable effects. */
-export type MigrationDeferredApplyContract = {
+type MigrationDeferredApplyContract = {
   retrySafe: true;
 };
 

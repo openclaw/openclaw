@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import type { SetupMigrationPromotionContinuation } from "./setup.migration-promotion.js";
 import {
   createSetupMigrationStage,
   recoverSetupMigrationPromotion,
-  type SetupMigrationPromotionContinuation,
 } from "./setup.migration-stage.js";
 
 const tempRoots = new Set<string>();

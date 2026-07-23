@@ -20,7 +20,7 @@ import {
   type SetupMigrationPromotionResume,
 } from "./setup.migration-stage.js";
 
-export type SetupMigrationImportOutcome = SetupMigrationPromotionOutcome & {
+type SetupMigrationImportOutcome = SetupMigrationPromotionOutcome & {
   acknowledgePromotion?: () => Promise<void>;
 };
 

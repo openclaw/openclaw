@@ -31,7 +31,6 @@ import { offerLiveModelVerification } from "./setup.inference-verification.js";
 import {
   assertDeferredMigrationApplyContract,
   finalizeSetupMigrationPromotion,
-  type SetupMigrationImportOutcome,
 } from "./setup.migration-finalize.js";
 import {
   assertFreshSetupMigrationTarget,
@@ -46,9 +45,8 @@ import {
   buildSetupMigrationPhasePlan,
   createSetupMigrationStage,
   recoverSetupMigrationPromotion,
+  type SetupMigrationPromotionOutcome,
 } from "./setup.migration-stage.js";
-
-export type { SetupMigrationImportOutcome } from "./setup.migration-finalize.js";
 
 type SetupMigrationDetection = {
   providerId: string;
@@ -376,7 +374,7 @@ export async function runSetupMigrationImport(params: {
     expectedConfig: OpenClawConfig,
   ) => Promise<OpenClawConfig>;
   continueOnboarding?: boolean;
-}): Promise<SetupMigrationImportOutcome> {
+}): Promise<Awaited<ReturnType<typeof finalizeSetupMigrationPromotion>>> {
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },
@@ -591,7 +589,7 @@ export async function runSetupMigrationImport(params: {
       assertApplySucceeded(stagedResult);
       const projectedStagedResult = stage.projectResultToFinal(stagedResult);
 
-      let outcome: SetupMigrationImportOutcome = { kind: "no-imported-inference" };
+      let outcome: SetupMigrationPromotionOutcome = { kind: "no-imported-inference" };
       if (resolveAgentModelPrimaryValue(stage.getStagedConfig().agents?.defaults?.model)) {
         const verification = await offerLiveModelVerification({
           config: stage.getStagedConfig(),
