@@ -115,6 +115,7 @@ type CatalogRefresh = {
   generation: number;
   controller: AbortController;
   promise: Promise<McpToolCatalog>;
+  activeWaiters: number;
 };
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
@@ -451,6 +452,7 @@ export function createSessionMcpRuntime(params: {
   let disposed = false;
   let catalog: McpToolCatalog | null = null;
   let catalogInFlight: CatalogRefresh | undefined;
+  const abandonedCatalogRefreshControllers = new WeakSet<AbortController>();
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
@@ -790,6 +792,9 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
+                if (abandonedCatalogRefreshControllers.has(refreshController)) {
+                  throw error;
+                }
                 const generationSuperseded = catalogInvalidationGeneration !== catalogGeneration;
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
@@ -862,6 +867,9 @@ export function createSessionMcpRuntime(params: {
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
+        if (abandonedCatalogRefreshControllers.has(refreshController)) {
+          throw error;
+        }
         await Promise.allSettled(
           Array.from(sessions.values(), (session) => disposeSession(session)),
         );
@@ -881,6 +889,7 @@ export function createSessionMcpRuntime(params: {
       generation: catalogGeneration,
       controller: refreshController,
       promise: trackedInFlight,
+      activeWaiters: 0,
     };
     catalogInFlight = refresh;
     void trackedInFlight
@@ -898,14 +907,13 @@ export function createSessionMcpRuntime(params: {
   ): Promise<McpToolCatalog> => {
     while (true) {
       failIfDisposed();
+      options?.signal?.throwIfAborted();
       if (catalog) {
-        options?.signal?.throwIfAborted();
         return catalog;
       }
 
       const refresh = catalogInFlight ?? startCatalogRefresh();
-      // Caller cancellation only detaches this wait. Generation invalidation or
-      // runtime disposal owns cancellation of the shared refresh itself.
+      refresh.activeWaiters += 1;
       const waitSignal = options?.signal
         ? AbortSignal.any([options.signal, refresh.controller.signal])
         : refresh.controller.signal;
@@ -917,7 +925,21 @@ export function createSessionMcpRuntime(params: {
         if (refresh.generation !== catalogInvalidationGeneration) {
           continue;
         }
+        if (abandonedCatalogRefreshControllers.has(refresh.controller)) {
+          continue;
+        }
         throw error;
+      } finally {
+        refresh.activeWaiters -= 1;
+        if (
+          refresh.activeWaiters === 0 &&
+          catalogInFlight === refresh &&
+          !refresh.controller.signal.aborted
+        ) {
+          abandonedCatalogRefreshControllers.add(refresh.controller);
+          catalogInFlight = undefined;
+          refresh.controller.abort(new Error("MCP catalog refresh abandoned by all waiters"));
+        }
       }
     }
   };
