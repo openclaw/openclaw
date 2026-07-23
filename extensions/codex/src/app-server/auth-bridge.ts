@@ -1,7 +1,6 @@
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 // Codex plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,6 +20,7 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
@@ -61,6 +61,11 @@ const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
 const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 const CODEX_AUTH_JSON_FILENAME = "auth.json";
 const CODEX_HOME_DIRNAME = ".codex";
+
+// Bound sync reads of the Codex CLI auth file so an oversized CODEX_HOME/auth.json
+// cannot trigger an unbounded memory read. Mirrors the ADC credential read bound
+// in extensions/anthropic-vertex/region.ts (#109260).
+const CODEX_CLI_AUTH_FILE_MAX_BYTES = 1024 * 1024;
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 export type CodexAppServerAuthRequirement = "api-key" | "subscription";
 const scopedOAuthRefreshQueues = new WeakMap<
@@ -716,9 +721,19 @@ async function readCodexCliAuthFileApiKey(env: NodeJS.ProcessEnv): Promise<strin
 
 function resolveCodexCliAuthFileApiKeyCacheKey(env: NodeJS.ProcessEnv): string | undefined {
   try {
-    const apiKey = parseCodexCliAuthFileApiKey(
-      fsSync.readFileSync(resolveCodexCliAuthFilePath(env), "utf8"),
-    );
+    // Bound the sync read so an oversized CODEX_HOME/auth.json cannot be slurped
+    // into memory just to fingerprint a cache key. tryReadSecretFileSync throws
+    // FsSafeError on oversize; the guard + catch return undefined (the file is
+    // treated as unreadable, same as a missing/corrupt auth file). Mirrors the
+    // ADC credential read bound in extensions/anthropic-vertex/region.ts (#109260).
+    const text = tryReadSecretFileSync(resolveCodexCliAuthFilePath(env), "Codex CLI auth file", {
+      maxBytes: CODEX_CLI_AUTH_FILE_MAX_BYTES,
+      rejectHardlinks: false,
+    });
+    if (!text) {
+      return undefined;
+    }
+    const apiKey = parseCodexCliAuthFileApiKey(text);
     return apiKey ? fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey) : undefined;
   } catch {
     return undefined;

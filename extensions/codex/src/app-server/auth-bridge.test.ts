@@ -2288,6 +2288,33 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("rejects an oversized Codex CLI auth.json instead of slurping it into memory", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const codexHome = path.join(root, "codex-cli");
+    try {
+      await writeCodexCliApiKeyAuthFile(codexHome);
+      // Overwrite with a valid JSON auth file padded past the 1 MiB bound. Without
+      // the bound, readFileSync would slurp the whole file and return a cache key;
+      // with the bound, the oversized read is rejected -> undefined.
+      await fs.writeFile(
+        path.join(codexHome, "auth.json"),
+        `${JSON.stringify({
+          OPENAI_API_KEY: "cli-auth-json-api-key",
+          padding: " ".repeat(1024 * 1024 + 256),
+        })}\n`,
+      );
+
+      expect(
+        resolveCodexAppServerFallbackApiKeyCacheKey({
+          startOptions: createStartOptions(),
+          baseEnv: { CODEX_HOME: codexHome },
+        }),
+      ).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not include Codex CLI api-key auth.json in websocket fallback cache keys", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const codexHome = path.join(root, "codex-cli");
