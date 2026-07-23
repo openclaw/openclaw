@@ -4,7 +4,7 @@ type SqliteIntegrityChecks = {
   integrityCheck: "ok";
 };
 
-type SqliteCheckPragma = "integrity_check";
+type SqliteCheckPragma = "integrity_check" | "quick_check";
 type SqliteForeignKeyViolation = {
   fkid: bigint;
   parent: string;
