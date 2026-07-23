@@ -603,7 +603,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
