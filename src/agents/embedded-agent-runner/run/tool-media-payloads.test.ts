@@ -268,4 +268,88 @@ describe("mergeAttemptToolMediaPayloads", () => {
       },
     });
   });
+
+  it("splits trusted local media from message-tool-only source reply mirrors", () => {
+    // Trusted local media (e.g. agent-generated TTS) represents new content
+    // created by the agent, not a mirror of an external message-tool send.
+    // Keep the transcript mirror immutable so final dispatch can deliver the
+    // media payload without treating it as a suppressed source-reply mirror.
+    const sourceReply = setReplyPayloadMetadata(
+      { text: "sent through message tool" },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          text: "sent through message tool",
+        },
+      },
+    );
+
+    const [mergedReply, mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [sourceReply],
+        toolMediaUrls: ["/tmp/tts-audio.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mergedReply).toEqual({ text: "sent through message tool" });
+    expect(getReplyPayloadMetadata(mergedReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        text: "sent through message tool",
+      },
+    });
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/tts-audio.opus"],
+      mediaUrl: "/tmp/tts-audio.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(mediaReply).not.toHaveProperty("text");
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
+  });
+
+  it("keeps trusted local media separate from harness-owned media beside a source mirror", () => {
+    const sourceReply = setReplyPayloadMetadata(
+      { text: "sent through message tool" },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          text: "sent through message tool",
+        },
+      },
+    );
+
+    const [mergedReply, trustedReply, hostOwnedReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [sourceReply],
+        toolMediaUrls: ["/tmp/tts-audio.opus", "/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mergedReply).toEqual({ text: "sent through message tool" });
+    expect(trustedReply).toEqual({
+      mediaUrls: ["/tmp/tts-audio.opus"],
+      mediaUrl: "/tmp/tts-audio.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(trustedReply ?? {})).toBeUndefined();
+    expect(hostOwnedReply).toEqual({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(hostOwnedReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
 });
