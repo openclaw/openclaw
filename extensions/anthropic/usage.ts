@@ -24,6 +24,7 @@ const ANTHROPIC_ADMIN_TOKEN_PREFIX = "openclaw:anthropic-admin:v1:";
 const ANTHROPIC_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const ANTHROPIC_USAGE_HISTORY_DAYS = 30;
 const MAX_PAGES = 100;
+const DECIMAL_NUMBER_PATTERN = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/;
 
 type AnthropicUsagePage = {
   data: unknown[];
@@ -83,12 +84,10 @@ function objectRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function finiteNumber(value: unknown): number | undefined {
+  const decimalMatch =
+    typeof value === "string" ? DECIMAL_NUMBER_PATTERN.exec(value)?.[0] : undefined;
   const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
+    typeof value === "number" ? value : decimalMatch === value ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
