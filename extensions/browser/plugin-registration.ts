@@ -26,16 +26,11 @@ import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
-
-const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
+import { resolveBrowserControlStartupMode } from "./src/plugin-start-policy.js";
 
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
 );
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
-}
 
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
@@ -191,7 +186,11 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   return {
     id: "browser-control",
     start: async (ctx) => {
-      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+      const startupMode = resolveBrowserControlStartupMode(
+        ctx.config,
+        process.env.OPENCLAW_EAGER_BROWSER_CONTROL_SERVER,
+      );
+      if (!startupMode) {
         return;
       }
       const loaded = await loadService();
