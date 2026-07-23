@@ -231,6 +231,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         storePath: string;
         cfg: OpenClawConfig;
       }) => Promise<void>;
+      tasks?: Parameters<typeof runHeartbeatOnce>[0]["tasks"];
     } = {},
   ) {
     return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -253,6 +254,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
       await runHeartbeatOnce({
         cfg,
+        tasks: params.tasks,
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
 
@@ -445,15 +447,8 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
-  it("delivers a terminal tool warning without recording successful heartbeat bookkeeping", async () => {
+  it("delivers a terminal tool warning without recording successful delivery bookkeeping", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      await seedHeartbeatScratchForTest({
-        content: `tasks:
-  - name: check-delivery
-    interval: 1m
-    prompt: Check delivery
-`,
-      });
       const cfg = createConfig({ tmpDir, storePath });
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
@@ -478,13 +473,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
       });
       const sessionStore = readSessionStoreForTest<{
-        heartbeatTaskState?: Record<string, number>;
         lastHeartbeatText?: string;
       }>(storePath);
 
       expect(result).toEqual({ status: "failed", reason: "agent-tool-failure" });
       expectTelegramSend(sendTelegram, { text: warning, cfg });
-      expect(sessionStore[sessionKey]?.heartbeatTaskState).toBeUndefined();
       expect(sessionStore[sessionKey]?.lastHeartbeatText).toBeUndefined();
       expect(getLastHeartbeatEvent()).toMatchObject({
         status: "failed",
@@ -882,15 +875,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("uses the heartbeat response tool prompt for due heartbeat tasks", async () => {
     const result = await runPromptScenario({
       config: { visibleReplies: "message_tool" },
-      beforeSeed: async () => {
-        await seedHeartbeatScratchForTest({
-          content: `tasks:
-  - name: status
-    interval: 1m
-    prompt: Check deployment status
-`,
-        });
-      },
+      tasks: [{ jobId: "job-status", name: "status", prompt: "Check deployment status" }],
     });
 
     expectHeartbeatToolPrompt(result, [

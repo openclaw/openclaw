@@ -1156,6 +1156,16 @@ async function runHeartbeatScratchMigrationHealth(ctx: DoctorHealthFlowContext):
   });
 }
 
+async function runHeartbeatTaskMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatTasksToCron } =
+    await import("../commands/doctor-heartbeat-task-migration.js");
+  await maybeMigrateHeartbeatTasksToCron({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.runtime, ctx.prompter, {
@@ -2246,6 +2256,21 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runHeartbeatScratchMigrationHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-task-cron-migration",
+      label: "Heartbeat task cron migration",
+      healthChecks: {
+        id: "core/doctor/heartbeat-task-cron-migration",
+        description: "Heartbeat scratch task blocks must migrate into cron jobs.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectHeartbeatTaskMigrationFindings } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          return await collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
+        },
+      },
+      run: runHeartbeatTaskMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",

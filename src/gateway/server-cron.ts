@@ -662,6 +662,7 @@ export function buildGatewayCronService(params: {
         ...(opts?.scheduledAnchorMs !== undefined
           ? { scheduledAnchorMs: opts.scheduledAnchorMs }
           : {}),
+        ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
       });
     },
     runHeartbeatOnce: async (opts) => {
