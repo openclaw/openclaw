@@ -40,6 +40,9 @@ type McpLoopbackScopeParams = {
   runtimePolicySessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  runId?: string;
+  workspaceDir?: string;
+  cwd?: string;
   modelProvider?: string;
   modelId?: string;
   yieldContextCacheKey?: string;
@@ -100,6 +103,7 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
     conversationReadOrigin: "delegated",
     surface: "loopback",
     excludeToolNames,
+    mediatedToolNames: mediatedNativeTools,
     includeNodeExecTool,
   });
   return {
@@ -140,6 +144,9 @@ export class McpLoopbackToolCache {
       params.runtimePolicySessionKey ?? "",
       params.agentId ?? "",
       params.sessionId ?? "",
+      params.runId ?? "",
+      params.workspaceDir ?? "",
+      params.cwd ?? "",
       params.modelProvider ?? "",
       params.modelId ?? "",
       params.yieldContextCacheKey ?? "",

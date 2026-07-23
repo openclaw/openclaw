@@ -523,12 +523,16 @@ export async function executePreparedCliRun(
     // session run with the node's full native toolset.
     toolAvailability:
       nodePlacement && params.cliToolAvailability
-        ? { native: params.cliToolAvailability.native, mcp: [] }
+        ? { native: params.cliToolAvailability.native, openClaw: [] }
         : params.cliToolAvailability,
     useResume,
     baseArgs: baseArgsWithSkills,
   });
-  if (params.cliToolAvailability && !resolvedExecutionArgs) {
+  if (
+    params.cliToolAvailability &&
+    context.backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+    !resolvedExecutionArgs
+  ) {
     throw new Error(
       `CLI backend ${context.backendResolved.id} did not enforce exact per-run tool availability`,
     );

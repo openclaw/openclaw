@@ -339,6 +339,8 @@ type OpenClawCodingToolsOptions = {
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
+  /** Skip hook wrapping when an outer tool-call boundary owns hook execution. */
+  wrapBeforeToolCallHook?: boolean;
   /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai".
@@ -1216,11 +1218,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     emitDiagnostics: options?.emitBeforeToolCallDiagnostics,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   };
-  const withHooks = normalized.map((tool) =>
-    isToolWrappedWithBeforeToolCallHook(tool)
-      ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
-      : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
-  );
+  // MCP and other outer dispatchers execute hooks at their shared call boundary.
+  // Rewrapping here would run plugin authorization and mutation hooks twice.
+  const withHooks =
+    options?.wrapBeforeToolCallHook === false
+      ? normalized
+      : normalized.map((tool) =>
+          isToolWrappedWithBeforeToolCallHook(tool)
+            ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
+            : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
+        );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))

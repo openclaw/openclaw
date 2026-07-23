@@ -82,12 +82,14 @@ describe("resolveMcpLoopbackScopedTools", () => {
     ]);
     const call = resolveGatewayScopedTools.mock.calls[0]?.[0] as {
       excludeToolNames?: Set<string>;
+      mediatedToolNames?: Set<string>;
       includeNodeExecTool?: boolean;
     };
     expect(call.includeNodeExecTool).toBe(false);
     expect(call.excludeToolNames?.has("read")).toBe(false);
     expect(call.excludeToolNames?.has("exec")).toBe(false);
     expect(call.excludeToolNames?.has("write")).toBe(true);
+    expect(call.mediatedToolNames).toEqual(new Set(["read", "exec"]));
   });
 });
 

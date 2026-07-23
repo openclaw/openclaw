@@ -202,6 +202,7 @@ describe("resolveCliBackendConfig", () => {
           resolveExecutionArgs: resolveExecutionArgs as never,
           ownsNativeCompaction: true,
           nativeToolMode: "selectable",
+          toolAvailabilityEnforcement: "execution-args",
           sideQuestionToolMode: "disabled",
         }),
       ],
@@ -214,6 +215,7 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.resolveExecutionArgs).toBe(resolveExecutionArgs);
     expect(resolved.ownsNativeCompaction).toBe(true);
     expect(resolved.nativeToolMode).toBe("selectable");
+    expect(resolved.toolAvailabilityEnforcement).toBe("execution-args");
     expect(resolved.sideQuestionToolMode).toBe("disabled");
   });
 });

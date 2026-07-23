@@ -188,10 +188,10 @@ export type RunCliAgentParams = {
   toolsAllow?: string[];
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
-  /** Exact native surface plus host-isolated MCP permissions for a selectable CLI backend. */
+  /** Exact native plus canonical OpenClaw surface for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];
-    mcp: string[];
+    openClaw: string[];
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;

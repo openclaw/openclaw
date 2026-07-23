@@ -44,7 +44,7 @@ scenario:
     channel: qa-channel
     retryCount: 0
     timeoutMs: 420000
-    summary: Create one group-owned job, add a sender wildcard restriction, then prove its scheduled write authority survives requester-policy resolution.
+    summary: Create one group-owned job through the operator API, add a sender wildcard restriction, then prove its scheduled write authority survives requester-policy resolution.
     config:
       artifactFile: cron-explicit-authority-proof.txt
       artifactText: CRON_EXPLICIT_AUTHORITY_OK
@@ -77,27 +77,33 @@ flow:
         - set: jobName
           value:
             expr: "`qa-cron-explicit-authority-${randomUUID()}`"
-        - sendInbound:
-            conversation:
-              id:
-                ref: config.conversationId
-              kind: group
-              title: Cron execution authority QA
-            senderId: qa-cron-authority-operator
-            senderName: Cron Authority Operator
-            text:
-              expr: |-
-                `Use the cron tool once to create one enabled isolated agent-turn job. Do not run it yourself.
-                Name it '${jobName}', schedule it at '${scheduledFor}', use payload message 'Use the write tool to create ${config.artifactFile} in the workspace with exactly ${config.artifactText}. Then reply exactly ${config.artifactText}.', set toolsAllow to ["write"], and set delivery to none.
-                After the cron add call succeeds, reply exactly CRON-EXECUTION-JOB-CREATED.`
-        - call: waitForCondition
+        - call: env.gateway.call
           saveAs: added
           args:
-            - lambda:
-                async: true
-                expr: "env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 }).then((page) => page.jobs.find((job) => job.name === jobName))"
-            - expr: liveTurnTimeoutMs(env, 240000)
-            - 250
+            - cron.add
+            - agentId: qa
+              owner:
+                agentId: qa
+                sessionKey:
+                  ref: config.ownerSessionKey
+              name:
+                ref: jobName
+              enabled: true
+              schedule:
+                kind: at
+                at:
+                  ref: scheduledFor
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  expr: "`Use the write tool to create ${config.artifactFile} in the workspace with exactly ${config.artifactText}. Then reply exactly ${config.artifactText}.`"
+                toolsAllow:
+                  - write
+              delivery:
+                mode: none
+            - timeoutMs: 30000
         - set: jobId
           value:
             expr: added.id
@@ -142,7 +148,7 @@ flow:
             message:
               expr: "`expected cron.run to enqueue one run, got ${JSON.stringify(runResponse)}`"
 
-    - name: scheduled authority writes the workspace proof
+    - name: records the scheduled run as successful
       actions:
         - call: waitForCronRunCompletion
           saveAs: completedRun
@@ -155,10 +161,16 @@ flow:
                 ref: runStartedAt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 120000)
+              gatewayCallTimeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
         - assert:
             expr: "completedRun?.status === 'ok'"
             message:
               expr: "`expected cron run ok, got ${JSON.stringify(completedRun)}`"
+      detailsExpr: "`job=${jobId} status=${completedRun.status}`"
+
+    - name: scheduled authority writes the workspace proof
+      actions:
         - call: waitForCondition
           saveAs: artifact
           args:

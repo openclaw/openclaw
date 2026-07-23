@@ -92,7 +92,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
-import { expandToolGroups } from "../tool-policy.js";
+import { expandToolGroups, normalizeToolName } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -121,10 +121,6 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import {
-  OPENCLAW_MCP_TOOL_PREFIX,
-  resolveLoopbackToolsAllowFromMcpPermissions,
-} from "./tool-policy.js";
 import type {
   CliReusableSession,
   CliSecretInput,
@@ -372,34 +368,15 @@ export async function prepareCliRunContext(
     if (normalizedToolsAllow.includes("*")) {
       params = { ...params, toolsAllow: undefined };
     } else {
-      const resolvedAvailability = backendResolved.resolveRuntimeToolAvailability?.({
-        toolsAllow: normalizedToolsAllow,
-      });
-      if (!resolvedAvailability) {
-        throw new Error(
-          `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
-        );
-      }
-      const resolvedMcpPermissions = uniqueStrings(
-        resolvedAvailability.mcp.map((permission) => permission.trim()).filter(Boolean),
+      const canonicalToolsAllow = uniqueStrings(
+        normalizedToolsAllow.map((toolName) => normalizeToolName(toolName)).filter(Boolean),
       );
-      const allowedMcpPermissions = new Set(
-        normalizedToolsAllow.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
-      );
-      const expandedMcpPermissions = resolvedMcpPermissions.filter(
-        (permission) => !allowedMcpPermissions.has(permission),
-      );
-      if (expandedMcpPermissions.length > 0) {
-        throw new Error(
-          `CLI backend ${backendResolved.id} expanded runtime toolsAllow outside the requested OpenClaw MCP grant: ${expandedMcpPermissions.join(", ")}`,
-        );
-      }
       params = {
         ...params,
         toolsAllow: undefined,
         cliToolAvailability: {
           native: [],
-          mcp: resolvedMcpPermissions,
+          openClaw: canonicalToolsAllow,
         },
       };
     }
@@ -410,9 +387,25 @@ export async function prepareCliRunContext(
     execHost: params.sessionEntry?.execHost,
     execNode: params.sessionEntry?.execNode,
   });
+  if (nodeClaudePlacement && params.cliToolAvailability) {
+    // Gateway-loopback MCP tools do not exist on the node. Project the policy
+    // before either backend enforcement phase so staged settings and argv agree.
+    params = {
+      ...params,
+      cliToolAvailability: {
+        native: params.cliToolAvailability.native,
+        openClaw: [],
+      },
+    };
+  }
   if (
     params.cliToolAvailability !== undefined &&
-    (backendResolved.nativeToolMode !== "selectable" || !backendResolved.resolveExecutionArgs)
+    (backendResolved.nativeToolMode !== "selectable" ||
+      !backendResolved.toolAvailabilityEnforcement ||
+      (backendResolved.toolAvailabilityEnforcement === "execution-args" &&
+        !backendResolved.resolveExecutionArgs) ||
+      (backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
+        !backendResolved.prepareExecution))
   ) {
     throw new Error(
       `CLI backend ${backendResolved.id} cannot enforce exact per-run tool availability`,
@@ -521,7 +514,7 @@ export async function prepareCliRunContext(
         JSON.stringify([
           baseExtraSystemPromptHash ?? null,
           params.cliToolAvailability.native.toSorted(),
-          params.cliToolAvailability.mcp.toSorted(),
+          params.cliToolAvailability.openClaw.toSorted(),
         ]),
       )
     : baseExtraSystemPromptHash;
@@ -726,9 +719,7 @@ export async function prepareCliRunContext(
   // user/plugin MCP servers must not be merged into the run's config at all.
   // The loopback server (scoped by the grant allowlist) becomes the complete
   // tool universe for the run.
-  const restrictedLoopbackToolsAllow = resolveLoopbackToolsAllowFromMcpPermissions(
-    params.cliToolAvailability?.mcp,
-  );
+  const restrictedLoopbackToolsAllow = params.cliToolAvailability?.openClaw;
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
@@ -826,8 +817,9 @@ export async function prepareCliRunContext(
       contextTokenBudget: contextWindowInfo.tokens,
       authProfileId: effectiveAuthProfileId,
       executionMode,
+      toolAvailability: params.cliToolAvailability,
       env: preparedBackend.env,
-    } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
+    } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     preparedExecution =
       (await backendResolved.prepareExecution?.(
         (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
@@ -853,6 +845,15 @@ export async function prepareCliRunContext(
           }
         : undefined;
     cleanupPreparedResources = preparedBackendCleanup;
+    if (
+      params.cliToolAvailability &&
+      backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
+      preparedExecution?.toolAvailabilityEnforced !== true
+    ) {
+      throw new Error(
+        `CLI backend ${backendResolved.id} did not enforce exact per-run tool availability during execution preparation`,
+      );
+    }
     const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
       authEpochMode: backendResolved.authEpochMode,
       authProfileId: effectiveAuthProfileId,

@@ -2660,6 +2660,7 @@ describe("prepareCliRunContext", () => {
         agentId: "worker",
         sessionId: "session-test",
         runId: "run-test-room-event-tools",
+        workspaceDir: context.workspaceDir,
         modelProvider: "anthropic",
         modelId: "test-model",
         messageProvider: "discord",
@@ -2802,7 +2803,7 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("fails closed when a runtime toolsAllow is requested for CLI backends", async () => {
+  it("fails closed when a backend cannot enforce a runtime toolsAllow", async () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({
       port: 31783,
       ownerToken: "loopback-owner-token",
@@ -2817,28 +2818,107 @@ describe("prepareCliRunContext", () => {
         config: createCliBackendConfig({ bundleMcp: true }),
         toolsAllow: ["read", "web_search"],
       }),
-    ).rejects.toThrow(
-      "CLI backend test-cli cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy",
-    );
+    ).rejects.toThrow("CLI backend test-cli cannot enforce exact per-run tool availability");
 
     expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
   });
 
-  it("translates runtime toolsAllow through a selectable backend and bounds its MCP grant", async () => {
+  it("requires prepared-execution backends to acknowledge exact enforcement and cleans up", async () => {
+    const cleanup = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({ cleanup }));
+    setRawCliBackendForPrepareTest({
+      id: "settings-cli",
+      pluginId: "settings-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "settings-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "settings-cli",
+        cliToolAvailability: { native: [], openClaw: [] },
+      }),
+    ).rejects.toThrow(
+      "did not enforce exact per-run tool availability during execution preparation",
+    );
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a positive prepared-execution enforcement acknowledgement", async () => {
+    const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+    setRawCliBackendForPrepareTest({
+      id: "settings-cli",
+      pluginId: "settings-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "settings-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "settings-cli",
+      cliToolAvailability: { native: [], openClaw: [] },
+    });
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+    await context.preparedBackend.cleanup?.();
+  });
+
+  it("projects node-placed Claude availability before prepared-execution enforcement", async () => {
+    const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+    setRawCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      sessionEntry: { execHost: "node", execNode: "node-a" } as never,
+      cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
+    });
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAvailability: { native: ["Read"], openClaw: [] },
+      }),
+    );
+    expect(context.params.cliToolAvailability).toEqual({ native: ["Read"], openClaw: [] });
+    await context.preparedBackend.cleanup?.();
+  });
+
+  it("keeps runtime toolsAllow canonical and bounds the backend-independent MCP grant", async () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
     ]);
-    const resolveRuntimeToolAvailability = vi.fn(() => ({
-      mcp: [
-        "mcp__openclaw__read",
-        "mcp__openclaw__write",
-        "mcp__openclaw__edit",
-        "mcp__openclaw__apply_patch",
-        "mcp__openclaw__exec",
-        "mcp__openclaw__browser",
-        "mcp__openclaw__image",
-      ],
-    }));
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     setRawCliBackendForPrepareTest({
       id: "claude-cli",
@@ -2846,8 +2926,8 @@ describe("prepareCliRunContext", () => {
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
       nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
-      resolveRuntimeToolAvailability,
       config: {
         command: "claude",
         args: ["--print"],
@@ -2879,21 +2959,10 @@ describe("prepareCliRunContext", () => {
       });
       cleanup = context.preparedBackend.cleanup;
 
-      expect(resolveRuntimeToolAvailability).toHaveBeenCalledWith({
-        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "browser", "image"],
-      });
       expect(context.params.toolsAllow).toBeUndefined();
       expect(context.params.cliToolAvailability).toEqual({
         native: [],
-        mcp: [
-          "mcp__openclaw__read",
-          "mcp__openclaw__write",
-          "mcp__openclaw__edit",
-          "mcp__openclaw__apply_patch",
-          "mcp__openclaw__exec",
-          "mcp__openclaw__browser",
-          "mcp__openclaw__image",
-        ],
+        openClaw: ["read", "write", "edit", "apply_patch", "exec", "browser", "image"],
       });
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual([
         "read",
@@ -2912,47 +2981,6 @@ describe("prepareCliRunContext", () => {
     }
   });
 
-  it("rejects a backend that expands runtime toolsAllow beyond the requested grant", async () => {
-    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
-      port: 31783,
-      ownerToken: "loopback-owner-token",
-      nonOwnerToken: "loopback-non-owner-token",
-    }));
-    setRawCliBackendForPrepareTest({
-      id: "claude-cli",
-      pluginId: "anthropic",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      nativeToolMode: "selectable",
-      resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-      resolveRuntimeToolAvailability: () => ({
-        mcp: ["mcp__openclaw__read", "mcp__openclaw__exec"],
-      }),
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        jsonlDialect: "claude-stream-json",
-        input: "stdin",
-        sessionMode: "existing",
-      },
-    });
-    setCliRunnerPrepareTestDeps({
-      getActiveMcpLoopbackRuntime,
-    });
-
-    await expect(
-      fixture.prepare({
-        sessionKey: "agent:main:main",
-        provider: "claude-cli",
-        toolsAllow: ["read"],
-      }),
-    ).rejects.toThrow(
-      "CLI backend claude-cli expanded runtime toolsAllow outside the requested OpenClaw MCP grant: mcp__openclaw__exec",
-    );
-    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-  });
-
   it("bounds the loopback grant to the selectable MCP tool allowlist", async () => {
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
       ...context.baseArgs,
@@ -2964,6 +2992,7 @@ describe("prepareCliRunContext", () => {
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
       nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
       config: {
         command: "claude",
@@ -3001,13 +3030,12 @@ describe("prepareCliRunContext", () => {
         },
         cliToolAvailability: {
           native: [],
-          mcp: ["mcp__openclaw__memory_search", "mcp__openclaw__memory_get", "mcp__other__thing"],
+          openClaw: ["memory_search", "memory_get"],
         },
       });
       cleanup = context.preparedBackend.cleanup;
 
-      // Foreign-server entries are not loopback-governed; the grant carries
-      // only the gateway tool names the run may reach.
+      // The grant carries exactly the canonical gateway tool names.
       const grantContext = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
       expect(grantContext?.toolsAllow).toEqual(["memory_search", "memory_get"]);
 
@@ -3030,13 +3058,13 @@ describe("prepareCliRunContext", () => {
     const resolveExecutionArgs = vi.fn(
       (context: {
         baseArgs: readonly string[];
-        toolAvailability?: { native: readonly string[]; mcp: readonly string[] };
+        toolAvailability?: { native: readonly string[]; openClaw: readonly string[] };
       }) => [
         ...context.baseArgs,
         "--tools",
         context.toolAvailability?.native.join(",") ?? "default",
         "--allowedTools",
-        context.toolAvailability?.mcp.join(",") ?? "",
+        context.toolAvailability?.openClaw.join(",") ?? "",
       ],
     );
     setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
@@ -3046,6 +3074,7 @@ describe("prepareCliRunContext", () => {
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
       nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
       resolveExecutionArgs,
       config: {
         command: "claude",
@@ -3071,7 +3100,7 @@ describe("prepareCliRunContext", () => {
       systemAgentTool: { surface: "cli" },
       cliToolAvailability: {
         native: [],
-        mcp: ["mcp__openclaw__openclaw"],
+        openClaw: ["openclaw"],
       },
     };
     const context = await prepareCliRunContext(params);
@@ -3089,7 +3118,7 @@ describe("prepareCliRunContext", () => {
     expect(resolveExecutionArgs).not.toHaveBeenCalled();
     expect(context.params.cliToolAvailability).toEqual({
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     });
     const mcpConfigPath = expectDefined(
       args[args.indexOf("--mcp-config") + 1],

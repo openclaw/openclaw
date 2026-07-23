@@ -15,6 +15,9 @@ export type McpLoopbackRequestContext = {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  /** Server-selected roots for mediated coding tools in this CLI run. */
+  workspaceDir?: string;
+  cwd?: string;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
