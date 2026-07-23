@@ -9,6 +9,7 @@ import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { page as chatPage } from "./pages/chat/route.ts";
+import { page as clawsPage } from "./pages/claws/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
@@ -46,6 +47,7 @@ type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteMod
 
 const APP_ROUTE_TREE = [
   chatPage,
+  clawsPage,
   custodianPage,
   newSessionPage,
   activityPage,

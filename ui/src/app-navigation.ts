@@ -22,6 +22,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "sessions",
   "activity",
+  "claws",
   "plugins",
   "apps",
 ] as const satisfies readonly NavigationRouteId[];
@@ -214,6 +215,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  claws: "bot",
   custodian: "lobster",
   config: "settings",
   profile: "lobster",
@@ -314,6 +316,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  claws: { titleKey: "tabs.claws", subtitleKey: "subtitles.claws" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },

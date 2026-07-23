@@ -25,6 +25,7 @@ export type {
   MissingScopeErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
+export * from "./schema/claws.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -141,6 +142,10 @@ import {
   ChannelsStatusResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
+  ClawsDoctorParamsSchema,
+  ClawsDoctorResultSchema,
+  ClawsStatusParamsSchema,
+  ClawsStatusResultSchema,
   ChatAbortParamsSchema,
   ChatEventSchema,
   ChatHistoryParamsSchema,
@@ -592,6 +597,10 @@ import {
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
+export const validateClawsStatusParams = lazyCompile(ClawsStatusParamsSchema);
+export const validateClawsDoctorParams = lazyCompile(ClawsDoctorParamsSchema);
+export const validateClawsStatusResult = lazyCompile(ClawsStatusResultSchema);
+export const validateClawsDoctorResult = lazyCompile(ClawsDoctorResultSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = lazyCompile(WorkerAdmissionHandshakeSchema);
 export const validateWorkerConnectRequestFrame = lazyCompile(WorkerConnectRequestFrameSchema);

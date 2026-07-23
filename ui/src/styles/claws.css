@@ -1,0 +1,252 @@
+.claws-page {
+  min-width: 0;
+}
+
+.claws-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+}
+
+.claws-summary__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-inline-end: 1px solid var(--border);
+}
+
+.claws-summary__item:last-child {
+  border-inline-end: 0;
+}
+
+.claws-summary__icon {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.claws-summary__value {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.claws-summary__label {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.claws-workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  min-height: 420px;
+  border-block-end: 1px solid var(--border);
+}
+
+.claws-inventory {
+  border-inline-end: 1px solid var(--border);
+}
+
+.claws-inventory__row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  color: inherit;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-block-end: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.claws-inventory__row:hover,
+.claws-inventory__row[aria-pressed="true"] {
+  background: var(--bg-hover);
+}
+
+.claws-inventory__main,
+.claws-inventory__meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.claws-inventory__name,
+.claws-resource__id {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.claws-inventory__agent,
+.claws-inventory__meta,
+.claws-detail__subtitle,
+.claws-resource__kind,
+.claws-finding__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.claws-inventory__meta {
+  flex: 0 0 auto;
+  align-items: flex-end;
+}
+
+.claws-detail {
+  min-width: 0;
+  padding: 18px 20px 28px;
+}
+
+.claws-detail__header,
+.claws-resource {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.claws-detail__title {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.claws-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 18px 0 0;
+  padding: 14px 0;
+  border-block: 1px solid var(--border);
+}
+
+.claws-metadata dt {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.claws-metadata dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.claws-detail__section {
+  margin-top: 22px;
+}
+
+.claws-detail__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.claws-detail__count {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.claws-resource-list,
+.claws-findings {
+  border-block-start: 1px solid var(--border);
+}
+
+.claws-resource,
+.claws-finding {
+  padding: 11px 0;
+  border-block-end: 1px solid var(--border);
+}
+
+.claws-resource__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.claws-resource__state {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.claws-finding {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.claws-finding__severity {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.claws-finding--error .claws-finding__severity {
+  color: var(--danger);
+}
+
+.claws-finding--warning .claws-finding__severity {
+  color: var(--warn);
+}
+
+.claws-finding__message,
+.claws-finding__hint {
+  overflow-wrap: anywhere;
+}
+
+.claws-finding__hint {
+  margin-top: 4px;
+}
+
+.claws-empty {
+  padding: 24px 0;
+}
+
+@media (max-width: 760px) {
+  .claws-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .claws-summary__item:nth-child(2) {
+    border-inline-end: 0;
+  }
+
+  .claws-summary__item:nth-child(-n + 2) {
+    border-block-end: 1px solid var(--border);
+  }
+
+  .claws-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .claws-inventory {
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--border);
+  }
+
+  .claws-metadata {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .claws-resource {
+    flex-direction: column;
+  }
+
+  .claws-resource__state {
+    justify-content: flex-start;
+  }
+}

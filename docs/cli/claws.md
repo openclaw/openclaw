@@ -322,6 +322,15 @@ The result contains `package.json`, canonical `CLAW.md`, and managed workspace
 sidecars. It is a portable Claw package, not a whole-instance backup: unrelated
 agents, credentials, sessions, and unowned local state are excluded.
 
+## Inspect Claws in the Control UI
+
+When the connected Gateway starts with `OPENCLAW_EXPERIMENTAL_CLAWS=1`, the
+Control UI adds a **Claws** destination. It shows installed Claws, lifecycle
+health, doctor findings, and managed/referenced provenance. The Gateway
+advertises this surface to the UI and returns a secret-safe projection; the
+browser does not receive the environment flag, package paths, configuration
+values, file contents, or scheduled prompts.
+
 ## Command reference
 
 | Command                             | Purpose                                             |
