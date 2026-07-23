@@ -61,7 +61,7 @@ type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transp
 type DetachedVoiceSession = {
   voiceSessionId: string;
   serverOwned: boolean;
-  generation: number;
+  generation: number | undefined;
   transcriptWrites: Promise<void>;
 };
 
@@ -137,6 +137,7 @@ function compactLaunchParams(
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
   private closed = false;
+  private lifecycleGeneration = 0;
   private videoEnabled = false;
   private videoOperation = 0;
   private voiceSessionId: string | undefined;
@@ -155,10 +156,11 @@ export class RealtimeTalkSession {
   ) {}
 
   async start(): Promise<void> {
+    const lifecycleGeneration = ++this.lifecycleGeneration;
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
     const providerVideoCapable = await this.resolveVideoCapability();
-    if (this.closed) {
+    if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
       return;
     }
     // Declaring voice-transcript arms the server-side spoken-confirmation gate;
@@ -182,16 +184,24 @@ export class RealtimeTalkSession {
     if (!voiceSessionId) {
       throw new Error("Realtime Talk session did not return a voice session id");
     }
-    this.voiceSessionId = voiceSessionId;
-    this.acceptingTranscripts = true;
-    this.serverOwnedVoiceSession = transport === "gateway-relay";
-    if (this.closed) {
-      const detached = this.detachVoiceSession();
-      if (detached) {
-        this.closeLogicalVoiceSession(detached);
+    if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+      // A stopped or superseded create still owns the allocation returned to it.
+      // Close at its owner boundary before stale state can replace the active call.
+      if (transport === "gateway-relay") {
+        this.closeStaleGatewayRelay(session as RealtimeTalkGatewayRelaySessionResult);
+      } else {
+        this.closeLogicalVoiceSession({
+          voiceSessionId,
+          serverOwned: false,
+          generation: undefined,
+          transcriptWrites: Promise.resolve(),
+        });
       }
       return;
     }
+    this.voiceSessionId = voiceSessionId;
+    this.acceptingTranscripts = true;
+    this.serverOwnedVoiceSession = transport === "gateway-relay";
     this.transportGeneration += 1;
     const callbacks =
       transport === "gateway-relay"
@@ -300,6 +310,7 @@ export class RealtimeTalkSession {
   }
 
   stop(): void {
+    this.lifecycleGeneration += 1;
     this.closed = true;
     this.videoOperation += 1;
     this.videoEnabled = false;
@@ -311,6 +322,12 @@ export class RealtimeTalkSession {
     if (detached) {
       this.closeLogicalVoiceSession(detached);
     }
+  }
+
+  private closeStaleGatewayRelay(session: RealtimeTalkGatewayRelaySessionResult): void {
+    void this.client
+      .request("talk.session.close", { sessionId: session.relaySessionId })
+      .catch(() => undefined);
   }
 
   private clientOwnedTranscriptCallbacks(
@@ -442,7 +459,7 @@ export class RealtimeTalkSession {
         console.warn("Realtime Talk voice session close failed", error);
         // Suppress if a newer transport has started: closing the old call is its own
         // teardown and must not push the active replacement call into an error state.
-        if (this.transportGeneration === detached.generation) {
+        if (detached.generation !== undefined && this.transportGeneration === detached.generation) {
           this.callbacks.onStatus?.("error", "Realtime Talk voice session close failed");
         }
       });
