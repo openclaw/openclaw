@@ -81,9 +81,8 @@ export type TestSessionMenu = HTMLElement & {
 export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",

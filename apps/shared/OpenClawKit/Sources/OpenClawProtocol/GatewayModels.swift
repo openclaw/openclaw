@@ -96,6 +96,26 @@ public enum SessionObserverHealth: String, Codable, Sendable {
     case failed = "failed"
 }
 
+public enum SessionVisibility: String, Codable, Sendable {
+    case shared = "shared"
+    case readOnly = "read-only"
+    case suggest = "suggest"
+    case draft = "draft"
+}
+
+public enum SessionSharingRole: String, Codable, Sendable {
+    case admin = "admin"
+    case owner = "owner"
+    case member = "member"
+    case viewer = "viewer"
+}
+
+public enum SessionSharingAction: String, Codable, Sendable {
+    case visibility = "visibility"
+    case memberAdded = "member-added"
+    case memberRemoved = "member-removed"
+}
+
 public enum SessionPlacementState: String, Codable, Sendable {
     case local = "local"
     case requested = "requested"
@@ -4120,7 +4140,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let pullrequest: SessionCatalogPullRequestSummary?
     public let archived: Bool
     public let sessionkey: String?
-    public let createdactor: [String: AnyCodable]?
+    public let createdactor: SessionCreatedActor?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -4141,7 +4161,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         pullrequest: SessionCatalogPullRequestSummary? = nil,
         archived: Bool,
         sessionkey: String? = nil,
-        createdactor: [String: AnyCodable]? = nil,
+        createdactor: SessionCreatedActor? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -4790,6 +4810,28 @@ public struct SessionOperationEvent: Codable, Sendable {
     }
 }
 
+public struct SessionCreatedActor: Codable, Sendable {
+    public let type: AnyCodable
+    public let id: String?
+    public let label: String?
+
+    public init(
+        type: AnyCodable,
+        id: String? = nil,
+        label: String? = nil)
+    {
+        self.type = type
+        self.id = id
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case label
+    }
+}
+
 public struct SessionObserverPlanProgress: Codable, Sendable {
     public let completed: Int
     public let total: Int
@@ -4847,6 +4889,216 @@ public struct SessionObserverDigest: Codable, Sendable {
         case assessment
         case health
         case planprogress = "planProgress"
+    }
+}
+
+public struct SessionRow: Codable, Sendable {
+    public let key: String
+    public let sessionid: String?
+    public let kind: AnyCodable
+    public let label: String?
+    public let displayname: String?
+    public let derivedtitle: String?
+    public let lastmessagepreview: String?
+    public let channel: String?
+    public let chattype: AnyCodable?
+    public let updatedat: AnyCodable?
+    public let archived: Bool?
+    public let archivedat: Double?
+    public let pinned: Bool?
+    public let pinnedat: Double?
+    public let icon: String?
+    public let unread: Bool?
+    public let lastreadat: Double?
+    public let lastactivityat: Double?
+    public let lastinteractionat: Double?
+    public let status: AnyCodable?
+    public let lastrunerror: String?
+    public let spawnedby: String?
+    public let parentsessionkey: String?
+    public let controlownersessionkey: String?
+    public let childsessions: [String]?
+    public let forkedfromparent: Bool?
+    public let spawndepth: Double?
+    public let subagentrole: AnyCodable?
+    public let subagentcontrolscope: AnyCodable?
+    public let swarmgroupid: String?
+    public let worktree: [String: AnyCodable]?
+    public let execnode: String?
+    public let execcwd: String?
+    public let spawnedworkspacedir: String?
+    public let spawnedcwd: String?
+    public let createdvia: AnyCodable?
+    public let createdactor: SessionCreatedActor?
+    public let visibility: SessionVisibility?
+    public let sharingrole: SessionSharingRole?
+    public let createdat: Double?
+    public let forksource: [String: AnyCodable]?
+    public let previoussessionid: String?
+    public let inputtokens: Double?
+    public let outputtokens: Double?
+    public let totaltokens: Double?
+    public let totaltokensfresh: Bool?
+    public let contexttokens: Double?
+    public let estimatedcostusd: Double?
+    public let model: String?
+    public let modelprovider: String?
+
+    public init(
+        key: String,
+        sessionid: String? = nil,
+        kind: AnyCodable,
+        label: String? = nil,
+        displayname: String? = nil,
+        derivedtitle: String? = nil,
+        lastmessagepreview: String? = nil,
+        channel: String? = nil,
+        chattype: AnyCodable? = nil,
+        updatedat: AnyCodable? = nil,
+        archived: Bool? = nil,
+        archivedat: Double? = nil,
+        pinned: Bool? = nil,
+        pinnedat: Double? = nil,
+        icon: String? = nil,
+        unread: Bool? = nil,
+        lastreadat: Double? = nil,
+        lastactivityat: Double? = nil,
+        lastinteractionat: Double? = nil,
+        status: AnyCodable? = nil,
+        lastrunerror: String? = nil,
+        spawnedby: String? = nil,
+        parentsessionkey: String? = nil,
+        controlownersessionkey: String? = nil,
+        childsessions: [String]? = nil,
+        forkedfromparent: Bool? = nil,
+        spawndepth: Double? = nil,
+        subagentrole: AnyCodable? = nil,
+        subagentcontrolscope: AnyCodable? = nil,
+        swarmgroupid: String? = nil,
+        worktree: [String: AnyCodable]? = nil,
+        execnode: String? = nil,
+        execcwd: String? = nil,
+        spawnedworkspacedir: String? = nil,
+        spawnedcwd: String? = nil,
+        createdvia: AnyCodable? = nil,
+        createdactor: SessionCreatedActor? = nil,
+        visibility: SessionVisibility? = nil,
+        sharingrole: SessionSharingRole? = nil,
+        createdat: Double? = nil,
+        forksource: [String: AnyCodable]? = nil,
+        previoussessionid: String? = nil,
+        inputtokens: Double? = nil,
+        outputtokens: Double? = nil,
+        totaltokens: Double? = nil,
+        totaltokensfresh: Bool? = nil,
+        contexttokens: Double? = nil,
+        estimatedcostusd: Double? = nil,
+        model: String? = nil,
+        modelprovider: String? = nil)
+    {
+        self.key = key
+        self.sessionid = sessionid
+        self.kind = kind
+        self.label = label
+        self.displayname = displayname
+        self.derivedtitle = derivedtitle
+        self.lastmessagepreview = lastmessagepreview
+        self.channel = channel
+        self.chattype = chattype
+        self.updatedat = updatedat
+        self.archived = archived
+        self.archivedat = archivedat
+        self.pinned = pinned
+        self.pinnedat = pinnedat
+        self.icon = icon
+        self.unread = unread
+        self.lastreadat = lastreadat
+        self.lastactivityat = lastactivityat
+        self.lastinteractionat = lastinteractionat
+        self.status = status
+        self.lastrunerror = lastrunerror
+        self.spawnedby = spawnedby
+        self.parentsessionkey = parentsessionkey
+        self.controlownersessionkey = controlownersessionkey
+        self.childsessions = childsessions
+        self.forkedfromparent = forkedfromparent
+        self.spawndepth = spawndepth
+        self.subagentrole = subagentrole
+        self.subagentcontrolscope = subagentcontrolscope
+        self.swarmgroupid = swarmgroupid
+        self.worktree = worktree
+        self.execnode = execnode
+        self.execcwd = execcwd
+        self.spawnedworkspacedir = spawnedworkspacedir
+        self.spawnedcwd = spawnedcwd
+        self.createdvia = createdvia
+        self.createdactor = createdactor
+        self.visibility = visibility
+        self.sharingrole = sharingrole
+        self.createdat = createdat
+        self.forksource = forksource
+        self.previoussessionid = previoussessionid
+        self.inputtokens = inputtokens
+        self.outputtokens = outputtokens
+        self.totaltokens = totaltokens
+        self.totaltokensfresh = totaltokensfresh
+        self.contexttokens = contexttokens
+        self.estimatedcostusd = estimatedcostusd
+        self.model = model
+        self.modelprovider = modelprovider
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case sessionid = "sessionId"
+        case kind
+        case label
+        case displayname = "displayName"
+        case derivedtitle = "derivedTitle"
+        case lastmessagepreview = "lastMessagePreview"
+        case channel
+        case chattype = "chatType"
+        case updatedat = "updatedAt"
+        case archived
+        case archivedat = "archivedAt"
+        case pinned
+        case pinnedat = "pinnedAt"
+        case icon
+        case unread
+        case lastreadat = "lastReadAt"
+        case lastactivityat = "lastActivityAt"
+        case lastinteractionat = "lastInteractionAt"
+        case status
+        case lastrunerror = "lastRunError"
+        case spawnedby = "spawnedBy"
+        case parentsessionkey = "parentSessionKey"
+        case controlownersessionkey = "controlOwnerSessionKey"
+        case childsessions = "childSessions"
+        case forkedfromparent = "forkedFromParent"
+        case spawndepth = "spawnDepth"
+        case subagentrole = "subagentRole"
+        case subagentcontrolscope = "subagentControlScope"
+        case swarmgroupid = "swarmGroupId"
+        case worktree
+        case execnode = "execNode"
+        case execcwd = "execCwd"
+        case spawnedworkspacedir = "spawnedWorkspaceDir"
+        case spawnedcwd = "spawnedCwd"
+        case createdvia = "createdVia"
+        case createdactor = "createdActor"
+        case visibility
+        case sharingrole = "sharingRole"
+        case createdat = "createdAt"
+        case forksource = "forkSource"
+        case previoussessionid = "previousSessionId"
+        case inputtokens = "inputTokens"
+        case outputtokens = "outputTokens"
+        case totaltokens = "totalTokens"
+        case totaltokensfresh = "totalTokensFresh"
+        case contexttokens = "contextTokens"
+        case estimatedcostusd = "estimatedCostUsd"
+        case model
+        case modelprovider = "modelProvider"
     }
 }
 
@@ -4911,6 +5163,250 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case ok
+    }
+}
+
+public struct SessionSharingIdentity: Codable, Sendable {
+    public let type: AnyCodable
+    public let id: String
+    public let label: String?
+
+    public init(
+        type: AnyCodable,
+        id: String,
+        label: String? = nil)
+    {
+        self.type = type
+        self.id = id
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case label
+    }
+}
+
+public struct SessionVisibilitySetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let visibility: SessionVisibility
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        visibility: SessionVisibility)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.visibility = visibility
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case visibility
+    }
+}
+
+public struct SessionVisibilitySetResult: Codable, Sendable {
+    public let ok: Bool
+    public let sessionkey: String
+    public let visibility: SessionVisibility
+
+    public init(
+        ok: Bool,
+        sessionkey: String,
+        visibility: SessionVisibility)
+    {
+        self.ok = ok
+        self.sessionkey = sessionkey
+        self.visibility = visibility
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case sessionkey = "sessionKey"
+        case visibility
+    }
+}
+
+public struct SessionMembersListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionMember: Codable, Sendable {
+    public let identityid: String
+    public let addedby: String
+    public let addedat: Int
+
+    public init(
+        identityid: String,
+        addedby: String,
+        addedat: Int)
+    {
+        self.identityid = identityid
+        self.addedby = addedby
+        self.addedat = addedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case identityid = "identityId"
+        case addedby = "addedBy"
+        case addedat = "addedAt"
+    }
+}
+
+public struct SessionMembersListResult: Codable, Sendable {
+    public let sessionkey: String
+    public let owner: SessionSharingIdentity?
+    public let members: [SessionMember]
+    public let identities: [SessionSharingIdentity]
+    public let role: SessionSharingRole
+    public let allowedvisibilities: [SessionVisibility]
+
+    public init(
+        sessionkey: String,
+        owner: SessionSharingIdentity? = nil,
+        members: [SessionMember],
+        identities: [SessionSharingIdentity],
+        role: SessionSharingRole,
+        allowedvisibilities: [SessionVisibility])
+    {
+        self.sessionkey = sessionkey
+        self.owner = owner
+        self.members = members
+        self.identities = identities
+        self.role = role
+        self.allowedvisibilities = allowedvisibilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case owner
+        case members
+        case identities
+        case role
+        case allowedvisibilities = "allowedVisibilities"
+    }
+}
+
+public struct SessionMemberAddParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let identityid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        identityid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.identityid = identityid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case identityid = "identityId"
+    }
+}
+
+public struct SessionMemberRemoveParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let identityid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        identityid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.identityid = identityid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case identityid = "identityId"
+    }
+}
+
+public struct SessionMemberMutationResult: Codable, Sendable {
+    public let ok: Bool
+    public let sessionkey: String
+    public let identityid: String
+
+    public init(
+        ok: Bool,
+        sessionkey: String,
+        identityid: String)
+    {
+        self.ok = ok
+        self.sessionkey = sessionkey
+        self.identityid = identityid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case sessionkey = "sessionKey"
+        case identityid = "identityId"
+    }
+}
+
+public struct SessionSharingEvent: Codable, Sendable {
+    public let action: SessionSharingAction
+    public let sessionkey: String
+    public let agentid: String
+    public let actor: SessionSharingIdentity
+    public let visibility: SessionVisibility?
+    public let identityid: String?
+    public let ts: Int
+
+    public init(
+        action: SessionSharingAction,
+        sessionkey: String,
+        agentid: String,
+        actor: SessionSharingIdentity,
+        visibility: SessionVisibility? = nil,
+        identityid: String? = nil,
+        ts: Int)
+    {
+        self.action = action
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.actor = actor
+        self.visibility = visibility
+        self.identityid = identityid
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case actor
+        case visibility
+        case identityid = "identityId"
+        case ts
     }
 }
 
@@ -13604,6 +14100,7 @@ public struct PluginApprovalPresentation: Codable, Sendable {
     public let kind: String
     public let title: String
     public let description: String
+    public let detail: String?
     public let severity: PluginApprovalSeverity
     public let pluginid: AnyCodable?
     public let toolname: AnyCodable?
@@ -13614,6 +14111,7 @@ public struct PluginApprovalPresentation: Codable, Sendable {
         kind: String,
         title: String,
         description: String,
+        detail: String? = nil,
         severity: PluginApprovalSeverity,
         pluginid: AnyCodable? = nil,
         toolname: AnyCodable? = nil,
@@ -13623,6 +14121,7 @@ public struct PluginApprovalPresentation: Codable, Sendable {
         self.kind = kind
         self.title = title
         self.description = description
+        self.detail = detail
         self.severity = severity
         self.pluginid = pluginid
         self.toolname = toolname
@@ -13634,6 +14133,7 @@ public struct PluginApprovalPresentation: Codable, Sendable {
         case kind
         case title
         case description
+        case detail
         case severity
         case pluginid = "pluginId"
         case toolname = "toolName"
@@ -14674,6 +15174,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let pluginid: String?
     public let title: String
     public let description: String
+    public let detail: String?
     public let severity: String?
     public let toolname: String?
     public let toolcallid: String?
@@ -14692,6 +15193,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         pluginid: String? = nil,
         title: String,
         description: String,
+        detail: String? = nil,
         severity: String? = nil,
         toolname: String? = nil,
         toolcallid: String? = nil,
@@ -14709,6 +15211,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.pluginid = pluginid
         self.title = title
         self.description = description
+        self.detail = detail
         self.severity = severity
         self.toolname = toolname
         self.toolcallid = toolcallid
@@ -14728,6 +15231,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case pluginid = "pluginId"
         case title
         case description
+        case detail
         case severity
         case toolname = "toolName"
         case toolcallid = "toolCallId"

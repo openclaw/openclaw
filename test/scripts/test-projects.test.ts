@@ -3740,7 +3740,11 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
     expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
       mode: "targets",
-      targets: ["extensions/google-meet/src/cli.test.ts"],
+      targets: [
+        "extensions/google-meet/src/cli-artifacts.test.ts",
+        "extensions/google-meet/src/cli-runtime.test.ts",
+        "extensions/google-meet/src/cli.test.ts",
+      ],
     });
   });
 

@@ -1649,9 +1649,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() =>
           page.evaluate(() => {
             const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { connected: boolean } } } };
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
             };
-            return app.runtime?.context.gateway.snapshot.connected ?? false;
+            return app.runtime?.context.gateway.snapshot.phase === "connected";
           }),
         )
         .toBe(false);

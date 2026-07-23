@@ -111,7 +111,11 @@ function expectChangedBroadcast(
   const [event, payload, connIds, options] = broadcastToConnIds.mock.calls[0] ?? [];
   expect(event).toBe("sessions.changed");
   expect(connIds).toEqual(new Set(["conn-1"]));
-  expect(options).toEqual({ dropIfSlow: true });
+  expect(options).toEqual({
+    ...(typeof expected.agentId === "string" ? { agentId: expected.agentId } : {}),
+    dropIfSlow: true,
+    ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
+  });
   const payloadRecord = requireRecord(payload, "broadcast payload");
   expectFields(payloadRecord, expected);
   return payloadRecord;

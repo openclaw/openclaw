@@ -85,6 +85,14 @@ tool-result cap from the effective model context window: `16000` chars below
 The runtime context-share guard still caps a single tool result at 30% of the
 context window even when a larger explicit ceiling is configured.
 
+Large provider windows are not enabled automatically when they materially
+change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
+publish a `1050000` token total window, but OpenClaw defaults their active
+runtime budget to `272000` tokens. The opt-in `922000` input budget reserves the
+full `128000` output allowance, and OpenAI applies higher long-context pricing
+to the entire request once input exceeds `272000` tokens. See
+[OpenAI context window defaults](/providers/openai#context-window-defaults-and-long-context-opt-in).
+
 For images, OpenClaw downscales transcript/tool image payloads before
 provider calls. Tune with `agents.defaults.imageMaxDimensionPx` (default:
 `1200`):

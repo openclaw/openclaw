@@ -137,6 +137,7 @@ function appendOrderedImages(params: {
 function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 } {
   if (entries.length === 0) {
     return {};
@@ -151,10 +152,14 @@ function resolveMergedTurnImages(entries: OrderedTurnImage[]): {
     return left.sequence - right.sequence;
   });
   const images = merged.flatMap((entry) => (entry.image ? [entry.image] : []));
-  return {
+  const result = {
     ...(images.length > 0 ? { images } : {}),
     imageOrder: merged.map((entry) => entry.imageOrder),
   };
+  Object.defineProperty(result, "imageSourceIndexes", {
+    value: merged.map((entry) => entry.sourceIndex),
+  });
+  return result;
 }
 
 /** Resolves current-turn image attachments that were not already described by media understanding. */
@@ -167,6 +172,7 @@ export async function resolveCurrentTurnImages(params: {
 }): Promise<{
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  imageSourceIndexes?: Array<number | undefined>;
 }> {
   const entries: OrderedTurnImage[] = [];
   appendOrderedImages({

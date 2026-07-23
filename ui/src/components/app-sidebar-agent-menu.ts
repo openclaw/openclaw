@@ -12,6 +12,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
+import "./sidebar-build-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
