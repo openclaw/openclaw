@@ -207,7 +207,9 @@ openclaw skills workshop inspect <proposal-id>
 openclaw skills workshop apply <proposal-id>
 ```
 
-See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
+See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle,
+including how to choose the correct workspace, when to create versus update,
+and how to avoid duplicate proposals.
 
 ## Publishing to ClawHub
 

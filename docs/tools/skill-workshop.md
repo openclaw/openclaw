@@ -158,6 +158,40 @@ cwd-inferred, then the default agent) and `--json` (structured output).
 `propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
 `--evidence <text>` to record proposal context alongside `--proposal`.
 
+## Workspace scope pitfalls
+
+Skill Workshop proposals are scoped to one workspace. A skill can be live in
+one workspace, missing in another, and pending in a third. When you create or
+update skills from an agent session, verify the target workspace before you
+choose the lifecycle action.
+
+Use `propose-create` when the skill does not exist in the target workspace.
+Use `propose-update` only when the existing skill is a writable workspace skill
+in that same target workspace. If you already have a pending proposal for the
+change, use `revise` instead of creating a second proposal.
+
+Before proposing, applying, or troubleshooting a confusing UI state, compare
+the live skill and proposal state explicitly:
+
+```bash
+openclaw skills info --agent <agent-id> <skill-name> --json
+openclaw skills workshop --agent <agent-id> list --json
+openclaw skills workshop --agent <agent-id> inspect <proposal-id> --json
+```
+
+Common cases:
+
+- **Brand or project skill:** create it in that agent's workspace. If an older
+  copy exists in the default `main` workspace, apply the target-workspace
+  proposal first, then remove the stale `main` copy intentionally so it does
+  not appear as the active skill in the wrong agent.
+- **Shared skill:** apply the proposal in a review workspace, promote or install
+  the applied skill into the shared managed skill root, then remove the
+  temporary workspace copy so it does not shadow the shared managed skill.
+- **Unexpected applied/pending UI state:** check whether the UI is showing a
+  proposal from one workspace and a live skill from another. The same skill key
+  can legitimately have different states per workspace.
+
 ## Proposal content
 
 While pending, the proposal is stored as `PROPOSAL.md` with proposal-only
