@@ -380,7 +380,7 @@ describe("sessions.abort agent scope", () => {
         reason: "abort",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { agentId: "work", dropIfSlow: true },
     );
   });
 

@@ -15,6 +15,7 @@ export function buildDraftSessionCreateParams(draft: {
   message: string;
   model?: string;
   thinkingLevel?: string;
+  incognito?: boolean;
   attachments?: unknown[];
   worktree: boolean;
   baseRef?: string;
@@ -35,6 +36,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
+    ...(draft.incognito ? { incognito: true } : {}),
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(!catalogId && model ? { model } : {}),

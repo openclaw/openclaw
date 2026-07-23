@@ -95,6 +95,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      incognito: row.incognito === true,
       createdActor: row.createdActor,
       // The sidebar's zone structure already says what forked from what;
       // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
@@ -110,6 +111,7 @@ export function buildSidebarSessionNavigationState(input: {
       kind: row.kind,
       pinned: row.pinned === true,
       archived: row.archived === true,
+      visibility: row.visibility,
       icon: row.icon,
       category: normalizeOptionalString(row.category),
       channel: channelInfo.channel,

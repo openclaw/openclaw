@@ -1019,8 +1019,8 @@ describe("dispatchOutbound", () => {
     expect(finalized?.MediaType).toBe("audio/wav");
     expect(finalized?.MediaTypes).toEqual(["audio/wav"]);
     expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
-    expect(finalized).not.toHaveProperty("MediaPath");
-    expect(finalized).not.toHaveProperty("MediaPaths");
+    expect(finalized?.MediaPath).toBeUndefined();
+    expect(finalized?.MediaPaths).toBeUndefined();
   });
 
   it("synthesizes plain audioAsVoice text as a QQ voice reply", async () => {

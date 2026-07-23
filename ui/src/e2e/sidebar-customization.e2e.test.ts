@@ -529,21 +529,20 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .poll(() => trimmedTextContents(pinnedItems))
         .toEqual(["Usage", "Automations", "Plugins"]);
 
-      // The sidebar search field is the command palette entry point.
-      const searchButton = sidebar.locator(".sidebar-search");
+      // The shell chrome search button is the command palette entry point.
+      const searchButton = page.locator(".shell-chrome-controls__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
       await expect.poll(() => paletteInput.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The sidebar toggle lives in the sidebar brand row on desktop.
-      // Collapsing hides the sidebar entirely; a floating expand control and
-      // Cmd+B bring it back (there is no icon rail).
+      // The shell chrome toggle stays visible while the desktop sidebar
+      // collapses and expands (there is no icon rail).
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
       await expect
         .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand"))),
+          collapseButton.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
         )
         .toBe(true);
       await collapseButton.click();
@@ -559,12 +558,14 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe("0px");
       await expect.poll(() => sidebarResizer.count()).toBe(0);
       await expect.poll(() => sidebar.isVisible()).toBe(false);
-      const navExpand = page.locator(".shell-nav-expand");
+      const navExpand = page.locator(".shell-chrome-controls__nav-toggle");
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
-      await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(true);
+      await expect
+        .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
+        .toBe(true);
       await captureUiProof(page, "04-persisted-collapsed.png");
-      await page.locator(".shell-nav-expand").click();
+      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
@@ -602,7 +603,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await sidebar.getByRole("button", { name: "Collapse sidebar" }).click();
+      await page.locator(".shell-chrome-controls__nav-toggle").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");

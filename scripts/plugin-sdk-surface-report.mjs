@@ -105,7 +105,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 24,
   "channel-reply-pipeline": 12,
   "interactive-runtime": 11,
-  "infra-runtime": 593,
+  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+  "infra-runtime": 596,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -152,7 +153,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: generic inbound-root and SCP-host schema validators.
       // +2: attributed-range renderer and its options contract.
       // +1: agent-harness transcript visibility projector.
-      4690,
+      // +1: outbound formatting capability profile.
+      // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      4695,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -166,12 +170,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: generic inbound-root and SCP-host schema validators.
       // +1: attributed-range renderer.
       // +1: agent-harness transcript visibility projector.
-      2840,
+      // +2: plugin approval detail truncator and sanitize-with-status variant.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      2843,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1683,
+      // +3: canonical incognito classifier projected through deprecated compatibility barrels.
+      1686,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

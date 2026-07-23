@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 /** Projected actor that caused a session node to be created. */
 export const SessionCreatedActorSchema = closedObject({
@@ -15,6 +16,7 @@ export const SessionRowSchema = Type.Object(
   {
     key: Type.String(),
     sessionId: Type.Optional(Type.String()),
+    incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
       Type.Literal("group"),
@@ -84,6 +86,8 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
+    visibility: Type.Optional(SessionVisibilitySchema),
+    sharingRole: Type.Optional(SessionSharingRoleSchema),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({

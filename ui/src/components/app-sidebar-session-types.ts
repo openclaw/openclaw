@@ -1,4 +1,5 @@
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
@@ -51,6 +52,7 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  incognito?: boolean;
   createdActor?: SessionCreatedActor;
   label: string;
   meta: string;
@@ -65,6 +67,7 @@ export type SidebarRecentSession = {
   kind?: string;
   pinned: boolean;
   archived?: boolean;
+  visibility?: SessionVisibility;
   icon?: string;
   category?: string;
   channel?: string;

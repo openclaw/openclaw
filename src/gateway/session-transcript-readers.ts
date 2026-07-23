@@ -217,8 +217,15 @@ function sqliteRecordMessageWithSeq(record: {
   recordTimestampMs?: number;
   seq: number;
 }): unknown {
+  const rawIdempotencyKey = (record.message as { idempotencyKey?: unknown } | undefined)
+    ?.idempotencyKey;
+  const idempotencyKey =
+    typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
+      ? rawIdempotencyKey.trim()
+      : undefined;
   return attachOpenClawTranscriptMeta(record.message, {
     ...(record.id ? { id: record.id } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(record.recordTimestampMs !== undefined
       ? { recordTimestampMs: record.recordTimestampMs }
       : {}),

@@ -1136,6 +1136,16 @@ async function runHeartbeatTemplateRepairHealth(ctx: DoctorHealthFlowContext): P
   });
 }
 
+async function runHeartbeatScratchMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatFilesToScratch } =
+    await import("../commands/doctor-heartbeat-scratch-migration.js");
+  await maybeMigrateHeartbeatFilesToScratch({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
 async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { doctorShellCompletion } = await import("../commands/doctor-completion.js");
   await doctorShellCompletion(ctx.runtime, ctx.prompter, {
@@ -2196,6 +2206,21 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runHeartbeatTemplateRepairHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-scratch-migration",
+      label: "Heartbeat scratch migration",
+      healthChecks: {
+        id: "core/doctor/heartbeat-scratch-migration",
+        description: "Workspace HEARTBEAT.md files must migrate into cron-owned scratch.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectHeartbeatScratchMigrationFindings } =
+            await import("../commands/doctor-heartbeat-scratch-migration.js");
+          return await collectHeartbeatScratchMigrationFindings(ctx.cfg);
+        },
+      },
+      run: runHeartbeatScratchMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",

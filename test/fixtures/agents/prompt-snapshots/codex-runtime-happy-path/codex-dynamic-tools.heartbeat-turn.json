@@ -1276,6 +1276,9 @@
             "reason": {
               "type": "string"
             },
+            "scratch": {
+              "type": "string"
+            },
             "summary": {
               "type": "string"
             }

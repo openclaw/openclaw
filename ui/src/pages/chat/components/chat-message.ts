@@ -8,11 +8,8 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import {
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-  type MarkdownRenderOptions,
-} from "../../../components/markdown.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -32,6 +29,7 @@ import {
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import {
   extractToolCardsCached,
@@ -918,6 +916,10 @@ const USER_TURN_ENTRY_ANIMATION_WINDOW_MS = 400;
 const USER_TURN_ENTRY_FRESH_SUBMIT_MS = 2_000;
 const USER_TURN_ENTRY_SEEN_CAP = 256;
 
+function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
+  return Boolean(group.sender && !(userId && group.sender.id === userId));
+}
+
 function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boolean {
   const now = Date.now();
   const seen = userTurnEntrySeenByMessageKey.get(messageKey);
@@ -954,7 +956,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     avatar: opts.userAvatar ?? null,
   });
   const userLabel = group.senderLabel?.trim();
-  const isCurrentUser = opts.userId && group.sender?.id === opts.userId;
+  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
+  const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
   const who =
     normalizedRole === "user"
       ? isCurrentUser
@@ -1112,12 +1115,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   // messages keep the accent skin.
   const senderHue =
     normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
+  const replyToLabel =
+    normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
+  const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${senderHue === null
-        ? ""
-        : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
+        ? " chat-group--peer"
+        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
@@ -1138,6 +1144,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           )
         : nothing}
       <div class="chat-group-messages">
+        ${replyToLabel
+          ? html`
+              <div class="chat-reply-attribution" title=${replyToTitle} aria-label=${replyToTitle}>
+                <span class="chat-reply-attribution__icon" aria-hidden="true"
+                  >${icons.cornerDownLeft}</span
+                >
+                <span>${replyToLabel}</span>
+              </div>
+            `
+          : nothing}
         ${group.messages.map((item, index) => {
           const actionDetails = messageActionDetails[index];
           return html`
