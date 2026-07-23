@@ -19,6 +19,8 @@ import { createGatewayHttpServer } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+const upstreamTraceId = "11111111111111111111111111111111";
+const upstreamSpanId = "2222222222222222";
 
 async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promise<number> {
   return await new Promise<number>((resolve) => {
@@ -33,6 +35,49 @@ async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): 
   await new Promise<void>((resolve, reject) => {
     server.close((err) => (err ? reject(err) : resolve()));
   });
+}
+
+async function captureRequestTrace(params: {
+  traceparent?: string;
+  trustedProxies?: string[];
+}): Promise<DiagnosticTraceContext | undefined> {
+  let activeTraceInHandler: DiagnosticTraceContext | undefined;
+
+  await withTempConfig({
+    cfg: {
+      gateway: {
+        auth: { mode: "none" },
+        ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
+      },
+    },
+    run: async () => {
+      const httpServer = createGatewayHttpServer({
+        clients: new Set(),
+        controlUiEnabled: false,
+        controlUiBasePath: "/__control__",
+        openAiChatCompletionsEnabled: false,
+        openResponsesEnabled: false,
+        handleHooksRequest: async (_req, res) => {
+          activeTraceInHandler = getActiveDiagnosticTraceContext();
+          res.statusCode = 204;
+          res.end();
+          return true;
+        },
+        resolvedAuth,
+      });
+      const port = await listen(httpServer);
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/hook`, {
+          headers: params.traceparent ? { traceparent: params.traceparent } : undefined,
+        });
+        expect(response.status).toBe(204);
+      } finally {
+        await closeServer(httpServer);
+      }
+    },
+  });
+
+  return activeTraceInHandler;
 }
 
 afterEach(() => {
@@ -98,5 +143,40 @@ describe("gateway HTTP request trace scope", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("continues traceparent from a trusted HTTP peer as a child span", async () => {
+    const activeTrace = await captureRequestTrace({
+      traceparent: `00-${upstreamTraceId}-${upstreamSpanId}-00`,
+      trustedProxies: ["127.0.0.1"],
+    });
+
+    expect(activeTrace).toMatchObject({
+      traceId: upstreamTraceId,
+      parentSpanId: upstreamSpanId,
+      traceFlags: "00",
+    });
+    expect(activeTrace?.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(activeTrace?.spanId).not.toBe(upstreamSpanId);
+  });
+
+  it.each([
+    {
+      name: "untrusted peer",
+      traceparent: `00-${upstreamTraceId}-${upstreamSpanId}-01`,
+      trustedProxies: ["10.0.0.1"],
+    },
+    {
+      name: "malformed traceparent",
+      traceparent: "not-a-traceparent",
+      trustedProxies: ["127.0.0.1"],
+    },
+  ])("creates a fresh trace for $name", async ({ traceparent, trustedProxies }) => {
+    const activeTrace = await captureRequestTrace({ traceparent, trustedProxies });
+
+    expect(activeTrace?.traceId).toMatch(/^[0-9a-f]{32}$/);
+    expect(activeTrace?.traceId).not.toBe(upstreamTraceId);
+    expect(activeTrace?.spanId).toMatch(/^[0-9a-f]{16}$/);
+    expect(activeTrace?.parentSpanId).toBeUndefined();
   });
 });

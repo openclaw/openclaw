@@ -15,7 +15,9 @@ import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
+  parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
@@ -39,7 +41,7 @@ import {
 import type { ControlUiRootState } from "./control-ui.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { resolveRequestClientIp } from "./net.js";
+import { isTrustedProxyAddress, resolveRequestClientIp } from "./net.js";
 import {
   normalizePluginNodeCapabilityScopedUrl,
   type PluginNodeCapabilitySurface,
@@ -528,12 +530,35 @@ export function createGatewayHttpServer(opts: {
       });
 
   function handleRequestWithTrace(req: IncomingMessage, res: ServerResponse) {
-    return runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-      handleRequest(req, res),
+    const freshTrace = createDiagnosticTraceContext();
+    const traceparent = req.headers.traceparent;
+    const upstreamTrace =
+      typeof traceparent === "string" ? parseDiagnosticTraceparent(traceparent) : undefined;
+    if (!upstreamTrace) {
+      return runWithDiagnosticTraceContext(freshTrace, () => handleRequest(req, res));
+    }
+
+    let configSnapshot: OpenClawConfig;
+    try {
+      configSnapshot = loadGatewayConfig();
+    } catch {
+      // Preserve the existing request error path when config loading fails.
+      return runWithDiagnosticTraceContext(freshTrace, () => handleRequest(req, res));
+    }
+    const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+    const requestTrace = isTrustedProxyAddress(req.socket.remoteAddress, trustedProxies)
+      ? createChildDiagnosticTraceContext(upstreamTrace)
+      : freshTrace;
+    return runWithDiagnosticTraceContext(requestTrace, () =>
+      handleRequest(req, res, configSnapshot),
     );
   }
 
-  async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+  async function handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    loadedConfig?: OpenClawConfig,
+  ) {
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
@@ -562,7 +587,7 @@ export function createGatewayHttpServer(opts: {
         return;
       }
 
-      const configSnapshot = loadGatewayConfig();
+      const configSnapshot = loadedConfig ?? loadGatewayConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
