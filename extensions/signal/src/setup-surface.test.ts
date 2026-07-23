@@ -337,6 +337,50 @@ describe("signalSetupWizard", () => {
     });
   });
 
+  it("prompts for an account when URL recovery changes to a container", async () => {
+    mocks.probeSignalTransport
+      .mockResolvedValueOnce({ ok: false, error: "receive probe failed" })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    mocks.detectSignalTransport.mockResolvedValueOnce({
+      kind: "container",
+      url: "http://signal-helper-new:8080",
+    });
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["url"],
+      textValues: ["http://signal-helper-new:8080", "+15555550123"],
+    });
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {},
+      accountId: "default",
+      credentialValues: {
+        signalTransportKind: "external-native",
+        signalServerUrl: "http://signal-helper-old:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(queued.text).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ message: "Signal server URL" }),
+    );
+    expect(queued.text).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ message: "Signal phone number" }),
+    );
+    expect(mocks.probeSignalTransport).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        transport: { kind: "container", url: "http://signal-helper-new:8080" },
+        account: "+15555550123",
+      }),
+    );
+    expect(
+      resolveSignalAccount({ cfg: finalized?.cfg ?? {}, accountId: "default" }).config.account,
+    ).toBe("+15555550123");
+  });
+
   it("retries the same candidate without re-detecting it", async () => {
     mocks.probeSignalTransport
       .mockResolvedValueOnce({ ok: false, error: "not ready" })

@@ -41,6 +41,15 @@ const t = createSetupTranslator();
 
 const channel = "signal" as const;
 
+// Prepare emits this transient state before generic text inputs run; finalize consumes it
+// to rebuild and probe the account-owned transport before any transport write.
+export const signalSetupStateKeys = {
+  transportKind: "signalTransportKind",
+  cliPath: "signalCliPath",
+  cliConfigPath: "signalCliConfigPath",
+  serverUrl: "signalServerUrl",
+} as const;
+
 const signalSetupFields = {
   signalNumber: {
     kind: "string",
@@ -338,14 +347,14 @@ export const signalNumberTextInputs: ChannelSetupWizardTextInput[] = [
   {
     ...signalNumberTextInput,
     shouldPrompt: ({ credentialValues }) =>
-      credentialValues.signalTransportKind !== "external-native",
+      credentialValues[signalSetupStateKeys.transportKind] !== "external-native",
   },
   {
     ...signalNumberTextInput,
     message: "Signal phone number (optional)",
     required: false,
     shouldPrompt: ({ credentialValues }) =>
-      credentialValues.signalTransportKind === "external-native",
+      credentialValues[signalSetupStateKeys.transportKind] === "external-native",
     validate: ({ value }) =>
       normalizeOptionalString(value) && !normalizeSignalAccountInput(value)
         ? INVALID_SIGNAL_ACCOUNT_ERROR

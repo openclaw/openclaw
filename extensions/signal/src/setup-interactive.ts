@@ -16,18 +16,13 @@ import {
   type ResolvedSignalTransport,
 } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
-import { normalizeSignalAccountInput } from "./setup-core.js";
+import { normalizeSignalAccountInput, signalSetupStateKeys } from "./setup-core.js";
 import {
   detectSignalTransport,
   prepareSignalManagedNativeTransport,
   probeSignalTransport,
   writeSignalAccountTransport,
 } from "./setup-transport.js";
-
-const SIGNAL_TRANSPORT_KIND_KEY = "signalTransportKind";
-const SIGNAL_CLI_PATH_KEY = "signalCliPath";
-const SIGNAL_CLI_CONFIG_PATH_KEY = "signalCliConfigPath";
-const SIGNAL_SERVER_URL_KEY = "signalServerUrl";
 
 type SignalSetupMode = "local" | "existing-server";
 type SignalPrepareParams = Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0];
@@ -38,10 +33,320 @@ type SignalExistingTransport = Extract<
 >;
 type ExistingServerPromptParams = {
   cfg: OpenClawConfig;
-  accountId: string;
   prompter: WizardPrompter;
   initialValue?: string;
 };
+
+export async function prepareSignalInteractiveSetup(params: SignalPrepareParams) {
+  const resolvedAccount = resolveSignalAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const initialMode: SignalSetupMode =
+    resolvedAccount.configured && resolvedAccount.transport.kind !== "managed-native"
+      ? "existing-server"
+      : "local";
+
+  const mode = await params.prompter.select<SignalSetupMode>({
+    message: "How do you want to set up Signal for OpenClaw?",
+    initialValue: initialMode,
+    options: [
+      {
+        value: "local",
+        label: "Use local signal-cli",
+        hint: "OpenClaw starts the local signal-cli daemon for this account.",
+      },
+      {
+        value: "existing-server",
+        label: "Connect to an existing Signal server",
+        hint: "OpenClaw detects and stores the server protocol for this account.",
+      },
+    ],
+  });
+
+  if (mode === "local") {
+    return await prepareManagedNativeSetup(params, resolvedAccount.transport);
+  }
+  return await prepareExistingServerSetup(params, resolvedAccount.transport);
+}
+
+export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParams) {
+  const kind = params.credentialValues[signalSetupStateKeys.transportKind];
+  let cfg = params.cfg;
+  const resolvedAccount = resolveSignalAccount({
+    cfg,
+    accountId: params.accountId,
+  });
+  let account = normalizeSignalAccountInput(resolvedAccount.config.account) ?? undefined;
+  let transport: SignalTransportConfig;
+  if (kind === "managed-native") {
+    const configPath = params.credentialValues[signalSetupStateKeys.cliConfigPath];
+    transport = prepareSignalManagedNativeTransport({
+      cfg,
+      accountId: params.accountId,
+      overrides: {
+        cliPath: params.credentialValues[signalSetupStateKeys.cliPath] ?? "signal-cli",
+        ...(configPath ? { configPath } : {}),
+      },
+    });
+  } else if (kind === "external-native" || kind === "container") {
+    const url = params.credentialValues[signalSetupStateKeys.serverUrl];
+    if (!url) {
+      throw new Error("Signal setup is missing its prepared transport candidate.");
+    }
+    transport = { kind, url };
+  } else {
+    throw new Error("Signal setup is missing its prepared transport candidate.");
+  }
+
+  let shouldPromptAccount = !account && transport.kind !== "external-native";
+
+  while (true) {
+    // Account or URL recovery re-enters here so every probe sees matching candidate state.
+    if (shouldPromptAccount) {
+      account = await promptSignalAccount(params.prompter);
+      cfg = patchChannelConfigForAccount({
+        cfg,
+        channel: "signal",
+        accountId: params.accountId,
+        patch: { account, accountUuid: undefined },
+      });
+      shouldPromptAccount = false;
+    }
+
+    const probe = await probeSignalTransport({
+      cfg,
+      accountId: params.accountId,
+      transport,
+      account,
+    }).catch((error: unknown) => ({ ok: false, error: String(error) }));
+    if (probe.ok) {
+      break;
+    }
+
+    await params.prompter.note(
+      `OpenClaw could not validate this Signal setup.\nError: ${probe.error ?? "Signal transport probe failed."}`,
+      "Signal setup",
+    );
+    const recovery = await params.prompter.select<"retry" | "account" | "url" | "stop">({
+      message: "How should Signal setup continue?",
+      options: [
+        { value: "retry", label: "Retry this setup" },
+        { value: "account", label: "Try another Signal account" },
+        ...(transport.kind === "managed-native"
+          ? []
+          : [{ value: "url" as const, label: "Try another Signal server URL" }]),
+        { value: "stop", label: "Stop Signal setup" },
+      ],
+      initialValue: "retry",
+    });
+    if (recovery === "stop") {
+      throw new WizardCancelledError("Signal setup stopped");
+    }
+    if (recovery === "account") {
+      shouldPromptAccount = true;
+      continue;
+    }
+    if (recovery === "url" && transport.kind !== "managed-native") {
+      transport = await promptExistingSignalTransport({
+        cfg,
+        prompter: params.prompter,
+        initialValue: transport.url,
+      });
+      shouldPromptAccount = !account && transport.kind !== "external-native";
+    }
+  }
+
+  return {
+    cfg: writeSignalAccountTransport({
+      cfg,
+      accountId: params.accountId,
+      transport,
+    }),
+  };
+}
+
+async function promptSignalAccount(prompter: WizardPrompter) {
+  const raw = await prompter.text({
+    message: "Signal phone number",
+    placeholder: "+15555550123",
+    validate: (value) =>
+      normalizeSignalAccountInput(value)
+        ? undefined
+        : "Enter a Signal phone number in international format, for example +15555550123.",
+  });
+  const account = normalizeSignalAccountInput(raw);
+  if (!account) {
+    throw new Error("Signal phone number is required.");
+  }
+  return account;
+}
+
+async function prepareManagedNativeSetup(
+  params: SignalPrepareParams,
+  resolvedTransport: ResolvedSignalTransport,
+) {
+  let cliPath =
+    resolvedTransport.kind === "managed-native" ? resolvedTransport.cliPath : "signal-cli";
+  let cliDetected = await detectBinary(cliPath);
+
+  if (params.options?.allowSignalInstall) {
+    const wantsInstall = await params.prompter.confirm({
+      message: cliDetected ? "Reinstall signal-cli?" : "Install signal-cli?",
+      initialValue: !cliDetected,
+    });
+    if (wantsInstall) {
+      await params.options.beforePersistentEffect?.();
+      try {
+        const result = await installSignalCli(params.runtime);
+        if (result.ok && result.cliPath) {
+          cliPath = result.cliPath;
+          await params.prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
+        } else {
+          await params.prompter.note(result.error ?? "signal-cli install failed.", "Signal");
+        }
+      } catch (error) {
+        await params.prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
+      }
+      cliDetected = await detectBinary(cliPath);
+    }
+  }
+
+  if (!cliDetected) {
+    cliPath =
+      normalizeOptionalString(
+        await params.prompter.text({
+          message: "signal-cli path",
+          initialValue: cliPath,
+          validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
+        }),
+      ) ?? cliPath;
+  }
+
+  const existingConfigPath =
+    resolvedTransport.kind === "managed-native" ? resolvedTransport.configPath : undefined;
+  const configPath = normalizeOptionalString(
+    await params.prompter.text({
+      message: "signal-cli config path (optional)",
+      initialValue: existingConfigPath,
+      placeholder: "~/.local/share/signal-cli",
+    }),
+  );
+
+  // Validate account-owned port allocation now, while keeping the candidate ephemeral until probe.
+  prepareSignalManagedNativeTransport({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    overrides: { cliPath, ...(configPath ? { configPath } : {}) },
+  });
+
+  return {
+    credentialValues: {
+      [signalSetupStateKeys.transportKind]: "managed-native",
+      [signalSetupStateKeys.cliPath]: cliPath,
+      ...(configPath ? { [signalSetupStateKeys.cliConfigPath]: configPath } : {}),
+    },
+  };
+}
+
+async function promptSignalServerUrl(prompter: WizardPrompter, initialValue: string) {
+  return (
+    normalizeOptionalString(
+      await prompter.text({
+        message: "Signal server URL",
+        initialValue,
+        placeholder: "http://127.0.0.1:8080",
+        validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
+      }),
+    ) ?? initialValue
+  );
+}
+
+async function promptExistingSignalTransport(
+  params: ExistingServerPromptParams,
+): Promise<SignalExistingTransport> {
+  let url = await promptSignalServerUrl(
+    params.prompter,
+    params.initialValue ?? "http://127.0.0.1:8080",
+  );
+  while (true) {
+    const detection = await detectSignalTransport({ url }).then(
+      (transport) => ({ ok: true as const, transport }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    if (!detection.ok) {
+      await params.prompter.note(
+        `OpenClaw could not detect a working Signal server at ${url}.\nError: ${String(detection.error)}`,
+        "Signal server URL",
+      );
+      const recovery = await params.prompter.select<"retry" | "url" | "stop">({
+        message: "How should Signal server setup continue?",
+        options: [
+          { value: "retry", label: "Retry this Signal server URL" },
+          { value: "url", label: "Try another Signal server URL" },
+          { value: "stop", label: "Stop Signal setup" },
+        ],
+        initialValue: "retry",
+      });
+      if (recovery === "stop") {
+        throw new WizardCancelledError("Signal setup stopped");
+      }
+      if (recovery === "url") {
+        url = await promptSignalServerUrl(params.prompter, url);
+      }
+      continue;
+    }
+
+    const transport = detection.transport;
+    if (transport.kind === "managed-native") {
+      throw new Error("Signal transport detection returned a managed-native transport");
+    }
+    if (!aliasesManagedSignalEndpoint(params.cfg, transport.url)) {
+      return transport;
+    }
+
+    await params.prompter.note(
+      [
+        "That URL is an OpenClaw-managed Signal daemon.",
+        "It stops when its account switches away from local signal-cli.",
+        "Enter the URL of an independently operated Signal server instead.",
+      ].join("\n"),
+      "Signal server URL",
+    );
+    const recovery = await params.prompter.select<"url" | "stop">({
+      message: "How should Signal server setup continue?",
+      options: [
+        { value: "url", label: "Try another Signal server URL" },
+        { value: "stop", label: "Stop Signal setup" },
+      ],
+      initialValue: "url",
+    });
+    if (recovery === "stop") {
+      throw new WizardCancelledError("Signal setup stopped");
+    }
+    url = await promptSignalServerUrl(params.prompter, url);
+  }
+}
+
+async function prepareExistingServerSetup(
+  params: SignalPrepareParams,
+  resolvedTransport: ResolvedSignalTransport,
+) {
+  const transport = await promptExistingSignalTransport({
+    cfg: params.cfg,
+    prompter: params.prompter,
+    initialValue:
+      resolvedTransport.kind === "external-native" || resolvedTransport.kind === "container"
+        ? resolvedTransport.baseUrl
+        : "http://127.0.0.1:8080",
+  });
+  return {
+    credentialValues: {
+      [signalSetupStateKeys.transportKind]: transport.kind,
+      [signalSetupStateKeys.serverUrl]: transport.url,
+    },
+  };
+}
 
 function normalizeEndpointHostname(value: string): string {
   return value
@@ -136,325 +441,4 @@ function aliasesManagedSignalEndpoint(cfg: OpenClawConfig, candidateUrl: string)
   return listConfiguredManagedSignalEndpoints(cfg).some((managedUrl) =>
     matchesManagedSignalEndpoint(managedUrl, candidateUrl),
   );
-}
-
-async function promptSignalAccount(params: SignalFinalizeParams) {
-  const raw = await params.prompter.text({
-    message: "Signal phone number",
-    placeholder: "+15555550123",
-    validate: (value) =>
-      normalizeSignalAccountInput(value)
-        ? undefined
-        : "Enter a Signal phone number in international format, for example +15555550123.",
-  });
-  const account = normalizeSignalAccountInput(raw);
-  if (!account) {
-    throw new Error("Signal phone number is required.");
-  }
-  return account;
-}
-
-async function prepareManagedNativeSetup(
-  params: SignalPrepareParams,
-  resolvedTransport: ResolvedSignalTransport,
-) {
-  let cliPath =
-    resolvedTransport.kind === "managed-native" ? resolvedTransport.cliPath : "signal-cli";
-  const cliDetected = await detectBinary(cliPath);
-
-  if (params.options?.allowSignalInstall) {
-    const wantsInstall = await params.prompter.confirm({
-      message: cliDetected ? "Reinstall signal-cli?" : "Install signal-cli?",
-      initialValue: !cliDetected,
-    });
-    if (wantsInstall) {
-      await params.options.beforePersistentEffect?.();
-      try {
-        const result = await installSignalCli(params.runtime);
-        if (result.ok && result.cliPath) {
-          cliPath = result.cliPath;
-          await params.prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
-        } else {
-          await params.prompter.note(result.error ?? "signal-cli install failed.", "Signal");
-        }
-      } catch (error) {
-        await params.prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
-      }
-    }
-  }
-
-  if (!(await detectBinary(cliPath))) {
-    cliPath =
-      normalizeOptionalString(
-        await params.prompter.text({
-          message: "signal-cli path",
-          initialValue: cliPath,
-          validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
-        }),
-      ) ?? cliPath;
-  }
-
-  const existingConfigPath =
-    resolvedTransport.kind === "managed-native" ? resolvedTransport.configPath : undefined;
-  const configPath = normalizeOptionalString(
-    await params.prompter.text({
-      message: "signal-cli config path (optional)",
-      initialValue: existingConfigPath,
-      placeholder: "~/.local/share/signal-cli",
-    }),
-  );
-
-  // Validate account-owned port allocation now, while keeping the candidate ephemeral until probe.
-  prepareSignalManagedNativeTransport({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    overrides: { cliPath, ...(configPath ? { configPath } : {}) },
-  });
-
-  return {
-    credentialValues: {
-      [SIGNAL_TRANSPORT_KIND_KEY]: "managed-native",
-      [SIGNAL_CLI_PATH_KEY]: cliPath,
-      ...(configPath ? { [SIGNAL_CLI_CONFIG_PATH_KEY]: configPath } : {}),
-    },
-  };
-}
-
-async function promptExistingSignalTransport(
-  params: ExistingServerPromptParams,
-): Promise<SignalExistingTransport> {
-  let initialValue = params.initialValue ?? "http://127.0.0.1:8080";
-  let url = initialValue;
-  let promptForUrl = true;
-
-  while (true) {
-    if (promptForUrl) {
-      url =
-        normalizeOptionalString(
-          await params.prompter.text({
-            message: "Signal server URL",
-            initialValue,
-            placeholder: "http://127.0.0.1:8080",
-            validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
-          }),
-        ) ?? initialValue;
-    }
-
-    const detection = await detectSignalTransport({ url }).then(
-      (transport) => ({ ok: true as const, transport }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    if (!detection.ok) {
-      await params.prompter.note(
-        `OpenClaw could not detect a working Signal server at ${url}.\nError: ${String(detection.error)}`,
-        "Signal server URL",
-      );
-      const recovery = await params.prompter.select<"retry" | "url" | "stop">({
-        message: "How should Signal server setup continue?",
-        options: [
-          { value: "retry", label: "Retry this Signal server URL" },
-          { value: "url", label: "Try another Signal server URL" },
-          { value: "stop", label: "Stop Signal setup" },
-        ],
-        initialValue: "retry",
-      });
-      if (recovery === "stop") {
-        throw new WizardCancelledError("Signal setup stopped");
-      }
-      promptForUrl = recovery === "url";
-      initialValue = url;
-      continue;
-    }
-
-    const transport = detection.transport;
-    if (transport.kind === "managed-native") {
-      throw new Error("Signal transport detection returned a managed-native transport");
-    }
-    if (!aliasesManagedSignalEndpoint(params.cfg, transport.url)) {
-      return transport;
-    }
-
-    await params.prompter.note(
-      [
-        "That URL is an OpenClaw-managed Signal daemon.",
-        "It stops when its account switches away from local signal-cli.",
-        "Enter the URL of an independently operated Signal server instead.",
-      ].join("\n"),
-      "Signal server URL",
-    );
-    const recovery = await params.prompter.select<"url" | "stop">({
-      message: "How should Signal server setup continue?",
-      options: [
-        { value: "url", label: "Try another Signal server URL" },
-        { value: "stop", label: "Stop Signal setup" },
-      ],
-      initialValue: "url",
-    });
-    if (recovery === "stop") {
-      throw new WizardCancelledError("Signal setup stopped");
-    }
-    initialValue = url;
-    promptForUrl = true;
-  }
-}
-
-async function prepareExistingServerSetup(
-  params: SignalPrepareParams,
-  resolvedTransport: ResolvedSignalTransport,
-) {
-  const transport = await promptExistingSignalTransport({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    prompter: params.prompter,
-    initialValue:
-      resolvedTransport.kind === "external-native" || resolvedTransport.kind === "container"
-        ? resolvedTransport.baseUrl
-        : "http://127.0.0.1:8080",
-  });
-  return {
-    credentialValues: {
-      [SIGNAL_TRANSPORT_KIND_KEY]: transport.kind,
-      [SIGNAL_SERVER_URL_KEY]: transport.url,
-    },
-  };
-}
-
-export async function prepareSignalInteractiveSetup(params: SignalPrepareParams) {
-  const resolvedAccount = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const initialMode: SignalSetupMode =
-    resolvedAccount.configured && resolvedAccount.transport.kind !== "managed-native"
-      ? "existing-server"
-      : "local";
-
-  const mode = await params.prompter.select<SignalSetupMode>({
-    message: "How do you want to set up Signal for OpenClaw?",
-    initialValue: initialMode,
-    options: [
-      {
-        value: "local",
-        label: "Use local signal-cli",
-        hint: "OpenClaw starts the local signal-cli daemon for this account.",
-      },
-      {
-        value: "existing-server",
-        label: "Connect to an existing Signal server",
-        hint: "OpenClaw detects and stores the server protocol for this account.",
-      },
-    ],
-  });
-
-  if (mode === "local") {
-    return await prepareManagedNativeSetup(params, resolvedAccount.transport);
-  }
-  return await prepareExistingServerSetup(params, resolvedAccount.transport);
-}
-
-export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParams) {
-  const kind = params.credentialValues[SIGNAL_TRANSPORT_KIND_KEY];
-  let cfg = params.cfg;
-  const resolvedAccount = resolveSignalAccount({
-    cfg,
-    accountId: params.accountId,
-  });
-  let account = normalizeSignalAccountInput(resolvedAccount.config.account) ?? undefined;
-  let transport: SignalTransportConfig | undefined =
-    kind === "managed-native"
-      ? prepareSignalManagedNativeTransport({
-          cfg,
-          accountId: params.accountId,
-          overrides: {
-            cliPath: params.credentialValues[SIGNAL_CLI_PATH_KEY] ?? "signal-cli",
-            ...(params.credentialValues[SIGNAL_CLI_CONFIG_PATH_KEY]
-              ? { configPath: params.credentialValues[SIGNAL_CLI_CONFIG_PATH_KEY] }
-              : {}),
-          },
-        })
-      : kind === "external-native" || kind === "container"
-        ? {
-            kind,
-            url: params.credentialValues[SIGNAL_SERVER_URL_KEY] ?? "",
-          }
-        : undefined;
-  if (!transport || (transport.kind !== "managed-native" && !transport.url)) {
-    throw new Error("Signal setup is missing its prepared transport candidate.");
-  }
-  if ((transport.kind === "managed-native" || transport.kind === "container") && !account) {
-    account = await promptSignalAccount(params);
-    cfg = patchChannelConfigForAccount({
-      cfg,
-      channel: "signal",
-      accountId: params.accountId,
-      patch: { account, accountUuid: undefined },
-    });
-  }
-
-  while (true) {
-    const probe = await probeSignalTransport({
-      cfg,
-      accountId: params.accountId,
-      transport,
-      account,
-    }).catch((error: unknown) => ({ ok: false, error: String(error) }));
-    if (probe.ok) {
-      break;
-    }
-
-    await params.prompter.note(
-      `OpenClaw could not validate this Signal setup.\nError: ${probe.error ?? "Signal transport probe failed."}`,
-      "Signal setup",
-    );
-    const recovery = await params.prompter.select<"retry" | "account" | "url" | "stop">({
-      message: "How should Signal setup continue?",
-      options: [
-        { value: "retry", label: "Retry this setup" },
-        { value: "account", label: "Try another Signal account" },
-        ...(transport.kind === "managed-native"
-          ? []
-          : [{ value: "url" as const, label: "Try another Signal server URL" }]),
-        { value: "stop", label: "Stop Signal setup" },
-      ],
-      initialValue: "retry",
-    });
-    if (recovery === "stop") {
-      throw new WizardCancelledError("Signal setup stopped");
-    }
-    if (recovery === "account") {
-      account = await promptSignalAccount(params);
-      cfg = patchChannelConfigForAccount({
-        cfg,
-        channel: "signal",
-        accountId: params.accountId,
-        patch: { account, accountUuid: undefined },
-      });
-      continue;
-    }
-    if (recovery === "url" && transport.kind !== "managed-native") {
-      transport = await promptExistingSignalTransport({
-        cfg,
-        accountId: params.accountId,
-        prompter: params.prompter,
-        initialValue: transport.url,
-      });
-      if (transport.kind === "container" && !account) {
-        account = await promptSignalAccount(params);
-        cfg = patchChannelConfigForAccount({
-          cfg,
-          channel: "signal",
-          accountId: params.accountId,
-          patch: { account, accountUuid: undefined },
-        });
-      }
-    }
-  }
-
-  return {
-    cfg: writeSignalAccountTransport({
-      cfg,
-      accountId: params.accountId,
-      transport,
-    }),
-  };
 }
