@@ -3,6 +3,7 @@ import {
   registerCodexEventProjectorTestLifecycle,
   expect,
   it,
+  createParams,
   createProjector,
   buildEmptyToolTelemetry,
   expectUsageFields,
@@ -10,11 +11,37 @@ import {
   agentMessageDelta,
   turnCompleted,
   turnWithStatus,
+  vi,
 } from "./event-projector.test-harness.js";
 
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector usage projection", () => {
+  it("emits native context-window and prompt-token snapshots", async () => {
+    const params = await createParams();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...params, onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: {
+          modelContextWindow: 875_900,
+          last: {
+            totalTokens: 300_010,
+            inputTokens: 300_000,
+            cachedInputTokens: 250_000,
+            outputTokens: 10,
+          },
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.usage",
+      data: { modelContextWindow: 875_900, promptTokens: 300_000 },
+    });
+  });
+
   it("ignores cumulative thread usage after exact response usage", async () => {
     const projector = await createProjector();
 

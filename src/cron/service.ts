@@ -117,8 +117,8 @@ export class CronService implements CronServiceContract {
     return await ops.updateWithPrecondition(this.state, id, patch, precondition);
   }
 
-  async remove(id: string) {
-    return await ops.remove(this.state, id);
+  async remove(id: string, opts?: { systemOwned?: boolean }) {
+    return await ops.remove(this.state, id, opts);
   }
 
   async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {
@@ -154,6 +154,17 @@ export class CronService implements CronServiceContract {
 
   async readJob(id: string): Promise<CronJob | undefined> {
     return await ops.readJob(this.state, id);
+  }
+
+  async readScratch(id: string) {
+    return await ops.readScratch(this.state, id);
+  }
+
+  async writeScratch(
+    id: string,
+    params: { content: string | null; expectedRevision?: number; sourceSha256?: string },
+  ) {
+    return await ops.writeScratch(this.state, id, params);
   }
 
   async recordExternalFailure(

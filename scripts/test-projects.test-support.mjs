@@ -1409,6 +1409,29 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/upgrade-survivor-config-recipe.test.ts",
     ],
   ],
+  [
+    "scripts/lib/release-version.mjs",
+    [
+      "test/release-version.test.ts",
+      "test/npm-publish-plan.test.ts",
+      "test/openclaw-npm-release-check.test.ts",
+      "test/openclaw-npm-postpublish-verify.test.ts",
+      "test/plugin-npm-release.test.ts",
+      "test/plugin-clawhub-release.test.ts",
+      "test/scripts/android-version.test.ts",
+      "test/scripts/android-pin-version.test.ts",
+      "test/scripts/docker-release-policy.test.ts",
+      "test/scripts/ios-version.test.ts",
+      "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+      "test/scripts/openclaw-npm-publish.test.ts",
+      "test/scripts/release-preflight.test.ts",
+      "test/scripts/release-prepare.test.ts",
+      "test/scripts/release-upgrade-baseline.test.ts",
+      "test/scripts/release-version.test.ts",
+      "test/scripts/upgrade-survivor-baselines.test.ts",
+      "test/scripts/upgrade-survivor-config-recipe.test.ts",
+    ],
+  ],
   ["scripts/sync-codex-model-prompt-fixture.ts", ["test/scripts/prompt-snapshots.test.ts"]],
   [
     "scripts/lib/npm-pack-budget.mjs",
@@ -1706,7 +1729,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/plugin-prerelease-test-plan.test.ts",
     ],
   ],
-  ["scripts/measure-rpc-rtt.mjs", ["test/scripts/measure-rpc-rtt.test.ts"]],
   [
     "scripts/e2e/telegram-user-crabbox-proof.ts",
     ["test/scripts/telegram-user-crabbox-proof.test.ts"],
@@ -1736,10 +1758,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/browser-cdp-snapshot.test.ts",
       "test/scripts/e2e-helper-env-limits.test.ts",
     ],
-  ],
-  [
-    "scripts/e2e/channel-plugin-trust-docker.sh",
-    ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-projects.test.ts"],
   ],
   [
     "scripts/e2e/config-reload-source-docker.sh",
@@ -2234,6 +2252,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/lib/local-build-metadata-paths.d.mts", "scripts/lib/local-build-metadata-paths.mjs"],
   ["scripts/lib/local-build-metadata.d.mts", "scripts/lib/local-build-metadata.mjs"],
   ["scripts/lib/plugin-sdk-entries.d.mts", "scripts/lib/plugin-sdk-entries.mjs"],
+  ["scripts/lib/release-version.d.mts", "scripts/lib/release-version.mjs"],
   ["scripts/lib/vitest-local-scheduling.d.mts", "scripts/lib/vitest-local-scheduling.mjs"],
   ["scripts/run-node.d.mts", "scripts/run-node.mjs"],
   ["scripts/stage-bundled-plugin-runtime.d.mts", "scripts/stage-bundled-plugin-runtime.mjs"],
@@ -2381,7 +2400,47 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
-  ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-artifact-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-export.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-space-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-runtime-commands.ts",
+    ["extensions/google-meet/src/cli-runtime.test.ts"],
+  ],
+  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli-command-context.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-shared.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   [
@@ -3671,17 +3730,9 @@ function resolveK8sManifestTargets(changedPath) {
 function resolveParallelsToolingTestTargets(changedPath) {
   if (
     !/^scripts\/e2e\/parallels\/[^/]+\.ts$/u.test(changedPath) &&
-    !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
+    !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath)
   ) {
     return null;
-  }
-  if (
-    /^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) ||
-    /^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
-  ) {
-    return ["test/scripts/parallels-lib-helpers.test.ts"];
   }
   const targets = ["test/scripts/parallels-smoke-model.test.ts"];
   if (

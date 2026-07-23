@@ -8,11 +8,8 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import {
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-  type MarkdownRenderOptions,
-} from "../../../components/markdown.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -32,6 +29,7 @@ import {
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import {
   extractToolCardsCached,
@@ -61,7 +59,7 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { isPendingSendMessage, persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -873,6 +871,9 @@ function buildGroupedMessageRenderOptions(
     boardProvider: opts.boardProvider,
     agentId: opts.agentId,
     entryId: persistedMessageEntryId(item.message) ?? undefined,
+    entryAnimated:
+      normalizeRoleForGrouping(group.role) === "user" &&
+      shouldAnimateUserTurnEntry(item.key, item.message),
     onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
@@ -899,6 +900,51 @@ function buildGroupedMessageRenderOptions(
   };
 }
 
+/** One-shot entry animation state for submitted user turns, keyed by message
+ * key (send identity). An entry records first sight for the send's lifetime —
+ * value is the animation start, or 0 for seen-without-animating — so
+ * re-renders during the animation keep the class while later renders or
+ * virtualizer remounts of the same (possibly still pending) row never replay
+ * it. Insertion-ordered cap bounds the map instead of time-based pruning,
+ * which would forget long-lived pending rows; keys are per-send UUIDs, so the
+ * map is never reset across panes or sessions. */
+const userTurnEntrySeenByMessageKey = new Map<string, number>();
+const USER_TURN_ENTRY_ANIMATION_WINDOW_MS = 400;
+/** Only just-submitted bubbles animate; restored outbox rows render still.
+ * Accepted tradeoff: a full page reload within this window re-animates the
+ * just-submitted bubble once, which matches the fresh paint around it. */
+const USER_TURN_ENTRY_FRESH_SUBMIT_MS = 2_000;
+const USER_TURN_ENTRY_SEEN_CAP = 256;
+
+function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
+  return Boolean(group.sender && !(userId && group.sender.id === userId));
+}
+
+function shouldAnimateUserTurnEntry(messageKey: string, message: unknown): boolean {
+  const now = Date.now();
+  const seen = userTurnEntrySeenByMessageKey.get(messageKey);
+  if (seen !== undefined) {
+    return seen > 0 && now - seen < USER_TURN_ENTRY_ANIMATION_WINDOW_MS;
+  }
+  // Only a locally pending submit starts the animation; loaded history and
+  // remote echoes render without one.
+  if (!isPendingSendMessage(message)) {
+    return false;
+  }
+  const submittedAt = (message as { timestamp?: unknown }).timestamp;
+  const freshSubmit =
+    typeof submittedAt === "number" && now - submittedAt < USER_TURN_ENTRY_FRESH_SUBMIT_MS;
+  while (userTurnEntrySeenByMessageKey.size >= USER_TURN_ENTRY_SEEN_CAP) {
+    const oldest = userTurnEntrySeenByMessageKey.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    userTurnEntrySeenByMessageKey.delete(oldest);
+  }
+  userTurnEntrySeenByMessageKey.set(messageKey, freshSubmit ? now : 0);
+  return freshSubmit;
+}
+
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const isWorkspaceConflict = group.messages.every((item) =>
@@ -910,7 +956,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     avatar: opts.userAvatar ?? null,
   });
   const userLabel = group.senderLabel?.trim();
-  const isCurrentUser = opts.userId && group.sender?.id === opts.userId;
+  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
+  const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
   const who =
     normalizedRole === "user"
       ? isCurrentUser
@@ -1058,6 +1105,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   );
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
+  const hasUserFooterActions =
+    normalizedRole === "user" &&
+    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onDelete || opts.onRewind);
 
   // Attributed (logged-in) senders tint their bubbles with the same stable
   // identity hue as their avatar initials; CSS owns per-theme lightness so
@@ -1065,12 +1115,15 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   // messages keep the accent skin.
   const senderHue =
     normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
+  const replyToLabel =
+    normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
+  const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${senderHue === null
-        ? ""
-        : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
+        ? " chat-group--peer"
+        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
@@ -1091,6 +1144,16 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           )
         : nothing}
       <div class="chat-group-messages">
+        ${replyToLabel
+          ? html`
+              <div class="chat-reply-attribution" title=${replyToTitle} aria-label=${replyToTitle}>
+                <span class="chat-reply-attribution__icon" aria-hidden="true"
+                  >${icons.cornerDownLeft}</span
+                >
+                <span>${replyToLabel}</span>
+              </div>
+            `
+          : nothing}
         ${group.messages.map((item, index) => {
           const actionDetails = messageActionDetails[index];
           return html`
@@ -1116,11 +1179,21 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : ""}"
       >
         <div class="chat-group-footer__meta">
-          ${opts.onRewind && normalizedRole === "user"
-            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
-            : nothing}
-          ${opts.onDelete && normalizedRole === "user"
-            ? renderDeleteButton(opts.onDelete, "left")
+          ${hasUserFooterActions
+            ? html`
+                <div
+                  class="chat-group-footer-actions"
+                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                >
+                  ${footerActionDetails?.replyTarget && opts.onReply
+                    ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+                    : nothing}
+                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
+                  ${opts.onRewind
+                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+                    : nothing}
+                </div>
+              `
             : nothing}
           ${normalizedRole === "user" && !showAvatarGutter
             ? renderChatAuthorAvatar(group.sender)
@@ -1128,7 +1201,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           <span class="chat-sender-name">${who}</span>
           ${renderMessageMeta(group.timestamp, meta)}
         </div>
-        ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
+        ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
           ? html`
               <div
                 class="chat-group-footer-actions"
@@ -1141,7 +1214,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                       opts.onOpenSidebar,
                       normalizedRole !== "user" ? opts.onDelete : undefined,
                     )
-                  : opts.onDelete && normalizedRole !== "user"
+                  : opts.onDelete
                     ? renderDeleteButton(opts.onDelete, "right")
                     : nothing}
               </div>
@@ -2678,6 +2751,8 @@ function renderGroupedMessage(
     allowExternalEmbedUrls?: boolean;
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
     entryId?: string;
+    /** Freshly submitted user turn: play the one-shot composer entry animation. */
+    entryAnimated?: boolean;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -2735,6 +2810,7 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
+    opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
   ]
     .filter(Boolean)
     .join(" ");

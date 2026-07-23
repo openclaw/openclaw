@@ -28,6 +28,8 @@ export function bindSqliteSessionRoot(params: {
   return {
     session_id: params.entry.sessionId,
     session_key: params.sessionKey,
+    previous_session_id: normalizeSqliteText(params.entry.previousSessionId),
+    reason: null,
     session_scope: resolveSqliteSessionScope(params.entry, params.sessionKey),
     created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
@@ -46,6 +48,63 @@ export function bindSqliteSessionRoot(params: {
     spawned_by: normalizeSqliteText(params.entry.spawnedBy),
     display_name: resolveSqliteSessionDisplayName(params.entry),
   };
+}
+
+/** Project the canonical entry blob into the logical-node query columns. */
+export function bindSqliteSessionNode(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  updatedAt: number;
+}) {
+  const actor = params.entry.createdActor;
+  const legacyActorId = normalizeSqliteText(
+    (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
+  );
+  return {
+    session_key: params.sessionKey,
+    current_session_id: params.entry.sessionId,
+    entry_json: JSON.stringify(params.entry),
+    updated_at: params.updatedAt,
+    status: normalizeSqliteStatus(params.entry.status),
+    created_at: finiteSqliteNumber(params.entry.createdAt),
+    created_via: normalizeSqliteCreatedVia(params.entry.createdVia),
+    created_actor_type:
+      normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
+    created_actor_id: normalizeSqliteText(actor?.id) ?? legacyActorId,
+    parent_session_key:
+      normalizeSqliteText(params.entry.parentSessionKey) ??
+      normalizeSqliteText(params.entry.spawnedBy),
+    spawned_by: normalizeSqliteText(params.entry.spawnedBy),
+    fork_source_session_key: normalizeSqliteText(params.entry.forkSource?.sessionKey),
+    fork_source_session_id: normalizeSqliteText(params.entry.forkSource?.sessionId),
+    fork_source_entry_id: normalizeSqliteText(params.entry.forkSource?.entryId),
+    label: normalizeSqliteText(params.entry.label),
+    display_name: normalizeSqliteText(params.entry.displayName),
+    category: normalizeSqliteText(params.entry.category),
+    icon: normalizeSqliteText(params.entry.icon),
+    pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
+    archived_at: finiteSqliteNumber(params.entry.archivedAt),
+    last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
+    last_interaction_at: finiteSqliteNumber(params.entry.lastInteractionAt),
+    last_activity_at: finiteSqliteNumber(params.entry.lastActivityAt),
+  };
+}
+
+function normalizeSqliteCreatedVia(value: SessionEntry["createdVia"]) {
+  return value === "operator" ||
+    value === "spawn" ||
+    value === "channel" ||
+    value === "cron" ||
+    value === "talk" ||
+    value === "run" ||
+    value === "plugin" ||
+    value === "internal"
+    ? value
+    : null;
+}
+
+function normalizeSqliteCreatedActorType(value: unknown) {
+  return value === "human" || value === "agent" || value === "system" ? value : null;
 }
 
 function resolveSqliteSessionScope(

@@ -9,6 +9,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -214,8 +215,25 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
-    ...((resetTriggered || !existingEntry) && ctx.SessionCreator
-      ? { createdBy: { ...ctx.SessionCreator } }
+    ...(!existingEntry && ctx.SessionCreation
+      ? buildSessionCreationStamp(ctx.SessionCreation)
+      : {}),
+    ...(resetTriggered && existingEntry
+      ? {
+          previousSessionId: existingEntry.sessionId,
+          spawnedBy: existingEntry.spawnedBy,
+          spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
+          spawnedCwd: existingEntry.spawnedCwd,
+          parentSessionKey: existingEntry.parentSessionKey,
+          forkedFromParent: existingEntry.forkedFromParent,
+          forkSource: existingEntry.forkSource,
+          createdVia: existingEntry.createdVia,
+          createdActor: existingEntry.createdActor,
+          createdAt: existingEntry.createdAt,
+          spawnDepth: existingEntry.spawnDepth,
+          subagentRole: existingEntry.subagentRole,
+          subagentControlScope: existingEntry.subagentControlScope,
+        }
       : {}),
     sessionFile,
     updatedAt: now,

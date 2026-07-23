@@ -5,7 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
@@ -40,6 +39,7 @@ import {
   safeReadDir,
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
+import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
 import {
   getLegacySessionSurfaces,
   isLegacyGroupKey,
@@ -1088,6 +1088,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         writeAcpSessionMetaForMigration({
           sessionKey: canonicalSessionKey,
           sessionId: normalizedEntry.sessionId,
+          lifecycleRevision: normalizedEntry.lifecycleRevision,
           meta: normalizedEntry.acp,
           env,
           now,
@@ -1333,9 +1334,9 @@ export async function saveSessionStoreStrict(
   storePath: string,
   store: Record<string, SessionEntry>,
 ): Promise<void> {
-  await saveSessionStore(storePath, store, {
-    skipMaintenance: true,
+  await saveLegacySessionStore(storePath, store, {
     requireWriteSuccess: true,
+    skipMaintenance: true,
   });
 }
 

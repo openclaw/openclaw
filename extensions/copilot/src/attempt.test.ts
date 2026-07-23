@@ -10,6 +10,7 @@ import {
   queueAgentHarnessMessage,
   type AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult,
+  type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -308,7 +309,7 @@ function makeParams(
         useLoggedInUser?: boolean;
       };
       initialReplayState: { sdkSessionId?: string };
-      messages: Array<{ content: string; role: "user"; timestamp: number }>;
+      messages: AgentMessage[];
       model: { api: string; id: string; provider: string };
       onAssistantDelta: (payload: { delta: string; text: string }) => void | Promise<void>;
       profileVersion: string;
@@ -907,6 +908,13 @@ describe("runCopilotAttempt", () => {
         makeParams({
           imageOrder: ["offloaded"],
           images: [],
+          media: [
+            {
+              url: `media://inbound/${mediaId}`,
+              contentType: "image/png",
+              kind: "image",
+            },
+          ],
           model: {
             api: "openai-responses",
             id: "gpt-4o",
@@ -2832,6 +2840,43 @@ describe("runCopilotAttempt", () => {
       const roles = args.messages.map((m) => m.role);
       expect(roles).toContain("user");
       expect(roles).toContain("assistant");
+    });
+
+    it("keeps current memory-maintenance visibility hidden across later replays", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("NO_REPLY"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const priorAssistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "ordinary prior reply" }],
+        timestamp: Date.now() - 1,
+      } as AgentMessage;
+      const currentUser = {
+        role: "user",
+        content: "Pre-compaction memory flush",
+        timestamp: Date.now(),
+      } as AgentMessage;
+
+      const result = await runCopilotAttempt(
+        makeParams({
+          messages: [priorAssistant, currentUser],
+          prompt: "Pre-compaction memory flush",
+          trigger: "memory",
+        }),
+        { pool },
+      );
+
+      const [replayedPrior, persistedPrompt, persistedAssistant] =
+        result.messagesSnapshot as Array<{
+          display?: boolean;
+          role: string;
+        }>;
+      expect(replayedPrior).not.toHaveProperty("display", false);
+      expect(persistedPrompt).toMatchObject({ display: false, role: "user" });
+      expect(persistedAssistant).toMatchObject({ display: false, role: "assistant" });
     });
 
     it("does not invoke dual-write mirror when runtime identity is absent", async () => {

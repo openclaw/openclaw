@@ -14,10 +14,11 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
-  "createdBy",
   "lifecycleRevision",
   "updatedAt",
+  "incognito",
   "archivedAt",
+  "archivedBy",
   "pinnedAt",
   "icon",
   "lastReadAt",
@@ -32,6 +33,11 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "spawnedCwd",
   "worktree",
   "parentSessionKey",
+  "createdVia",
+  "createdActor",
+  "createdAt",
+  "forkSource",
+  "previousSessionId",
   "forkedFromParent",
   "spawnDepth",
   "swarmGroupId",
@@ -172,6 +178,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "hookExternalContentSource",
   "acp",
   "quotaSuspension",
+  "visibility",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 
 type ReservedSessionEntrySlotKey = Extract<

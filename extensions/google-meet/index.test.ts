@@ -12,23 +12,17 @@ import {
 import {
   convertMeetingTtsAudioForBridge,
   createLocalMeetingRealtimeAudioTransport,
+  createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHealth,
   type MeetingRealtimeAudioTransport,
-  type MeetingRealtimeToolCallParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";
-import {
-  consultOpenClawAgentForGoogleMeet,
-  handleGoogleMeetRealtimeConsultToolCall,
-  resolveGoogleMeetRealtimeTools,
-} from "./src/agent-consult.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
@@ -115,23 +109,15 @@ function createEmptyMeetingRealtimeAudioEngineHealth(): MeetingRealtimeAudioEngi
 }
 
 function createGoogleMeetTestEngineBindings(params: {
-  config: GoogleMeetConfig;
-  fullConfig: Parameters<typeof consultOpenClawAgentForGoogleMeet>[0]["fullConfig"];
-  runtime: Parameters<typeof consultOpenClawAgentForGoogleMeet>[0]["runtime"];
-  logger: Parameters<typeof consultOpenClawAgentForGoogleMeet>[0]["logger"];
+  config: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["config"];
+  fullConfig: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["fullConfig"];
+  runtime: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["runtime"];
+  logger: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["logger"];
 }) {
-  return {
-    platform: {
-      displayName: "Google Meet",
-      logScope: "[google-meet]",
-      sessionIdPrefix: "google-meet",
-    },
-    consultAgent: (consult: MeetingAgentConsultParams) =>
-      consultOpenClawAgentForGoogleMeet({ ...params, ...consult }),
-    tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
-    handleToolCall: (call: MeetingRealtimeToolCallParams) =>
-      handleGoogleMeetRealtimeConsultToolCall({ ...params, ...call }),
-  };
+  return createMeetingRealtimeEngineBindings({
+    platform: GOOGLE_MEET_PLATFORM_ADAPTER,
+    ...params,
+  });
 }
 
 type TestLocalAgentEngineParams = Omit<
@@ -5950,7 +5936,7 @@ describe("google-meet plugin", () => {
     expect(joinArgs.mode).toBe("bidi");
   });
 
-  it("resets test speech output baselines when another agent owns the old session", async () => {
+  it("resets test speech output and loopback baselines when another agent owns the old session", async () => {
     const runtime = new GoogleMeetRuntime({
       config: resolveGoogleMeetConfig({}),
       fullConfig: {} as never,
@@ -5976,7 +5962,13 @@ describe("google-meet plugin", () => {
       chrome: {
         audioBackend: "blackhole-2ch",
         launched: true,
-        health: { audioOutputActive: true, lastOutputBytes: 100 },
+        health: {
+          audioOutputActive: true,
+          lastOutputBytes: 100,
+          outputLoopbackSignalBytes: 200,
+          outputGeneration: 10,
+          verifiedOutputGeneration: 10,
+        },
       },
       notes: [],
     };
@@ -5987,7 +5979,13 @@ describe("google-meet plugin", () => {
       chrome: {
         audioBackend: "blackhole-2ch",
         launched: true,
-        health: { audioOutputActive: true, lastOutputBytes: 1 },
+        health: {
+          audioOutputActive: true,
+          lastOutputBytes: 1,
+          outputLoopbackSignalBytes: 2,
+          outputGeneration: 1,
+          verifiedOutputGeneration: 1,
+        },
       },
     };
     vi.spyOn(runtime, "list").mockReturnValue([oldSession]);
@@ -6003,7 +6001,7 @@ describe("google-meet plugin", () => {
     expect(result.speechOutputTimedOut).toBe(false);
   });
 
-  it("keeps the pre-join test speech baseline when reusing the same session", async () => {
+  it("keeps the pre-join output and loopback baselines when reusing the same session", async () => {
     const runtime = new GoogleMeetRuntime({
       config: resolveGoogleMeetConfig({}),
       fullConfig: {} as never,
@@ -6029,13 +6027,22 @@ describe("google-meet plugin", () => {
       chrome: {
         audioBackend: "blackhole-2ch",
         launched: true,
-        health: { audioOutputActive: true, lastOutputBytes: 10 },
+        health: {
+          audioOutputActive: true,
+          lastOutputBytes: 10,
+          outputLoopbackSignalBytes: 20,
+          outputGeneration: 1,
+          verifiedOutputGeneration: 1,
+        },
       },
       notes: [],
     };
     vi.spyOn(runtime, "list").mockReturnValue([session]);
     vi.spyOn(runtime, "join").mockImplementation(async () => {
       session.chrome!.health!.lastOutputBytes = 11;
+      session.chrome!.health!.outputLoopbackSignalBytes = 21;
+      session.chrome!.health!.outputGeneration = 2;
+      session.chrome!.health!.verifiedOutputGeneration = 2;
       return { session, spoken: true };
     });
 
@@ -6045,6 +6052,58 @@ describe("google-meet plugin", () => {
     });
 
     expect(result.speechOutputVerified).toBe(true);
+    expect(result.speechOutputTimedOut).toBe(false);
+  });
+
+  it("does not verify speech from fresh output bytes without fresh loopback signal", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+    const session: GoogleMeetSession = {
+      id: "meet_1",
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome",
+      mode: "agent",
+      agentId: "main",
+      state: "active",
+      createdAt: "2026-04-27T00:00:00.000Z",
+      updatedAt: "2026-04-27T00:00:00.000Z",
+      participantIdentity: "signed-in Google Chrome profile",
+      realtime: {
+        enabled: true,
+        strategy: "agent",
+        transcriptionProvider: "openai",
+        toolPolicy: "safe-read-only",
+      },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: {
+          audioOutputActive: true,
+          lastOutputBytes: 10,
+          outputLoopbackSignalBytes: 20,
+          outputGeneration: 1,
+          verifiedOutputGeneration: 1,
+        },
+      },
+      notes: [],
+    };
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
+    vi.spyOn(runtime, "join").mockImplementation(async () => {
+      session.chrome!.health!.lastOutputBytes = 11;
+      session.chrome!.health!.outputGeneration = 2;
+      return { session, spoken: true };
+    });
+
+    const result = await runtime.testSpeech({
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    });
+
+    expect(result.speechOutputVerified).toBe(false);
     expect(result.speechOutputTimedOut).toBe(false);
   });
 
