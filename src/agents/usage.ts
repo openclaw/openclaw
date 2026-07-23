@@ -37,6 +37,9 @@ export type UsageLike = {
   input_tokens_details?: { cached_tokens?: number };
   // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
   prompt_tokens_details?: { cached_tokens?: number };
+  // MiniMax reports cache hits in a top-level prompt_cache_hit_tokens field
+  // (prompt_tokens already includes cached tokens).
+  prompt_cache_hit_tokens?: number;
   // Some agents/logs emit alternate naming.
   totalTokens?: number;
   total_tokens?: number;
@@ -137,7 +140,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
       raw.input_tokens_details?.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+      raw.prompt_tokens_details?.cached_tokens ??
+      raw.prompt_cache_hit_tokens,
   );
 
   const rawInputValue =
@@ -152,7 +156,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const usesOpenAIStylePromptTotals =
     raw.cached_tokens !== undefined ||
     raw.input_tokens_details?.cached_tokens !== undefined ||
-    raw.prompt_tokens_details?.cached_tokens !== undefined;
+    raw.prompt_tokens_details?.cached_tokens !== undefined ||
+    raw.prompt_cache_hit_tokens !== undefined;
 
   // Some providers (shared model runtime OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
