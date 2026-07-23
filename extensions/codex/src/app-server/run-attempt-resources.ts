@@ -170,9 +170,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       agentId: sessionAgentId,
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       isRelayHealthy: () =>
-        state.nativeHookRelay !== undefined &&
-        state.nativeHookRelay.expiresAtMs > Date.now() &&
-        !runAbortController.signal.aborted,
+        state.nativeHookRelay?.isRegistered() === true && !runAbortController.signal.aborted,
     });
   };
   const releaseCurrentRoute = () => {

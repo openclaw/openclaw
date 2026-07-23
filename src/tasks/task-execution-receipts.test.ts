@@ -79,6 +79,9 @@ describe("task execution receipts", () => {
       expect(
         evaluateTaskExecutionGate({ taskId: task.taskId, gate: "green", now: 10_000 }).ok,
       ).toBe(false);
+      append("heartbeat");
+      append("relay_health");
+      append("connector_health");
       append("branch");
       expect(
         evaluateTaskExecutionGate({ taskId: task.taskId, gate: "running_code", now: 10_000 }),
@@ -99,10 +102,6 @@ describe("task execution receipts", () => {
       append("deploy");
       append("canary");
       append("readback");
-      append("heartbeat");
-      append("relay_health");
-      append("connector_health");
-
       expect(
         evaluateTaskExecutionGate({ taskId: task.taskId, gate: "green", now: 10_000 }),
       ).toEqual({

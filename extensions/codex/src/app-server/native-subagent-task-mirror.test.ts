@@ -1,5 +1,4 @@
 // Codex tests cover native subagent task mirror plugin behavior.
-/* eslint-disable max-lines -- mirrors the production lifecycle matrix in one suite */
 import { describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,
@@ -180,66 +179,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
     expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
     expect(JSON.stringify(vi.mocked(runtime.recordExecutionReceipt).mock.calls)).not.toContain(
       "raw-secret-value",
-    );
-    mirror.dispose();
-  });
-
-  it("records only structured artifact receipts from completed runtime items", () => {
-    const runtime = createRuntime();
-    const mirror = new CodexNativeSubagentTaskMirror(
-      { parentThreadId: "parent-thread", now: () => 22_000 },
-      runtime,
-    );
-    mirror.handleNotification({
-      method: "thread/started",
-      params: {
-        thread: {
-          id: "child-thread",
-          status: { type: "active", activeFlags: [] },
-          source: {
-            subAgent: { thread_spawn: { parent_thread_id: "parent-thread", depth: 1 } },
-          },
-        },
-      },
-    });
-
-    mirror.handleNotification({
-      method: "item/completed",
-      params: {
-        threadId: "child-thread",
-        item: {
-          type: "commandExecution",
-          status: "completed",
-          aggregatedOutput: "I created a PR and deployed green",
-          executionReceipts: [
-            { kind: "branch", status: "ok", detail: { name: "fix/receipt-gates" } },
-            { kind: "diff", status: "ok", detail: { readable: true, files: 2 } },
-          ],
-        },
-      },
-    });
-
-    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith({
-      runId: "codex-thread:child-thread",
-      kind: "branch",
-      status: "ok",
-      recordedAt: 22_000,
-      summary: undefined,
-      detail: { name: "fix/receipt-gates" },
-    });
-    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith({
-      runId: "codex-thread:child-thread",
-      kind: "diff",
-      status: "ok",
-      recordedAt: 22_000,
-      summary: undefined,
-      detail: { readable: true, files: 2 },
-    });
-    expect(runtime.recordExecutionReceipt).not.toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "pr" }),
-    );
-    expect(runtime.recordExecutionReceipt).not.toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "deploy" }),
     );
     mirror.dispose();
   });

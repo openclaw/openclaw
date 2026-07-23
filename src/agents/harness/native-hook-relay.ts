@@ -121,6 +121,8 @@ type NativeHookRelayRegistration = {
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
+  /** True only while this exact registration still owns the live relay and bridge. */
+  isRegistered: () => boolean;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   commandForEvent: (
     event: NativeHookRelayEvent,
@@ -461,6 +463,15 @@ export function registerNativeHookRelay(
   registerNativeHookRelayBridge(registration, stateDbPath);
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
+    isRegistered: () => {
+      const bridge = relayBridges.get(relayId);
+      return (
+        relays.get(relayId) === registration &&
+        bridge !== undefined &&
+        bridge.server.listening &&
+        registration.expiresAtMs > Date.now()
+      );
+    },
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommandWithStateDatabase({

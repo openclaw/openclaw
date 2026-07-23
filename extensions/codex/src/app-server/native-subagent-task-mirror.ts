@@ -1,9 +1,9 @@
-/* eslint-disable max-lines -- native child lifecycle projection remains one cohesive state machine */
 /**
  * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
  * runtime rows so parent sessions can observe child progress.
  */
 import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { projectCodexNativeExecutionReceipts } from "./native-subagent-execution-receipts.js";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -127,7 +127,13 @@ export class CodexNativeSubagentTaskMirror {
             detail: { itemType },
           });
           if (item) {
-            this.recordStructuredArtifactReceipts(runId, item, failed);
+            for (const receipt of projectCodexNativeExecutionReceipts(item)) {
+              this.runtime.recordExecutionReceipt({
+                runId,
+                ...receipt,
+                recordedAt: this.now(),
+              });
+            }
           }
         }
       }
@@ -535,33 +541,6 @@ export class CodexNativeSubagentTaskMirror {
     this.armSupervision(runId);
   }
 
-  private recordStructuredArtifactReceipts(
-    runId: string,
-    item: JsonObject,
-    itemFailed: boolean,
-  ): void {
-    const receipts = Array.isArray(item.executionReceipts) ? item.executionReceipts : [];
-    for (const candidate of receipts) {
-      if (!isJsonObject(candidate)) {
-        continue;
-      }
-      const kind = readExecutionArtifactKind(candidate);
-      if (!kind) {
-        continue;
-      }
-      const status = readString(candidate, "status") === "error" || itemFailed ? "error" : "ok";
-      const detail = isJsonObject(candidate.detail) ? candidate.detail : undefined;
-      this.runtime.recordExecutionReceipt({
-        runId,
-        kind,
-        status,
-        recordedAt: this.now(),
-        summary: trimOptional(readString(candidate, "summary")),
-        ...(detail ? { detail } : {}),
-      });
-    }
-  }
-
   private armSupervision(runId: string): void {
     this.clearSupervision(runId);
     const timer = setTimeout(() => {
@@ -596,26 +575,6 @@ export class CodexNativeSubagentTaskMirror {
       progressSummary: `Stalled: ${summary}`,
     });
   }
-}
-
-const EXECUTION_ARTIFACT_KINDS = new Set([
-  "branch",
-  "diff",
-  "commit",
-  "tests",
-  "pr",
-  "deploy",
-  "canary",
-  "readback",
-] as const);
-
-function readExecutionArtifactKind(
-  value: JsonObject,
-): "branch" | "diff" | "commit" | "tests" | "pr" | "deploy" | "canary" | "readback" | undefined {
-  const kind = readString(value, "kind");
-  return kind && EXECUTION_ARTIFACT_KINDS.has(kind as never)
-    ? (kind as "branch" | "diff" | "commit" | "tests" | "pr" | "deploy" | "canary" | "readback")
-    : undefined;
 }
 
 /** Converts a Codex child thread id into the OpenClaw task-runtime run id. */

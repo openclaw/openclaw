@@ -202,6 +202,13 @@ export function evaluateTaskExecutionGate(params: {
       missing.push(kind);
     }
   };
+  requireOk("relay_health");
+  requireOk("connector_health");
+  const heartbeat = latest.get("heartbeat");
+  const period = params.supervisionPeriodMs ?? 60_000;
+  if (heartbeat?.status !== "ok" || (params.now ?? Date.now()) - heartbeat.recordedAt > period) {
+    missing.push("fresh_heartbeat");
+  }
   if (
     params.gate === "running_code" ||
     params.gate === "built" ||
@@ -220,15 +227,6 @@ export function evaluateTaskExecutionGate(params: {
   }
   if (params.gate === "delivered" || params.gate === "green") {
     requireOk("pr");
-  }
-  if (params.gate === "healthy" || params.gate === "green") {
-    requireOk("relay_health");
-    requireOk("connector_health");
-    const heartbeat = latest.get("heartbeat");
-    const period = params.supervisionPeriodMs ?? 60_000;
-    if (heartbeat?.status !== "ok" || (params.now ?? Date.now()) - heartbeat.recordedAt > period) {
-      missing.push("fresh_heartbeat");
-    }
   }
   if (params.gate === "green") {
     requireOk("deploy");
