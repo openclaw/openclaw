@@ -617,14 +617,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  // chat.update cannot preserve custom authorship. Use native streaming when
-  // possible; otherwise keep identity intact with one final postMessage.
-  const shouldUseDraftStream =
-    !hasSlackCustomIdentity &&
-    shouldInitializeSlackDraftStream({
-      previewStreamingEnabled,
-      useStreaming,
-    });
+  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
+    previewStreamingEnabled,
+    useStreaming,
+  });
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
@@ -1287,6 +1283,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       info.kind === "final" &&
       ttsSupplement &&
       draftStream &&
+      !hasSlackCustomIdentity &&
       !draftPreviewCommitted &&
       !observedFinalReplyDelivery &&
       previewStreamingEnabled &&
@@ -1372,6 +1369,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             : undefined,
         buildFinalEdit: () => {
           if (
+            hasSlackCustomIdentity ||
             !previewStreamingEnabled ||
             (reply.hasMedia && !ttsSupplement) ||
             payload.isError ||
@@ -1473,7 +1471,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         token: ctx.botToken,
         accountId: account.accountId,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
-        identity: slackIdentity,
+        // Customized Slack messages cannot be deleted. Keep the temporary
+        // preview disposable and apply custom identity to the final delivery.
+        ...(!hasSlackCustomIdentity && slackIdentity ? { identity: slackIdentity } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {

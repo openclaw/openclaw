@@ -248,12 +248,8 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "cancel" },
     { kind: "idle" },
   ],
-  // Edit-preview tier: native transport ineligible → draft post + throttled
-  // chat.update, and the final promotes the draft in place. The custom-identity
-  // flavor of this tier is structurally unreachable: dispatch.ts disables the
-  // draft stream whenever a custom identity is set because chat.update cannot
-  // preserve custom authorship (identity turns instead deliver one final
-  // chat.postMessage), so no golden exists for it.
+  // Edit-preview tier: native transport ineligible → identity-aware draft
+  // post + throttled chat.update, and the final promotes the draft in place.
   "preview-edit-fallback": [
     { kind: "reply-start" },
     { kind: "partial", text: PREVIEW_PARTIAL_ONE },

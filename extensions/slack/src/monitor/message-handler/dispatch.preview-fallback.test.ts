@@ -1229,15 +1229,57 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
-  it("uses the relay identity when the agent has no explicit Slack identity", async () => {
+  it("uses a disposable portable preview before custom-identity final delivery", async () => {
     const relayIdentity = { username: "Nik Team Claw" };
+    const draftStream = {
+      ...createDraftStreamStub(),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
 
-    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ identity: expect.anything() }),
+    );
     expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+  });
+
+  it("clears a disposable preview before custom-identity media delivery", async () => {
+    const relayIdentity = { username: "Nik Team Claw" };
+    const draftStream = {
+      ...createDraftStreamStub(),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "Photo", mediaUrl: "https://example.com/a.png" },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ identity: expect.anything() }),
+    );
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const params = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(params, { replyThreadTs: THREAD_TS, identity: relayIdentity });
+    expect(params.replies).toEqual([{ text: "Photo", mediaUrl: "https://example.com/a.png" }]);
   });
 
   it("uses supported native Slack streaming authorship when a custom identity is active", async () => {
