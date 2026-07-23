@@ -659,4 +659,33 @@ describe("message hook mappers", () => {
       groupId: "demo-chat:chat:456",
     });
   });
+
+  it("does not fall back after plugin resolver explicitly returns null", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "null-rejector",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "null-rejector", label: "Null rejector" }),
+            messaging: {
+              resolveInboundConversation: () => null,
+            },
+          },
+        },
+      ]),
+    );
+
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "null-rejector",
+        Surface: "null-rejector",
+        OriginatingChannel: "null-rejector",
+        To: "channel:room-123",
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical).conversationId).toBeUndefined();
+    expect(toPluginInboundClaimEvent(canonical).conversationId).toBeUndefined();
+  });
 });

@@ -322,8 +322,11 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
         isGroup: canonical.isGroup,
       })
     : undefined;
+  // A null return from the plugin resolver is an explicit rejection — do not
+  // fall through to generic prefix stripping.  Only undefined (resolver not
+  // invoked or unavailable) retains fallback behaviour.  This matches the
+  // contract in src/channels/conversation-resolution.ts.
   if (pluginResolved === null) {
-    // A plugin-owned null is an explicit rejection, so generic parsing must not reclaim it.
     return {};
   }
   if (pluginResolved) {
