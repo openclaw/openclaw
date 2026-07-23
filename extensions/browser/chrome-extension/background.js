@@ -553,94 +553,100 @@ function scheduleReconnect() {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   void (async () => {
-    switch (msg?.type) {
-      case "getStatus": {
-        const { relayUrl } = await getConfig();
-        const shared = await listSharedTabs();
-        sendResponse({
-          paired: Boolean(relayUrl),
-          state: relayState,
-          sharedTabCount: shared.length,
-        });
-        return;
-      }
-      case "pair": {
-        const parsed = parsePairingString(msg.pairingString);
-        if (!parsed) {
-          sendResponse({ ok: false, error: "Invalid pairing string." });
-          return;
-        }
-        await chrome.storage.local.set({
-          relayUrl: parsed.relayUrl,
-          token: parsed.token,
-          groupColor: nearestGroupColor(msg.groupColor),
-        });
-        reconnectAttempt = 0;
-        clearRelayOpeningDeadline();
-        relayWs?.close();
-        relayWs = null;
-        await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
-        await connectRelay();
-        await copilot.refreshConfig();
-        sendResponse({ ok: true });
-        return;
-      }
-      case "unpair": {
-        await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
-        clearRelayOpeningDeadline();
-        relayWs?.close();
-        relayWs = null;
-        setBadge("off");
-        await copilot.refreshConfig();
-        sendResponse({ ok: true });
-        return;
-      }
-      case "toggleShareTab": {
-        const tabId = msg.tabId;
-        if (typeof tabId !== "number") {
-          sendResponse({ ok: false, error: "No tab." });
-          return;
-        }
-        if (await isTabShared(tabId)) {
-          await detachDebugger(tabId);
-          await removeTabFromOpenClawGroup(tabId);
-          scheduleTabsSync();
-          sendResponse({ ok: true, shared: false });
-        } else {
-          await addTabToOpenClawGroup(tabId);
-          scheduleTabsSync();
-          sendResponse({ ok: true, shared: true });
-        }
-        await copilot.onConsentChanged();
-        return;
-      }
-      case "isTabShared": {
-        sendResponse({ shared: await isTabShared(msg.tabId) });
-        return;
-      }
-      case "sendPageToOpenClaw": {
-        if (typeof msg.tabId !== "number") {
-          sendResponse({ ok: false, error: "No tab." });
-          return;
-        }
-        try {
-          await sendPageToOpenClaw(msg.tabId, msg.note);
-          sendResponse({ ok: true });
-        } catch (error) {
+    try {
+      switch (msg?.type) {
+        case "getStatus": {
+          const { relayUrl } = await getConfig();
+          const shared = await listSharedTabs();
           sendResponse({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
+            paired: Boolean(relayUrl),
+            state: relayState,
+            sharedTabCount: shared.length,
           });
+          return;
         }
-        return;
+        case "pair": {
+          const parsed = parsePairingString(msg.pairingString);
+          if (!parsed) {
+            sendResponse({ ok: false, error: "Invalid pairing string." });
+            return;
+          }
+          await chrome.storage.local.set({
+            relayUrl: parsed.relayUrl,
+            token: parsed.token,
+            groupColor: nearestGroupColor(msg.groupColor),
+          });
+          reconnectAttempt = 0;
+          clearRelayOpeningDeadline();
+          relayWs?.close();
+          relayWs = null;
+          await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
+          await connectRelay();
+          await copilot.refreshConfig();
+          sendResponse({ ok: true });
+          return;
+        }
+        case "unpair": {
+          await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
+          clearRelayOpeningDeadline();
+          relayWs?.close();
+          relayWs = null;
+          setBadge("off");
+          await copilot.refreshConfig();
+          sendResponse({ ok: true });
+          return;
+        }
+        case "toggleShareTab": {
+          const tabId = msg.tabId;
+          if (typeof tabId !== "number") {
+            sendResponse({ ok: false, error: "No tab." });
+            return;
+          }
+          if (await isTabShared(tabId)) {
+            await detachDebugger(tabId);
+            await removeTabFromOpenClawGroup(tabId);
+            scheduleTabsSync();
+            sendResponse({ ok: true, shared: false });
+          } else {
+            await addTabToOpenClawGroup(tabId);
+            scheduleTabsSync();
+            sendResponse({ ok: true, shared: true });
+          }
+          await copilot.onConsentChanged();
+          return;
+        }
+        case "isTabShared": {
+          sendResponse({ shared: await isTabShared(msg.tabId) });
+          return;
+        }
+        case "sendPageToOpenClaw": {
+          if (typeof msg.tabId !== "number") {
+            sendResponse({ ok: false, error: "No tab." });
+            return;
+          }
+          try {
+            await sendPageToOpenClaw(msg.tabId, msg.note);
+            sendResponse({ ok: true });
+          } catch (error) {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          return;
+        }
+        case "prepareCopilotPanel": {
+          const options = await copilot.preparePanel(msg.tabId);
+          sendResponse({ ok: true, ...options });
+          return;
+        }
+        default:
+          sendResponse({ ok: false, error: "unknown message" });
       }
-      case "prepareCopilotPanel": {
-        const options = await copilot.preparePanel(msg.tabId);
-        sendResponse({ ok: true, ...options });
-        return;
-      }
-      default:
-        sendResponse({ ok: false, error: "unknown message" });
+    } catch (error) {
+      // Any throw in the async handler must still answer the caller; without this the
+      // popup/side-panel awaits a response that never arrives and its UI freezes.
+      sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
     }
   })();
   return true; // keep sendResponse alive for the async path
