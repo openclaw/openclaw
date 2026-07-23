@@ -833,6 +833,28 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("accepts emoji forum topic names that exceed 128 UTF-16 code units", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.editForumTopic.mockResolvedValue(true);
+
+    await editForumTopicTelegram("-1001234567890", 271, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      name: "😀".repeat(65),
+    });
+
+    expect(botApi.editForumTopic).toHaveBeenCalledWith("-1001234567890", 271, {
+      name: "😀".repeat(65),
+    });
+  });
+
   it("rejects empty topic edits before creating a Telegram client", async () => {
     botCtorSpy.mockClear();
 
@@ -4769,6 +4791,22 @@ describe("createForumTopicTelegram", () => {
     });
   }
 
+  it("accepts emoji topic names that exceed 128 UTF-16 code units", async () => {
+    const createForumTopic = vi.fn().mockResolvedValue({
+      message_thread_id: 400,
+      name: "🎃".repeat(65),
+    });
+    const api = { createForumTopic } as unknown as Bot["api"];
+
+    await createForumTopicTelegram("-1001234567890", "🎃".repeat(65), {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(createForumTopic).toHaveBeenCalledWith("-1001234567890", "🎃".repeat(65), undefined);
+  });
+
   it("rejects an invalid topic name before creating a Telegram client", async () => {
     botCtorSpy.mockClear();
 
@@ -4779,6 +4817,16 @@ describe("createForumTopicTelegram", () => {
       }),
     ).rejects.toThrow("Forum topic name is required");
     expect(botCtorSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects topic names exceeding 128 code points", async () => {
+    await expect(
+      createForumTopicTelegram("-1001234567890", "a".repeat(129), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api: { createForumTopic: vi.fn() } as unknown as Bot["api"],
+      }),
+    ).rejects.toThrow("128 characters or fewer");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
