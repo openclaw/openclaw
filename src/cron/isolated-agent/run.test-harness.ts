@@ -105,7 +105,7 @@ export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 export const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
-const ensureAgentWorkspaceMock = createMock();
+export const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
 export const isThinkingLevelSupportedMock = createMock();
@@ -121,6 +121,7 @@ const isExternalHookSessionMock = createMock();
 const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
+export const loadModelCatalogOwnerMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
 vi.mock("./run.runtime.js", async () => ({
@@ -177,10 +178,6 @@ vi.mock("./run-context.runtime.js", () => ({
   lookupContextTokens: lookupContextTokensMock,
 }));
 
-vi.mock("./run-model-catalog.runtime.js", () => ({
-  loadPreparedModelCatalog: loadModelCatalogMock,
-}));
-
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
@@ -230,7 +227,8 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogOwnerMock,
+  resolveAgentConfig: resolveAgentConfigMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
@@ -565,6 +563,23 @@ function resetRunConfigMocks(): void {
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
+  loadModelCatalogOwnerMock.mockImplementation(
+    async (params: {
+      agentId?: string;
+      agentDir: string;
+      config: object;
+      workspaceDir: string;
+    }) => ({
+      agentId: params.agentId ?? "default",
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      modelCatalog: {
+        entries: await loadModelCatalogMock(params),
+        routeVariants: [],
+      },
+    }),
+  );
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
 

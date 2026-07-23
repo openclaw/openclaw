@@ -15,6 +15,23 @@ vi.mock("../agents/embedded-agent.js", () => ({
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalog,
   loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
+  loadPublishedPreparedModelCatalogOwnerSnapshot: vi.fn(
+    async (params: {
+      agentId?: string;
+      agentDir?: string;
+      config?: object;
+      workspaceDir?: string;
+    }) => ({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      agentDir: params.agentDir ?? "/tmp/cron-agent",
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      config: params.config ?? {},
+      modelCatalog: {
+        entries: await loadPreparedModelCatalog(params),
+        routeVariants: [],
+      },
+    }),
+  ),
 }));
 
 vi.mock("../agents/model-selection.js", async () => {

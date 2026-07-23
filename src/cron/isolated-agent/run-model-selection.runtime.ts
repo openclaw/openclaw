@@ -1,7 +1,8 @@
 // Runtime model-selection seam for isolated cron agent runs.
-export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+export { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 export { resolveSubagentModelConfigSelectionResult } from "../../agents/agent-scope.js";
-export { loadPublishedPreparedModelCatalog as loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+export { loadPublishedPreparedModelCatalogOwnerSnapshot as loadPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 export {
   getModelRefStatus,
   normalizeModelSelection,

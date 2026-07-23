@@ -4,12 +4,15 @@ import {
   clearCliSessionMock,
   clearFastTestEnv,
   getCliSessionBindingMock,
+  ensureAgentWorkspaceMock,
+  ensureRuntimePluginsLoadedMock,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
   isThinkingLevelSupportedMock,
   loadModelCatalogMock,
+  loadModelCatalogOwnerMock,
   resolveAgentConfigMock,
   resolveAgentModelFallbacksOverrideMock,
   resolveAllowedModelRefMock,
@@ -142,6 +145,51 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
 
   afterEach(() => {
     restoreFastTestEnv(previousFastTestEnv);
+  });
+
+  it("builds cron context from the published replacement owner", async () => {
+    const callerConfig = { agents: { defaults: { model: "anthropic/caller" } } };
+    const ownerConfig = {
+      agents: {
+        defaults: { model: "google/gemini-2.0-flash" },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const ownerCatalog = [{ provider: "google", id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" }];
+    loadModelCatalogOwnerMock.mockResolvedValueOnce({
+      agentId: "main",
+      agentDir: "/tmp/owner-agent",
+      workspaceDir: "/tmp/owner-workspace",
+      config: ownerConfig,
+      modelCatalog: { entries: ownerCatalog, routeVariants: [] },
+    });
+    ensureAgentWorkspaceMock.mockImplementationOnce(async ({ dir }: { dir: string }) => ({ dir }));
+    runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({ cfg: callerConfig, agentId: "worker" }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
+      config: callerConfig,
+      agentId: "worker",
+      agentDir: "/tmp/agent-dir",
+      workspaceDir: "/tmp/workspace",
+      readOnly: true,
+    });
+    expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ dir: "/tmp/owner-workspace" }),
+    );
+    expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining(ownerConfig),
+        workspaceDir: "/tmp/owner-workspace",
+      }),
+    );
+    expect(resolveCronSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: ownerConfig, agentId: "main" }),
+    );
   });
 
   it("passes the cron payload model override to runWithModelFallback", async () => {
