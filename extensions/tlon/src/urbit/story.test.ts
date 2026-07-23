@@ -466,6 +466,24 @@ describe("markdownToStory list rendering", () => {
     ]);
   });
 
+  it("preserves blank-separated siblings after an unsupported list item", () => {
+    expect(markdownToStory("- # heading\n\n- sibling")).toEqual([
+      { inline: ["- # heading"] },
+      { inline: ["- sibling"] },
+    ]);
+  });
+
+  it("keeps ordinary inline Markdown outside loose-list preservation", () => {
+    expect(markdownToStory("**bold**")).toEqual([{ inline: [{ bold: ["bold"] }] }]);
+  });
+
+  it("keeps the unsupported outer marker across nested marker styles", () => {
+    expect(markdownToStory("- # heading\n  * child\n\n- sibling")).toEqual([
+      { inline: ["- # heading", { break: null }, "  * child"] },
+      { inline: ["- sibling"] },
+    ]);
+  });
+
   it("does not let an empty list item interrupt a paragraph", () => {
     expect(markdownToStory("foo\n*")).toEqual([{ inline: ["foo", { break: null }, "*"] }]);
   });

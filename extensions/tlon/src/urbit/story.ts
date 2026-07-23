@@ -540,9 +540,20 @@ export function markdownToStory(markdown: string): Story {
   const story: Story = [];
   const lines = markdown.split("\n");
   let i = 0;
+  let preservedListMarkerKey: string | undefined;
 
   while (i < lines.length) {
     const line = expectDefined(lines[i], "Markdown line index is in bounds");
+    const lineListItem = parseMarkdownListItem(line);
+    if (
+      line.trim() !== "" &&
+      preservedListMarkerKey !== undefined &&
+      (lineListItem !== undefined
+        ? lineListItem.markerKey !== preservedListMarkerKey
+        : lineIndent(line) === 0)
+    ) {
+      preservedListMarkerKey = undefined;
+    }
 
     // Code block: ```lang\ncode\n```
     if (line.startsWith("```")) {
@@ -616,16 +627,22 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
-    const listing = parseListingBlock(lines, i);
+    const preservesLooseList =
+      preservedListMarkerKey !== undefined && lineListItem?.markerKey === preservedListMarkerKey;
+    const listing = preservesLooseList ? undefined : parseListingBlock(lines, i);
     if (listing) {
       story.push(...listing.verses);
       i = listing.nextIndex;
+      preservedListMarkerKey = undefined;
       continue;
+    }
+    if (lineListItem) {
+      preservedListMarkerKey = lineListItem.markerKey;
     }
 
     // If a list-like block cannot be represented without losing Markdown semantics,
     // preserve the whole block in the existing plain paragraph path.
-    let preserveListText = MARKDOWN_LIST_ITEM_PATTERN.test(line);
+    let preserveListText = preservesLooseList || MARKDOWN_LIST_ITEM_PATTERN.test(line);
 
     // Regular paragraph - collect consecutive non-empty lines
     const paragraphLines: string[] = [];
@@ -651,6 +668,9 @@ export function markdownToStory(markdown: string): Story {
         // Once one candidate is not safely representable, keep the remaining
         // paragraph byte-compatible instead of repeatedly reparsing its suffixes.
         preserveListText = true;
+        if (item) {
+          preservedListMarkerKey = item.markerKey;
+        }
       }
       paragraphLines.push(paragraphLine);
       i++;
