@@ -630,6 +630,30 @@ two-party event loops that do not go through the shared inbound reply runner.
     gateway.
 
   </Accordion>
+  <Accordion title="api.runtime.talk">
+    Open a plugin-owned voice conversation. OpenClaw handles realtime provider
+    setup, agent tool calls, workspace access, and turn coordination.
+
+    ```typescript
+    const session = await api.runtime.talk.openSession({
+      sessionKey: "agent:main:avatar",
+      onEvent(event) {
+        if (event.type === "audio") player.write(event.pcm);
+      },
+    });
+
+    session.sendAudio(microphonePcm);
+    session.cancelOutput();
+    session.close();
+    ```
+
+    `openSession` is available from Gateway-authenticated plugin routes that
+    declare `contracts.gatewayMethodDispatch`. Input and output are PCM16LE,
+    24 kHz mono audio. This is a trusted operator surface, not a plugin sandbox:
+    the caller may select an agent session and receive its raw Talk output. A
+    browser UI must obtain microphone permission before sending input audio.
+
+  </Accordion>
   <Accordion title="api.runtime.system">
     System-level utilities.
 

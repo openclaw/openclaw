@@ -15,6 +15,7 @@ import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
+import type { RealtimeVoiceOutputMediaEvent } from "../talk/output-media.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -373,6 +374,69 @@ describe("talk realtime gateway relay", () => {
         tools: [],
       }),
     ).toThrow("Realtime relay session expiry is outside the supported Date range");
+  });
+
+  it("keeps conversation direct while Gateway owns agent consultation", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          sendUserMessage: vi.fn(),
+          handleBargeIn: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    createTalkRealtimeRelaySession({
+      context: {
+        broadcastToConnIds: vi.fn(),
+        logGateway: { info: vi.fn(), warn: vi.fn() },
+      } as never,
+      connId: "conn-1",
+      cfg: {},
+      provider,
+      providerConfig: {},
+      instructions: "transcribe and wait",
+      tools: [
+        {
+          type: "function",
+          name: "browser-tool",
+          description: "browser tool",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      sessionKey: "agent:main:main",
+      manageAgentConsult: true,
+    });
+    await Promise.resolve();
+
+    expect(bridgeRequest?.autoRespondToAudio).toBe(true);
+    expect(bridgeRequest?.interruptResponseOnInputAudio).toBe(true);
+    expect(bridgeRequest?.tools).toEqual([expect.objectContaining({ name: "browser-tool" })]);
+  });
+
+  it("requires a session key for gateway-owned agent consultation", () => {
+    expect(() =>
+      createTalkRealtimeRelaySession({
+        context: {} as never,
+        connId: "conn-1",
+        provider: createIdleRelayProvider(),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        manageAgentConsult: true,
+      }),
+    ).toThrow("requires a session key");
   });
 
   function createAbortableRelayRunFixture(provider = createIdleRelayProvider()) {
@@ -1791,6 +1855,119 @@ describe("talk realtime gateway relay", () => {
           entry.payload.talkEvent.turnId === "turn-1",
       ),
     ).toBe(true);
+  });
+
+  it("sends exact output PCM and lifecycle to the session owner without changing relay delivery", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          handleBargeIn: vi.fn(() => request.onClearAudio("barge-in")),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    const broadcastToConnIds = vi.fn();
+    const mediaEvents: RealtimeVoiceOutputMediaEvent[] = [];
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+      sessionKey: "agent:main:main",
+      onOutputMediaEvent: (event) => {
+        mediaEvents.push(event);
+      },
+    });
+
+    bridgeRequest?.onReady?.();
+    bridgeRequest?.onAudio(Buffer.from([1, 2, 3, 4]));
+    await vi.waitFor(() =>
+      expect(mediaEvents.some((event) => event.type === "audio" && event.generation === 1)).toBe(
+        true,
+      ),
+    );
+    const listeningStatesBefore = mediaEvents.filter(
+      (event) => event.type === "state" && event.state === "listening",
+    ).length;
+    bridgeRequest?.onError?.(new Error("recoverable provider stream warning"));
+    await vi.waitFor(() =>
+      expect(
+        mediaEvents.filter((event) => event.type === "state" && event.state === "listening").length,
+      ).toBe(listeningStatesBefore + 1),
+    );
+    expect(mediaEvents.some((event) => event.type === "state" && event.state === "error")).toBe(
+      false,
+    );
+    cancelTalkRealtimeRelayTurn({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      reason: "barge-in",
+    });
+    await vi.waitFor(() =>
+      expect(mediaEvents.filter((event) => event.type === "clear")).toHaveLength(1),
+    );
+    bridgeRequest?.onAudio(Buffer.from([5, 6]));
+    await vi.waitFor(() =>
+      expect(mediaEvents.some((event) => event.type === "audio" && event.generation === 2)).toBe(
+        true,
+      ),
+    );
+    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+
+    await vi.waitFor(() =>
+      expect(mediaEvents.some((event) => event.type === "session.end")).toBe(true),
+    );
+    expect(mediaEvents.map((event) => event.type)).toEqual([
+      "session.start",
+      "state",
+      "state",
+      "state",
+      "audio",
+      "state",
+      "clear",
+      "state",
+      "audio",
+      "clear",
+      "state",
+      "session.end",
+    ]);
+    const audioEvents = mediaEvents.filter(
+      (event): event is Extract<RealtimeVoiceOutputMediaEvent, { type: "audio" }> =>
+        event.type === "audio",
+    );
+    expect(
+      audioEvents.map((event) => ({
+        generation: event.generation,
+        sequence: event.sequence,
+        ptsMs: event.ptsMs,
+        pcm: [...event.pcm],
+      })),
+    ).toEqual([
+      { generation: 1, sequence: 0, ptsMs: 0, pcm: [1, 2, 3, 4] },
+      { generation: 2, sequence: 0, ptsMs: 0, pcm: [5, 6] },
+    ]);
+    expect(
+      broadcastToConnIds.mock.calls
+        .map((call) => call[1] as { type?: string; audioBase64?: string })
+        .filter((event) => event.type === "audio")
+        .map((event) => event.audioBase64),
+    ).toEqual([
+      Buffer.from([1, 2, 3, 4]).toString("base64"),
+      Buffer.from([5, 6]).toString("base64"),
+    ]);
   });
 
   it("aborts linked agent consult runs when the relay turn is cancelled", () => {

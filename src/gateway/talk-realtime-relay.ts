@@ -5,10 +5,12 @@ import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/n
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  parseRealtimeVoiceAgentConsultArgs,
 } from "../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
 import {
@@ -26,18 +28,27 @@ import {
 import { readSpeakableRealtimeVoiceToolResult } from "../talk/consult-question.js";
 import type { RealtimeVoiceForcedConsultHandle } from "../talk/forced-consult-coordinator.js";
 import {
+  createRealtimeVoiceOutputMediaSession,
+  type RealtimeVoiceOutputMediaEvent,
+  type RealtimeVoiceOutputMediaSession,
+} from "../talk/output-media.js";
+import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
   type RealtimeVoiceAudioClearReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
+  type RealtimeVoiceToolCallEvent,
   type RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 import {
   createRealtimeVoiceSessionHarness,
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
-import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
+import type {
+  RealtimeVoiceBridgeSession,
+  RealtimeVoiceBridgeSessionParams,
+} from "../talk/session-runtime.js";
 import type { TalkEvent, TalkEventInput } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -123,7 +134,8 @@ type RelaySession = {
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
-  harness: RealtimeVoiceSessionHarness;
+  harness: RealtimeVoiceSessionHarness<unknown, ManagedAgentConsultMetadata>;
+  outputMedia?: RealtimeVoiceOutputMediaSession;
   sessionKey?: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
@@ -152,6 +164,12 @@ type RelaySession = {
   voiceTranscriptSeq: number;
   voiceTranscriptWrites: Promise<void>;
   pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
+  managedConsultResults: Map<string, string>;
+};
+
+type ManagedAgentConsultMetadata = {
+  handle: RealtimeVoiceForcedConsultHandle;
+  args?: RealtimeVoiceToolCallEvent["args"];
 };
 
 type CreateTalkRealtimeRelaySessionParams = {
@@ -166,7 +184,9 @@ type CreateTalkRealtimeRelaySessionParams = {
   sessionKey?: string;
   voice?: string;
   language?: string;
+  manageAgentConsult?: boolean;
   forceAgentConsultOnFinalTranscript?: boolean;
+  onOutputMediaEvent?: (event: RealtimeVoiceOutputMediaEvent) => void | Promise<void>;
 };
 
 type TalkRealtimeRelaySessionResult = {
@@ -301,6 +321,15 @@ export function ensureTalkRealtimeRelayVoiceSession(params: {
   for (const entry of buffered) {
     enqueueRelayVoiceTranscript(session, entry.role, entry.text);
   }
+}
+
+let gatewayAgentConsultRuntimePromise:
+  | Promise<typeof import("./talk-managed-agent-consult.runtime.js")>
+  | undefined;
+
+function resolveGatewayAgentConsultRuntime() {
+  gatewayAgentConsultRuntimePromise ??= import("./talk-managed-agent-consult.runtime.js");
+  return gatewayAgentConsultRuntimePromise;
 }
 
 function isWorkingToolResult(result: unknown): boolean {
@@ -654,6 +683,7 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
   abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
   session.bridge.close();
   closeRelayVoiceSession(session);
+  session.outputMedia?.end(reason);
   broadcastToOwner(session.context, session.connId, {
     relaySessionId: session.id,
     type: "close",
@@ -699,13 +729,22 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
+  const manageAgentConsult = params.manageAgentConsult === true;
+  if (manageAgentConsult && !params.sessionKey?.trim()) {
+    throw new Error("Gateway-owned realtime agent consult requires a session key");
+  }
   const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
   if (expiresAtMs === undefined) {
     throw new Error("Realtime relay session expiry is outside the supported Date range");
   }
-  const harness = createRealtimeVoiceSessionHarness({
+  const relayRef: { current?: RelaySession } = {};
+  const requesterSessionKey = params.sessionKey?.trim() ?? "";
+  const managedAgentId = manageAgentConsult
+    ? resolveAgentIdFromSessionKey(requesterSessionKey)
+    : undefined;
+  const harness = createRealtimeVoiceSessionHarness<unknown, ManagedAgentConsultMetadata>({
     talk: {
       sessionId: relaySessionId,
       mode: "realtime",
@@ -726,7 +765,100 @@ export function createTalkRealtimeRelaySession(
     },
     transcriptLookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
     captureBridgeEvents: false,
+    ...(manageAgentConsult && managedAgentId
+      ? {
+          talkback: {
+            debounceMs: 120,
+            logger: params.context.logGateway,
+            logPrefix: `[talk:${relaySessionId}] gateway agent`,
+            responseStyle: "Brief, natural spoken answer for a live voice conversation.",
+            fallbackText: "I hit an error while checking that. Please try again.",
+            consult: async ({ question, responseStyle, metadata }) => {
+              const relay = relayRef.current;
+              if (!relay) {
+                throw new Error("Realtime Talk session closed before the agent consult started");
+              }
+              const runtime = await resolveGatewayAgentConsultRuntime();
+              const toolArgs = metadata?.args ?? { question, responseStyle };
+              return await runtime.consultTalkManagedAgent({
+                cfg: params.cfg ?? params.context.getRuntimeConfig(),
+                logger: params.context.logGateway,
+                agentId: managedAgentId,
+                sessionKey: requesterSessionKey,
+                messageProvider: "talk",
+                lane: "talk",
+                runIdPrefix: `talk:${relaySessionId}`,
+                onRunStarted: (runId) =>
+                  registerTalkRealtimeRelayAgentRun({
+                    relaySessionId,
+                    connId: params.connId,
+                    sessionKey: requesterSessionKey,
+                    runId,
+                  }),
+                args: toolArgs,
+                transcript: relay.harness.transcript,
+                surface: "OpenClaw realtime Talk",
+                userLabel: "person",
+                assistantLabel: "voice assistant",
+                questionSourceLabel: "live microphone",
+                extraSystemPrompt:
+                  "You are the configured OpenClaw agent receiving a request from a realtime Talk session. Use the OpenClaw workspace and available tools when appropriate, complete the requested work, and return a concise result suitable for speech.",
+              });
+            },
+            deliver: (text, metadata) => {
+              const relay = relayRef.current;
+              if (!relay || relaySessions.get(relaySessionId) !== relay) {
+                return;
+              }
+              const handle = metadata?.handle;
+              const callIds = handle ? relay.harness.forcedConsults.nativeCallIds(handle) : [];
+              if (handle) {
+                relay.managedConsultResults.set(handle.id, text);
+                while (relay.managedConsultResults.size > 12) {
+                  const oldest = relay.managedConsultResults.keys().next().value;
+                  if (!oldest) {
+                    break;
+                  }
+                  relay.managedConsultResults.delete(oldest);
+                }
+              }
+              if (callIds.length === 0) {
+                relay.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+                if (handle) {
+                  relay.harness.forcedConsults.markDelivered(handle);
+                }
+                return;
+              }
+              void Promise.all(
+                callIds.map((callId) =>
+                  Promise.resolve(
+                    submitTalkRealtimeRelayToolResult({
+                      relaySessionId,
+                      connId: params.connId,
+                      callId,
+                      result: { text },
+                    }),
+                  ),
+                ),
+              )
+                .then(() => {
+                  if (handle) {
+                    relay.harness.forcedConsults.markDelivered(handle);
+                  }
+                })
+                .catch((error: unknown) => {
+                  params.context.logGateway.warn(
+                    `[talk:${relaySessionId}] managed consult result failed: ${formatErrorMessage(error)}`,
+                  );
+                });
+            },
+          },
+        }
+      : {}),
   });
+  const outputMedia = params.onOutputMediaEvent
+    ? createRealtimeVoiceOutputMediaSession({ onEvent: params.onOutputMediaEvent })
+    : undefined;
   const broadcastEvent = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEvent) =>
     broadcastToOwner(
       params.context,
@@ -743,8 +875,7 @@ export function createTalkRealtimeRelaySession(
   let currentOutputResponseId: string | undefined;
   let ready = false;
   let failureEmitted = false;
-  const relayRef: { current?: RelaySession } = {};
-  const bridge = harness.createBridge({
+  const bridgeParams: RealtimeVoiceBridgeSessionParams = {
     provider: params.provider,
     cfg: params.cfg,
     providerConfig: params.providerConfig,
@@ -752,7 +883,7 @@ export function createTalkRealtimeRelaySession(
     instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
-    interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
+    interruptResponseOnInputAudio: manageAgentConsult || !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
     markStrategy: "transport",
     audioSink: {
@@ -773,10 +904,13 @@ export function createTalkRealtimeRelaySession(
           },
           recorded?.outputAudioDelta,
         );
+        outputMedia?.sendAudio(audio);
       },
       clearAudio: (reason) => {
         const talkEvent = relayRef.current?.harness.completeOutputAudio(reason ?? "clear");
         broadcastEvent({ relaySessionId, type: "clear", ...(reason ? { reason } : {}) }, talkEvent);
+        outputMedia?.clear(reason ?? "cancel");
+        outputMedia?.setState("listening");
       },
       sendMark: (markName) => {
         const talkEvent = relayRef.current?.harness.completeOutputAudio("mark", { markName });
@@ -786,6 +920,15 @@ export function createTalkRealtimeRelaySession(
     onEvent: (event) => {
       if (event.direction !== "server") {
         return;
+      }
+      if (event.type === "input_audio_buffer.speech_started") {
+        outputMedia?.setState("listening");
+      } else if (
+        event.type === "input_audio_buffer.speech_stopped" ||
+        event.type === "input_audio_buffer.committed" ||
+        event.type === "response.created"
+      ) {
+        outputMedia?.setState("thinking");
       }
       if (
         event.type === "conversation.output_audio.delta" ||
@@ -803,6 +946,7 @@ export function createTalkRealtimeRelaySession(
         event.type === "response.done" ||
         event.type === "response.cancelled"
       ) {
+        outputMedia?.setState("listening");
         broadcastEvent(
           {
             relaySessionId,
@@ -878,13 +1022,76 @@ export function createTalkRealtimeRelaySession(
             });
           return;
         }
-        if (forceAgentConsultOnFinalTranscript) {
+        if (manageAgentConsult && forceAgentConsultOnFinalTranscript) {
+          if (!relay) {
+            return;
+          }
+          if (relay.harness.forcedConsults.hasRecent(question)) {
+            return;
+          }
+          relay.harness.forcedConsults.clearPending();
+          const handle = relay.harness.forcedConsults.prepare(question);
+          if (handle) {
+            relay.harness.forcedConsults.schedule(handle, FORCED_CONSULT_FALLBACK_DELAY_MS, () => {
+              relay.harness.forcedConsults.markStarted(handle);
+              runOutsideGatewayRootWorkAdmission(() =>
+                relay.harness.talkback?.enqueue(question, { handle }),
+              );
+            });
+          }
+        } else if (forceAgentConsultOnFinalTranscript) {
           scheduleForcedAgentConsult(relay, question);
         }
       }
     },
     onToolCall: (toolCall) => {
       const relay = relayRef.current;
+      if (relay && manageAgentConsult && toolCall.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+        const parsed = parseRealtimeVoiceAgentConsultArgs(toolCall.args);
+        let match = relay.harness.forcedConsults.recordNativeConsult(
+          toolCall.args,
+          toolCall.callId,
+        );
+        let handle = match.kind === "none" ? undefined : match.handle;
+        if (!handle) {
+          handle = relay.harness.forcedConsults.prepare(parsed.question);
+          if (handle) {
+            match = relay.harness.forcedConsults.recordNativeConsult(
+              toolCall.args,
+              toolCall.callId,
+            );
+          }
+        }
+        const working = submitRealtimeAgentConsultWorkingResponse(
+          relay,
+          toolCall.callId,
+          ensureRelayTurn(relay),
+        );
+        if (!handle) {
+          return working;
+        }
+        if (match.kind === "already_delivered") {
+          const text = relay.managedConsultResults.get(handle.id);
+          if (text) {
+            void Promise.resolve(working).then(() =>
+              submitTalkRealtimeRelayToolResult({
+                relaySessionId,
+                connId: params.connId,
+                callId: toolCall.callId,
+                result: { text },
+              }),
+            );
+          }
+          return working;
+        }
+        if (match.kind !== "in_flight") {
+          relay.harness.forcedConsults.markStarted(handle);
+          runOutsideGatewayRootWorkAdmission(() =>
+            relay.harness.talkback?.enqueue(parsed.question, { handle, args: toolCall.args }),
+          );
+        }
+        return working;
+      }
       let shouldSubmitWorkingResult = false;
       if (relay && toolCall.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
         const forcedConsult = relay.harness.forcedConsults.recordNativeConsult(
@@ -937,6 +1144,7 @@ export function createTalkRealtimeRelaySession(
     onReady: () => {
       ready = true;
       emit({ relaySessionId, type: "ready" }, { type: "session.ready", payload: null });
+      outputMedia?.setState("listening");
     },
     onError: (error) => {
       const issue = realtimeRelayIssue({
@@ -951,6 +1159,7 @@ export function createTalkRealtimeRelaySession(
         payload: issue,
         final: true,
       });
+      outputMedia?.setState(ready ? "listening" : "error");
     },
     onClose: (reason) => {
       const active = relaySessions.get(relaySessionId);
@@ -963,6 +1172,7 @@ export function createTalkRealtimeRelaySession(
       clearTimeout(active.cleanupTimer);
       abortRelayAgentRuns(active, "relay-closed");
       closeRelayVoiceSession(active);
+      active.outputMedia?.end(reason);
       if (!ready && !failureEmitted) {
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
@@ -981,13 +1191,22 @@ export function createTalkRealtimeRelaySession(
         { type: "session.closed", payload: { reason }, final: true },
       );
     },
-  });
+  };
+  let bridge: RealtimeVoiceBridgeSession;
+  try {
+    bridge = harness.createBridge(bridgeParams);
+  } catch (error) {
+    harness.close();
+    outputMedia?.end("error");
+    throw error;
+  }
   const relay: RelaySession = {
     id: relaySessionId,
     connId: params.connId,
     context: params.context,
     bridge,
     harness,
+    ...(outputMedia ? { outputMedia } : {}),
     sessionKey: params.sessionKey?.trim() || undefined,
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
@@ -1012,6 +1231,7 @@ export function createTalkRealtimeRelaySession(
     voiceTranscriptSeq: 0,
     voiceTranscriptWrites: Promise.resolve(),
     pendingVoiceTranscripts: [],
+    managedConsultResults: new Map(),
   };
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
@@ -1580,7 +1800,12 @@ export function cancelTalkRealtimeRelayTurn(params: {
       }
     }
   }
+  const outputGeneration = session.outputMedia?.generation;
   session.harness.handleBargeIn({ audioPlaybackActive: true }, noFallbackRelayOutputFlush);
+  if (session.outputMedia && session.outputMedia.generation === outputGeneration) {
+    session.outputMedia.clear(reason === "barge-in" ? "barge-in" : "cancel");
+  }
+  session.outputMedia?.setState("listening");
   abortRelayAgentRuns(session, reason);
   const cancelled = session.harness.talk.cancelTurn({
     turnId,
