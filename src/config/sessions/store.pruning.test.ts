@@ -652,26 +652,61 @@ describe("capEntryCount", () => {
     expect(store.old).toBeUndefined();
   });
 
-  it("preserves durable external conversation entries when capping", () => {
+  it("enforces the entry cap against durable conversations oldest-first, keeping always-protected (#112638)", () => {
     const now = Date.now();
-    const threadKey = "agent:main:discord:channel:123456:thread:987654";
+    // Durable conversation entries are exempt from age-based pruning but must remain evictable
+    // under the hard `maxEntries` cap, otherwise the store grows unbounded. Always-protected
+    // entries (main + model-locked harness) still survive regardless of age.
+    const mainKey = "agent:main:main";
+    const lockedKey = "agent:main:harness-owned:locked";
+    const oldestThread = "agent:main:slack:channel:C1:thread:1";
+    const olderThread = "agent:main:slack:channel:C2:thread:2";
+    const newerThread = "agent:main:discord:channel:123456:thread:987654";
+    const newestThread = "agent:main:telegram:group:-100:topic:9";
     const store = makeStore([
-      [threadKey, makeEntry(now - 5 * DAY_MS)],
-      ["oldest", makeEntry(now - 4 * DAY_MS)],
-      ["old", makeEntry(now - 3 * DAY_MS)],
-      ["recent", makeEntry(now - DAY_MS)],
-      ["newest", makeEntry(now)],
+      [mainKey, makeEntry(now - 100 * DAY_MS)],
+      [lockedKey, { ...makeEntry(now - 90 * DAY_MS), modelSelectionLocked: true }],
+      [oldestThread, makeEntry(now - 5 * DAY_MS)],
+      [olderThread, makeEntry(now - 4 * DAY_MS)],
+      [newerThread, makeEntry(now - 2 * DAY_MS)],
+      [newestThread, makeEntry(now - DAY_MS)],
     ]);
 
-    const evicted = capEntryCount(store, 3);
+    // maxEntries=4: 2 always-protected + budget for 2 durable => evict the 2 oldest threads.
+    const evicted = capEntryCount(store, 4);
 
     expect(evicted).toBe(2);
-    expect(Object.keys(store)).toHaveLength(3);
-    expect(store).toHaveProperty(threadKey);
-    expect(store).toHaveProperty("newest");
-    expect(store).toHaveProperty("recent");
-    expect(store.oldest).toBeUndefined();
-    expect(store.old).toBeUndefined();
+    expect(Object.keys(store)).toHaveLength(4);
+    expect(store).toHaveProperty(mainKey);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store).toHaveProperty(newerThread);
+    expect(store).toHaveProperty(newestThread);
+    expect(store[oldestThread]).toBeUndefined();
+    expect(store[olderThread]).toBeUndefined();
+  });
+
+  it("never evicts the agent primary main session under hard cap pressure (#112637)", () => {
+    const now = Date.now();
+    const mainKey = "agent:main:main";
+    // `main` is the oldest entry, so pre-fix it was the first eviction target once thread entries
+    // left zero removable budget. It is now always protected; the cap is instead honored by
+    // evicting the oldest durable threads.
+    const store = makeStore([
+      [mainKey, makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:channel:C1:thread:1", makeEntry(now - 3 * DAY_MS)],
+      ["agent:main:slack:channel:C2:thread:2", makeEntry(now - 2 * DAY_MS)],
+      ["agent:main:slack:channel:C3:thread:3", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    expect(store).toHaveProperty(mainKey);
+    expect(evicted).toBe(2);
+    expect(Object.keys(store)).toHaveLength(2);
+    // Newest durable thread survives; the two oldest threads are reclaimed.
+    expect(store).toHaveProperty("agent:main:slack:channel:C3:thread:3");
+    expect(store["agent:main:slack:channel:C1:thread:1"]).toBeUndefined();
+    expect(store["agent:main:slack:channel:C2:thread:2"]).toBeUndefined();
   });
 
   it("preserves model-locked harness sessions when capping", () => {
@@ -821,6 +856,17 @@ describe("enforceSessionDiskBudget", () => {
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it("always protects the agent's primary main session across agents", () => {
+    expect(isProtectedSessionMaintenanceEntry("agent:main:main", makeEntry(Date.now()))).toBe(true);
+    expect(isProtectedSessionMaintenanceEntry("agent:worker:main", makeEntry(Date.now()))).toBe(
+      true,
+    );
+    // A non-main, metadata-less session key remains disposable.
+    expect(isProtectedSessionMaintenanceEntry("agent:main:opaque", makeEntry(Date.now()))).toBe(
+      false,
+    );
+  });
+
   it("treats generated ACP bridge sessions as disposable", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
