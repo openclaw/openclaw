@@ -30,6 +30,8 @@ env:
   DOCKERHUB_REGISTRY: docker.io
   DOCKERHUB_IMAGE_NAME: openclaw/openclaw
 
+permissions: {}
+
 jobs:
   validate_manual_backfill:
     if: github.event_name == 'workflow_dispatch'

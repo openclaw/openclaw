@@ -44,6 +44,8 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"
 
+permissions: {}
+
 jobs:
   preview_plugins_clawhub:
     runs-on: ubuntu-latest
