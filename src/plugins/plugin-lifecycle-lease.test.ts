@@ -143,7 +143,9 @@ describe("plugin lifecycle lease", () => {
       await waitForPath(firstMarker);
       const second = runLeaseChild(childScript, ["second", ...childArgs]);
       await waitForPath(secondReady);
-      await waitForPath(secondResult);
+      // Wait for the child to close so its result write is fully flushed before
+      // reading; file existence alone can race with the write after open().
+      await second;
 
       let assertionError: unknown;
       try {

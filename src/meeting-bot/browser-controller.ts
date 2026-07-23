@@ -7,7 +7,7 @@ import type {
   MeetingManualAction,
   MeetingBrowserRequestCaller,
   MeetingPlatformAdapter,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,

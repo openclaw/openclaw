@@ -6085,17 +6085,20 @@ public struct SessionsFilesListParams: Codable, Sendable {
 public struct SessionsFilesListResult: Codable, Sendable {
     public let sessionkey: String
     public let root: String?
+    public let gitcheckout: Bool?
     public let files: [SessionFileEntry]
     public let browser: SessionFileBrowserResult?
 
     public init(
         sessionkey: String,
         root: String? = nil,
+        gitcheckout: Bool? = nil,
         files: [SessionFileEntry],
         browser: SessionFileBrowserResult? = nil)
     {
         self.sessionkey = sessionkey
         self.root = root
+        self.gitcheckout = gitcheckout
         self.files = files
         self.browser = browser
     }
@@ -6103,6 +6106,7 @@ public struct SessionsFilesListResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case root
+        case gitcheckout = "gitCheckout"
         case files
         case browser
     }

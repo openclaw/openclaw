@@ -93,11 +93,26 @@ export function applyChatSendManagedMediaFields(
   }
 }
 
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
-  return savedMedia.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType,
-  }));
+function buildChatSendUserTurnMedia(
+  savedMedia: SavedMedia[],
+  offloadedRefs: OffloadedRef[],
+): NonNullable<UserTurnInput["media"]> {
+  const offloadedRefsById = new Map(offloadedRefs.map((ref) => [ref.id, ref] as const));
+  return savedMedia.map((entry) => {
+    const offloadedRef = offloadedRefsById.get(entry.id);
+    return {
+      path: entry.path,
+      ...(offloadedRef
+        ? {
+            // Every offload keeps its claim-check alias so persisted marker
+            // ownership survives; only non-images skip native image hydration.
+            url: offloadedRef.mediaRef,
+            ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
+          }
+        : {}),
+      contentType: entry.contentType,
+    };
+  });
 }
 
 function buildChatSendPromptMedia(
@@ -251,10 +266,21 @@ export function prepareChatSendUserTurn(params: {
       ? getPersistedMediaForTranscript()
       : Promise.resolve([]);
   userTurn.setInputPromise(
-    preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia).then((media) => ({
-      ...userTurn.baseInput,
-      ...(media.length > 0 ? { media } : {}),
-    })),
+    preparedUserTurnMediaPromise
+      .then((media) => buildChatSendUserTurnMedia(media, attachments.offloadedRefs))
+      .then((media) => ({
+        ...userTurn.baseInput,
+        ...(media.length > 0 ? { media } : {}),
+        ...(media.length > 0 && attachments.imageOrder.length > 0
+          ? {
+              mediaImageLayout: {
+                // persistInboundImagesForTranscript emits image facts in this exact order,
+                // then appends non-images, so image slot ordinals are fact ordinals.
+                slots: attachments.imageOrder.map((kind, factIndex) => ({ kind, factIndex })),
+              },
+            }
+          : {}),
+      })),
   );
   const pluginBoundMediaFieldsPromise =
     attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0

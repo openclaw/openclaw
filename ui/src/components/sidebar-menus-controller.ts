@@ -1,5 +1,4 @@
-import { html, nothing } from "lit";
-import { state } from "lit/decorators.js";
+import { html, nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import {
   cancelRoutePreload,
@@ -7,8 +6,11 @@ import {
   scheduleRoutePreload,
   serializeSidebarEntry,
   type NavigationRouteId,
+  type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { ThemeMode } from "../app/theme.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -28,7 +30,6 @@ import {
   renderSidebarMoreMenu,
   renderSidebarNavRoute,
 } from "./app-sidebar-nav-menus.ts";
-import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
@@ -37,21 +38,87 @@ import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
   SidebarSessionMenuState,
+  SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
+import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import type { SessionOrganizerController } from "./session-organizer-controller.ts";
+import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
+
+type SidebarMenuAgent = {
+  id: string;
+  name?: string;
+  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
+};
+
+interface SidebarMenusControllerState {
+  customizeMenuPosition: { x: number; y: number } | null;
+  moreMenuPosition: { x: number; y: number } | null;
+  sessionMenu: SidebarSessionMenuState | null;
+  sessionMenuWork: SessionMenuWork | null;
+  sessionGroupMenu: SidebarSessionGroupMenuState | null;
+  sessionSortMenuPosition: { x: number; y: number } | null;
+  agentMenuPosition: { x: number; bottom: number } | null;
+  agentMenuFilter: string;
+}
+
+interface SidebarMenusControllerHost
+  extends ReactiveControllerHost, SessionOrganizerControllerHost {
+  readonly activeRouteId?: NavigationRouteId;
+  readonly activeWorkboardBoardId: string;
+  readonly basePath: string;
+  readonly canPairDevice: boolean;
+  readonly connected: boolean;
+  readonly enabledRouteIds?: readonly NavigationRouteId[];
+  readonly gatewayVersion: string | null;
+  readonly onNavigate?: (
+    routeId: NavigationRouteId,
+    options?: ApplicationNavigationOptions,
+  ) => void;
+  readonly onPairMobile?: () => void;
+  readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
+  readonly pinnedAgentIds: readonly string[];
+  readonly selectedSessionKeys: ReadonlySet<string>;
+  readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
+    Pick<SessionDataController, "approvalBadgeSnapshot" | "sessionsLoading">;
+  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionOrganizer: SessionOrganizerController;
+  readonly sidebarEntries: readonly string[];
+  sessionSortMode: SidebarSessionSortMode;
+  readonly terminalAvailable: boolean;
+  readonly themeMode: ThemeMode;
+  readonly workboardBoards: readonly SidebarWorkboardBoard[];
+  readonly workboardRenderers?: SidebarWorkboardRenderers;
+  activeChipAgent(): {
+    activeId: string;
+    agent: SidebarMenuAgent | undefined;
+    agents: readonly SidebarMenuAgent[];
+  };
+  agentUnreadCount(agentId: string): number;
+  askAgentCapabilities(agentId: string): void;
+  getRouteSessionKey(): string;
+  getSessionNavigationState(): { selectedAgentId: string };
+  reconciledSidebarZone(): {
+    entries: readonly SidebarZoneEntry[];
+    sidebarEntries: readonly string[];
+  };
+  selectedVisibleSessions(): SidebarRecentSession[];
+  switchChipAgent(agentId: string): void;
+}
 
 /** Popup ownership and stateless menu-renderer wiring. */
-export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElement {
-  @state() protected customizeMenuPosition: { x: number; y: number } | null = null;
-  @state() protected moreMenuPosition: { x: number; y: number } | null = null;
-  @state() sessionMenu: SidebarSessionMenuState | null = null;
-  @state() protected sessionMenuWork: SessionMenuWork | null = null;
-  @state() sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
-  @state() sessionSortMenuPosition: { x: number; y: number } | null = null;
+export class SidebarMenusController implements ReactiveController, SidebarMenusControllerState {
+  customizeMenuPosition: { x: number; y: number } | null = null;
+  moreMenuPosition: { x: number; y: number } | null = null;
+  sessionMenu: SidebarSessionMenuState | null = null;
+  sessionMenuWork: SessionMenuWork | null = null;
+  sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
+  sessionSortMenuPosition: { x: number; y: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
-  @state() protected agentMenuPosition: { x: number; bottom: number } | null = null;
-  @state() protected agentMenuFilter = "";
+  agentMenuPosition: { x: number; bottom: number } | null = null;
+  agentMenuFilter = "";
 
   private customizeMenuTrigger: HTMLElement | null = null;
   private moreMenuTrigger: HTMLElement | null = null;
@@ -64,20 +131,34 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
-  protected readonly catalogMenu = new SidebarCatalogMenuController({
-    // Closing every transient menu keeps one popover at a time.
-    beforeOpen: () => void this.dismissTransientMenus(),
-    requestUpdate: () => this.requestUpdate(),
-    terminalAvailable: () => this.terminalAvailable,
-    navigate: (search) => this.onNavigate?.("chat", { search }),
-  });
+  readonly catalogMenu: SidebarCatalogMenuController;
 
-  override disconnectedCallback() {
+  constructor(private readonly host: SidebarMenusControllerHost) {
+    host.addController(this);
+    this.catalogMenu = new SidebarCatalogMenuController({
+      // Closing every transient menu keeps one popover at a time.
+      beforeOpen: () => void this.dismissTransientMenus(),
+      requestUpdate: () => host.requestUpdate(),
+      terminalAvailable: () => host.terminalAvailable,
+      navigate: (search) => host.onNavigate?.("chat", { search }),
+    });
+  }
+
+  hostConnected(): void {}
+
+  hostDisconnected(): void {
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
-    super.disconnectedCallback();
+  }
+
+  private updateState<Key extends keyof SidebarMenusControllerState>(
+    key: Key,
+    value: SidebarMenusControllerState[Key],
+  ): void {
+    Object.assign(this, { [key]: value });
+    this.host.requestUpdate();
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -102,13 +183,13 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     return hadTransientMenu;
   }
 
-  protected preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
+  private preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
     scheduleRoutePreload(
       this.routePreloadTimers,
       routeId,
       event,
-      (nextRouteId) => this.onPreloadRoute?.(nextRouteId),
-      routeId === this.activeRouteId || !this.isRouteEnabled(routeId),
+      (nextRouteId) => this.host.onPreloadRoute?.(nextRouteId),
+      routeId === this.host.activeRouteId || !this.isRouteEnabled(routeId),
       immediate,
     );
   }
@@ -117,11 +198,11 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     cancelRoutePreload(this.routePreloadTimers, event);
   };
 
-  protected isRouteEnabled(routeId: NavigationRouteId): boolean {
-    return this.enabledRouteIds?.includes(routeId) ?? true;
+  isRouteEnabled(routeId: NavigationRouteId): boolean {
+    return this.host.enabledRouteIds?.includes(routeId) ?? true;
   }
 
-  protected readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
+  readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
     event.preventDefault();
     this.openCustomizeMenu(event.clientX, event.clientY);
   };
@@ -131,22 +212,22 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const menuMaxHeight = 420;
     this.dismissTransientMenus();
     this.customizeMenuTrigger = trigger;
-    this.customizeMenuPosition = {
+    this.updateState("customizeMenuPosition", {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
-    };
+    });
   }
 
   private closeCustomizeMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.customizeMenuTrigger;
     this.customizeMenuTrigger = null;
-    this.customizeMenuPosition = null;
+    this.updateState("customizeMenuPosition", null);
     if (options.restoreFocus) {
       trigger?.focus();
     }
   }
 
-  protected toggleMoreMenu(trigger: HTMLElement) {
+  toggleMoreMenu(trigger: HTMLElement) {
     if (this.moreMenuPosition) {
       this.closeMoreMenu();
       return;
@@ -156,16 +237,16 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     this.moreMenuTrigger = trigger;
-    this.moreMenuPosition = {
+    this.updateState("moreMenuPosition", {
       x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
-    };
+    });
   }
 
   private closeMoreMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.moreMenuTrigger;
     this.moreMenuTrigger = null;
-    this.moreMenuPosition = null;
+    this.updateState("moreMenuPosition", null);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -178,8 +259,8 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     y: number,
     trigger: HTMLElement | null = null,
   ) {
-    if (!this.selectedSessionKeys.has(session.key)) {
-      this.clearSessionSelection();
+    if (!this.host.selectedSessionKeys.has(session.key)) {
+      this.host.clearSessionSelection();
     }
     this.showSessionMenu(session, x, y, trigger);
   }
@@ -192,31 +273,39 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
   ) {
     this.dismissTransientMenus();
     this.sessionMenuTrigger = trigger;
-    this.sessionMenu = { session, x, y };
+    this.updateState("sessionMenu", { session, x, y });
     this.loadSessionMenuWork(session);
   }
 
-  protected closeSessionMenu() {
+  closeSessionMenu() {
     this.sessionMenuTrigger = null;
-    this.sessionMenu = null;
     this.sessionMenuWorkVersion += 1;
-    this.sessionMenuWork = null;
+    this.updateState("sessionMenu", null);
+    this.updateState("sessionMenuWork", null);
   }
 
   private loadSessionMenuWork(session: SidebarRecentSession) {
     const version = ++this.sessionMenuWorkVersion;
     if (!session.worktreeId) {
-      this.sessionMenuWork = null;
+      this.updateState("sessionMenuWork", null);
       return;
     }
-    this.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
-    const context = this.context;
+    this.updateState("sessionMenuWork", {
+      loading: true,
+      pullRequestUrl: null,
+      worktreePath: null,
+    });
+    const context = this.host.sessionDataContext;
     const client = context?.gateway.snapshot.client;
     if (!context || !client) {
-      this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      this.updateState("sessionMenuWork", {
+        loading: false,
+        pullRequestUrl: null,
+        worktreePath: null,
+      });
       return;
     }
-    const { selectedAgentId } = this.getSessionNavigationState();
+    const { selectedAgentId } = this.host.getSessionNavigationState();
     void fetchSessionMenuWork({
       client,
       pullRequestsAvailable:
@@ -227,7 +316,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       worktreeId: session.worktreeId,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
-        this.sessionMenuWork = { loading: false, ...work };
+        this.updateState("sessionMenuWork", { loading: false, ...work });
       }
     });
   }
@@ -237,17 +326,17 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const menuMaxHeight = 160;
     this.dismissTransientMenus();
     this.sessionGroupMenuTrigger = trigger;
-    this.sessionGroupMenu = {
+    this.updateState("sessionGroupMenu", {
       group,
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
-    };
+    });
   }
 
   private closeSessionGroupMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.sessionGroupMenuTrigger;
     this.sessionGroupMenuTrigger = null;
-    this.sessionGroupMenu = null;
+    this.updateState("sessionGroupMenu", null);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -263,22 +352,22 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     this.sessionSortMenuTrigger = trigger;
-    this.sessionSortMenuPosition = {
+    this.updateState("sessionSortMenuPosition", {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
-    };
+    });
   }
 
   private closeSessionSortMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.sessionSortMenuTrigger;
     this.sessionSortMenuTrigger = null;
-    this.sessionSortMenuPosition = null;
+    this.updateState("sessionSortMenuPosition", null);
     if (options.restoreFocus) {
       trigger?.focus();
     }
   }
 
-  protected toggleAgentMenu(trigger: HTMLElement) {
+  toggleAgentMenu(trigger: HTMLElement) {
     if (this.agentMenuPosition) {
       this.closeAgentMenu();
       return;
@@ -291,32 +380,32 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.agentMenuTrigger = trigger;
-    this.agentMenuFilter = "";
-    this.agentMenuPosition = {
+    this.updateState("agentMenuFilter", "");
+    this.updateState("agentMenuPosition", {
       x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
       bottom: Math.max(8, window.innerHeight - rect.top + 4),
-    };
+    });
   }
 
-  protected closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
+  closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.agentMenuTrigger;
     this.agentMenuTrigger = null;
-    this.agentMenuPosition = null;
-    this.agentMenuFilter = "";
+    this.updateState("agentMenuPosition", null);
+    this.updateState("agentMenuFilter", "");
     if (options.restoreFocus) {
       trigger?.focus();
     }
   }
 
-  protected renderCustomizeMenu() {
+  renderCustomizeMenu() {
     const position = this.customizeMenuPosition;
     const trigger = this.customizeMenuTrigger;
     return renderSidebarCustomizeMenu({
       position,
-      sidebarEntries: this.sidebarEntries,
+      sidebarEntries: this.host.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
-      workboardBoards: this.workboardBoards,
-      workboardRenderers: this.workboardRenderers,
+      workboardBoards: this.host.workboardBoards,
+      workboardRenderers: this.host.workboardRenderers,
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         if (this.customizeMenuPosition !== position) {
@@ -326,56 +415,57 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onToggleRoute: (routeId) => {
         const entry = serializeSidebarEntry({ type: "route", route: routeId });
-        const canonical = this.reconciledSidebarZone().sidebarEntries;
+        const canonical = this.host.reconciledSidebarZone().sidebarEntries;
         const next = canonical.includes(entry)
           ? canonical.filter((candidate) => candidate !== entry)
           : [...canonical, entry];
-        this.onUpdateSidebarEntries?.(next);
+        this.host.onUpdateSidebarEntries?.(next);
       },
       onToggleWorkboardBoard: (boardId) => {
         const entry = serializeSidebarEntry({ type: "workboard", boardId });
-        const canonical = this.reconciledSidebarZone().sidebarEntries;
+        const canonical = this.host.reconciledSidebarZone().sidebarEntries;
         const next = canonical.includes(entry)
           ? canonical.filter((candidate) => candidate !== entry)
           : [...canonical, entry];
-        this.onUpdateSidebarEntries?.(next);
+        this.host.onUpdateSidebarEntries?.(next);
       },
       onReset: () => {
         // Canonical list, not the render list: unknown-state session slots
         // (other agents, still-loading caches) must survive a route reset.
-        const sessions = this.reconciledSidebarZone().sidebarEntries.filter((entry) =>
-          entry.startsWith("session:"),
-        );
-        this.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
+        const sessions = this.host
+          .reconciledSidebarZone()
+          .sidebarEntries.filter((entry) => entry.startsWith("session:"));
+        this.host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
         this.closeCustomizeMenu({ restoreFocus: true });
       },
     });
   }
 
-  protected renderAgentMenu() {
+  renderAgentMenu() {
     const position = this.agentMenuPosition;
     const trigger = this.agentMenuTrigger;
-    const { activeId, agent, agents } = this.activeChipAgent();
+    const { activeId, agent, agents } = this.host.activeChipAgent();
     return renderSidebarAgentMenu({
       position,
       activeId,
       activeName: agent ? normalizeAgentLabel(agent) : activeId,
       agents,
       filter: this.agentMenuFilter,
-      pinnedAgentIds: this.pinnedAgentIds,
-      connected: this.connected,
-      canPairDevice: this.canPairDevice,
-      basePath: this.basePath,
-      gatewayVersion: this.gatewayVersion,
-      themeMode: this.themeMode,
-      agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
+      pinnedAgentIds: this.host.pinnedAgentIds,
+      connected: this.host.connected,
+      canPairDevice: this.host.canPairDevice,
+      basePath: this.host.basePath,
+      gatewayVersion: this.host.gatewayVersion,
+      themeMode: this.host.themeMode,
+      agentUnreadCount: (agentId) => this.host.agentUnreadCount(agentId),
       agentApprovalCount: (agentId) =>
-        this.sessionData.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ?? 0,
+        this.host.sessionData.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ??
+        0,
       onFilterChange: (next) => {
-        this.agentMenuFilter = next;
+        this.updateState("agentMenuFilter", next);
       },
-      onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
-      onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
+      onSwitchAgent: (agentId) => this.host.switchChipAgent(agentId),
+      onAskCapabilities: (agentId) => this.host.askAgentCapabilities(agentId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         if (this.agentMenuPosition !== position) {
@@ -383,23 +473,23 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         }
         this.closeAgentMenu({ restoreFocus });
       },
-      onNavigate: (routeId, options) => this.onNavigate?.(routeId, options),
-      onPairMobile: () => this.onPairMobile?.(),
+      onNavigate: (routeId, options) => this.host.onNavigate?.(routeId, options),
+      onPairMobile: () => this.host.onPairMobile?.(),
     });
   }
 
-  protected renderSessionMenu() {
+  renderSessionMenu() {
     const menu = this.sessionMenu;
     if (!menu) {
       return nothing;
     }
-    const context = this.context;
+    const context = this.host.sessionDataContext;
     const { session } = menu;
     const mainKey = resolveUiConfiguredMainKey({
-      agentsList: this.context?.agents.state.agentsList,
-      hello: this.context?.gateway.snapshot.hello,
+      agentsList: this.host.sessionDataContext?.agents.state.agentsList,
+      hello: this.host.sessionDataContext?.gateway.snapshot.hello,
     });
-    const selection = this.selectedVisibleSessions();
+    const selection = this.host.selectedVisibleSessions();
     const batchRows =
       selection.length > 1 && selection.some((row) => row.key === session.key) ? selection : null;
     const rows = batchRows ?? [session];
@@ -427,8 +517,8 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
           .lastActive=${batchRows ? "" : session.meta}
           .anchor=${menu}
           .trigger=${this.sessionMenuTrigger}
-          .disabled=${!this.connected}
-          .forkDisabled=${this.sessionData.sessionsLoading || session.modelSelectionLocked}
+          .disabled=${!this.host.connected}
+          .forkDisabled=${this.host.sessionData.sessionsLoading || session.modelSelectionLocked}
           .archiveAllowed=${archiveAllowed}
           .cloudWorkerStopAllowed=${Boolean(
             !batchRows &&
@@ -437,7 +527,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
             context &&
             isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
           )}
-          .groups=${this.knownSessionGroups()}
+          .groups=${this.host.knownSessionGroups()}
           .canOpenChat=${true}
           .work=${batchRows ? null : this.sessionMenuWork}
           .workboard=${null}
@@ -448,12 +538,12 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
           }}
           .onAction=${(action: SessionMenuAction) => {
             if (batchRows) {
-              this.runBatchSessionAction(action, batchRows, allUnread);
+              void this.host.sessionOrganizer.runBatchSessionAction(action, batchRows, allUnread);
               return;
             }
             switch (action.kind) {
               case "open-chat":
-                this.selectSession(session.key);
+                this.host.selectSession(session.key);
                 break;
               case "open-pr":
                 openExternalUrlSafe(action.url);
@@ -462,42 +552,42 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 openEditor(action.editor, action.path);
                 break;
               case "toggle-pin":
-                void this.patchSession(session, { pinned: !session.pinned });
+                void this.host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
                 break;
               case "set-icon":
-                void this.patchSession(session, { icon: action.icon });
+                void this.host.sessionOrganizer.patchSession(session, { icon: action.icon });
                 break;
               case "toggle-unread":
-                void this.patchSession(session, { unread: !session.unread });
+                void this.host.sessionOrganizer.patchSession(session, { unread: !session.unread });
                 break;
               case "rename":
-                this.renameSession(session);
+                void this.host.sessionOrganizer.renameSession(session);
                 break;
               case "fork":
-                void this.forkSession(session);
+                void this.host.sessionOrganizer.forkSession(session);
                 break;
               case "workboard":
                 break;
               case "move-to-group":
                 if (action.category === null || session.category !== action.category) {
-                  this.assignSessionCategory(session, action.category);
+                  void this.host.sessionOrganizer.assignSessionCategory(session, action.category);
                 }
                 break;
               case "new-group":
-                this.createSessionGroup([session]);
+                void this.host.sessionOrganizer.createSessionGroup([session]);
                 break;
               case "toggle-archived":
                 if (session.archived) {
-                  void this.patchSession(session, { archived: false });
+                  void this.host.sessionOrganizer.patchSession(session, { archived: false });
                 } else {
-                  void this.archiveSessionWithUndo(session);
+                  void this.host.sessionOrganizer.archiveSessionWithUndo(session);
                 }
                 break;
               case "stop-cloud-worker":
-                void this.stopCloudWorker(session);
+                void this.host.sessionOrganizer.stopCloudWorker(session);
                 break;
               case "delete":
-                void this.deleteSession(session);
+                void this.host.sessionOrganizer.deleteSession(session);
                 break;
             }
           }}
@@ -506,23 +596,23 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     );
   }
 
-  protected renderSessionGroupMenu() {
+  renderSessionGroupMenu() {
     const menu = this.sessionGroupMenu;
     return renderSidebarSessionGroupMenu({
       menu,
       trigger: this.sessionGroupMenuTrigger,
-      connected: this.connected,
+      connected: this.host.connected,
       onAction: (action, group) => {
         this.closeSessionGroupMenu({ restoreFocus: true });
         switch (action) {
           case "rename-group":
-            this.renameSessionGroupFromMenu(group);
+            void this.host.sessionOrganizer.renameSessionGroupFromMenu(group);
             break;
           case "new-group":
-            this.createSessionGroup();
+            void this.host.sessionOrganizer.createSessionGroup();
             break;
           case "delete-group":
-            this.deleteSessionGroupFromMenu(group);
+            void this.host.sessionOrganizer.deleteSessionGroupFromMenu(group);
             break;
         }
       },
@@ -535,29 +625,29 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     });
   }
 
-  protected renderSessionSortMenu() {
+  renderSessionSortMenu() {
     const position = this.sessionSortMenuPosition;
     return renderSidebarSessionSortMenu({
       position,
       trigger: this.sessionSortMenuTrigger,
-      grouping: this.sessionsGrouping,
-      sortMode: this.sessionSortMode,
-      statusFilter: this.sessionsStatusFilter,
-      showCron: this.sessionsShowCron,
+      grouping: this.host.sessionsGrouping,
+      sortMode: this.host.sessionSortMode,
+      statusFilter: this.host.sessionsStatusFilter,
+      showCron: this.host.sessionsShowCron,
       onGroupingChange: (grouping) => {
-        this.setSessionsGrouping(grouping);
+        this.host.sessionOrganizer.setSessionsGrouping(grouping);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onSortModeChange: (mode) => {
-        this.sessionSortMode = mode;
+        this.host.sessionSortMode = mode;
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onStatusFilterChange: (statusFilter) => {
-        this.setSessionsStatusFilter(statusFilter);
+        this.host.sessionOrganizer.setSessionsStatusFilter(statusFilter);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onShowCronChange: (show) => {
-        this.setSessionsShowCron(show);
+        this.host.sessionOrganizer.setSessionsShowCron(show);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onClose: (restoreFocus) => {
@@ -569,40 +659,40 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     });
   }
 
-  protected renderRoute(routeId: NavigationRouteId) {
+  renderRoute(routeId: NavigationRouteId) {
     if (!this.isRouteEnabled(routeId)) {
       return nothing;
     }
-    const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
+    const routeSessionKey = routeId === "chat" ? this.host.getRouteSessionKey() : "";
     const chatSearch =
       routeId === "chat" && routeSessionKey ? searchForSession(routeSessionKey) : "";
     return renderSidebarNavRoute({
       routeId,
       href: chatSearch
-        ? `${pathForRoute("chat", this.basePath)}${chatSearch}`
-        : pathForRoute(routeId, this.basePath),
+        ? `${pathForRoute("chat", this.host.basePath)}${chatSearch}`
+        : pathForRoute(routeId, this.host.basePath),
       active:
-        isSidebarRouteActive(this.activeRouteId, routeId) &&
+        isSidebarRouteActive(this.host.activeRouteId, routeId) &&
         !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
       onNavigate: () => {
-        this.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
+        this.host.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
     });
   }
 
-  protected renderMoreMenu() {
+  renderMoreMenu() {
     const position = this.moreMenuPosition;
     const trigger = this.moreMenuTrigger;
     return renderSidebarMoreMenu({
       position,
-      basePath: this.basePath,
-      activeRouteId: this.activeRouteId,
+      basePath: this.host.basePath,
+      activeRouteId: this.host.activeRouteId,
       activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
-        ? this.activeWorkboardBoardId
+        ? this.host.activeWorkboardBoardId
         : "",
-      sidebarEntries: this.sidebarEntries,
+      sidebarEntries: this.host.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
@@ -613,7 +703,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onNavigateRoute: (routeId) => {
         this.closeMoreMenu({ restoreFocus: true });
-        this.onNavigate?.(routeId);
+        this.host.onNavigate?.(routeId);
       },
       onPreloadRoute: (routeId, event) => this.preloadRoute(routeId, event),
       onCancelPreload: this.cancelPreload,
@@ -629,10 +719,13 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
 
   private activeWorkboardBoardIsPinned(): boolean {
     return Boolean(
-      this.activeWorkboardBoardId &&
-      this.reconciledSidebarZone().entries.some(
-        (entry) => entry.type === "workboard" && entry.boardId === this.activeWorkboardBoardId,
-      ),
+      this.host.activeWorkboardBoardId &&
+      this.host
+        .reconciledSidebarZone()
+        .entries.some(
+          (entry) =>
+            entry.type === "workboard" && entry.boardId === this.host.activeWorkboardBoardId,
+        ),
     );
   }
 }

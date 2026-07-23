@@ -82,6 +82,8 @@ Restart the Gateway if your plugin-management path does not restart it automatic
 
 Treat any failed setup check as a blocker for that transport and mode. For an observe-only smoke test, select `transcribe` mode and confirm that status reports an in-call session before expecting caption text.
 
+For talk-back smoke tests, verified speech requires more than bytes accepted by the playback command. The shared command-pair bridge correlates a bounded waveform fingerprint from the current output generation with audio returning on the BlackHole microphone capture path; Google Meet, Teams, and Zoom do not report `speechOutputVerified: true` when only the output-byte counter advances or unrelated participant audio is present.
+
 ## Handle platform policy prompts
 
 Browser automation handles the normal guest-name, prejoin camera and microphone, join, in-call, and leave controls. It does not bypass platform or organizer policy.

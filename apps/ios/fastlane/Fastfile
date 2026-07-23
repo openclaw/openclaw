@@ -1680,9 +1680,9 @@ platform :ios do
         configuration: "Debug",
         devices: [device],
         languages: ["en-US"],
-        # The scheme also carries functional UI tests (share extension); the
-        # screenshot lane must only drive the deterministic snapshot suite.
-        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
+        # App Store capture is isolated from functional UI checks; this lane only
+        # needs the deterministic four-screenshot release flow.
+        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/testConnectedGatewayTabs"],
         launch_arguments: ["--openclaw-screenshot-mode"],
         output_directory: output_directory,
         clear_previous_screenshots: index.zero?,

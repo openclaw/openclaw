@@ -116,6 +116,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
     allowedToolNames: input.replayAllowedToolNames,
+    trigger: attempt.trigger,
     suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
