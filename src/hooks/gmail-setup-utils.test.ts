@@ -40,7 +40,7 @@ describe("runGcloud interpreter resolution", () => {
         await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
           runCommandWithTimeoutMock
             .mockResolvedValueOnce({
-              stdout: `${realPython}\n`,
+              stdout: `${realPython}\n3.12\n`,
               stderr: "",
               code: 0,
               signal: null,
@@ -63,6 +63,68 @@ describe("runGcloud interpreter resolution", () => {
           expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
             timeoutMs: 120_000,
             env: { CLOUDSDK_PYTHON: realPython, CLOUDSDK_PYTHON_ARGS: undefined },
+          });
+        });
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  itUnix(
+    "skips a python whose version is outside gcloud's supported range",
+    async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-ver-"));
+      try {
+        const oldPython = path.join(tmp, "python-old");
+        await fs.writeFile(oldPython, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(oldPython, 0o755);
+        const goodPython = path.join(tmp, "python-good");
+        await fs.writeFile(goodPython, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(goodPython, 0o755);
+
+        const shimDir = path.join(tmp, "shims");
+        await fs.mkdir(shimDir, { recursive: true });
+        // Two interpreters on PATH: the incompatible one is discovered first.
+        for (const name of ["python3", "python"]) {
+          const shim = path.join(shimDir, name);
+          await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
+          await fs.chmod(shim, 0o755);
+        }
+
+        await withEnvAsync({ PATH: shimDir }, async () => {
+          runCommandWithTimeoutMock
+            // python3 -> Python 3.9 (unsupported by gcloud): must be skipped.
+            .mockResolvedValueOnce({
+              stdout: `${oldPython}\n3.9\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            // python -> Python 3.12 (supported): should be selected.
+            .mockResolvedValueOnce({
+              stdout: `${goodPython}\n3.12\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            })
+            .mockResolvedValue({
+              stdout: "",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            });
+
+          await runGcloud(["config", "list"]);
+
+          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+            timeoutMs: 120_000,
+            env: { CLOUDSDK_PYTHON: goodPython, CLOUDSDK_PYTHON_ARGS: undefined },
           });
         });
       } finally {
@@ -99,7 +161,7 @@ describe("runGcloud", () => {
           async () => {
             runCommandWithTimeoutMock
               .mockResolvedValueOnce({
-                stdout: `${realPython}\n`,
+                stdout: `${realPython}\n3.12\n`,
                 stderr: "",
                 code: 0,
                 signal: null,
