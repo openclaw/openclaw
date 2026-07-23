@@ -304,6 +304,76 @@ import { runManagedCommand } from ${JSON.stringify(helperUrl)};
       }
     },
   );
+
+  posixIt("times out and kills managed command descendants", async () => {
+    const dir = createTempDir("openclaw-managed-timeout-");
+    const childPath = path.join(dir, "child.mjs");
+    const childPidPath = path.join(dir, "child.pid");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    fs.writeFileSync(
+      childPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(process.pid));
+fs.writeFileSync(process.argv[3], String(descendant.pid));
+setInterval(() => {}, 1_000);
+`,
+      "utf8",
+    );
+
+    let managedChild: ReturnType<typeof spawn> | undefined;
+    let childPid = 0;
+    let descendantPid = 0;
+    const command = runManagedCommand({
+      bin: process.execPath,
+      args: [childPath, childPidPath, descendantPidPath],
+      shell: false,
+      stdio: "ignore",
+      timeoutMs: 1_000,
+      onReady: (child) => {
+        managedChild = child;
+      },
+    });
+    const outcome = command.then(
+      (status) => ({ kind: "resolved" as const, status }),
+      (error: unknown) => ({ error, kind: "rejected" as const }),
+    );
+
+    try {
+      await waitFor(() => fs.existsSync(childPidPath));
+      await waitFor(() => fs.existsSync(descendantPidPath));
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+
+      const result = await Promise.race([
+        outcome,
+        delay(3_000).then(() => ({ kind: "not-timed-out" as const })),
+      ]);
+
+      expect(result).toMatchObject({
+        error: expect.objectContaining({ code: "ETIMEDOUT" }),
+        kind: "rejected",
+      });
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
+      await waitFor(() => !isProcessAlive(descendantPid), 1_500);
+    } finally {
+      if (managedChild) {
+        terminateManagedChild(managedChild, "SIGKILL");
+      }
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+      await Promise.race([outcome, delay(1_000)]);
+    }
+  });
 });
 
 async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
