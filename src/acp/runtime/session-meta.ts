@@ -155,9 +155,17 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
 
 function acpSessionRowMatchesEntry(
   row: AcpSessionRow,
-  entry: Pick<SessionEntry, "lifecycleRevision"> | undefined,
+  entry:
+    | (Pick<SessionEntry, "lifecycleRevision"> & Partial<Pick<SessionEntry, "sessionId">>)
+    | undefined,
 ): boolean {
-  return row.session_id == null || row.session_id === entry?.lifecycleRevision;
+  return (
+    row.session_id == null ||
+    row.session_id === entry?.lifecycleRevision ||
+    // Rows written before reset boundaries stored the logical session id in this
+    // schema-neutral column. The next ACP metadata write rebinds them to the revision.
+    row.session_id === entry?.sessionId
+  );
 }
 
 export function readAcpSessionMeta(params: {
@@ -189,7 +197,9 @@ export function readAcpSessionMeta(params: {
 
 export function readAcpSessionMetaForEntry(params: {
   sessionKey: string;
-  entry: Pick<SessionEntry, "lifecycleRevision"> | undefined;
+  entry:
+    | (Pick<SessionEntry, "lifecycleRevision"> & Partial<Pick<SessionEntry, "sessionId">>)
+    | undefined;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
@@ -249,7 +259,7 @@ export function writeAcpSessionMetaForMigration(params: {
 export function repairAcpSessionMetaKeyForMigration(params: {
   sessionKey: string;
   candidateSessionKeys?: Iterable<string | null | undefined>;
-  entry?: Pick<SessionEntry, "lifecycleRevision">;
+  entry?: Pick<SessionEntry, "lifecycleRevision"> & Partial<Pick<SessionEntry, "sessionId">>;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
   now?: () => number;

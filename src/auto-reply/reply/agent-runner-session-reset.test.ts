@@ -411,4 +411,45 @@ describe("resetReplyRunSession", () => {
       }),
     ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: "reset" })]));
   });
+
+  it("replaces a SQLite marker for a different transcript target", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionId = "current-session";
+    const staleMarker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "stale-session",
+      storePath,
+    });
+    const sessionEntry: SessionEntry = {
+      sessionFile: staleMarker,
+      sessionId,
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    let activeSessionEntry: SessionEntry | undefined;
+    await resetReplyRunSession({
+      options: {
+        failureLabel: "stale marker",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey,
+      queueKey: sessionKey,
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: (entry) => {
+        activeSessionEntry = entry;
+      },
+      onNewSession: () => {},
+    });
+
+    expect(activeSessionEntry?.sessionFile).toBe(
+      formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+    );
+    expect(activeSessionEntry?.sessionFile).not.toBe(staleMarker);
+  });
 });

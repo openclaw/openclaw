@@ -426,6 +426,43 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
+  it("reads ACP metadata rows written with the legacy session-id binding", async () => {
+    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const sessionKey = "agent:codex:acp:binding:discord:default:legacy";
+      await seedAcpSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "sess-existing",
+          lifecycleRevision: "revision-existing",
+          updatedAt: 100,
+        },
+      });
+      // Simulate the pre-boundary layout, where session_id stored the logical id.
+      writeAcpSessionMetaForMigration({
+        databasePath,
+        sessionKey,
+        lifecycleRevision: "sess-existing",
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-legacy",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      });
+
+      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
+        "codex-legacy",
+      );
+      expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
+    });
+  });
+
   it("repairs ACP metadata rows when session-store keys are canonicalized", async () => {
     await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

@@ -46,7 +46,7 @@ import {
 } from "../config/sessions/session-entry-provenance.js";
 import {
   formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1189,7 +1189,11 @@ export async function performGatewaySessionReset(params: {
         throw new Error(`Session ${params.key} changed before reset boundary append.`);
       }
       const resetSessionFile = boundaryEntry?.sessionId
-        ? ((parseSqliteSessionFileMarker(boundaryEntry.sessionFile)
+        ? ((sqliteSessionFileMarkerMatchesTarget(boundaryEntry.sessionFile, {
+            agentId,
+            sessionId: boundaryEntry.sessionId,
+            storePath,
+          })
             ? boundaryEntry.sessionFile
             : undefined) ??
           formatSqliteSessionFileMarker({

@@ -7,7 +7,7 @@ import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
 } from "../../config/sessions/sqlite-marker.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -109,7 +109,13 @@ export async function resetReplyRunSession(params: {
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile =
-    (parseSqliteSessionFileMarker(prevEntry.sessionFile) ? prevEntry.sessionFile : undefined) ??
+    (sqliteSessionFileMarkerMatchesTarget(prevEntry.sessionFile, {
+      agentId,
+      sessionId: nextSessionId,
+      storePath: params.storePath,
+    })
+      ? prevEntry.sessionFile
+      : undefined) ??
     formatSqliteSessionFileMarker({
       agentId,
       sessionId: nextSessionId,

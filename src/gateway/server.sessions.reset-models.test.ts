@@ -4,7 +4,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
@@ -486,6 +487,46 @@ test("sessions.reset rotates an already-stale generated transcript file to the n
   const persistedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
   expect(persistedEntry?.sessionFile).toBe(nextSessionFile);
+});
+
+test("sessions.reset replaces a SQLite marker for a different transcript target", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "current-session";
+  const sessionKey = "agent:main:main";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(sessionId),
+    },
+  });
+  const current = loadSessionEntry({ sessionKey, storePath });
+  if (!current) {
+    throw new Error("expected current session entry");
+  }
+  const staleMarker = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId: "stale-session",
+    storePath,
+  });
+  await replaceSessionEntry(
+    { sessionKey, storePath },
+    {
+      ...current,
+      sessionFile: staleMarker,
+    },
+  );
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; sessionFile?: string };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).toBe(sessionId);
+  expect(reset.payload?.entry.sessionFile).toBe(
+    formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+  );
+  expect(reset.payload?.entry.sessionFile).not.toBe(staleMarker);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
