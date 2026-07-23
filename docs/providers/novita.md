@@ -80,4 +80,4 @@ run on your own hardware or network boundary.
 ## Related
 
 - [Model providers](/concepts/model-providers)
-- [Provider directory](/providers/index)
+- [Provider directory](/providers)

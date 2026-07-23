@@ -1512,7 +1512,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
     Still noisy: check session settings in the Control UI and set verbose to **inherit**; confirm you are not using a bot profile with `verboseDefault: "on"` in config.
 
-    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security/index#reasoning-and-verbose-output-in-groups).
+    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security#reasoning-and-verbose-output-in-groups).
 
   </Accordion>
 

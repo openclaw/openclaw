@@ -99,4 +99,4 @@ deepinfra/zai-org/GLM-5.1
 ## Related
 
 - [Model providers](/concepts/model-providers)
-- [All providers](/providers/index)
+- [All providers](/providers)

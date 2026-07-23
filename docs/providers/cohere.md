@@ -80,4 +80,4 @@ If the Gateway runs as a daemon or in Docker, set `COHERE_API_KEY` for that serv
 
 - [Model providers](/concepts/model-providers)
 - [Models CLI](/cli/models)
-- [Provider directory](/providers/index)
+- [Provider directory](/providers)

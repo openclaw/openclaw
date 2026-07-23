@@ -51,7 +51,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [Z.AI (GLM)](/providers/zai)
 
 For the full provider catalog and advanced configuration, see
-[Provider directory](/providers/index) and [Model providers](/concepts/model-providers).
+[Provider directory](/providers) and [Model providers](/concepts/model-providers).
 
 ## Additional provider variants
 
@@ -61,7 +61,7 @@ For the full provider catalog and advanced configuration, see
 
 ## Related
 
-- [Provider directory](/providers/index)
+- [Provider directory](/providers)
 - [Model selection](/concepts/model-providers)
 - [Model failover](/concepts/model-failover)
 - [Models CLI](/cli/models)

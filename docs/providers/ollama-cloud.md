@@ -114,4 +114,4 @@ authorize `/api/embed`; force them with `OPENCLAW_LIVE_OLLAMA_EMBEDDINGS=1`.
 
 - [Ollama](/providers/ollama)
 - [Model providers](/concepts/model-providers)
-- [All providers](/providers/index)
+- [All providers](/providers)
