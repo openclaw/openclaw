@@ -413,4 +413,142 @@ describe("QmdMemoryManager slugified path resolution", () => {
       lines: 1,
     });
   });
+
+  it("maps a slugified underscore path back to the real on-disk filesystem path (#106866)", async () => {
+    // Native QMD can store `mundo-pathfinder.md` (a `_`->`-` slug) as the active
+    // documents row while the real file on disk is `mundo_pathfinder.md`. Search
+    // must return the real, readable path rather than the non-existent slug path.
+    const actualRelative = "rol/mundo_pathfinder.md";
+    const actualFile = path.join(workspaceDir, actualRelative);
+    await fs.mkdir(path.dirname(actualFile), { recursive: true });
+    await fs.writeFile(actualFile, "line-1\nline-2\nline-3", "utf-8");
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://workspace-main/rol/mundo-pathfinder.md",
+              score: 0.94,
+              snippet: "@@ -2,1\nline-2",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    installIndexedPathStub({
+      manager,
+      collection: "workspace-main",
+      normalizedPath: "rol/mundo-pathfinder.md",
+      exactPaths: ["rol/mundo-pathfinder.md"],
+      allPaths: ["rol/mundo-pathfinder.md"],
+    });
+
+    const results = await manager.search("line-2", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    expect(results).toEqual([
+      {
+        path: actualRelative,
+        startLine: 2,
+        endLine: 2,
+        score: 0.94,
+        snippet: "@@ -2,1\nline-2",
+        source: "memory",
+      },
+    ]);
+
+    const result = expectDefined(results[0], "recovered underscore QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
+      path: actualRelative,
+      text: "line-1\nline-2\nline-3",
+      from: 1,
+      lines: 3,
+    });
+  });
+
+  it("skips a search result whose slugified path has no file on disk (#106866)", async () => {
+    // The active row points at `rol/ghost-doc.md` and no real file exists on disk.
+    // Search must drop the result rather than emit an unreadable citation.
+    await fs.mkdir(path.join(workspaceDir, "rol"), { recursive: true });
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://workspace-main/rol/ghost-doc.md",
+              score: 0.5,
+              snippet: "@@ -1,1\nghost",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    installIndexedPathStub({
+      manager,
+      collection: "workspace-main",
+      normalizedPath: "rol/ghost-doc.md",
+      exactPaths: ["rol/ghost-doc.md"],
+    });
+
+    const results = await manager.search("ghost", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    expect(results).toEqual([]);
+  });
+
+  it("does not guess when a slug matches multiple real files (#106866)", async () => {
+    // Two real files normalize to the same slug (`mundo-pathfinder.md`). Recovery
+    // must stay ambiguous-safe and skip rather than return the wrong file.
+    await fs.mkdir(path.join(workspaceDir, "rol"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "rol/mundo_pathfinder.md"), "underscore", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "rol/mundo pathfinder.md"), "space", "utf-8");
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            {
+              file: "qmd://workspace-main/rol/mundo-pathfinder.md",
+              score: 0.7,
+              snippet: "@@ -1,1\nunderscore",
+            },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    installIndexedPathStub({
+      manager,
+      collection: "workspace-main",
+      normalizedPath: "rol/mundo-pathfinder.md",
+      exactPaths: ["rol/mundo-pathfinder.md"],
+    });
+
+    const results = await manager.search("underscore", {
+      sessionKey: "agent:main:slack:dm:u123",
+    });
+    expect(results).toEqual([]);
+  });
 });

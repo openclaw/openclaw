@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -292,8 +293,23 @@ export class QmdDocumentResolver {
     if (!rootEntry) {
       return null;
     }
-    const normalizedRelative = collectionRelativePath.replace(/\\/g, "/");
-    const absPath = path.normalize(path.resolve(rootEntry.path, collectionRelativePath));
+    let normalizedRelative = collectionRelativePath.replace(/\\/g, "/");
+    let absPath = path.normalize(path.resolve(rootEntry.path, collectionRelativePath));
+    // Native QMD can persist a slugified path (e.g. `_` stored as `-`) whose active
+    // documents row diverges from the real filesystem name. If the resolved file is
+    // missing, recover the real on-disk path whose slug form matches before returning
+    // it, so memory_search never emits a citation that cannot be read (issue #106866).
+    if (!this.pathExistsOnDisk(absPath)) {
+      const recovered = this.recoverExistingCollectionRelativePath(
+        rootEntry.path,
+        normalizedRelative,
+      );
+      if (recovered === null) {
+        return null;
+      }
+      normalizedRelative = recovered;
+      absPath = path.normalize(path.resolve(rootEntry.path, recovered));
+    }
     const relativeToWorkspace = path.relative(this.workspaceDir, absPath);
     return {
       rel: this.buildSearchPath(collection, normalizedRelative, relativeToWorkspace, absPath),
@@ -336,11 +352,16 @@ export class QmdDocumentResolver {
         const match = rows.find((row) =>
           this.matchesPreferredFileHint(row.path, collectionRelativePath),
         );
-        if (
-          match &&
-          path.normalize(path.resolve(rootValue.path, match.path)) === normalizedAbsPath
-        ) {
-          return true;
+        if (match) {
+          if (path.normalize(path.resolve(rootValue.path, match.path)) === normalizedAbsPath) {
+            return true;
+          }
+          // The active row is a slugified alias (e.g. `_` stored as `-`) of a real
+          // file. Allow reading the real on-disk file the alias normalizes to
+          // (issue #106866); it is confined to the collection root and exists.
+          if (this.pathExistsOnDisk(normalizedAbsPath)) {
+            return true;
+          }
         }
       } catch (err) {
         if (isSqliteBusyError(err)) {
@@ -351,6 +372,68 @@ export class QmdDocumentResolver {
       }
     }
     return false;
+  }
+
+  /**
+   * Walks `relativePath` under `rootPath` segment by segment. When a segment does
+   * not exist verbatim, matches it against the real directory entries by their
+   * normalized slug form (normalizeQmdLookupSegment), recovering the actual
+   * on-disk name (e.g. a `-` in the stored path that is really `_` on disk).
+   * Returns the recovered relative path, or null when any segment cannot be
+   * matched to exactly one existing entry (missing or ambiguous).
+   */
+  private recoverExistingCollectionRelativePath(
+    rootPath: string,
+    relativePath: string,
+  ): string | null {
+    if (relativePath.includes("..")) {
+      return null;
+    }
+    const segments = relativePath
+      .split("/")
+      .filter((segment) => segment.length > 0 && segment !== ".");
+    if (segments.length === 0) {
+      return null;
+    }
+    let currentDir = rootPath;
+    const recovered: string[] = [];
+    for (const [index, segment] of segments.entries()) {
+      const isLast = index === segments.length - 1;
+      const direct = path.join(currentDir, segment);
+      if (this.pathExistsOnDisk(direct)) {
+        recovered.push(segment);
+        currentDir = direct;
+        continue;
+      }
+      let entries: fsSync.Dirent[];
+      try {
+        entries = fsSync.readdirSync(currentDir, { withFileTypes: true }) as fsSync.Dirent[];
+      } catch {
+        return null;
+      }
+      const target = normalizeQmdLookupSegment(segment);
+      const matches = entries.filter(
+        (entry) =>
+          (isLast ? entry.isFile() : entry.isDirectory()) &&
+          normalizeQmdLookupSegment(entry.name) === target,
+      );
+      const [match] = matches;
+      if (!match || matches.length !== 1) {
+        // 0 matches -> no real file; >1 -> ambiguous. Never guess a citation.
+        return null;
+      }
+      recovered.push(match.name);
+      currentDir = path.join(currentDir, match.name);
+    }
+    return recovered.join("/");
+  }
+
+  private pathExistsOnDisk(absPath: string): boolean {
+    try {
+      return fsSync.existsSync(absPath);
+    } catch {
+      return false;
+    }
   }
 }
 
