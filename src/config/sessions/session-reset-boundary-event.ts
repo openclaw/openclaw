@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
@@ -11,6 +13,11 @@ export type SessionResetBoundaryEvent = {
   timestamp: string;
   reason: SessionResetBoundaryReason;
   firstKeptEntryId?: string;
+};
+
+export type SessionResetBoundaryPlan = {
+  event: SessionResetBoundaryEvent;
+  seedEvents: unknown[];
 };
 
 function recordId(record: unknown): string | undefined {
@@ -52,5 +59,58 @@ export function buildSessionResetBoundaryEvent(params: {
     timestamp: new Date().toISOString(),
     reason: params.reason,
     ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
+  };
+}
+
+function readLegacyTranscriptEvents(sessionFile: string | undefined): unknown[] {
+  const filePath = sessionFile?.trim();
+  if (!filePath || parseSqliteSessionFileMarker(filePath)) {
+    return [];
+  }
+  try {
+    return fs
+      .readFileSync(filePath, "utf8")
+      .split(/\r?\n/u)
+      .flatMap((line) => {
+        if (!line.trim()) {
+          return [];
+        }
+        try {
+          return [JSON.parse(line) as unknown];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+export function buildSessionResetBoundaryPlan(params: {
+  events: readonly unknown[];
+  legacySessionFile?: string;
+  reason: SessionResetBoundaryReason;
+}): SessionResetBoundaryPlan {
+  const hasConversationEvents = params.events.some(
+    (event) =>
+      event !== null &&
+      typeof event === "object" &&
+      !Array.isArray(event) &&
+      (event as { type?: unknown }).type !== "session",
+  );
+  const legacyEvents = hasConversationEvents
+    ? []
+    : readLegacyTranscriptEvents(params.legacySessionFile);
+  const seedEvents = legacyEvents.filter(
+    (event) =>
+      event !== null &&
+      typeof event === "object" &&
+      !Array.isArray(event) &&
+      (event as { type?: unknown }).type !== "session",
+  );
+  const events = seedEvents.length > 0 ? [...params.events, ...seedEvents] : params.events;
+  return {
+    event: buildSessionResetBoundaryEvent({ events, reason: params.reason }),
+    seedEvents,
   };
 }

@@ -51,12 +51,12 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
-import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -160,10 +160,13 @@ export async function resetSqliteSessionEntryLifecycle(
         currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
         primaryKey: params.target.canonicalKey,
       });
-      const resetBoundaryEvent =
-        params.resetBoundaryReason && current?.entry.sessionId
-          ? buildSessionResetBoundaryEvent({
+      const resetBoundaryPlan =
+        params.resetBoundaryReason &&
+        current?.entry.sessionId &&
+        !sqliteSessionEntriesEqual(current.entry, nextEntry)
+          ? buildSessionResetBoundaryPlan({
               events: loadSqliteTranscriptEventsFromDatabase(database, current.entry.sessionId),
+              legacySessionFile: current.entry.sessionFile,
               reason: params.resetBoundaryReason,
             })
           : undefined;
@@ -175,17 +178,18 @@ export async function resetSqliteSessionEntryLifecycle(
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
         assertSqliteLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
-        if (resetBoundaryEvent && current?.entry.sessionId) {
-          const appended = appendTranscriptEventInTransaction(
+        if (resetBoundaryPlan && current?.entry.sessionId) {
+          const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
+          const appended = appendTranscriptEventsInTransaction(
             transactionDb,
             {
               ...resolved,
               sessionId: current.entry.sessionId,
               sessionKey: current.key,
             },
-            resetBoundaryEvent,
+            events,
           );
-          if (!appended) {
+          if (appended !== events.length) {
             throw new Error(`Failed to append reset boundary for ${current.key}`);
           }
         }

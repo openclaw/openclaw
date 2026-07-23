@@ -28,7 +28,7 @@ import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
-import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
 import type { SessionEntry } from "./types.js";
@@ -344,6 +344,11 @@ export async function projectSqliteSessionEntryLifecycleMutation(
       continue;
     }
     const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
+    if (upsert.resetBoundaryReason && !expectedEntry) {
+      throw new Error(
+        `Cannot append reset boundary without an existing session row: ${sessionKey}`,
+      );
+    }
     const entry =
       upsert.buildEntry === undefined
         ? upsert.entry
@@ -358,10 +363,11 @@ export async function projectSqliteSessionEntryLifecycleMutation(
     const cloned = cloneSessionEntry(entry);
     store[sessionKey] = cloned;
     changedSessionKeys.add(sessionKey);
-    const resetBoundaryEvent =
+    const resetBoundaryPlan =
       upsert.resetBoundaryReason && expectedEntry?.sessionId
-        ? buildSessionResetBoundaryEvent({
+        ? buildSessionResetBoundaryPlan({
             events: loadSqliteTranscriptEventsFromDatabase(database, expectedEntry.sessionId),
+            legacySessionFile: expectedEntry.sessionFile,
             reason: upsert.resetBoundaryReason,
           })
         : undefined;
@@ -369,7 +375,7 @@ export async function projectSqliteSessionEntryLifecycleMutation(
       expectedEntry,
       sessionKey,
       entry: cloned,
-      ...(resetBoundaryEvent ? { resetBoundaryEvent } : {}),
+      ...(resetBoundaryPlan ? { resetBoundaryPlan } : {}),
     });
   }
   const referencedSessionIds = collectProjectedReferencedSqliteSessionIds({

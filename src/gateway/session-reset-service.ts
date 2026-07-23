@@ -1197,7 +1197,8 @@ export async function performGatewaySessionReset(params: {
             storePath,
           }))
         : undefined;
-      const resetBoundaryAppended = boundaryEntry !== undefined;
+      let resetBoundaryAppended = false;
+      let resetSkipped = false;
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
@@ -1216,8 +1217,14 @@ export async function performGatewaySessionReset(params: {
         buildNextEntry: ({ currentEntry, primaryKey }) => {
           createdNewEntry = currentEntry === undefined;
           if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
+            if (currentEntry) {
+              resetSkipped = true;
+              return currentEntry;
+            }
+            params.assertCurrent?.();
             throw new Error(`Session ${params.key} changed before reset boundary commit.`);
           }
+          resetBoundaryAppended = currentEntry !== undefined;
           if (!isResetLifecycleCurrent() && currentEntry?.sessionId !== entry?.sessionId) {
             // A newer owner already replaced or removed the session while cleanup
             // targeted the old id. Preserve that newer state instead of resetting it.
@@ -1354,6 +1361,9 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
+          if (resetSkipped) {
+            return;
+          }
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,
             sessionKey: target.canonicalKey ?? params.key,
@@ -1416,7 +1426,9 @@ export async function performGatewaySessionReset(params: {
       });
       let lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>>;
       lifecycle = await lifecyclePromise;
-      handleSessionStateSessionReset(target.canonicalKey ?? params.key);
+      if (!resetSkipped) {
+        handleSessionStateSessionReset(target.canonicalKey ?? params.key);
+      }
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);
       const resolved = {
@@ -1434,27 +1446,29 @@ export async function performGatewaySessionReset(params: {
       const oldSessionFile = lifecycle.previousSessionFile;
 
       const archivedTranscripts = lifecycle.archivedTranscripts;
-      emitGatewaySessionEndPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey ?? params.key,
-        sessionId: oldSessionId,
-        storePath,
-        sessionFile: oldSessionFile,
-        agentId: target.agentId,
-        reason: params.reason,
-        archivedTranscripts,
-        nextSessionId: next.sessionId,
-      });
-      emitGatewaySessionStartPluginHook({
-        cfg,
-        sessionKey: target.canonicalKey ?? params.key,
-        sessionId: next.sessionId,
-        resumedFrom: oldSessionId,
-        storePath,
-        sessionFile: next.sessionFile,
-        agentId: target.agentId,
-      });
-      if (hadExistingEntry) {
+      if (!resetSkipped) {
+        emitGatewaySessionEndPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionId: oldSessionId,
+          storePath,
+          sessionFile: oldSessionFile,
+          agentId: target.agentId,
+          reason: params.reason,
+          archivedTranscripts,
+          nextSessionId: next.sessionId,
+        });
+        emitGatewaySessionStartPluginHook({
+          cfg,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionId: next.sessionId,
+          resumedFrom: oldSessionId,
+          storePath,
+          sessionFile: next.sessionFile,
+          agentId: target.agentId,
+        });
+      }
+      if (hadExistingEntry && !resetSkipped) {
         await emitSessionUnboundLifecycleEvent({
           targetSessionKey: target.canonicalKey ?? params.key,
           reason: "session-reset",

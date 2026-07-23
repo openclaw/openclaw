@@ -62,7 +62,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
-import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./store.js";
@@ -338,19 +338,20 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         sessionKey,
         entry,
         expectedEntry,
-        resetBoundaryEvent,
+        resetBoundaryPlan,
       } of projected.upsertedEntries) {
         const currentEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
         if (!sqliteSessionEntriesEqual(currentEntry, expectedEntry)) {
           throw new Error(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
         }
-        if (resetBoundaryEvent && expectedEntry?.sessionId) {
-          const appended = appendTranscriptEventInTransaction(
+        if (resetBoundaryPlan && expectedEntry?.sessionId) {
+          const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
+          const appended = appendTranscriptEventsInTransaction(
             transactionDb,
             { ...resolved, sessionId: expectedEntry.sessionId, sessionKey },
-            resetBoundaryEvent,
+            events,
           );
-          if (!appended) {
+          if (appended !== events.length) {
             throw new Error(`Failed to append reset boundary for ${sessionKey}`);
           }
         }
