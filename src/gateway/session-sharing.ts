@@ -244,14 +244,15 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
 ]);
 
 function resolveSessionGroupMutationTargets(params: {
-  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
   requestParams: unknown;
 }): SessionMutationTarget[] | undefined {
   const groupName = readStringParam(params.requestParams, "name");
   if (!groupName) {
     return undefined;
   }
-  return resolveAllAgentSessionStoreTargetsSync(params.cfg).flatMap((storeTarget) =>
+  const cfg = params.context.getRuntimeConfig();
+  return resolveAllAgentSessionStoreTargetsSync(cfg).flatMap((storeTarget) =>
     listSessionEntries({
       agentId: storeTarget.agentId,
       storePath: storeTarget.storePath,
@@ -292,13 +293,15 @@ function resolveApprovalSessionTarget(
 }
 
 function resolveSessionMutationTargets(params: {
-  cfg: OpenClawConfig;
   method: string;
   requestParams: unknown;
   context: GatewayRequestContext;
 }): SessionMutationTarget[] | undefined {
   if (params.method === "sessions.groups.rename" || params.method === "sessions.groups.delete") {
-    return resolveSessionGroupMutationTargets(params);
+    return resolveSessionGroupMutationTargets({
+      context: params.context,
+      requestParams: params.requestParams,
+    });
   }
   if (
     params.method === "exec.approval.resolve" ||
@@ -350,7 +353,6 @@ function resolveSessionMutationTargets(params: {
 }
 
 export function authorizeSessionMutation(params: {
-  cfg: OpenClawConfig;
   client: GatewayClient | null;
   method: string;
   requestParams: unknown;
@@ -359,7 +361,11 @@ export function authorizeSessionMutation(params: {
   if (isGatewayAdmin(params.client)) {
     return null;
   }
-  const targetRefs = resolveSessionMutationTargets(params);
+  const targetRefs = resolveSessionMutationTargets({
+    method: params.method,
+    requestParams: params.requestParams,
+    context: params.context,
+  });
   if (!targetRefs) {
     if (REQUIRED_SESSION_TARGET_METHODS.has(params.method)) {
       return errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
@@ -368,9 +374,13 @@ export function authorizeSessionMutation(params: {
     }
     return null;
   }
+  // Resolve runtime config only once a real session-mutation target exists. The context getter
+  // reloads/resolves gateway config, so reading it for every non-session request would tax the
+  // authorization hot path (most requests never reach here).
+  const cfg = params.context.getRuntimeConfig();
   for (const targetRef of targetRefs) {
     const error = authorizeResolvedSessionMutation({
-      cfg: params.cfg,
+      cfg,
       client: params.client,
       sessionKey: targetRef.sessionKey,
       agentId: targetRef.agentId,

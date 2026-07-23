@@ -421,14 +421,13 @@ describe("session sharing handlers", () => {
         viewGeneration: "a".repeat(32),
       });
       const memberClient = identifiedClient("outsider@example.com");
-      const requestContext = context(vi.fn());
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      } as never;
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const requestContext = context(vi.fn(), cfg);
 
       expect(
         authorizeSessionMutation({
-          cfg,
           client: memberClient,
           method: "board.action",
           requestParams: { ticket, agentId: "work" },
@@ -444,7 +443,6 @@ describe("session sharing handlers", () => {
       });
       expect(
         authorizeSessionMutation({
-          cfg,
           client: memberClient,
           method: "board.action",
           requestParams: { ticket: unscopedTicket, agentId: "work" },
@@ -491,7 +489,6 @@ describe("session sharing handlers", () => {
       const expectAccess = (allowed: boolean) => {
         for (const [method, requestParams] of mutations) {
           const error = authorizeSessionMutation({
-            cfg: {},
             client: memberClient,
             method,
             requestParams,
@@ -603,7 +600,6 @@ describe("session sharing handlers", () => {
       );
       expect(
         authorizeSessionMutation({
-          cfg: {},
           client: identifiedClient("viewer"),
           method: "sessions.groups.delete",
           requestParams: { name: "Projects" },

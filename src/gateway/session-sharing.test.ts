@@ -151,15 +151,16 @@ describe("session sharing policy", () => {
         { agentId: "main", sessionKey: "agent:main:solo-draft" },
         { sessionId: "session-solo-draft", updatedAt: 1, visibility: "draft" },
       );
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      } as never;
       const context = {
         chatAbortControllers: new Map([["run-1", { sessionKey: "global", agentId: "work" }]]),
         execApprovalManager: {
           lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
           getSnapshot: () => ({ request: { sessionKey: "global", agentId: "work" } }),
         },
-      } as never;
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        getRuntimeConfig: () => cfg,
       } as never;
       const outsider = client({ user: "outsider@example.com" });
 
@@ -168,12 +169,11 @@ describe("session sharing policy", () => {
         ["exec.approval.resolve", { id: "approval-1" }],
       ] as const) {
         expect(
-          authorizeSessionMutation({ cfg, client: outsider, method, requestParams, context }),
+          authorizeSessionMutation({ client: outsider, method, requestParams, context }),
         ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       }
       expect(
         authorizeSessionMutation({
-          cfg,
           client: client({}),
           method: "chat.send",
           requestParams: { sessionKey: "agent:main:solo-draft" },
@@ -184,10 +184,9 @@ describe("session sharing policy", () => {
   });
 
   it("fails closed when a required session mutation has no target", () => {
-    const context = { chatAbortControllers: new Map() } as never;
+    const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never;
     expect(
       authorizeSessionMutation({
-        cfg: {},
         client: client({}),
         method: "sessions.reset",
         requestParams: {},
@@ -196,7 +195,6 @@ describe("session sharing policy", () => {
     ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     expect(
       authorizeSessionMutation({
-        cfg: {},
         client: client({ scopes: ["operator.admin"] }),
         method: "sessions.reset",
         requestParams: {},

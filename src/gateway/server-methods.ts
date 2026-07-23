@@ -936,7 +936,6 @@ export async function handleGatewayRequest(
     return;
   }
   const sessionMutationError = authorizeSessionMutation({
-    cfg: context.getRuntimeConfig(),
     client: client ?? null,
     method: req.method,
     requestParams: req.params,
