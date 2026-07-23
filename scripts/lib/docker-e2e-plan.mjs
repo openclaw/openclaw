@@ -86,6 +86,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
   "tilde-log-path",
+  "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
 ];
 
