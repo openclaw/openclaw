@@ -100,6 +100,108 @@ describe("scripts bounded response reader", () => {
   );
 
   it.each(helpers)(
+    "rejects repeated identical decimal %s content-length values before reading",
+    async (_name, read) => {
+      let readStarted = false;
+      let canceled = false;
+      const response = {
+        headers: new Headers({ "content-length": "17, 17" }),
+        body: {
+          async cancel() {
+            canceled = true;
+          },
+          getReader() {
+            return {
+              async read() {
+                readStarted = true;
+                return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+              },
+              async cancel() {
+                canceled = true;
+              },
+              releaseLock() {},
+            };
+          },
+        },
+      } as unknown as Response;
+
+      await expect(read(response, "probe", 16)).rejects.toThrow(
+        "probe response body exceeded 16 bytes",
+      );
+
+      expect(readStarted).toBe(false);
+      expect(canceled).toBe(true);
+    },
+  );
+
+  it.each(helpers)(
+    "rejects repeated equivalent decimal %s content-length values before reading",
+    async (_name, read) => {
+      let readStarted = false;
+      let canceled = false;
+      const response = {
+        headers: new Headers({ "content-length": "17, 017" }),
+        body: {
+          async cancel() {
+            canceled = true;
+          },
+          getReader() {
+            return {
+              async read() {
+                readStarted = true;
+                return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+              },
+              async cancel() {
+                canceled = true;
+              },
+              releaseLock() {},
+            };
+          },
+        },
+      } as unknown as Response;
+
+      await expect(read(response, "probe", 16)).rejects.toThrow(
+        "probe response body exceeded 16 bytes",
+      );
+
+      expect(readStarted).toBe(false);
+      expect(canceled).toBe(true);
+    },
+  );
+
+  it.each(helpers)(
+    "streams repeated differing decimal %s content-length values",
+    async (_name, read) => {
+      let readStarted = false;
+      let canceled = false;
+      const response = {
+        headers: new Headers({ "content-length": "17, 12" }),
+        body: {
+          getReader() {
+            return {
+              async read() {
+                readStarted = true;
+                return { done: false, value: new Uint8Array(17) };
+              },
+              async cancel() {
+                canceled = true;
+              },
+              releaseLock() {},
+            };
+          },
+        },
+      } as unknown as Response;
+
+      await expect(read(response, "probe", 16)).rejects.toThrow(
+        "probe response body exceeded 16 bytes",
+      );
+
+      expect(readStarted).toBe(true);
+      expect(canceled).toBe(true);
+    },
+  );
+
+  it.each(helpers)(
     "rejects unsafe decimal %s content-length values before reading",
     async (_name, read) => {
       let readStarted = false;

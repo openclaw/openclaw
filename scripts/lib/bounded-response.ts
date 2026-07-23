@@ -17,12 +17,24 @@ function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void
     .catch(() => undefined);
 }
 
-function parseContentLengthHeader(headers: Headers): number | undefined {
-  const raw = headers.get("content-length");
-  if (!raw || !/^\d+$/u.test(raw)) {
+function canonicalDecimal(value: string): string | undefined {
+  if (!/^\d+$/u.test(value)) {
     return undefined;
   }
-  const parsed = Number(raw);
+  return value.replace(/^0+/u, "") || "0";
+}
+
+function parseContentLengthHeader(headers: Headers): number | undefined {
+  const raw = headers.get("content-length");
+  if (!raw) {
+    return undefined;
+  }
+  const values = raw.includes(",") ? raw.split(",").map((value) => value.trim()) : [raw];
+  const declared = values[0] ? canonicalDecimal(values[0]) : undefined;
+  if (!declared || values.some((value) => canonicalDecimal(value) !== declared)) {
+    return undefined;
+  }
+  const parsed = Number(declared);
   return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
