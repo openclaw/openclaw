@@ -40,7 +40,8 @@ import {
 } from "./agent-bundle-mcp-runtime-config.js";
 import {
   resolveSessionMcpRuntimeIdleTtlMs,
-  waitForSessionMcpRequest,
+  type SessionMcpSharedTask,
+  waitForSessionMcpSharedTask,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
@@ -111,11 +112,8 @@ type McpServerBackoffState = {
   retryAfterMs?: number;
 };
 
-type CatalogRefresh = {
+type CatalogRefresh = SessionMcpSharedTask<McpToolCatalog> & {
   generation: number;
-  controller: AbortController;
-  promise: Promise<McpToolCatalog>;
-  activeWaiters: number;
 };
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
@@ -913,12 +911,20 @@ export function createSessionMcpRuntime(params: {
       }
 
       const refresh = catalogInFlight ?? startCatalogRefresh();
-      refresh.activeWaiters += 1;
-      const waitSignal = options?.signal
-        ? AbortSignal.any([options.signal, refresh.controller.signal])
-        : refresh.controller.signal;
       try {
-        return await waitForSessionMcpRequest(refresh.promise, waitSignal);
+        return await waitForSessionMcpSharedTask({
+          task: refresh,
+          signal: options?.signal,
+          abandonIfCurrent: () => {
+            if (catalogInFlight !== refresh) {
+              return false;
+            }
+            abandonedCatalogRefreshControllers.add(refresh.controller);
+            catalogInFlight = undefined;
+            return true;
+          },
+          abandonedReason: new Error("MCP catalog refresh abandoned by all waiters"),
+        });
       } catch (error) {
         options?.signal?.throwIfAborted();
         failIfDisposed();
@@ -929,17 +935,6 @@ export function createSessionMcpRuntime(params: {
           continue;
         }
         throw error;
-      } finally {
-        refresh.activeWaiters -= 1;
-        if (
-          refresh.activeWaiters === 0 &&
-          catalogInFlight === refresh &&
-          !refresh.controller.signal.aborted
-        ) {
-          abandonedCatalogRefreshControllers.add(refresh.controller);
-          catalogInFlight = undefined;
-          refresh.controller.abort(new Error("MCP catalog refresh abandoned by all waiters"));
-        }
       }
     }
   };

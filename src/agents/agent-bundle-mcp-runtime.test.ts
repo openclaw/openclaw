@@ -3294,7 +3294,7 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("keeps a combined catalog load alive after its operation waiter aborts", async () => {
+  it("cancels a combined catalog load only after its last operation waiter aborts", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
       {
@@ -3308,6 +3308,7 @@ describe("requester-scoped MCP connection resolution", () => {
       releaseCatalog = resolve;
     });
     let catalogLoadCount = 0;
+    let catalogAbortCount = 0;
     const createRuntime: RuntimeFactory = (params) => {
       const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
       const catalog = {
@@ -3328,7 +3329,14 @@ describe("requester-scoped MCP connection resolution", () => {
         peekCatalog: () => currentCatalog,
         getCatalog: async (options) => {
           catalogLoadCount += 1;
-          await waitForSessionMcpRequest(catalogGate, options?.signal);
+          try {
+            await waitForSessionMcpRequest(catalogGate, options?.signal);
+          } catch (error) {
+            if (options?.signal?.aborted) {
+              catalogAbortCount += 1;
+            }
+            throw error;
+          }
           currentCatalog = catalog;
           return catalog;
         },
@@ -3350,14 +3358,32 @@ describe("requester-scoped MCP connection resolution", () => {
       messageChannel: "telegram",
     });
 
-    await expect(runtime.getCatalog({ signal: AbortSignal.timeout(20) })).rejects.toThrow(/abort/i);
-    const backgroundCatalog = runtime.getCatalog();
+    const firstWaiter = new AbortController();
+    const lastWaiter = new AbortController();
+    const firstCatalog = runtime.getCatalog({ signal: firstWaiter.signal });
+    const lastCatalog = runtime.getCatalog({ signal: lastWaiter.signal });
+    firstWaiter.abort(new Error("first combined catalog waiter aborted"));
+    await expect(firstCatalog).rejects.toThrow("first combined catalog waiter aborted");
+    expect(catalogAbortCount).toBe(0);
+
+    lastWaiter.abort(new Error("last combined catalog waiter aborted"));
+    await expect(lastCatalog).rejects.toThrow("last combined catalog waiter aborted");
+    await waitForPredicate(
+      () => catalogAbortCount === 2,
+      "both combined catalog parts to observe cancellation",
+      LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+    );
+    expect(catalogLoadCount).toBe(2);
+    expect(runtime.peekCatalog()).toBeNull();
+
+    const restartedCatalog = runtime.getCatalog();
     releaseCatalog?.();
 
-    await expect(backgroundCatalog).resolves.toMatchObject({
+    await expect(restartedCatalog).resolves.toMatchObject({
       servers: { shared: {}, "user-mail": {} },
     });
-    expect(catalogLoadCount).toBe(2);
+    expect(catalogLoadCount).toBe(4);
+    expect(catalogAbortCount).toBe(2);
 
     await manager.disposeAll();
   });

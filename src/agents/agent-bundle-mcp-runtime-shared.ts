@@ -27,6 +27,12 @@ export type CreateSessionMcpRuntime = (params: {
   configFingerprint?: string;
 }) => SessionMcpRuntime;
 
+export type SessionMcpSharedTask<T> = {
+  controller: AbortController;
+  promise: Promise<T>;
+  activeWaiters: number;
+};
+
 function toMcpRequestError(reason: unknown, fallbackMessage: string): Error {
   return reason instanceof Error ? reason : new Error(fallbackMessage, { cause: reason });
 }
@@ -55,6 +61,31 @@ export async function waitForSessionMcpRequest<T>(
       },
     );
   });
+}
+
+export async function waitForSessionMcpSharedTask<T>(params: {
+  task: SessionMcpSharedTask<T>;
+  signal?: AbortSignal;
+  abandonIfCurrent: () => boolean;
+  abandonedReason: Error;
+}): Promise<T> {
+  params.signal?.throwIfAborted();
+  params.task.activeWaiters += 1;
+  const waitSignal = params.signal
+    ? AbortSignal.any([params.signal, params.task.controller.signal])
+    : params.task.controller.signal;
+  try {
+    return await waitForSessionMcpRequest(params.task.promise, waitSignal);
+  } finally {
+    params.task.activeWaiters -= 1;
+    if (
+      params.task.activeWaiters === 0 &&
+      !params.task.controller.signal.aborted &&
+      params.abandonIfCurrent()
+    ) {
+      params.task.controller.abort(params.abandonedReason);
+    }
+  }
 }
 
 export function resolveSessionMcpRuntimeIdleTtlMs(): number {
