@@ -52,6 +52,7 @@ const POSIX_PARSEABLE_SHELL_WRAPPER_NAMES = [
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
 const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
+const NUSHELL_INLINE_COMMAND_FLAGS = new Set([...POSIX_INLINE_COMMAND_FLAGS, "-e", "--execute"]);
 
 function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
@@ -155,12 +156,13 @@ function resolveShellWrapperSpecAndArgvInternal(
     return null;
   }
 
-  const wrapper = findShellWrapperSpec(normalizeExecutableToken(candidate.token0));
+  const baseExecutable = normalizeExecutableToken(candidate.token0);
+  const wrapper = findShellWrapperSpec(baseExecutable);
   if (!wrapper) {
     return null;
   }
 
-  const payload = extractShellWrapperPayload(candidate.argv, wrapper);
+  const payload = extractShellWrapperPayload(candidate.argv, wrapper, baseExecutable);
   if (!payload) {
     return null;
   }
@@ -235,8 +237,9 @@ export function unwrapKnownShellMultiplexerInvocation(
   return { kind: "unwrapped", wrapper, argv: unwrapped };
 }
 
-function extractPosixShellInlineCommand(argv: string[]): string | null {
-  return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
+function extractPosixShellInlineCommand(argv: string[], baseExecutable: string): string | null {
+  const flags = baseExecutable === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS;
+  return extractInlineCommandByFlags(argv, flags, { allowCombinedC: true });
 }
 
 function extractCmdInlineCommand(argv: string[]): string | null {
@@ -267,10 +270,14 @@ function extractInlineCommandByFlags(
   return resolveInlineCommandMatch(argv, flags, options).command;
 }
 
-function extractShellWrapperPayload(argv: string[], spec: ShellWrapperSpec): string | null {
+function extractShellWrapperPayload(
+  argv: string[],
+  spec: ShellWrapperSpec,
+  baseExecutable: string,
+): string | null {
   switch (spec.kind) {
     case "posix":
-      return extractPosixShellInlineCommand(argv);
+      return extractPosixShellInlineCommand(argv, baseExecutable);
     case "cmd":
       return extractCmdInlineCommand(argv);
     case "powershell":
@@ -341,7 +348,11 @@ function hasEnvManipulationBeforeShellWrapperInternal(
   if (!wrapper) {
     return false;
   }
-  const payload = extractShellWrapperPayload(candidate.argv, wrapper);
+  const payload = extractShellWrapperPayload(
+    candidate.argv,
+    wrapper,
+    normalizeExecutableToken(candidate.token0),
+  );
   if (!payload) {
     return false;
   }
@@ -368,7 +379,7 @@ function extractShellWrapperCommandInternal(
   if (!wrapper) {
     return { isWrapper: false, command: null };
   }
-  const payload = extractShellWrapperPayload(candidate.argv, wrapper);
+  const payload = extractShellWrapperPayload(candidate.argv, wrapper, baseExecutable);
   if (!payload) {
     return { isWrapper: false, command: null };
   }

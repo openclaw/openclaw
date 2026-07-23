@@ -872,6 +872,37 @@ $0 \\"$1\\"" touch {marker}`,
     },
   );
 
+  it.each(["--commands", "--execute", "-e"])(
+    "prevents allowlist bypass for nu %s inline shell payloads",
+    async (commandFlag) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const shell = makeExecutable(dir, "nu");
+      makeExecutable(dir, "id");
+      const env = makePathEnv(dir);
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: `${shell} ${commandFlag} 'id > marker'`,
+        allowlist: [{ pattern: shell, source: "allow-always" }],
+        safeBins: resolveSafeBins(undefined),
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("prevents allow-always bypass for caffeinate wrapper chains", async () => {
     if (process.platform === "win32") {
       return;

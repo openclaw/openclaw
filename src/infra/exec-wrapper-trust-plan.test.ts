@@ -110,6 +110,19 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
+      name: "recognizes nushell execute flags before evaluating allowlist policy",
+      enabled: true,
+      argv: ["nu", "--execute", "echo hi"],
+      expected: {
+        argv: ["nu", "--execute", "echo hi"],
+        policyArgv: ["nu", "--execute", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
       name: "recognizes yash cmdline flags before evaluating allowlist policy",
       enabled: true,
       argv: ["yash", "--cmdline", "echo hi"],
