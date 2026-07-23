@@ -1,7 +1,10 @@
 import Foundation
 import JavaScriptCore
+import CryptoKit
 
 enum ExecAllowlistMatcher {
+    private static let hashedArgPatternPrefix = "sha256:argv:"
+
     static func match(entries: [ExecAllowlistEntry], resolution: ExecCommandResolution?) -> ExecAllowlistEntry? {
         guard let resolution, !entries.isEmpty else { return nil }
         if let wildcard = entries.first(where: {
@@ -89,6 +92,9 @@ enum ExecAllowlistMatcher {
     /// one space between parsed arguments. Redirect-shaped tokens stay literal
     /// because resolution does not retain enough shell syntax provenance.
     private static func matchesArgPattern(_ argPattern: String, argv: [String]) -> Bool {
+        if argPattern.hasPrefix(self.hashedArgPatternPrefix) {
+            return argPattern == self.hashedArgPattern(argv: argv)
+        }
         let nul = "\0"
         let arguments = Array(argv.dropFirst())
         let usesNulSeparator = argPattern.contains(nul)
@@ -109,6 +115,14 @@ enum ExecAllowlistMatcher {
               context.exception == nil
         else { return false }
         return result.toBool()
+    }
+
+    private static func hashedArgPattern(argv: [String]) -> String {
+        let nul = "\0"
+        let arguments = Array(argv.dropFirst())
+        let subject = arguments.isEmpty ? nul + nul : arguments.joined(separator: nul) + nul
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return self.hashedArgPatternPrefix + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func matches(pattern: String, target: String) -> Bool {
