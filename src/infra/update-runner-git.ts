@@ -70,7 +70,7 @@ export async function runGitUpdate(params: {
   const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
   const hasDevTargetRef = channel === "dev" && Boolean(opts.devTargetRef?.trim());
   const needsCheckoutMain = channel === "dev" && !hasDevTargetRef && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 10;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -146,6 +146,9 @@ export async function runGitUpdate(params: {
       return;
     }
     await appendRecoveryStep("git rollback clean", ["git", "-C", gitRoot, "reset", "--hard"]);
+    // The preflight accepted only a completely clean checkout, so untracked
+    // paths created after mutation belong to the failed update and are safe to remove.
+    await appendRecoveryStep("git rollback clean untracked", ["git", "-C", gitRoot, "clean", "-fd"]);
     if (branch && branch !== "HEAD") {
       const checkedOut = await appendRecoveryStep("git rollback checkout", [
         "git",
@@ -384,6 +387,20 @@ export async function runGitUpdate(params: {
     steps.push(buildStep);
     if (buildStep.exitCode !== 0) {
       return await rollbackError("build-failed");
+    }
+    const buildCleanCheck = await runStep(
+      step(
+        "build clean check",
+        ["git", "-C", gitRoot, "status", "--porcelain", "--", ":!dist/control-ui/"],
+        gitRoot,
+      ),
+    );
+    steps.push(buildCleanCheck);
+    if (buildCleanCheck.exitCode !== 0) {
+      return await rollbackError("build-failed");
+    }
+    if (buildCleanCheck.stdoutTail?.trim()) {
+      return await rollbackError("build-dirty");
     }
     const uiBuildStep = await runStep(
       step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot, manager.env),
