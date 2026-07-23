@@ -78,7 +78,10 @@ import {
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -92,6 +95,7 @@ import {
   removeRemoteNodeInfo,
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
+import type { RestoredAdmissionDescriptor } from "../snapshot/restored-recovery-point.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -597,11 +601,57 @@ export type GatewayServerOptions = {
   hotReloadRecovery?: GatewayRestartEmitter;
 };
 
+const RESTORED_ADMISSION_FILE_ENV = "OPENCLAW_RFC0013_RESTORED_ADMISSION_FILE";
+
 export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   normalizeStateDirEnv(process.env);
+  const descriptorPath = process.env[RESTORED_ADMISSION_FILE_ENV];
+  if (descriptorPath === undefined) {
+    return await startGatewayServerRuntime(port, opts, null);
+  }
+  delete process.env[RESTORED_ADMISSION_FILE_ENV];
+  const admission = tryBeginGatewaySuspendAdmission(() => {});
+  if (!admission || !admission.commit()) {
+    admission?.rollback();
+    throw new Error("restored Gateway startup could not close work admission");
+  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return true;
+    }
+    released = admission.release();
+    return released;
+  };
+  try {
+    const restoredAdmissionModule = await import("./restored-admission.js");
+    const descriptor = await restoredAdmissionModule.prepareRestoredAdmission(
+      descriptorPath,
+      process.env,
+    );
+    return await startGatewayServerRuntime(port, opts, {
+      descriptor,
+      release,
+      complete: restoredAdmissionModule.completeRestoredAdmission,
+    });
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+async function startGatewayServerRuntime(
+  port: number,
+  opts: GatewayServerOptions,
+  restoredStartup: {
+    descriptor: RestoredAdmissionDescriptor;
+    release: () => boolean;
+    complete: typeof import("./restored-admission.js").completeRestoredAdmission;
+  } | null,
+): Promise<GatewayServer> {
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -1214,6 +1264,8 @@ export async function startGatewayServer(
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
   let gatewayCronStartHandled = false;
+  let restoredAdmissionReady = restoredStartup === null;
+  const releaseRestoredAdmission = () => restoredStartup?.release() ?? true;
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
     loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
@@ -1250,13 +1302,24 @@ export async function startGatewayServer(
     ambientAutostartSuppressedChannelIds,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
-  const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupSidecarsReady && sidecarStartup === "start";
+  const sidecarStartup = restoredStartup ? "start" : (opts.sidecarStartup ?? "start");
+  const isGatewayStartupPending = () =>
+    !restoredAdmissionReady || (!startupSidecarsReady && sidecarStartup === "start");
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
-    getStartupPendingReason: () => startupPendingReason,
+    getStartupPendingReason: () =>
+      restoredAdmissionReady ? startupPendingReason : "restored-admission",
+    getGatewayDraining: isGatewayDraining,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    shouldSkipChannelReadiness: () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+  });
+  const getRestoredOwnerReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
     getGatewayDraining: isGatewayDraining,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
@@ -1703,6 +1766,7 @@ export async function startGatewayServer(
       await runClosePrelude();
       await createCloseHandler()({ reason: "gateway startup failed" });
     } finally {
+      releaseRestoredAdmission();
       clearFallbackGatewayContextForServer();
     }
   };
@@ -2429,6 +2493,35 @@ export async function startGatewayServer(
                 runtimeState.gatewayLifetimeSidecars = [];
               }
             },
+            ...(restoredStartup
+              ? {
+                  beforeReady: async () => {
+                    const completed = await restoredStartup.complete({
+                      descriptor: restoredStartup.descriptor,
+                      startScheduler: async () => {
+                        const reconciliation = cronReconciliation.arm({
+                          reason: "startup",
+                          config: cfgAtStart,
+                          cronState: runtimeState.cronState,
+                        });
+                        await runtimeState.cronState.cron.start();
+                        gatewayCronStartHandled = true;
+                        await reconciliation.complete();
+                        return await runtimeState.cronState.cron.status();
+                      },
+                      getOwnerReadiness: getRestoredOwnerReadiness,
+                    });
+                    if (!releaseRestoredAdmission()) {
+                      throw new Error("restored Gateway startup lost work admission");
+                    }
+                    restoredAdmissionReady = true;
+                    log.info("restored admission opened", {
+                      readinessIdentity: completed.record.readinessIdentity,
+                      replayed: completed.replayed,
+                    });
+                  },
+                }
+              : {}),
             ...(workerPlacementRuntime
               ? {
                   startWorkerEnvironmentRuntime: async () => {
