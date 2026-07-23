@@ -64,6 +64,41 @@ function mergeOpenRouterProviderRouting(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/**
+ * Reads the `models` array from provider or model params for OpenRouter's
+ * automatic fallback feature. When provided, OpenRouter will try each model
+ * in order if the primary is down, rate-limited, or returns an error.
+ *
+ * @see https://openrouter.ai/docs/guides/routing/model-fallbacks
+ */
+function resolveOpenRouterModelsArray(params: {
+  providerParams?: Record<string, unknown>;
+  modelParams?: Record<string, unknown>;
+  extraParams: Record<string, unknown>;
+}): string[] | undefined {
+  const rawModels =
+    params.extraParams.models ??
+    params.providerParams?.models ??
+    params.modelParams?.models;
+
+  if (!Array.isArray(rawModels)) {
+    return undefined;
+  }
+
+  const models = rawModels
+    .map((entry) => (typeof entry === "string" ? entry.trim() : undefined))
+    .filter((entry): entry is string => Boolean(entry));
+
+  if (models.length === 0) {
+    return undefined;
+  }
+
+  // Pass through all valid models — OpenRouter applies its own limits
+  // server-side; adding a client-side cap silently drops configured
+  // fallback candidates without a documented contract.
+  return models;
+}
+
 export function resolveOpenRouterExtraParamsForTransport(
   ctx: OpenRouterExtraParamsContext,
 ): { patch?: Record<string, unknown> } | undefined {
@@ -74,15 +109,32 @@ export function resolveOpenRouterExtraParamsForTransport(
     modelParams,
     extraParams: ctx.extraParams,
   });
-  if (!providerConfigParams && !modelParams && !providerRouting) {
+  const modelsArray = resolveOpenRouterModelsArray({
+    providerParams: providerConfigParams,
+    modelParams,
+    extraParams: ctx.extraParams,
+  });
+  if (!providerConfigParams && !modelParams && !providerRouting && !modelsArray) {
     return undefined;
   }
-  return {
-    patch: {
-      ...providerConfigParams,
-      ...modelParams,
-      ...ctx.extraParams,
-      ...(providerRouting ? { provider: providerRouting } : {}),
-    },
+  // Start with merged params. Strip raw `models` from extraParams to prevent
+  // non-array values (null, object, string, etc.) from leaking into the patch.
+  const patch: Record<string, unknown> = {
+    ...providerConfigParams,
+    ...modelParams,
+    ...Object.fromEntries(
+      Object.entries(ctx.extraParams).filter(([k]) => k !== "models"),
+    ),
+    ...(providerRouting ? { provider: providerRouting } : {}),
   };
+  // When a valid models array was resolved, inject it as the sole source of
+  // truth. Otherwise explicitly remove any raw `models` that leaked through
+  // from providerConfigParams or modelParams — invalid values must not be
+  // forwarded to OpenRouter.
+  if (modelsArray) {
+    patch.models = modelsArray;
+  } else {
+    delete patch.models;
+  }
+  return { patch };
 }
