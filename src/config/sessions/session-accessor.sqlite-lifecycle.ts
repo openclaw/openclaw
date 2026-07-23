@@ -199,7 +199,9 @@ export async function resetSqliteSessionEntryLifecycle(
             throw new Error(`Failed to append reset boundary for ${current.key}`);
           }
         }
-        writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry);
+        writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry, {
+          previousEntry: current?.entry ?? null,
+        });
         rehomeSqliteSessionWindows(
           transactionDb,
           params.target.canonicalKey,
@@ -209,6 +211,7 @@ export async function resetSqliteSessionEntryLifecycle(
           transactionDb,
           params.target.storeKeys,
           params.target.canonicalKey,
+          { rehomeMembers: current?.entry.sessionId === nextEntry.sessionId },
         );
         // Reset only advances the live entry and route. Historical rows stay searchable;
         // disk-budget cleanup owns durable extraction before reclaiming them.

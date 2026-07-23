@@ -228,7 +228,9 @@ export async function forkSqliteSessionEntryFromParentTarget(
         sessionId: fork.transcript.sessionId,
       });
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
-      writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next);
+      writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next, {
+        previousEntry: freshBase,
+      });
       rehomeSqliteSessionWindows(
         writeDatabase,
         sessionTarget.canonicalKey,
@@ -238,6 +240,7 @@ export async function forkSqliteSessionEntryFromParentTarget(
         writeDatabase,
         sessionTarget.storeKeys,
         sessionTarget.canonicalKey,
+        { rehomeMembers: freshBase.sessionId === next.sessionId },
       );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
@@ -282,7 +285,9 @@ async function persistSqliteParentForkSkipPatch(params: {
   let currentIdentity = new Map<string, SessionEntry>();
   runOpenClawAgentWriteTransaction((database) => {
     previousIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);
-    writeSessionEntry(database, params.sessionTarget.canonicalKey, next);
+    writeSessionEntry(database, params.sessionTarget.canonicalKey, next, {
+      previousEntry: params.entry,
+    });
     rehomeSqliteSessionWindows(
       database,
       params.sessionTarget.canonicalKey,
@@ -292,6 +297,7 @@ async function persistSqliteParentForkSkipPatch(params: {
       database,
       params.sessionTarget.storeKeys,
       params.sessionTarget.canonicalKey,
+      { rehomeMembers: params.entry.sessionId === next.sessionId },
     );
     maintenancePlans.push(
       applySqliteSessionEntryMaintenance(database, {

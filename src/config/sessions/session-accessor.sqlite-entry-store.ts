@@ -459,6 +459,7 @@ export function deleteLegacySessionEntryRows(
   database: OpenClawAgentDatabase,
   legacyKeys: string[],
   sessionKey: string,
+  options: { rehomeMembers?: boolean } = {},
 ): void {
   if (legacyKeys.length === 0) {
     return;
@@ -469,7 +470,7 @@ export function deleteLegacySessionEntryRows(
       continue;
     }
     rehomeSqliteSessionWindows(database, sessionKey, [legacyKey]);
-    rehomeLegacySessionNodeArtifacts(database, legacyKey, sessionKey);
+    rehomeLegacySessionNodeArtifacts(database, legacyKey, sessionKey, options);
     executeSqliteQuerySync(
       database.db,
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
@@ -499,6 +500,7 @@ function rehomeLegacySessionNodeArtifacts(
   database: OpenClawAgentDatabase,
   legacyKey: string,
   canonicalKey: string,
+  options: { rehomeMembers?: boolean },
 ): void {
   const db = getSessionKysely(database.db);
   const presentTables = readSessionNodeArtifactTables(database);
@@ -545,7 +547,7 @@ function rehomeLegacySessionNodeArtifacts(
       );
     }
   }
-  if (presentTables.has("session_members")) {
+  if (options.rehomeMembers !== false && presentTables.has("session_members")) {
     const members = executeSqliteQuerySync(
       database.db,
       db.selectFrom("session_members").selectAll().where("session_key", "=", legacyKey),
@@ -634,15 +636,23 @@ export function writeSessionEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   entry: SessionEntry,
+  options: { previousEntry?: SessionEntry | null } = {},
 ): void {
   const db = getSessionKysely(database.db);
   const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
   const updatedAt = normalizedEntry.updatedAt;
-  const previousEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
-  // A replacement session instance starts shared and cannot inherit members
-  // or a copied-forward visibility restriction from the prior instance.
+  const canonicalPreviousEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
+  const previousEntry =
+    options.previousEntry === undefined
+      ? canonicalPreviousEntry
+      : (options.previousEntry ?? undefined);
+  // The lifecycle-selected entry owns visibility copy-forward semantics.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
+  }
+  // Membership belongs to the exact canonical row being overwritten, which
+  // can differ from the selected alias during canonicalization.
+  if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
     clearSessionMembersForKey(database, sessionKey);
   }
   // Registry writes snapshot the current transcript watermark so recovery can

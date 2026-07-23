@@ -25,6 +25,7 @@ import type {
   SessionEntryStatus,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  deleteLegacySessionEntryRows,
   deleteSqliteSessionEntryRows,
   readExactSessionEntryRow,
   readSqliteSessionEntryCount,
@@ -160,6 +161,7 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
             transactionDb,
             replacement.sessionKey,
             cloneSessionEntry(replacement.entry),
+            { previousEntry: expectedEntries.get(replacement.sessionKey) ?? null },
           );
         }
         maintenancePlans.push(
@@ -255,7 +257,9 @@ export async function applySqliteSessionStoreProjection<T>(params: {
         for (const sessionKey of changedKeys) {
           const entry = projected[sessionKey];
           if (entry) {
-            writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry));
+            writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry), {
+              previousEntry: before[sessionKey] ?? null,
+            });
           } else {
             deleteSqliteSessionEntryRows(transactionDb, sessionKey);
           }
@@ -352,6 +356,10 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         undefined,
         new Set(validatedRemovals.map((removal) => removal.sessionKey)),
       );
+      const legacyReplacementTargets = new Map<
+        string,
+        { canonicalKey: string; rehomeMembers: boolean }
+      >();
       for (const {
         sessionKey,
         entry,
@@ -386,7 +394,9 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
             throw new Error(`Failed to append reset boundary for ${sessionKey}`);
           }
         }
-        writeSessionEntry(transactionDb, sessionKey, entry);
+        writeSessionEntry(transactionDb, sessionKey, entry, {
+          previousEntry: expectedCurrentEntry ?? null,
+        });
         const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
           const removedSessionId = removal.expectedEntry.sessionId;
           return removal.sessionKey !== sessionKey &&
@@ -395,6 +405,15 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
             : [];
         });
         rehomeSqliteSessionWindows(transactionDb, sessionKey, relatedRemovalKeys);
+        for (const legacyKey of relatedRemovalKeys) {
+          const removedEntry = validatedRemovals.find(
+            (removal) => removal.sessionKey === legacyKey,
+          )?.expectedEntry;
+          legacyReplacementTargets.set(legacyKey, {
+            canonicalKey: sessionKey,
+            rehomeMembers: removedEntry?.sessionId === entry.sessionId,
+          });
+        }
       }
       const upsertedKeys = new Set(projected.upsertedEntries.map((upsert) => upsert.sessionKey));
       for (const removal of validatedRemovals) {
@@ -410,7 +429,17 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         if (!shouldRemoveSqliteSessionEntry(entry, removal.removal)) {
           continue;
         }
-        deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey);
+        const replacement = legacyReplacementTargets.get(removal.sessionKey);
+        if (replacement) {
+          deleteLegacySessionEntryRows(
+            transactionDb,
+            [removal.sessionKey],
+            replacement.canonicalKey,
+            { rehomeMembers: replacement.rehomeMembers },
+          );
+        } else {
+          deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey);
+        }
         removedSessionKeys.push(removal.sessionKey);
       }
       maintenancePlans.push(

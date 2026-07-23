@@ -305,11 +305,15 @@ export async function patchSqliteSessionEntry(
             previous: writeBase,
             sessionKey: resolved.sessionKey,
           });
-      writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      const selectedPreviousEntry = fresh.selected?.entry ?? writeBase;
+      writeSessionEntry(writeDatabase, resolved.sessionKey, next, {
+        previousEntry: selectedPreviousEntry,
+      });
       deleteLegacySessionEntryRows(
         writeDatabase,
         fresh.selected?.legacyKeys ?? [],
         resolved.sessionKey,
+        { rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId },
       );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
@@ -384,12 +388,16 @@ export async function patchSqliteSessionEntryTarget(
             previous: writeBase,
             sessionKey: scope.target.canonicalKey,
           });
-      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next);
+      const selectedPreviousEntry = fresh.primary?.entry ?? writeBase;
+      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next, {
+        previousEntry: selectedPreviousEntry,
+      });
       rehomeSqliteSessionWindows(writeDatabase, scope.target.canonicalKey, scope.target.storeKeys);
       deleteLegacySessionEntryRows(
         writeDatabase,
         scope.target.storeKeys,
         scope.target.canonicalKey,
+        { rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId },
       );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {

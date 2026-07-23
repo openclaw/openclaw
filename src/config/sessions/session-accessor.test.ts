@@ -657,6 +657,7 @@ describe("session accessor seam", () => {
       {
         sessionId: "legacy-session",
         updatedAt: 20,
+        visibility: "read-only",
       },
     );
     await replaceSqliteTranscriptEvents(
@@ -668,23 +669,60 @@ describe("session accessor seam", () => {
       "alias database path",
     );
     const aliasDatabase = openOpenClawAgentDatabase({ agentId: "main", path: aliasDatabasePath });
-    aliasDatabase.db.exec(`
-      INSERT INTO board_tabs (
-        session_key, tab_id, title, position, chat_dock, created_by, revision
-      ) VALUES ('agent:main:main', 'main', 'Alias board', 0, 'right', 'user', 1);
-      INSERT INTO board_widgets (
-        session_key, name, tab_id, content_kind, html, sha256, view_generation,
-        revision, size_w, size_h, position, created_by, created_at, updated_at
-      ) VALUES (
-        'agent:main:main', 'status', 'main', 'html', X'3C703E6F6B3C2F703E',
-        'hash', 'view-1', 1, 4, 4, 0, 'user', 20, 20
-      );
-      INSERT INTO heartbeat_outcomes (
-        session_key, run_session_key, outcome, summary, occurred_at, updated_at
-      ) VALUES ('agent:main:main', 'agent:main:main', 'done', 'alias heartbeat', 20, 20);
-      INSERT INTO session_members (session_key, identity_id, added_by, added_at)
-      VALUES ('agent:main:main', 'member-1', 'owner-1', 20);
-    `);
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO session_nodes (
+           session_key, current_session_id, entry_json, updated_at
+         ) VALUES (?, 'canonical-session', ?, 10)`,
+      )
+      .run(canonicalKey, JSON.stringify({ sessionId: "canonical-session", updatedAt: 10 }));
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO session_windows (
+           session_id, session_key, session_scope, created_at, updated_at
+         ) VALUES ('canonical-session', ?, 'conversation', 10, 10)`,
+      )
+      .run(canonicalKey);
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO board_tabs (
+           session_key, tab_id, title, position, chat_dock, created_by, revision
+         ) VALUES ('agent:main:main', 'main', 'Alias board', 0, 'right', 'user', 1)`,
+      )
+      .run();
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO board_widgets (
+           session_key, name, tab_id, content_kind, html, sha256, view_generation,
+           revision, size_w, size_h, position, created_by, created_at, updated_at
+         ) VALUES (
+           'agent:main:main', 'status', 'main', 'html', X'3C703E6F6B3C2F703E',
+           'hash', 'view-1', 1, 4, 4, 0, 'user', 20, 20
+         )`,
+      )
+      .run();
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO heartbeat_outcomes (
+           session_key, run_session_key, outcome, summary, occurred_at, updated_at
+         ) VALUES ('agent:main:main', 'agent:main:main', 'done', 'alias heartbeat', 20, 20)`,
+      )
+      .run();
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run("agent:main:main", "member-1", "owner-1", 20);
+    expect(
+      aliasDatabase.db.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
+    ).toEqual([{ session_key: "agent:main:main" }, { session_key: "agent:main:work" }]);
+    aliasDatabase.db
+      .prepare(
+        `INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run("agent:main:work", "stale-canonical-member", "stale-owner", 10);
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
@@ -707,6 +745,7 @@ describe("session accessor seam", () => {
     expect(patched).toMatchObject({
       label: "patched",
       sessionId: "legacy-session",
+      visibility: "read-only",
     });
     expect(listSessionEntries({ storePath })).toEqual([
       {
@@ -766,6 +805,7 @@ describe("session accessor seam", () => {
 
     expect(notify.mock.calls.map(([event]) => event.kind)).toEqual([
       "move",
+      "replace",
       "create",
       "replace",
       "reset",
