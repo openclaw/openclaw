@@ -1,5 +1,6 @@
 // Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ChatImageAttachment } from "./tui-backend.js";
 import type { TuiChatSubmitAdmission } from "./tui-submit-state.js";
 
 export type TuiSubmitAction = "local shell" | "command" | "message";
@@ -24,8 +25,9 @@ export function createEditorSubmitHandler(params: {
     addToHistory: (value: string) => void;
   };
   handleCommand: (value: string) => Promise<void> | void;
-  sendMessage: (value: string) => Promise<void> | void;
+  sendMessage: (value: string, attachments?: ChatImageAttachment[]) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  consumeAttachments?: () => ChatImageAttachment[] | Promise<ChatImageAttachment[] | undefined> | undefined;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   admitMessage?: (value: string) => TuiChatSubmitAdmission;
   onBlockedMessageSubmit?: (
@@ -71,7 +73,21 @@ export function createEditorSubmitHandler(params: {
     params.editor.setText("");
     // Enable built-in editor prompt history navigation (up/down).
     params.editor.addToHistory(value);
-    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
+    const maybeAttachments = params.consumeAttachments?.();
+    if (maybeAttachments && typeof (maybeAttachments as Promise<unknown>).then === "function") {
+      // Await async consumeAttachments (e.g. waiting for in-flight clipboard read).
+      runSubmitAction(
+        "message",
+        async () => {
+          const attachments = await maybeAttachments;
+          return params.sendMessage(value, attachments);
+        },
+        params.onSubmitError,
+      );
+    } else {
+      const attachments = maybeAttachments as ChatImageAttachment[] | undefined;
+      runSubmitAction("message", () => params.sendMessage(value, attachments), params.onSubmitError);
+    }
   };
 }
 

@@ -244,6 +244,15 @@ export class GatewayChatClient implements TuiBackend {
       deliver: opts.deliver,
       timeoutMs: opts.timeoutMs,
       idempotencyKey: runId,
+      ...(opts.attachments?.length
+        ? {
+            attachments: opts.attachments.map((a) => ({
+              type: "base64",
+              mimeType: a.mimeType,
+              content: a.base64,
+            })),
+          }
+        : {}),
     });
     const acceptedRunId = nonEmptyString(response?.runId) ?? runId;
     const status = nonEmptyString(response?.status);
