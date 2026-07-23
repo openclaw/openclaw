@@ -831,7 +831,6 @@ class ChatPane extends OpenClawLightDomElement {
     if (
       !scope ||
       !row ||
-      row.visibility !== "suggest" ||
       !this.hasMultipleIdentities() ||
       !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "session.suggestions.list")
     ) {

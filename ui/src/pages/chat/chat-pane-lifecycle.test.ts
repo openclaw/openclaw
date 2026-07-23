@@ -238,6 +238,52 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(pane.sessionSuggestionRole).toBe("owner");
   });
 
+  it.each(["draft", "shared"] as const)(
+    "loads an owner's pending suggestions after visibility changes to %s",
+    async (visibility) => {
+      const pending: SessionSuggestion = {
+        id: `pending-${visibility}`,
+        sessionKey: "agent:main:current",
+        agentId: "main",
+        author: { type: "human", id: "alice", label: "Alice" },
+        text: "still needs review",
+        createdAt: 1,
+        state: "pending",
+      };
+      const request = vi.fn(async () => ({ suggestions: [pending], role: "owner" as const }));
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({
+        client,
+        sessions: {} as SessionCapability,
+      });
+      pane.presencePayload = {
+        presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+      };
+      state.sessionsResult = {
+        count: 1,
+        path: "",
+        sessions: [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+            visibility,
+            sharingRole: "owner",
+          },
+        ],
+      } as never;
+
+      await pane.refreshSessionSuggestions();
+
+      expect(request).toHaveBeenCalledWith(
+        "session.suggestions.list",
+        expect.objectContaining({ sessionKey: state.sessionKey }),
+      );
+      expect(pane.sessionSuggestions).toEqual([pending]);
+      expect(pane.sessionSuggestionRole).toBe("owner");
+    },
+  );
+
   it("does not apply an edit failure after switching sessions", async () => {
     const deferred = createDeferred<never>();
     const client = {
