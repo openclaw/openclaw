@@ -232,6 +232,47 @@ describe("models.list OpenAI routes", () => {
     });
   });
 
+  it("escalates full discovery using the replacement owner's agent", async () => {
+    const initialConfig = {
+      agents: { defaults: {}, list: [{ id: "main" }, { id: "worker", default: true }] },
+    } as OpenClawConfig;
+    const replacementConfig = {
+      agents: {
+        defaults: { models: { "openai/*": {} } },
+        list: [{ id: "main", default: true }, { id: "worker" }],
+      },
+    } as OpenClawConfig;
+    const entry = catalogEntry("gpt-owner", "openai-responses");
+    const loadGatewayModelCatalogSnapshot = vi
+      .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+      .mockResolvedValueOnce({
+        agentId: "main",
+        agentDir: "/tmp/models-list-main-agent",
+        config: replacementConfig,
+        entries: [entry],
+        routeVariants: [entry],
+      })
+      .mockResolvedValueOnce({
+        agentId: "main",
+        agentDir: "/tmp/models-list-main-agent",
+        config: replacementConfig,
+        entries: [entry],
+        routeVariants: [entry],
+      });
+    const context = {
+      getRuntimeConfig: () => initialConfig,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await buildModelsListResult({ context, params: { view: "configured" } });
+
+    expect(loadGatewayModelCatalogSnapshot.mock.calls).toEqual([
+      [{ agentId: "worker", readOnly: true }],
+      [{ agentId: "main", readOnly: false }],
+    ]);
+  });
+
   it("passes the resolved default agent to catalog loads", async () => {
     const config = {
       agents: { defaults: {}, list: [{ id: "main", default: true }] },
@@ -326,6 +367,51 @@ describe("models.list OpenAI routes", () => {
         params: { view: "all" },
       }),
     ).resolves.toEqual({ models: [] });
+  });
+
+  it("accepts a canonical owner for a noncanonical explicit agent request", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [
+          { id: "main", default: true },
+          {
+            id: "worker",
+            models: { "openai/gpt-worker": { agentRuntime: { id: "openclaw" } } },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const workerEntry = catalogEntry("gpt-worker", "openai-responses");
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(() =>
+        Promise.resolve({
+          agentId: "worker",
+          agentDir: "/tmp/models-list-worker-agent",
+          config,
+          entries: [workerEntry],
+          routeVariants: [workerEntry],
+        }),
+      ),
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({
+        context,
+        agentId: "WORKER",
+        params: { view: "all" },
+      }),
+    ).resolves.toEqual({
+      models: [
+        expect.objectContaining({
+          id: "gpt-worker",
+          provider: "openai",
+          agentRuntime: { id: "openclaw", source: "model" },
+        }),
+      ],
+    });
   });
 
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {

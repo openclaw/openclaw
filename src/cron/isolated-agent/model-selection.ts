@@ -92,14 +92,14 @@ export async function resolveCronModelSelectionOwner(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   requiredAgentId?: string;
-  agentDir: string;
-  workspaceDir: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<CronModelSelectionOwner> {
   const owner = await loadPreparedModelCatalogOwnerSnapshot({
     config: params.cfg,
-    agentId: params.agentId,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     readOnly: true,
   });
   if (!owner.agentId) {
@@ -130,10 +130,14 @@ export async function resolveCronModelSelection(
     params.owner ??
     (await resolveCronModelSelectionOwner({
       cfg: params.cfg,
-      agentId: params.agentId,
-      requiredAgentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
+      ...(params.agentId
+        ? {
+            agentId: params.agentId,
+            requiredAgentId: params.agentId,
+            agentDir: params.agentDir,
+            workspaceDir: params.workspaceDir,
+          }
+        : {}),
     }));
   const ownerAgentId = owner.agentId;
   const ownerAgentConfigOverride = params.agentConfigOverride

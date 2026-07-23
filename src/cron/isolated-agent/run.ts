@@ -621,10 +621,14 @@ async function prepareCronRunContext(params: {
   const initialWorkspaceDir = resolveAgentWorkspaceDir(requestedRuntimeCfg, initialAgentId);
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
-    agentId: initialAgentId,
-    ...(normalizedRequested ? { requiredAgentId: normalizedRequested } : {}),
-    agentDir: initialAgentDir,
-    workspaceDir: initialWorkspaceDir,
+    ...(normalizedRequested
+      ? {
+          agentId: initialAgentId,
+          requiredAgentId: normalizedRequested,
+          agentDir: initialAgentDir,
+          workspaceDir: initialWorkspaceDir,
+        }
+      : {}),
   });
   const runtimeCfg = modelOwner.config;
   const agentId = modelOwner.agentId;

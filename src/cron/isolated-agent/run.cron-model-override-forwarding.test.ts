@@ -170,9 +170,6 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
-      agentId: "default",
-      agentDir: "/tmp/agent-dir",
-      workspaceDir: "/tmp/workspace",
       readOnly: true,
     });
     expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(

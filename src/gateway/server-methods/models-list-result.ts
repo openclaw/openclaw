@@ -49,6 +49,7 @@ import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -463,7 +464,7 @@ export async function buildModelsListResult(
   params: BuildModelsListResultParams,
 ): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
   const initialConfig = params.context.getRuntimeConfig();
-  const initialAgentId = params.agentId ?? resolveDefaultAgentId(initialConfig);
+  const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const view = resolveModelsListView(params.params);
   const preloadedCatalog =
     params.preloadedCatalog?.agentId === initialAgentId &&
@@ -504,11 +505,15 @@ export async function buildModelsListResult(
     },
     onTimeout: handleCatalogTimeout,
   });
+  if (loadedSnapshot && !loadedSnapshot.agentId) {
+    return { models: [] };
+  }
   if (
     loadedSnapshot &&
     loadedReadOnly &&
     modelCatalogBrowseRequiresFullDiscovery({ cfg: loadedSnapshot.config, view })
   ) {
+    const escalationAgentId = loadedSnapshot.agentId;
     let escalationTimedOut = false;
     let fullSnapshot: typeof loadedSnapshot | undefined;
     const escalatedCatalog = await loadPreparedModelCatalogSnapshotForBrowse({
@@ -516,7 +521,7 @@ export async function buildModelsListResult(
       view,
       loadCatalog: async ({ readOnly }) => {
         fullSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
-          agentId: initialAgentId,
+          agentId: escalationAgentId,
           readOnly,
         });
         return fullSnapshot;
@@ -535,7 +540,7 @@ export async function buildModelsListResult(
   if (
     loadedSnapshot &&
     (!loadedSnapshot.agentId ||
-      (params.agentId !== undefined && loadedSnapshot.agentId !== initialAgentId))
+      (params.agentId !== undefined && normalizeAgentId(loadedSnapshot.agentId) !== initialAgentId))
   ) {
     return { models: [] };
   }

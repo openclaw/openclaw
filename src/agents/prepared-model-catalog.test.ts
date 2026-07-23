@@ -139,12 +139,19 @@ describe("prepared model catalog access", () => {
     "returns the published replacement owner for Gateway reads (readOnly=$readOnly)",
     async ({ readOnly }) => {
       const committedConfig = { agents: { defaults: { model: "openai/committed" } } };
-      const committedSnapshot = { ...fullSnapshot, config: committedConfig };
+      const committedSnapshot = {
+        ...fullSnapshot,
+        agentDir: "/tmp/prepared-model-catalog-agent",
+        config: committedConfig,
+      };
       mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
 
-      await expect(loadPublishedPreparedModelCatalogOwnerSnapshot({ readOnly })).resolves.toBe(
-        committedSnapshot,
-      );
+      await expect(
+        loadPublishedPreparedModelCatalogOwnerSnapshot({ readOnly }),
+      ).resolves.toMatchObject({
+        ...committedSnapshot,
+        agentId: "main",
+      });
       expect(mocks.loadSnapshot).not.toHaveBeenCalled();
       expect(mocks.activateSnapshot).not.toHaveBeenCalled();
       expect(mocks.acquireSnapshot).not.toHaveBeenCalled();

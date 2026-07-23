@@ -40,6 +40,10 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAgentConfig: (cfg: { agents?: { list?: AgentConfig[] } }, agentId: string) =>
     cfg.agents?.list?.find((agent) => agent.id === agentId),
+  resolveAgentWorkspaceDir: (
+    cfg: { agents?: { list?: Array<AgentConfig & { workspace?: string }> } },
+    agentId: string,
+  ) => cfg.agents?.list?.find((agent) => agent.id === agentId)?.workspace ?? "/tmp/workspace",
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
@@ -317,7 +321,10 @@ describe("cron model formatting and precedence edge cases", () => {
 
     it("uses one published replacement owner for cron model selection", async () => {
       const callerConfig = {
-        agents: { defaults: { model: "anthropic/caller-model" } },
+        agents: {
+          defaults: { model: "anthropic/caller-model" },
+          list: [{ id: "worker", default: true }],
+        },
       };
       const ownerConfig = {
         agents: {
@@ -349,9 +356,6 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(loadModelCatalogMock).toHaveBeenCalledOnce();
       expect(loadModelCatalogMock).toHaveBeenCalledWith({
         config: callerConfig,
-        agentId: undefined,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
         readOnly: true,
       });
       expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
