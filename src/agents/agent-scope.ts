@@ -468,11 +468,17 @@ export function resolveSubagentModelConfigSelectionResult(params: {
   const agentConfig =
     params.agentConfigOverride ??
     (params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined);
+  // Precedence (per PR #58823, fixes #58822):
+  //   1. per-agent subagents.model         (explicit per-agent override)
+  //   2. agents.defaults.subagents.model   (global subagent default)
+  //   3. agent's own model                 (last-resort fallback)
+  // The global subagent default must win over the agent's own primary model so
+  // that e.g. an Opus main agent with `defaults.subagents.model = gpt-5.4`
+  // produces GPT-5.4 subagents, not Opus subagents.
   const candidates: SubagentModelConfigSelectionResult[] = [
     ...(agentConfig?.subagents?.model
       ? [{ raw: agentConfig.subagents.model, source: "subagent" as const }]
       : []),
-    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
     ...(params.cfg.agents?.defaults?.subagents?.model
       ? [
           {
@@ -481,6 +487,7 @@ export function resolveSubagentModelConfigSelectionResult(params: {
           },
         ]
       : []),
+    ...(agentConfig?.model ? [{ raw: agentConfig.model, source: "agent" as const }] : []),
   ];
   return candidates.find((candidate) => resolvePrimaryStringValue(candidate.raw));
 }

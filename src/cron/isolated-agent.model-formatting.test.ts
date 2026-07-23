@@ -50,8 +50,8 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
-      { raw: agentConfigOverride?.model, source: "agent" as const },
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
       if (normalizeModelSelectionMock(candidate.raw)) {
         return candidate;
@@ -732,7 +732,10 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through fallback-only subagents.model to the agent model", async () => {
+    it("falls through subagents.model without a primary to the global subagent default", async () => {
+      // PR #58823 (fixes #58822): per-agent subagents.model without a primary has
+      // no primary, so resolution falls through to agents.defaults.subagents.model
+      // (global subagent default), not to the agent's own model.
       await expectSelectedModel(
         {
           cfg: {
@@ -748,7 +751,7 @@ describe("cron model formatting and precedence edge cases", () => {
             subagents: { model: { fallbacks: [] } },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
 
@@ -773,7 +776,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    it("prefers global defaults.subagents.model over the agent primary model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -788,7 +791,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: { primary: "anthropic/claude-opus-4-6" },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
   });

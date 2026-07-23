@@ -863,6 +863,16 @@ describe("resolveAgentConfig", () => {
             },
           },
           {
+            id: "metadata-only-subagent",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+            subagents: {
+              model: {},
+            },
+          },
+          {
             id: "fallback-only-agent-model",
             model: {
               fallbacks: ["google/gemini-3-pro"],
@@ -893,8 +903,16 @@ describe("resolveAgentConfig", () => {
       "openai/gpt-5.4",
       "zai/glm-5",
     ]);
+    // Precedence (PR #58823): global defaults.subagents.model wins over the
+    // agent's own model, so agents without a per-agent subagents.model inherit
+    // the default-subagent fallbacks rather than the agent model fallbacks.
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
-      "google/gemini-3-pro",
+      "openai/gpt-5.4",
+      "zai/glm-5",
+    ]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "metadata-only-subagent")).toEqual([
+      "openai/gpt-5.4",
+      "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
       "openai/gpt-5.4",
@@ -1006,20 +1024,33 @@ describe("resolveAgentConfig", () => {
               model: { fallbacks: [] },
             },
           },
+          {
+            id: "metadata-only-subagent",
+            model: "anthropic/claude-sonnet-4-6",
+            subagents: {
+              model: {},
+            },
+          },
         ],
       },
     };
 
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "agent-model" })).toEqual({
-      primary: "anthropic/claude-sonnet-4-6",
-      fallbacks: ["google/gemini-3-pro"],
-    });
+    // Precedence (PR #58823, fixes #58822):
+    //   per-agent subagents.model → agents.defaults.subagents.model → agent.model.
+    // Global subagent default wins over agent's own model so e.g. an Opus main
+    // agent does not shadow a configured GPT-5.4 subagent default.
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "agent-model" })).toBe(
+      "openai/gpt-5.4",
+    );
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "subagent-model" })).toEqual({
       primary: "kimi/kimi-code",
       fallbacks: ["openai/gpt-5.4"],
     });
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "metadata-only-subagent" })).toBe(
+      "openai/gpt-5.4",
+    );
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "fallback-only-subagent" })).toBe(
-      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.4",
     );
     expect(resolveSubagentModelConfigSelection({ cfg, agentId: "default-subagent" })).toBe(
       "openai/gpt-5.4",
