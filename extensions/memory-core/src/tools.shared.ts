@@ -1,6 +1,7 @@
 // Memory Core plugin module implements tools.shared behavior.
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -160,6 +161,40 @@ export function buildMemorySearchUnavailableResult(
   };
 }
 
+const DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS = 10_000;
+
+export class SupplementSearchTimeoutError extends Error {
+  constructor(pluginId: string, timeoutMs: number) {
+    super(`supplement "${pluginId}" search did not settle within ${timeoutMs}ms`);
+    this.name = "SupplementSearchTimeoutError";
+  }
+}
+
+async function searchSupplementWithTimeout(
+  pluginId: string,
+  search: Promise<MemoryCorpusSearchResult[]>,
+  timeoutMs: number,
+): Promise<MemoryCorpusSearchResult[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<MemoryCorpusSearchResult[]>([
+      search,
+      new Promise<MemoryCorpusSearchResult[]>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new SupplementSearchTimeoutError(pluginId, timeoutMs));
+        }, timeoutMs);
+        if (typeof timer?.unref === "function") {
+          timer.unref();
+        }
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
@@ -167,6 +202,8 @@ export async function searchMemoryCorpusSupplements(params: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   corpus?: "memory" | "wiki" | "all" | "sessions";
+  /** Test seam only; production callers use the fixed default. */
+  timeoutMs?: number;
 }): Promise<MemoryCorpusSearchResult[]> {
   if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
@@ -175,11 +212,43 @@ export async function searchMemoryCorpusSupplements(params: {
   if (supplements.length === 0) {
     return [];
   }
-  const results = (
-    await Promise.all(
-      supplements.map(async (registration) => await registration.supplement.search(params)),
-    )
-  ).flat();
+  // Use allSettled with a per-supplement timeout so a single misbehaving or
+  // hung supplement does not discard sibling results or block the whole call
+  // indefinitely. Invariant: result ⊇ ⋃_{s settles in time} s.search(params).
+  const timeoutMs = params.timeoutMs ?? DEFAULT_SUPPLEMENT_SEARCH_TIMEOUT_MS;
+  const settled = await Promise.allSettled(
+    supplements.map((registration) =>
+      searchSupplementWithTimeout(
+        registration.pluginId,
+        Promise.resolve().then(() => registration.supplement.search(params)),
+        timeoutMs,
+      ),
+    ),
+  );
+  const results: MemoryCorpusSearchResult[] = [];
+  const failures: string[] = [];
+  for (let i = 0; i < settled.length; i++) {
+    const outcome = settled[i];
+    if (outcome.status === "fulfilled") {
+      results.push(...outcome.value);
+    } else {
+      const pluginId = supplements[i]?.pluginId ?? "<unknown>";
+      // Supplement errors can carry tokens or private endpoints; route them
+      // through the shared redaction formatter before they reach any log.
+      const reason = redactSensitiveText(formatSupplementError(outcome.reason));
+      failures.push(`"${pluginId}": ${reason}`);
+      console.warn(
+        `memory-core: corpus supplement "${pluginId}" search failed; sibling results preserved (${reason}).`,
+      );
+    }
+  }
+  if (failures.length === supplements.length) {
+    // Every supplement failed: that is backend unavailability, not an empty
+    // corpus. Throw so the memory tool surfaces its unavailable result
+    // (cooldown stays memory-phase-only) instead of a silent empty or
+    // memory-only success.
+    throw new Error(`all corpus supplement searches failed: ${failures.join("; ")}`);
+  }
   return results
     .toSorted((left, right) => {
       if (left.score !== right.score) {
@@ -188,6 +257,20 @@ export async function searchMemoryCorpusSupplements(params: {
       return left.path.localeCompare(right.path);
     })
     .slice(0, Math.max(1, params.maxResults ?? 10));
+}
+
+function formatSupplementError(reason: unknown): string {
+  if (reason instanceof Error) {
+    return reason.message || reason.name || "Error";
+  }
+  if (typeof reason === "string") {
+    return reason;
+  }
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
 }
 
 export async function getMemoryCorpusSupplementResult(params: {
