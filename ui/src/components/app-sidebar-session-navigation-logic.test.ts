@@ -1,13 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { isSidebarDraftOwnedBySelf } from "./app-sidebar-session-navigation-logic.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
+import { buildSidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
+
+function projectDraftOwnership(
+  row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
+  selfUserId?: string,
+): boolean | undefined {
+  const context = {
+    basePath: "",
+    agentSelection: { state: { selectedId: "main" } },
+    gateway: {
+      snapshot: {
+        assistantAgentId: "main",
+        hello: null,
+        selfUser: selfUserId ? { id: selfUserId } : undefined,
+      },
+    },
+    sessions: { pullRequestSummary: () => undefined },
+  } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
+  const navigation = buildSidebarSessionNavigationState({
+    context,
+    routeSessionKey: "agent:main:main",
+    sessionsResult: null,
+    sessionsAgentId: null,
+    showCron: false,
+    statusFilter: "active",
+    compareSessions: () => 0,
+    highlightCurrentSession: false,
+    runtimeSampledAtByRow: new WeakMap(),
+    loadingChildSessionKeys: new Set(),
+    outboxCountForSessionKey: () => 0,
+    resolveAttention: () => ({ kind: "none" }),
+    resolveAgentStatusNote: () => undefined,
+  });
+  return navigation.toSidebarSession({
+    key: "agent:main:draft",
+    kind: "direct",
+    updatedAt: 1,
+    ...row,
+  }).draftOwnedBySelf;
+}
 
 describe("sidebar draft ownership presentation", () => {
   it("keeps owner drafts at normal emphasis", () => {
     expect(
-      isSidebarDraftOwnedBySelf(
-        { visibility: "draft", sharingRole: "owner", createdActor: undefined },
-        undefined,
-      ),
+      projectDraftOwnership({
+        visibility: "draft",
+        sharingRole: "owner",
+        createdActor: undefined,
+      }),
     ).toBe(true);
   });
 
@@ -17,13 +58,13 @@ describe("sidebar draft ownership presentation", () => {
       sharingRole: "admin" as const,
       createdActor: { type: "human" as const, id: "admin" },
     };
-    expect(isSidebarDraftOwnedBySelf(ownDraft, "admin")).toBe(true);
-    expect(isSidebarDraftOwnedBySelf(ownDraft, "teammate")).toBe(false);
+    expect(projectDraftOwnership(ownDraft, "admin")).toBe(true);
+    expect(projectDraftOwnership(ownDraft, "teammate")).toBe(false);
   });
 
   it("never marks a shared session as an owned draft", () => {
     expect(
-      isSidebarDraftOwnedBySelf(
+      projectDraftOwnership(
         {
           visibility: "shared",
           sharingRole: "owner",

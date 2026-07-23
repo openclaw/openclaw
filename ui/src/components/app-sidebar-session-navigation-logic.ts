@@ -49,7 +49,7 @@ import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
-export function isSidebarDraftOwnedBySelf(
+function isSidebarDraftOwnedBySelf(
   row: Pick<SessionRow, "createdActor" | "sharingRole" | "visibility">,
   selfUserId: string | undefined,
 ): boolean {
