@@ -17,7 +17,7 @@ import {
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
-import type { ChatHost } from "./chat-send.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import {
   getPendingChatPickerPatch,
   switchChatFastMode,
@@ -138,8 +138,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-let handleSendChat: typeof import("./chat-send.ts").handleSendChat;
-let steerQueuedChatMessage: typeof import("./chat-send.ts").steerQueuedChatMessage;
+let handleSendChat: typeof import("./chat-send-submit.ts").handleSendChat;
+let steerQueuedChatMessage: typeof import("./chat-send-actions.ts").steerQueuedChatMessage;
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
 let handlePageGatewayEvent: typeof import("./chat-state.ts").handlePageGatewayEvent;
@@ -152,20 +152,20 @@ let removeVisibleOrScopedQueuedMessageWithoutReleasing: typeof import("./chat-qu
 let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-queue.ts").markQueuedChatSendsWaitingForReconnect;
 let subscribeChatOutboxProjection: typeof import("./chat-queue.ts").subscribeChatOutboxProjection;
 let syncChatQueueFromStoredOutbox: typeof import("./chat-queue.ts").syncChatQueueFromStoredOutbox;
-let flushChatQueueForEvent: typeof import("./chat-send.ts").flushChatQueueForEvent;
-let retryReconnectableQueuedChatSends: typeof import("./chat-send.ts").retryReconnectableQueuedChatSends;
-let retryQueuedChatMessage: typeof import("./chat-send.ts").retryQueuedChatMessage;
+let flushChatQueueForEvent: typeof import("./chat-send-actions.ts").flushChatQueueForEvent;
+let retryReconnectableQueuedChatSends: typeof import("./chat-send-actions.ts").retryReconnectableQueuedChatSends;
+let retryQueuedChatMessage: typeof import("./chat-send-actions.ts").retryQueuedChatMessage;
 let recordChatSendServerTiming: typeof import("./chat-send-timing.ts").recordChatSendServerTiming;
 let refreshPageChat: typeof import("./chat-state.ts").refreshPageChat;
 
 async function loadChatHelpers(): Promise<void> {
   ({
-    handleSendChat,
     steerQueuedChatMessage,
     flushChatQueueForEvent,
     retryReconnectableQueuedChatSends,
     retryQueuedChatMessage,
-  } = await import("./chat-send.ts"));
+  } = await import("./chat-send-actions.ts"));
+  ({ handleSendChat } = await import("./chat-send-submit.ts"));
   ({ recordChatSendServerTiming } = await import("./chat-send-timing.ts"));
   const chatState = await import("./chat-state.ts");
   handlePageGatewayEvent = chatState.handlePageGatewayEvent;

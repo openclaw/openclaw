@@ -77,16 +77,15 @@ import {
   resetChatRealtimeConversation,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import type { ChatSendTimingEntry } from "./chat-send-contract.ts";
-import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import {
   flushChatQueueForEvent,
-  handleSendChat,
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
-  type ChatHost,
-} from "./chat-send.ts";
+} from "./chat-send-actions.ts";
+import type { ChatHost, ChatSendTimingEntry } from "./chat-send-contract.ts";
+import { handleSendChat } from "./chat-send-submit.ts";
+import { recordChatSendServerTiming } from "./chat-send-timing.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   refreshCurrentChatSessionList,

@@ -1095,7 +1095,6 @@ ui/src/pages/chat/chat-history.ts
 ui/src/pages/chat/chat-pane.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
-ui/src/pages/chat/chat-send.ts
 ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts
