@@ -14,6 +14,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
+import { getArgumentChurnNoProgressStreak } from "./tool-loop-argument-churn.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -383,7 +384,7 @@ function getUnknownToolRepeatStreak(
 }
 
 function getNoProgressStreak(
-  history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
+  history: readonly ToolCallRecord[],
   toolName: string,
   argsHash: string,
 ): { count: number; latestResultHash?: string } {
@@ -413,7 +414,7 @@ function getNoProgressStreak(
 }
 
 function getPingPongStreak(
-  history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
+  history: readonly ToolCallRecord[],
   currentSignature: string,
 ): {
   count: number;
@@ -538,6 +539,8 @@ export function detectToolCallLoop(
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
+  const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName);
+  const globalNoProgressStreak = Math.max(noProgressStreak, argumentChurn.count);
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
 
@@ -552,17 +555,24 @@ export function detectToolCallLoop(
     };
   }
 
-  if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
+  if (globalNoProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      `Global circuit breaker triggered: ${toolName} repeated ${globalNoProgressStreak} times with no progress`,
     );
+    const churnMessage =
+      argumentChurn.count >= resolvedConfig.globalCircuitBreakerThreshold
+        ? ` cycled through ${argumentChurn.variantCount} repeated argument patterns with stable outcomes`
+        : ` repeated identical no-progress outcomes`;
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
-      count: noProgressStreak,
-      message: `CRITICAL: ${toolName} has repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
-      warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      count: globalNoProgressStreak,
+      message: `CRITICAL: ${toolName}${churnMessage} ${globalNoProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      warningKey:
+        argumentChurn.count >= resolvedConfig.globalCircuitBreakerThreshold
+          ? `global:${toolName}:argument-churn`
+          : `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
