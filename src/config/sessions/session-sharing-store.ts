@@ -116,18 +116,15 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   );
 }
 
-// Membership is bound to the session instance. Authorization is rechecked
-// before these transactions, but a reset/recreate can replace the row under the
-// same key in between; verifying the expected sessionId inside the write
-// transaction stops a stale owner from mutating the replacement's members.
+// Membership is bound to a live session entry, never a transcript placeholder.
+// Authorization is rechecked before these transactions, but a reset/recreate
+// can replace the row under the same key in between; the optional expected id
+// adds a caller snapshot check after the canonical node/entry check.
 function assertAuthorizedSessionInstance(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   expectedSessionId: string | undefined,
 ): void {
-  if (expectedSessionId === undefined) {
-    return;
-  }
   const row =
     database.db /* sqlite-allow-raw: sync TOCTOU re-read of canonical entry identity inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
       .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
@@ -143,7 +140,12 @@ function assertAuthorizedSessionInstance(
   } catch {
     entrySessionId = undefined;
   }
-  if (row?.current_session_id !== expectedSessionId || entrySessionId !== expectedSessionId) {
+  if (
+    !row ||
+    entrySessionId === undefined ||
+    row.current_session_id !== entrySessionId ||
+    (expectedSessionId !== undefined && entrySessionId !== expectedSessionId)
+  ) {
     throw new Error("session changed before sharing mutation");
   }
 }

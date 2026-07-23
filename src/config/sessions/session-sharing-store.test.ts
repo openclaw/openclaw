@@ -161,6 +161,15 @@ describe("session sharing store", () => {
           expectedSessionId: "session-a",
         }),
       ).toThrow(/session changed/);
+      expect(() =>
+        addSessionMember(scope, {
+          identityId: "planted",
+          addedBy: "owner",
+        }),
+      ).toThrow(/session changed/);
+
+      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 3 });
+      expect(listSessionMembers(scope)).toEqual([]);
     });
   });
 });
