@@ -61,9 +61,9 @@ export function assertConfigWriteAllowedInCurrentMode(
   } = {},
 ): void {
   const resolvedConfigPath = path.resolve(params.configPath ?? resolveConfigPath(params.env));
-  const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks)
-    .filter((block) => block.configPath === resolvedConfigPath)
-    .at(-1);
+  const runtimeConfigWriteBlock = Array.from(runtimeConfigWriteBlocks).find(
+    (block) => block.configPath === resolvedConfigPath,
+  );
   if (runtimeConfigWriteBlock) {
     throw new RuntimeConfigMutationBlockedError(runtimeConfigWriteBlock.reason, params.configPath);
   }
