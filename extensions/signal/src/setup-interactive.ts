@@ -25,7 +25,7 @@ const SIGNAL_CLI_PATH_KEY = "signalCliPath";
 const SIGNAL_CLI_CONFIG_PATH_KEY = "signalCliConfigPath";
 const SIGNAL_SERVER_URL_KEY = "signalServerUrl";
 
-type SignalSetupChoice = "managed-native" | "existing-server";
+type SignalSetupMode = "local" | "existing-server";
 type SignalPrepareParams = Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0];
 type SignalFinalizeParams = Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0];
 type SignalExistingTransport = Extract<
@@ -150,15 +150,13 @@ async function promptSignalAccount(params: SignalFinalizeParams) {
   return account;
 }
 
-function resolveSetupChoice(params: Pick<SignalPrepareParams, "cfg" | "accountId">) {
-  return resolveSignalAccount(params).transport.kind === "managed-native"
-    ? "managed-native"
-    : "existing-server";
-}
-
 async function prepareManagedNativeSetup(params: SignalPrepareParams) {
-  const existing = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).transport;
-  let cliPath = existing.kind === "managed-native" ? existing.cliPath : "signal-cli";
+  const resolvedTransport = resolveSignalAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).transport;
+  let cliPath =
+    resolvedTransport.kind === "managed-native" ? resolvedTransport.cliPath : "signal-cli";
   const cliDetected = await detectBinary(cliPath);
 
   if (params.options?.allowSignalInstall) {
@@ -193,7 +191,8 @@ async function prepareManagedNativeSetup(params: SignalPrepareParams) {
       ) ?? cliPath;
   }
 
-  const existingConfigPath = existing.kind === "managed-native" ? existing.configPath : undefined;
+  const existingConfigPath =
+    resolvedTransport.kind === "managed-native" ? resolvedTransport.configPath : undefined;
   const configPath = normalizeOptionalString(
     await params.prompter.text({
       message: "signal-cli config path (optional)",
@@ -297,14 +296,17 @@ async function promptExistingSignalTransport(
 }
 
 async function prepareExistingServerSetup(params: SignalPrepareParams) {
-  const existing = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).transport;
+  const resolvedTransport = resolveSignalAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).transport;
   const transport = await promptExistingSignalTransport({
     cfg: params.cfg,
     accountId: params.accountId,
     prompter: params.prompter,
     initialValue:
-      existing.kind === "external-native" || existing.kind === "container"
-        ? existing.baseUrl
+      resolvedTransport.kind === "external-native" || resolvedTransport.kind === "container"
+        ? resolvedTransport.baseUrl
         : "http://127.0.0.1:8080",
   });
   return {
@@ -316,12 +318,21 @@ async function prepareExistingServerSetup(params: SignalPrepareParams) {
 }
 
 export async function prepareSignalInteractiveSetup(params: SignalPrepareParams) {
-  const choice = await params.prompter.select<SignalSetupChoice>({
+  const resolvedAccount = resolveSignalAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const initialMode: SignalSetupMode =
+    resolvedAccount.configured && resolvedAccount.transport.kind !== "managed-native"
+      ? "existing-server"
+      : "local";
+
+  const mode = await params.prompter.select<SignalSetupMode>({
     message: "How do you want to set up Signal for OpenClaw?",
-    initialValue: resolveSetupChoice(params),
+    initialValue: initialMode,
     options: [
       {
-        value: "managed-native",
+        value: "local",
         label: "Use local signal-cli",
         hint: "OpenClaw starts the local signal-cli daemon for this account.",
       },
@@ -333,7 +344,7 @@ export async function prepareSignalInteractiveSetup(params: SignalPrepareParams)
     ],
   });
 
-  if (choice === "managed-native") {
+  if (mode === "local") {
     return await prepareManagedNativeSetup(params);
   }
   return await prepareExistingServerSetup(params);

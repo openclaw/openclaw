@@ -74,11 +74,11 @@ describe("signalSetupWizard", () => {
     mocks.probeSignalTransport.mockResolvedValue({ ok: true, status: 200 });
   });
 
-  it("prepares local signal-cli only after the persistent-effect boundary", async () => {
+  it("defaults an unconfigured account to local setup and installs after the boundary", async () => {
     mocks.detectBinary.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const beforePersistentEffect = vi.fn(async () => undefined);
     const queued = createQueuedWizardPrompter({
-      selectValues: ["managed-native"],
+      selectValues: ["local"],
       confirmValues: [true],
       textValues: ["/var/lib/signal-cli"],
     });
@@ -94,8 +94,9 @@ describe("signalSetupWizard", () => {
 
     expect(queued.select).toHaveBeenCalledWith(
       expect.objectContaining({
+        initialValue: "local",
         options: expect.arrayContaining([
-          expect.objectContaining({ value: "managed-native", label: "Use local signal-cli" }),
+          expect.objectContaining({ value: "local", label: "Use local signal-cli" }),
           expect.objectContaining({
             value: "existing-server",
             label: "Connect to an existing Signal server",
@@ -115,6 +116,41 @@ describe("signalSetupWizard", () => {
         signalCliConfigPath: "/var/lib/signal-cli",
       },
     });
+  });
+
+  it("defaults a configured existing server account to existing server setup", async () => {
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["existing-server"],
+      textValues: ["http://signal-helper:8080"],
+    });
+
+    await runSetupWizardPrepare({
+      prepare: signalSetupWizard.prepare,
+      cfg: {
+        channels: {
+          signal: {
+            accounts: {
+              work: {
+                transport: {
+                  kind: "external-native",
+                  url: "http://signal-helper:8080",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(queued.select).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValue: "existing-server" }),
+    );
+    expect(queued.text).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValue: "http://signal-helper:8080" }),
+    );
   });
 
   it("probes and writes a prepared managed transport for the selected account", async () => {
