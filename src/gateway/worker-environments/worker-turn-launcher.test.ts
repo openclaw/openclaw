@@ -636,7 +636,6 @@ describe("worker turn launcher", () => {
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
-      runId: "run-worker-turn",
     });
     expect(tunnel.reconcileWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ localPath: root }),

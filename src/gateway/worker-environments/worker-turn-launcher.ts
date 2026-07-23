@@ -71,7 +71,7 @@ type WorkerTurnLauncherOptions = {
   admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
-  resolveWorkspacePath: (claim: LocalTurnPlacementClaim) => Promise<string>;
+  resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
   workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
@@ -595,7 +595,7 @@ export function createWorkerSessionTurnPlacementProvider(
       let placement = requireActivePlacement(routablePlacement);
       // The placement owns the managed worktree. Callers can carry a default or stale
       // workspace path, but remote results must only reconcile into that canonical root.
-      const localWorkspaceDir = await options.resolveWorkspacePath(claim);
+      const localWorkspaceDir = await options.resolveWorkspacePath(identity);
       const admitted = await claimWorkerTurn({
         placements: options.placements,
         identity,
