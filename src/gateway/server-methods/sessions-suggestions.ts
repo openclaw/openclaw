@@ -40,7 +40,15 @@ import { assertValidParams } from "./validation.js";
 const TYPING_THROTTLE_MS = 1_000;
 const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
-const typingBroadcastState = new Map<string, { at: number; typing: boolean }>();
+type PendingTypingBroadcast = { typing: boolean; emit: () => boolean };
+type TypingBroadcastState = {
+  at: number;
+  typing: boolean;
+  pending?: PendingTypingBroadcast;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+const typingBroadcastState = new Map<string, TypingBroadcastState>();
 const typingConnections = new Map<string, Map<string, number>>();
 
 function suggestionScope(target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>) {
@@ -92,9 +100,16 @@ function requireSuggestionTarget(params: {
   return target;
 }
 
-function publishSuggestion(context: GatewayRequestContext, event: SessionSuggestionEvent): void {
+function publishSuggestion(
+  context: GatewayRequestContext,
+  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  requestedSessionKey: string,
+  event: SessionSuggestionEvent,
+): void {
   context.broadcast("session.suggestion", event, {
-    sessionKeys: [event.suggestion.sessionKey],
+    sessionKeys: [
+      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
+    ].toSorted(),
     agentId: event.suggestion.agentId,
   });
 }
@@ -103,16 +118,16 @@ function resolutionState(resolution: SessionSuggestionResolution): "accepted" | 
   return resolution === "dismiss" ? "dismissed" : "accepted";
 }
 
-function resolutionLabel(resolution: SessionSuggestionResolution): string {
+function resolutionAuditAction(resolution: SessionSuggestionResolution): string {
   switch (resolution) {
     case "send":
-      return "sent immediately";
+      return "sent a suggestion immediately";
     case "queue":
-      return "queued";
+      return "queued a suggestion";
     case "edit":
-      return "moved into the composer";
+      return "moved a suggestion into the composer";
     case "dismiss":
-      return "dismissed";
+      return "dismissed a suggestion";
   }
   throw new Error(`unsupported suggestion resolution: ${String(resolution)}`);
 }
@@ -189,22 +204,78 @@ function liveViewerIdentities(sessionKeys: ReadonlySet<string>): Set<string> {
   );
 }
 
-function shouldBroadcastTyping(key: string, typing: boolean, now: number): boolean {
-  const previous = typingBroadcastState.get(key);
-  if (previous && previous.typing !== typing) {
-    typingBroadcastState.delete(key);
-    typingBroadcastState.set(key, { at: now, typing });
-    return true;
-  }
-  if (previous && now - previous.at < TYPING_THROTTLE_MS) {
-    return false;
-  }
+function rememberTypingBroadcast(key: string, state: TypingBroadcastState): void {
   typingBroadcastState.delete(key);
-  typingBroadcastState.set(key, { at: now, typing });
-  if (typingBroadcastState.size > MAX_TYPING_THROTTLE_KEYS) {
-    typingBroadcastState.delete(typingBroadcastState.keys().next().value ?? "");
+  typingBroadcastState.set(key, state);
+  if (typingBroadcastState.size <= MAX_TYPING_THROTTLE_KEYS) {
+    return;
   }
-  return true;
+  const oldestKey = typingBroadcastState.keys().next().value;
+  if (!oldestKey) {
+    return;
+  }
+  const oldest = typingBroadcastState.get(oldestKey);
+  if (oldest?.timer) {
+    clearTimeout(oldest.timer);
+  }
+  typingBroadcastState.delete(oldestKey);
+}
+
+function broadcastTypingThrottled(params: {
+  key: string;
+  typing: boolean;
+  now: number;
+  emit: () => boolean;
+}): boolean {
+  const previous = typingBroadcastState.get(params.key);
+  if (!previous || params.now - previous.at >= TYPING_THROTTLE_MS) {
+    if (previous?.timer) {
+      clearTimeout(previous.timer);
+    }
+    const emitted = params.emit();
+    if (emitted) {
+      rememberTypingBroadcast(params.key, { at: params.now, typing: params.typing });
+    } else {
+      typingBroadcastState.delete(params.key);
+    }
+    return emitted;
+  }
+
+  if (params.typing === previous.typing && previous.pending?.typing !== params.typing) {
+    if (previous.timer) {
+      clearTimeout(previous.timer);
+    }
+    delete previous.pending;
+    delete previous.timer;
+    if (!params.typing) {
+      rememberTypingBroadcast(params.key, previous);
+      return false;
+    }
+  }
+
+  previous.pending = { typing: params.typing, emit: params.emit };
+  if (!previous.timer) {
+    const timer = setTimeout(
+      () => {
+        const current = typingBroadcastState.get(params.key);
+        if (!current || current.timer !== timer || !current.pending) {
+          return;
+        }
+        const pending = current.pending;
+        const next = { at: Date.now(), typing: pending.typing } satisfies TypingBroadcastState;
+        if (pending.emit()) {
+          rememberTypingBroadcast(params.key, next);
+        } else {
+          typingBroadcastState.delete(params.key);
+        }
+      },
+      TYPING_THROTTLE_MS - (params.now - previous.at),
+    );
+    timer.unref?.();
+    previous.timer = timer;
+  }
+  rememberTypingBroadcast(params.key, previous);
+  return false;
 }
 
 function updateTypingConnections(params: {
@@ -303,7 +374,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const projected = protocolSuggestion(target, suggestion);
-    publishSuggestion(context, { action: "added", suggestion: projected });
+    publishSuggestion(context, target, params.sessionKey, {
+      action: "added",
+      suggestion: projected,
+    });
     respond(true, { suggestion: projected });
   },
 
@@ -466,13 +540,16 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       await appendSessionAudit({
         cfg: context.getRuntimeConfig(),
         target,
-        text: `${actor.label ?? actor.id} ${resolutionLabel(resolution)} suggestion from ${suggestion.authorLabel ?? suggestion.authorId}.`,
+        text: `${actor.label ?? actor.id} ${resolutionAuditAction(resolution)}.`,
         now: Date.now(),
       });
     } catch (error) {
       context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
     }
-    publishSuggestion(context, { action: "resolved", suggestion: projected });
+    publishSuggestion(context, target, params.sessionKey, {
+      action: "resolved",
+      suggestion: projected,
+    });
     respond(true, { suggestion: projected });
   },
 
@@ -496,11 +573,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionKeys = new Set([params.sessionKey, target.canonicalKey, target.storeKey]);
-    const liveIdentities = liveViewerIdentities(sessionKeys);
-    if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
-      respond(true, { ok: true, broadcast: false });
-      return;
-    }
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}`;
     const effectiveTyping = updateTypingConnections({
@@ -509,25 +581,34 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       typing: params.typing,
       now,
     });
-    if (
-      (!params.typing && effectiveTyping) ||
-      !shouldBroadcastTyping(typingKey, effectiveTyping, now)
-    ) {
+    if (!params.typing && effectiveTyping) {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const event: SessionTypingEvent = {
-      sessionKey: target.canonicalKey,
-      agentId: target.agentId,
-      actor,
+    const broadcast = broadcastTypingThrottled({
+      key: typingKey,
       typing: effectiveTyping,
-      ts: now,
-    };
-    context.broadcast("session.typing", event, {
-      sessionKeys: [...sessionKeys].toSorted(),
-      agentId: target.agentId,
-      dropIfSlow: true,
+      now,
+      emit: () => {
+        const liveIdentities = liveViewerIdentities(sessionKeys);
+        if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
+          return false;
+        }
+        const event: SessionTypingEvent = {
+          sessionKey: target.canonicalKey,
+          agentId: target.agentId,
+          actor,
+          typing: effectiveTyping,
+          ts: Date.now(),
+        };
+        context.broadcast("session.typing", event, {
+          sessionKeys: [...sessionKeys].toSorted(),
+          agentId: target.agentId,
+          dropIfSlow: true,
+        });
+        return true;
+      },
     });
-    respond(true, { ok: true, broadcast: true });
+    respond(true, { ok: true, broadcast });
   },
 };
