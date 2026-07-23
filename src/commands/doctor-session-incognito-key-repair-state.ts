@@ -1,6 +1,13 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export type ReservedKeyRename = { from: string; to: string };
@@ -14,15 +21,34 @@ type SharedStateSessionKeyColumn = {
   table: string;
 };
 
+type SharedStateSchemaDatabase = {
+  sqlite_schema: { name: string; type: string };
+};
+
+type DynamicSharedStateDatabase = Record<string, Record<string, unknown>>;
+
+function sqliteSchemaIdentifier(value: string) {
+  return sql.id(value); // kysely-allow-raw -- value comes only from SQLite schema metadata.
+}
+
 // Shared state has many owner-specific session-key columns; schema discovery keeps this migration complete.
 function listSharedStateSessionKeyColumns(database: DatabaseSync): SharedStateSessionKeyColumn[] {
-  const tables = database
-    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-    .all() as Array<{ name: string }>;
+  const db = getNodeSqliteKysely<SharedStateSchemaDatabase>(database);
+  const tables = executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("sqlite_schema")
+      .select("name")
+      .where("type", "=", "table")
+      .where("name", "not like", "sqlite_%"),
+  ).rows;
   return tables.flatMap(({ name: table }) => {
-    const columns = database
-      .prepare(`PRAGMA table_info(${quoteSqliteIdentifier(table)})`)
-      .all() as Array<{ name: string }>;
+    const columns = executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom(sql`pragma_table_info(${table})`.as("pragma_columns"))
+        .select(sql`name`.as("name")),
+    ).rows as Array<{ name: string }>;
     return columns.flatMap(({ name: column }): SharedStateSessionKeyColumn[] => {
       if (column === "session_key" || column.endsWith("_session_key")) {
         return [{ table, column, json: false }];
@@ -33,13 +59,17 @@ function listSharedStateSessionKeyColumns(database: DatabaseSync): SharedStateSe
 }
 
 export function collectSharedStateSessionKeys(database: DatabaseSync): Set<string> {
+  const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
   const keys = new Set<string>();
   for (const { table, column, json } of listSharedStateSessionKeyColumns(database)) {
-    const rows = database
-      .prepare(
-        `SELECT ${quoteSqliteIdentifier(column)} AS value FROM ${quoteSqliteIdentifier(table)} WHERE ${quoteSqliteIdentifier(column)} IS NOT NULL`,
-      )
-      .all() as Array<{ value: unknown }>;
+    const columnId = sqliteSchemaIdentifier(column);
+    const rows = executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom(sql`${sqliteSchemaIdentifier(table)}`.as("session_key_table"))
+        .select(columnId.as("value"))
+        .where(columnId, "is not", null),
+    ).rows as Array<{ value: unknown }>;
     for (const { value } of rows) {
       if (!json && typeof value === "string") {
         keys.add(value);
@@ -59,24 +89,29 @@ export function rewriteSharedStateSessionKeys(
   database: DatabaseSync,
   renames: ReadonlyMap<string, string>,
 ): void {
+  const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
+  const rowId = sql`rowid`;
   for (const { table, column, json } of listSharedStateSessionKeyColumns(database)) {
-    const quotedTable = quoteSqliteIdentifier(table);
-    const quotedColumn = quoteSqliteIdentifier(column);
+    const tableId = sqliteSchemaIdentifier(table);
+    const columnId = sqliteSchemaIdentifier(column);
     if (!json) {
-      const statement = database.prepare(
-        `UPDATE ${quotedTable} SET ${quotedColumn} = ? WHERE ${quotedColumn} = ?`,
-      );
       for (const [from, to] of renames) {
-        statement.run(to, from);
+        executeSqliteQuerySync(
+          database,
+          db
+            .updateTable(sql`${tableId}`.as("session_key_table"))
+            .set(columnId, to)
+            .where(columnId, "=", from),
+        );
       }
       continue;
     }
-    const rows = database
-      .prepare(`SELECT rowid, ${quotedColumn} AS value FROM ${quotedTable}`)
-      .all() as Array<{ rowid: number | bigint; value: unknown }>;
-    const update = database.prepare(
-      `UPDATE ${quotedTable} SET ${quotedColumn} = ? WHERE rowid = ?`,
-    );
+    const rows = executeSqliteQuerySync(
+      database,
+      db
+        .selectFrom(sql`${tableId}`.as("session_key_table"))
+        .select([rowId.as("rowid"), columnId.as("value")]),
+    ).rows as Array<{ rowid: number | bigint; value: unknown }>;
     for (const row of rows) {
       if (typeof row.value !== "string") {
         continue;
@@ -89,7 +124,13 @@ export function rewriteSharedStateSessionKeys(
       }
       const rewritten = JSON.stringify(replaceSessionKeyReferences(parsed, renames));
       if (rewritten !== row.value) {
-        update.run(rewritten, row.rowid);
+        executeSqliteQuerySync(
+          database,
+          db
+            .updateTable(sql`${tableId}`.as("session_key_table"))
+            .set(columnId, rewritten)
+            .where(rowId, "=", row.rowid),
+        );
       }
     }
   }
@@ -115,9 +156,15 @@ function collectJsonStringValues(value: unknown, values: Set<string>): void {
 }
 
 export function readRepairJournal(database: DatabaseSync): ReservedKeyRename[] {
-  const row = database
-    .prepare("SELECT payload_json FROM state_leases WHERE scope = ? AND lease_key = ?")
-    .get(REPAIR_JOURNAL_SCOPE, REPAIR_JOURNAL_KEY) as { payload_json: string | null } | undefined;
+  const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db
+      .selectFrom("state_leases")
+      .select("payload_json")
+      .where("scope", "=", REPAIR_JOURNAL_SCOPE)
+      .where("lease_key", "=", REPAIR_JOURNAL_KEY),
+  );
   if (!row?.payload_json) {
     return [];
   }
@@ -155,23 +202,40 @@ export function writeRepairJournal(
   renames: readonly ReservedKeyRename[],
 ): void {
   const now = Date.now();
-  database
-    .prepare(
-      "INSERT INTO state_leases (scope, lease_key, owner, payload_json, created_at, updated_at) VALUES (?, ?, 'openclaw-doctor', ?, ?, ?) ON CONFLICT(scope, lease_key) DO UPDATE SET owner = excluded.owner, payload_json = excluded.payload_json, updated_at = excluded.updated_at",
-    )
-    .run(
-      REPAIR_JOURNAL_SCOPE,
-      REPAIR_JOURNAL_KEY,
-      JSON.stringify({ version: 1, renames }),
-      now,
-      now,
-    );
+  const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .insertInto("state_leases")
+      .values({
+        scope: REPAIR_JOURNAL_SCOPE,
+        lease_key: REPAIR_JOURNAL_KEY,
+        owner: "openclaw-doctor",
+        expires_at: null,
+        heartbeat_at: null,
+        payload_json: JSON.stringify({ version: 1, renames }),
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["scope", "lease_key"]).doUpdateSet({
+          owner: "openclaw-doctor",
+          payload_json: JSON.stringify({ version: 1, renames }),
+          updated_at: now,
+        }),
+      ),
+  );
 }
 
 export function deleteRepairJournal(database: DatabaseSync): void {
-  database
-    .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
-    .run(REPAIR_JOURNAL_SCOPE, REPAIR_JOURNAL_KEY);
+  const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("state_leases")
+      .where("scope", "=", REPAIR_JOURNAL_SCOPE)
+      .where("lease_key", "=", REPAIR_JOURNAL_KEY),
+  );
 }
 
 function replaceSessionKeyReferences(
@@ -190,8 +254,4 @@ function replaceSessionKeyReferences(
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, replaceSessionKeyReferences(item, renames)]),
   );
-}
-
-function quoteSqliteIdentifier(value: string): string {
-  return `"${value.replaceAll('"', '""')}"`;
 }

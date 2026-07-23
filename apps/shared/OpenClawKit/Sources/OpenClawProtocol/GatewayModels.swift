@@ -4895,6 +4895,7 @@ public struct SessionObserverDigest: Codable, Sendable {
 public struct SessionRow: Codable, Sendable {
     public let key: String
     public let sessionid: String?
+    public let incognito: Bool?
     public let kind: AnyCodable
     public let label: String?
     public let displayname: String?
@@ -4947,6 +4948,7 @@ public struct SessionRow: Codable, Sendable {
     public init(
         key: String,
         sessionid: String? = nil,
+        incognito: Bool? = nil,
         kind: AnyCodable,
         label: String? = nil,
         displayname: String? = nil,
@@ -4998,6 +5000,7 @@ public struct SessionRow: Codable, Sendable {
     {
         self.key = key
         self.sessionid = sessionid
+        self.incognito = incognito
         self.kind = kind
         self.label = label
         self.displayname = displayname
@@ -5051,6 +5054,7 @@ public struct SessionRow: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case sessionid = "sessionId"
+        case incognito
         case kind
         case label
         case displayname = "displayName"
@@ -6882,6 +6886,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let model: String?
     public let thinkinglevel: String?
+    public let incognito: Bool?
     public let catalogid: String?
     public let parentsessionkey: String?
     public let spawndepth: Int?
@@ -6903,6 +6908,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String? = nil,
         model: String? = nil,
         thinkinglevel: String? = nil,
+        incognito: Bool? = nil,
         catalogid: String? = nil,
         parentsessionkey: String? = nil,
         spawndepth: Int? = nil,
@@ -6923,6 +6929,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.model = model
         self.thinkinglevel = thinkinglevel
+        self.incognito = incognito
         self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
         self.spawndepth = spawndepth
@@ -6945,6 +6952,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case model
         case thinkinglevel = "thinkingLevel"
+        case incognito
         case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"
         case spawndepth = "spawnDepth"

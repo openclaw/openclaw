@@ -163,7 +163,7 @@ function applyReservedIncognitoKeyRenames(
     return;
   }
   // Board widget foreign keys are immediate; defer them so every key-bearing row renames atomically.
-  database.exec("PRAGMA defer_foreign_keys = ON;");
+  database.exec("PRAGMA defer_foreign_keys = ON;"); // sqlite-allow-raw -- transaction-local FK deferral.
   for (const rename of renames) {
     updateSessionKeyColumns(database, rename);
   }

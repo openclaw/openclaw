@@ -777,7 +777,11 @@ async function initSessionStateAttemptLocked(
     persistedAuthProfileOverrideCompactionCount = reusableEntry.authProfileOverrideCompactionCount;
     persistedLabel = reusableEntry.label;
   } else {
-    sessionId = entry?.sessionId ?? crypto.randomUUID();
+    // Durable resets retain their transcript identity for cursor continuity; ACP
+    // resets still rotate the local session id that owns provider conversation state.
+    sessionId = isAcpSessionKey(sessionKey)
+      ? crypto.randomUUID()
+      : (entry?.sessionId ?? crypto.randomUUID());
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
