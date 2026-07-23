@@ -547,6 +547,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const projected = protocolSuggestion(target, suggestion);
+    publishSuggestion(context, target, params.sessionKey, {
+      action: "resolved",
+      suggestion: projected,
+    });
     const actor = actorIdentity(client);
     try {
       await appendSessionAudit({
@@ -558,10 +562,6 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     } catch (error) {
       context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
     }
-    publishSuggestion(context, target, params.sessionKey, {
-      action: "resolved",
-      suggestion: projected,
-    });
     respond(true, { suggestion: projected });
   },
 

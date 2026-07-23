@@ -261,6 +261,44 @@ describe("session suggestion handlers", () => {
     });
   });
 
+  it("publishes a fenced resolution before awaiting the transcript audit", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-main",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const added = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "resolve before audit" },
+        client("alice", "Alice"),
+      );
+      const audit = createDeferred<void>();
+      mocks.appendSharingAudit.mockImplementationOnce(() => audit.promise);
+      const broadcast = vi.fn();
+      const pending = call(
+        "session.suggestions.resolve",
+        { sessionKey, id: responseSuggestionId(added), resolution: "edit" },
+        client("owner", "Owner"),
+        context(broadcast),
+      );
+
+      await vi.waitFor(() => expect(mocks.appendSharingAudit).toHaveBeenCalledOnce());
+      expect(broadcast).toHaveBeenCalledWith(
+        "session.suggestion",
+        expect.objectContaining({ action: "resolved" }),
+        expect.any(Object),
+      );
+
+      audit.resolve();
+      expect((await pending).responses[0]?.[0]).toBe(true);
+    });
+  });
+
   it("keeps typing dormant for one identity and broadcasts for two live viewers", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       vi.useFakeTimers();
