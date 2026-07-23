@@ -152,14 +152,13 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const ownerConfig = {
       agents: {
         defaults: { model: "google/gemini-2.0-flash" },
-        list: [{ id: "main", default: true }],
+        list: [{ id: "main", default: true, workspace: "/tmp/replacement-workspace" }],
       },
     };
     const ownerCatalog = [{ provider: "google", id: "gemini-2.0-flash", name: "Gemini 2.0 Flash" }];
     loadModelCatalogOwnerMock.mockResolvedValueOnce({
       agentId: "main",
       agentDir: "/tmp/owner-agent",
-      workspaceDir: "/tmp/owner-workspace",
       config: ownerConfig,
       modelCatalog: { entries: ownerCatalog, routeVariants: [] },
     });
@@ -179,12 +178,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       readOnly: true,
     });
     expect(ensureAgentWorkspaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ dir: "/tmp/owner-workspace" }),
+      expect.objectContaining({ dir: "/tmp/replacement-workspace" }),
     );
     expect(ensureRuntimePluginsLoadedMock).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining(ownerConfig),
-        workspaceDir: "/tmp/owner-workspace",
+        workspaceDir: "/tmp/replacement-workspace",
       }),
     );
     expect(resolveCronSessionMock).toHaveBeenCalledWith(

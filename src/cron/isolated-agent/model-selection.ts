@@ -11,6 +11,7 @@ import {
   loadPreparedModelCatalogOwnerSnapshot,
   normalizeModelSelection,
   resolveAgentConfig,
+  resolveAgentWorkspaceDir,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
@@ -106,7 +107,7 @@ export async function resolveCronModelSelectionOwner(params: {
     config: owner.config,
     agentId: owner.agentId,
     agentDir: owner.agentDir,
-    workspaceDir: owner.workspaceDir ?? params.workspaceDir,
+    workspaceDir: owner.workspaceDir ?? resolveAgentWorkspaceDir(owner.config, owner.agentId),
     catalog: owner.modelCatalog.entries,
   };
 }

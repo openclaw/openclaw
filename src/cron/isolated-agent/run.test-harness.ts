@@ -52,6 +52,10 @@ function usesRealAccessorStore(storePath?: string): boolean {
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
+export const resolveAgentWorkspaceDirMock = vi.fn(
+  (cfg: { agents?: { list?: Array<{ id?: string; workspace?: string }> } }, agentId: string) =>
+    cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ?? "/tmp/workspace",
+);
 const resolveEffectiveModelFallbacksMock = createMock();
 const resolveSubagentModelFallbacksOverrideMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
@@ -128,7 +132,7 @@ vi.mock("./run.runtime.js", async () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
-  resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
@@ -229,6 +233,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_PROVIDER: "openai",
   loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogOwnerMock,
   resolveAgentConfig: resolveAgentConfigMock,
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
