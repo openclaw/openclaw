@@ -61,7 +61,7 @@ export default definePluginEntry({
         id: "google-meet",
         aliases: ["googlemeet", "meet"],
         name: "Google Meet",
-        runtime: ensureRuntime,
+        runtime: async () => (await ensureRuntime()).transcriptSourceRuntime(),
       }),
     );
 

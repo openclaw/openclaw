@@ -13,10 +13,6 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  TranscriptStartRequest,
-  TranscriptStopRequest,
-} from "openclaw/plugin-sdk/transcripts";
-import type {
   GoogleMeetConfig,
   GoogleMeetMode,
   GoogleMeetModeInput,
@@ -27,6 +23,13 @@ import {
   testGoogleMeetSpeech,
   type GoogleMeetRuntimeProbeContext,
 } from "./runtime-probes.js";
+import {
+  isBrowserTransport,
+  noteSession,
+  resolveMode,
+  resolveTransport,
+  withSessionAgentConfig,
+} from "./runtime-session.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
 import {
   launchChromeMeet,
@@ -38,7 +41,10 @@ import {
   recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
-import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./transports/google-meet-platform-adapter.js";
+import {
+  GOOGLE_MEET_PLATFORM_ADAPTER,
+  isGoogleMeetTalkBackMode,
+} from "./transports/google-meet-platform-adapter.js";
 import type {
   GoogleMeetBrowserTab,
   GoogleMeetChromeHealth,
@@ -83,39 +89,7 @@ type GoogleMeetJoinContext = MeetingSessionRuntimeJoinContext<
   GoogleMeetBrowserTab
 >;
 
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
-  return `voice:google-meet:${meetingSessionId}`;
-}
-
-function resolveTransport(input: GoogleMeetTransport | undefined, config: GoogleMeetConfig) {
-  return input ?? config.defaultTransport;
-}
-
-function resolveMode(input: GoogleMeetModeInput | undefined, config: GoogleMeetConfig) {
-  return input === "realtime" ? "agent" : (input ?? config.defaultMode);
-}
-
-function withSessionAgentConfig(config: GoogleMeetConfig, agentId: string): GoogleMeetConfig {
-  return config.realtime.agentId === agentId
-    ? config
-    : { ...config, realtime: { ...config.realtime, agentId } };
-}
-
-function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
-  return mode === "agent" || mode === "bidi";
-}
-
-function isBrowserTransport(transport: GoogleMeetTransport): boolean {
-  return transport === "chrome" || transport === "chrome-node";
-}
-
-function noteSession(session: GoogleMeetSession, note: string): void {
-  session.notes = [...session.notes.filter((item) => item !== note), note];
-}
+const nowIso = () => new Date().toISOString();
 
 export class GoogleMeetRuntime {
   readonly #createdBrowserTabs = new Map<string, string>();
@@ -242,13 +216,7 @@ export class GoogleMeetRuntime {
     return await this.#sessions.transcript(sessionId, options);
   }
 
-  async startTranscriptSource(request: TranscriptStartRequest) {
-    return await this.#sessions.startTranscriptSource(request);
-  }
-
-  async stopTranscriptSource(request: TranscriptStopRequest) {
-    return await this.#sessions.stopTranscriptSource(request);
-  }
+  transcriptSourceRuntime = () => this.#sessions;
 
   async setupStatus(
     options: {
@@ -444,7 +412,7 @@ export class GoogleMeetRuntime {
           agentId: delegatedAgentId,
           sessionKey: delegatedAgentId
             ? `agent:${delegatedAgentId}:google-meet:${session.id}`
-            : buildTwilioVoiceCallSessionKey(session.id),
+            : `voice:google-meet:${session.id}`,
           message: isGoogleMeetTalkBackMode(session.mode)
             ? (request.message ??
               this.params.config.voiceCall.introMessage ??
