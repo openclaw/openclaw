@@ -148,7 +148,10 @@ function resolveGoogleAuthEnvProxyUrl(protocol: "http" | "https"): string | unde
 
 function collectGoogleAuthNoProxyRules(noProxy: ProxyRule[] = []): ProxyRule[] {
   const rules = [...noProxy];
-  const envRules = (process.env.NO_PROXY ?? process.env.no_proxy)?.split(",") ?? [];
+  const noProxyEnv =
+    normalizeGoogleAuthProxyEnvValue(process.env.NO_PROXY) ??
+    normalizeGoogleAuthProxyEnvValue(process.env.no_proxy);
+  const envRules = noProxyEnv?.split(",") ?? [];
   for (const rule of envRules) {
     const trimmed = rule.trim();
     if (trimmed.length > 0) {
