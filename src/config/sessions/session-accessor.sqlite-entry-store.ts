@@ -522,8 +522,8 @@ export function writeSessionEntry(
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
   }
-  // Membership belongs to the exact canonical row being overwritten, which
-  // can differ from the selected alias during canonicalization.
+  // Collaboration rows belong to the exact canonical node being overwritten,
+  // which can differ from the selected alias during canonicalization.
   if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
     clearSessionCollaborationForKey(database, sessionKey);
   }

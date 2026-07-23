@@ -192,19 +192,6 @@ export interface SessionMembers {
   session_key: string;
 }
 
-export interface SessionSuggestions {
-  author_id: string;
-  author_label: string | null;
-  created_at: number;
-  dispatch_resolution: string | null;
-  dispatch_started_at: number | null;
-  dispatch_token: string | null;
-  id: string;
-  session_key: string;
-  state: string;
-  text: string;
-}
-
 export interface SessionNodes {
   archived_at: number | null;
   category: string | null;
@@ -229,6 +216,19 @@ export interface SessionNodes {
   spawned_by: string | null;
   status: string | null;
   updated_at: number;
+}
+
+export interface SessionSuggestions {
+  author_id: string;
+  author_label: string | null;
+  created_at: number;
+  dispatch_resolution: string | null;
+  dispatch_started_at: number | null;
+  dispatch_token: string | null;
+  id: string;
+  session_key: string;
+  state: string;
+  text: string;
 }
 
 export interface SessionTranscriptActiveEvents {
