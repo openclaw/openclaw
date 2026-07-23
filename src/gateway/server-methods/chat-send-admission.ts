@@ -135,7 +135,7 @@ export async function admitChatSend(params: {
   let reservationSuperseded = false;
   let supersedingResult: DedupeEntry | undefined;
   const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
-    if (context.chatAbortedRuns.has(clientRunId)) {
+    if (context.chatRunState.hasAbortMarker(clientRunId)) {
       return;
     }
     const pendingReservation = readPreRegisteredRun({

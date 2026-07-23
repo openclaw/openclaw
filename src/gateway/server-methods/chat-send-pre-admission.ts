@@ -119,7 +119,7 @@ export async function runChatSendPreAdmission(params: {
     return false;
   }
 
-  const abortMarker = context.chatAbortedRuns.get(clientRunId);
+  const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
   if (abortMarker !== undefined) {
     const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
     const payload = buildAbortedChatSendPayload({ runId: clientRunId, endedAt: abortedAt });

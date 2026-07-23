@@ -34,13 +34,7 @@ import type {
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
-import type {
-  BufferedAgentEvent,
-  ChatAbortMarker,
-  ChatRunEntry,
-  ChatRunPlanSnapshot,
-  ChatRunRegistration,
-} from "../server-chat-state.js";
+import type { ChatRunEntry, ChatRunRegistration, ChatRunState } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
 import type {
   GatewayApprovalEventPublisher,
@@ -253,15 +247,7 @@ export type GatewayRequestContext = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   /** Cancel identities for turns waiting in the followup/collect queue. */
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
-  chatAbortedRuns: Map<string, ChatAbortMarker>;
-  chatRunBuffers: Map<string, string>;
-  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
-  chatDeltaSentAt: Map<string, number>;
-  chatDeltaLastBroadcastLen: Map<string, number>;
-  chatDeltaLastBroadcastText: Map<string, string>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  clearChatRunState: (runId: string) => void;
+  chatRunState: ChatRunState;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,

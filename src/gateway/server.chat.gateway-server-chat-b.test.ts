@@ -32,6 +32,7 @@ import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { createChatRunState } from "./server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
@@ -228,15 +229,7 @@ function createDirectChatContext(): GatewayRequestContext {
     },
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatRunPlanSnapshots: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     broadcast: vi.fn(),
@@ -466,11 +459,12 @@ describe("gateway server chat", () => {
           expiresAtMs: 10_000,
           projectSessionActive: true,
         });
-        context.chatRunBuffers.set("run-active", "partial reply");
-        context.chatRunPlanSnapshots?.set("run-active", {
+        const activeRun = context.chatRunState.getOrCreate("run-active");
+        activeRun.buffer = "partial reply";
+        activeRun.planSnapshot = {
           explanation: "Replay on reconnect",
           steps: [{ step: "Reconnect clients", status: "in_progress" }],
-        });
+        };
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         const { chatHandlers } = await import("./server-methods/chat.js");
 
@@ -796,7 +790,7 @@ describe("gateway server chat", () => {
       })),
       logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       chatAbortControllers: new Map(),
-      chatRunBuffers: new Map(),
+      chatRunState: createChatRunState(),
     } as unknown as GatewayRequestContext;
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -860,7 +854,7 @@ describe("gateway server chat", () => {
       }),
       logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       chatAbortControllers: new Map(),
-      chatRunBuffers: new Map(),
+      chatRunState: createChatRunState(),
     } as unknown as GatewayRequestContext;
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -929,7 +923,7 @@ describe("gateway server chat", () => {
       }),
       logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
       chatAbortControllers: new Map(),
-      chatRunBuffers: new Map(),
+      chatRunState: createChatRunState(),
     } as unknown as GatewayRequestContext;
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -1007,7 +1001,7 @@ describe("gateway server chat", () => {
           debug: vi.fn(),
         },
         chatAbortControllers: new Map(),
-        chatRunBuffers: new Map(),
+        chatRunState: createChatRunState(),
         getRuntimeConfig: () => ({}),
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
@@ -1199,7 +1193,7 @@ describe("gateway server chat", () => {
               debug: vi.fn(),
             },
             chatAbortControllers: new Map(),
-            chatRunBuffers: new Map(),
+            chatRunState: createChatRunState(),
             getRuntimeConfig: () => config,
           } as unknown as GatewayRequestContext;
           const { createGatewayAgentModelCatalogProjector } =
@@ -1449,7 +1443,7 @@ describe("gateway server chat", () => {
           debug: vi.fn(),
         },
         chatAbortControllers: new Map(),
-        chatRunBuffers: new Map(),
+        chatRunState: createChatRunState(),
         getRuntimeConfig: () => config,
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
@@ -1606,14 +1600,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -1747,14 +1734,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -2466,7 +2446,7 @@ describe("gateway server chat", () => {
         { ok: true, payload: terminalResult.payload, error: undefined },
       ]);
       expect(context.dedupe.get(`chat:${terminalRunId}`)).toBe(terminalResult);
-      expect(context.chatAbortedRuns.has(terminalRunId)).toBe(false);
+      expect(context.chatRunState.runs.get(terminalRunId)?.abortMarker).toBeUndefined();
     } finally {
       releaseMutation.resolve();
       releaseTerminalMutation.resolve();
@@ -2542,11 +2522,7 @@ describe("gateway server chat", () => {
           },
           agentRunSeq: new Map<string, number>(),
           chatAbortControllers: new Map(),
-          chatAbortedRuns: new Map(),
-          chatRunBuffers: new Map(),
-          chatDeltaSentAt: new Map(),
-          chatDeltaLastBroadcastLen: new Map(),
-          chatDeltaLastBroadcastText: new Map(),
+          chatRunState: createChatRunState(),
           addChatRun: vi.fn(),
           removeChatRun: vi.fn(),
           broadcast: vi.fn(),
@@ -3743,14 +3719,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -3981,14 +3950,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -4100,14 +4062,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -4239,15 +4194,8 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
+        chatRunState: createChatRunState(),
         chatQueuedTurns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast,
@@ -4475,14 +4423,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -4631,14 +4572,7 @@ describe("gateway server chat", () => {
         },
         agentRunSeq: new Map<string, number>(),
         chatAbortControllers: new Map(),
-        chatAbortedRuns: new Map(),
-        chatRunBuffers: new Map(),
-        chatDeltaSentAt: new Map(),
-        chatDeltaLastBroadcastLen: new Map(),
-        chatDeltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-        clearChatRunState: vi.fn(),
+        chatRunState: createChatRunState(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast,

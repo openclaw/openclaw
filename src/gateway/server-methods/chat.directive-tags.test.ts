@@ -31,6 +31,7 @@ import { getAgentRunContext } from "../../infra/agent-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -782,14 +783,7 @@ function createChatContext(): Pick<
   | "agentRunSeq"
   | "chatAbortControllers"
   | "chatQueuedTurns"
-  | "chatRunBuffers"
-  | "chatDeltaSentAt"
-  | "chatDeltaLastBroadcastLen"
-  | "chatDeltaLastBroadcastText"
-  | "agentDeltaSentAt"
-  | "bufferedAgentEvents"
-  | "chatAbortedRuns"
-  | "clearChatRunState"
+  | "chatRunState"
   | "addChatRun"
   | "removeChatRun"
   | "dedupe"
@@ -806,14 +800,7 @@ function createChatContext(): Pick<
     agentRunSeq: new Map<string, number>(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    chatAbortedRuns: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
