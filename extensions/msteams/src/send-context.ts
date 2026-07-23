@@ -140,6 +140,15 @@ async function findConversationReference(recipient: {
 export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
   to: string;
+  /**
+   * Optional per-call override for the resolved reply style. When set, takes
+   * precedence over the config-derived `resolveMSTeamsProactiveReplyStyle`
+   * lookup. Used by callers that want to force a fresh root post / new thread
+   * (`"top-level"`) in a channel without changing the static channel config.
+   * Ignored for DM and group-chat conversation types — those already default
+   * to `"top-level"` regardless.
+   */
+  replyStyleOverride?: MSTeamsReplyStyle;
 }): Promise<MSTeamsProactiveContext> {
   const msteamsCfg = params.cfg.channels?.msteams;
 
@@ -228,12 +237,14 @@ export async function resolveMSTeamsSendContext(params: {
     // groupChat, or unknown defaults to groupChat behavior
     conversationType = "groupChat";
   }
-  const replyStyle = resolveMSTeamsProactiveReplyStyle({
-    cfg: msteamsCfg,
-    conversationId,
-    ref: safeRef,
-    conversationType,
-  });
+  const replyStyle =
+    params.replyStyleOverride ??
+    resolveMSTeamsProactiveReplyStyle({
+      cfg: msteamsCfg,
+      conversationId,
+      ref: safeRef,
+      conversationType,
+    });
 
   // Get SharePoint site ID from config (required for file uploads in group chats/channels)
   const sharePointSiteId = msteamsCfg.sharePointSiteId;

@@ -465,12 +465,18 @@ function describeMSTeamsMessageTool({
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
-          actions: ["unpin"],
+          actions: ["unpin", "send"],
           properties: {
             pinnedMessageId: Type.Optional(
               Type.String({
                 description:
                   "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
+              }),
+            ),
+            topLevel: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Force a new root post / new thread in a channel (skips the in-thread reply chain). Ignored for DMs and group chats. Use for proactive warnings, broadcasts, cross-team announcements.",
               }),
             ),
           },
@@ -771,6 +777,43 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             ctx.action === "send"
               ? normalizeMessagePresentation(ctx.params.presentation)
               : undefined;
+          // Per-call `topLevel: true` opens a new root post / thread in a channel,
+          // bypassing the static channel `replyStyle` config. Only meaningful for
+          // plain-text sends — DMs/group-chats already default to top-level.
+          // Card sends with `presentation` keep their existing path; if topLevel
+          // is desired there too, extend `sendAdaptiveCardMSTeams` to accept
+          // replyStyleOverride in a follow-up.
+          if (
+            ctx.action === "send" &&
+            !presentation &&
+            (ctx.params.topLevel === true || ctx.params.topLevel === "true")
+          ) {
+            return await runWithRequiredActionTarget({
+              actionLabel: "Send (top-level / new thread)",
+              toolParams: ctx.params,
+              run: async (to) => {
+                const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
+                const result = await sendMessageMSTeams({
+                  cfg: ctx.cfg,
+                  to,
+                  text: resolveActionContent(ctx.params),
+                  mediaLocalRoots: ctx.mediaLocalRoots,
+                  mediaReadFile: ctx.mediaReadFile,
+                  replyStyleOverride: "top-level",
+                });
+                return jsonActionResultWithDetails(
+                  {
+                    ok: true,
+                    channel: "msteams",
+                    topLevel: true,
+                    messageId: result.messageId,
+                    conversationId: result.conversationId,
+                  },
+                  { ok: true, channel: "msteams", messageId: result.messageId },
+                );
+              },
+            });
+          }
           if (ctx.action === "send" && presentation) {
             const card = buildMSTeamsPresentationCard({
               presentation,

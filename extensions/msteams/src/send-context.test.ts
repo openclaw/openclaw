@@ -128,6 +128,73 @@ describe("resolveMSTeamsSendContext", () => {
     });
   });
 
+  it("honors replyStyleOverride before the config-derived replyStyle for channels", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        threadId: "thread-root-1",
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          appPassword: "app-password",
+          tenantId: "tenant-id",
+          // The channel has the default "thread" reply style — without the
+          // override below, the resolved context would carry replyStyle:"thread".
+          replyStyle: "thread" as const,
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        to: "conversation:19:channel@thread.tacv2",
+        replyStyleOverride: "top-level",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "19:channel@thread.tacv2",
+      replyStyle: "top-level",
+    });
+  });
+
+  it("falls back to the config-derived replyStyle when no override is passed", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        threadId: "thread-root-1",
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" },
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          appPassword: "app-password",
+          tenantId: "tenant-id",
+          replyStyle: "thread" as const,
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "19:channel@thread.tacv2",
+      replyStyle: "thread",
+    });
+  });
+
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     sendContextMockState.store.get.mockResolvedValue(
       channelRef({

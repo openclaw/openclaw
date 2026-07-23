@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { loadOutboundMediaFromUrl, type MSTeamsReplyStyle, type OpenClawConfig } from "../runtime-api.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -45,6 +45,13 @@ type SendMSTeamsMessageParams = {
   filename?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  /**
+   * Optional per-call override for the resolved reply style. When `"top-level"`
+   * is passed, the send opens a new root post / new thread in a channel
+   * regardless of the static channel `replyStyle` config. Ignored for DM and
+   * group-chat conversations. See `resolveMSTeamsSendContext`.
+   */
+  replyStyleOverride?: MSTeamsReplyStyle;
 };
 
 type SendMSTeamsMessageResult = {
@@ -175,13 +182,14 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile, replyStyleOverride } =
+    params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
   });
   const messageText = convertMarkdownTables(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const ctx = await resolveMSTeamsSendContext({ cfg, to, replyStyleOverride });
   const {
     app,
     conversationId,
