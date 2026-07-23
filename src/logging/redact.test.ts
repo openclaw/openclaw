@@ -802,6 +802,7 @@ describe("redactSensitiveText", () => {
     const passphrase = ["tls", "passphrase", "fixture", "1234567890"].join("-");
     const dbPass = ["db", "pass", "fixture", "1234567890"].join("-");
     const jwtValue = ["jwt", "fixture", "1234567890"].join("-");
+    const accessToken = ["access", "token", "fixture", "1234567890"].join("-");
     const secretValue = ["bare", "secret", "fixture", "1234567890"].join("-");
     const tokenValue = ["bare", "token", "fixture", "1234567890"].join("-");
     const quoted = (value: string, quote: '"' | "'") => [quote, value, quote].join("");
@@ -822,6 +823,7 @@ describe("redactSensitiveText", () => {
       `tls_passphrase=${passphrase}`,
       `db_pass=${dbPass}`,
       `jwt: ${jwtValue}`,
+      ["access-token", "=", accessToken].join(""),
       ["secret", " = ", quoted(secretValue, '"')].join(""),
       ["token", ": ", quoted(tokenValue, "'")].join(""),
       "password = abc,def",
@@ -847,6 +849,7 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("tls_passphrase=tls-pa…7890");
     expect(output).toContain("db_pass=db-pas…7890");
     expect(output).toContain("jwt: jwt-fi…7890");
+    expect(output).toContain("access-token=access…7890");
     expect(output).toContain('secret = "bare-s…7890"');
     expect(output).toContain("token: 'bare-t…7890'");
     expect(output).toContain("password = ***");
@@ -860,6 +863,7 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(passphrase);
     expect(output).not.toContain(dbPass);
     expect(output).not.toContain(jwtValue);
+    expect(output).not.toContain(accessToken);
     expect(output).not.toContain(secretValue);
     expect(output).not.toContain(tokenValue);
     expect(output).not.toContain("abc,def");
