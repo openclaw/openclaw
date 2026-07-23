@@ -252,8 +252,12 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
     try {
       const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
       // The Bot API consumes each polled update on response. When shutdown
-      // lands between getUpdates and journal, still accept the update so
-      // the ingress stop drains it before the DB handle closes.
+      // arrives while getUpdates is in-flight (the poll carries no abort
+      // signal and runs to its own 30 s timeout), still journal the update.
+      // This is best-effort — getUpdates outlives the 5 s channel-stop
+      // deadline, so the process may exit before the response lands. When
+      // it does land, durable-after-stop admission accepts the append after
+      // ingress.stop() has completed; the row is recovered on next restart.
       const shouldJournal =
         response.ok &&
         response.result &&
