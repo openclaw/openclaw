@@ -172,14 +172,14 @@ export type ChannelDeliveryOutcome = {
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
-  /** Text the provider accepted for this logical payload after native finalization. */
+  /** Final provider-visible text used for this logical payload's terminal observation. */
   content?: string;
 };
 
 /** Result returned after delivering one channel reply payload. */
 export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
-  /** Deferred provider finalization, such as closing an in-place streaming card. */
+  /** Same-payload native settlement; resolved fields override this result before observation. */
   finalization?: Promise<ChannelDeliveryOutcome>;
 };
 
@@ -218,7 +218,7 @@ export type ChannelEventDeliveryAdapter = {
     info: ChannelDeliveryInfo,
     result: ChannelDeliveryResult | void,
   ) => Promise<void> | void;
-  /** Opt into canonical `message_sent` observation after provider settlement. */
+  /** Let core emit the one canonical `message_sent` after non-durable provider settlement. */
   observeMessageSent?: true;
   onError?: (err: unknown, info: { kind: string }) => void;
 };
