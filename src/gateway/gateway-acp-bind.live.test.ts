@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -124,6 +125,29 @@ function extractAssistantTexts(messages: unknown[]): string[] {
     }
   }
   return texts;
+}
+
+function hasAssistantReplyAfterUserToken(messages: unknown[], token: string): boolean {
+  let sawTokenUserMessage = false;
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const role = (entry as { role?: unknown }).role;
+    const text = extractFirstTextBlock(entry);
+    if (role === "user" && typeof text === "string" && text.includes(token)) {
+      sawTokenUserMessage = true;
+      continue;
+    }
+    if (sawTokenUserMessage && role === "assistant") {
+      // Tool-using turns interleave non-text assistant entries; keep scanning
+      // until a textual reply lands rather than failing on the first tool call.
+      if (typeof text === "string" && text.trim().length > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function createAcpProbePhrase(words: string, nonce: string): string {
@@ -757,25 +781,35 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!firstBoundHistory) {
-          try {
-            const firstBoundTurn = await waitForAssistantTurn({
-              client,
+          // Every ACP agent must land a bound follow-up. The reply may not echo the
+          // token verbatim, so correlate by transcript order instead of counts: the
+          // rerouted user message carries the unique token, and a non-empty assistant
+          // message must follow it. A late-settling spawn turn sits BEFORE that user
+          // message and can never satisfy this check.
+          const deadline = Date.now() + 60_000;
+          let correlated: { messages?: unknown[] } | null = null;
+          while (Date.now() < deadline && !correlated) {
+            const history: { messages?: unknown[] } = await client.request("chat.history", {
               sessionKey: spawnedSessionKey,
-              minAssistantCount: 1,
-              timeoutMs: 60_000,
+              limit: 200,
             });
-            firstBoundHistory = {
-              messages: firstBoundTurn.messages,
-              lastAssistantText: firstBoundTurn.lastAssistantText,
-              matchedAssistantText: firstBoundTurn.lastAssistantText,
-            };
-          } catch (error) {
-            if (liveAgent !== "claude") {
-              throw error;
+            if (hasAssistantReplyAfterUserToken(history.messages ?? [], followupToken)) {
+              correlated = history;
+            } else {
+              await delay(2_000);
             }
-            firstBoundHistory = { messages: [], lastAssistantText: "", matchedAssistantText: "" };
-            logLiveStep("bound follow-up response not observed; continuing to marker probe");
           }
+          if (!correlated) {
+            throw new Error(
+              `bound follow-up did not land: no assistant reply after the ${followupToken} user turn`,
+            );
+          }
+          const assistantTexts = extractAssistantTexts(correlated.messages ?? []);
+          firstBoundHistory = {
+            messages: correlated.messages ?? [],
+            lastAssistantText: assistantTexts.at(-1) ?? "",
+            matchedAssistantText: assistantTexts.at(-1) ?? "",
+          };
         }
         const observedFollowupToken =
           firstBoundHistory.matchedAssistantText.includes(followupToken);
@@ -783,7 +817,7 @@ describeLive("gateway live (ACP bind)", () => {
 
         let recallHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;
         const expectedRecallAssistantCount = firstAssistantCount + 1;
-        const maxRecallAttempts = liveAgent === "claude" ? 3 : 1;
+        const maxRecallAttempts = 1;
         for (let attempt = 0; attempt < maxRecallAttempts && !recallHistory; attempt += 1) {
           await sendChatAndWait({
             client,
@@ -802,7 +836,7 @@ describeLive("gateway live (ACP bind)", () => {
               sessionKey: spawnedSessionKey,
               contains: followupToken,
               minAssistantCount: expectedRecallAssistantCount,
-              timeoutMs: liveAgent === "claude" ? 60_000 : 25_000,
+              timeoutMs: 25_000,
             });
           } catch {
             if (attempt === maxRecallAttempts - 1) {
@@ -812,29 +846,24 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         if (!recallHistory) {
-          if (liveAgent === "claude") {
-            try {
-              const recallTurn = await waitForAssistantTurn({
-                client,
-                sessionKey: spawnedSessionKey,
-                minAssistantCount: expectedRecallAssistantCount,
-                timeoutMs: 60_000,
-              });
-              recallHistory = {
-                messages: recallTurn.messages,
-                lastAssistantText: recallTurn.lastAssistantText,
-                matchedAssistantText: recallTurn.lastAssistantText,
-              };
-              logLiveStep(
-                "bound memory recall response did not repeat token; using turn progression",
-              );
-            } catch {
-              recallHistory = firstBoundHistory;
-              logLiveStep(
-                "bound memory recall response not observed; continuing from previous bound transcript",
-              );
-            }
-          } else {
+          try {
+            // A recall response that does not echo the token still proves bound memory
+            // progressed; inspect the advanced turn rather than skipping the assertion.
+            const recallTurn = await waitForAssistantTurn({
+              client,
+              sessionKey: spawnedSessionKey,
+              minAssistantCount: expectedRecallAssistantCount,
+              timeoutMs: 60_000,
+            });
+            recallHistory = {
+              messages: recallTurn.messages,
+              lastAssistantText: recallTurn.lastAssistantText,
+              matchedAssistantText: recallTurn.lastAssistantText,
+            };
+            logLiveStep(
+              "bound memory recall response did not repeat token; using turn progression",
+            );
+          } catch {
             // Live ACP harnesses can miss or significantly delay this intermediate recall turn.
             // Continue from the previously observed bound transcript and validate marker/image/cron
             // on subsequent turns.
@@ -845,7 +874,7 @@ describeLive("gateway live (ACP bind)", () => {
           }
         }
         const recallAssistantText = recallHistory.matchedAssistantText;
-        if (liveAgent === "claude" && recallAssistantText.includes(recallToken)) {
+        if (recallAssistantText.includes(recallToken)) {
           expect(recallAssistantText).toContain(followupToken);
           expect(recallAssistantText).toContain(recallToken);
         }
@@ -923,7 +952,7 @@ describeLive("gateway live (ACP bind)", () => {
                 client,
                 sessionKey: spawnedSessionKey,
                 minAssistantCount: markerAssistantCount + 1,
-                timeoutMs: liveAgent === "claude" ? 60_000 : 45_000,
+                timeoutMs: 45_000,
               });
             } catch {
               if (attempt === 1) {
