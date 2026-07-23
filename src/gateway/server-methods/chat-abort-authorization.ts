@@ -350,6 +350,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  exemptRunId?: string;
 }) {
   const sessionKeys = new Set(
     Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
@@ -362,10 +363,17 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
+  const exemptRunId = normalizeOptionalText(params.exemptRunId);
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
     if (active.controlUiVisible === false) {
+      continue;
+    }
+    // The run initiating a session-wide abort (e.g. a chat /close) must survive so
+    // it can deliver its own result; skip it entirely, not even counting it as a
+    // matched-but-unauthorized run.
+    if (exemptRunId && runId === exemptRunId) {
       continue;
     }
     if (params.preserveSideRuns && active.turnKind === "btw") {

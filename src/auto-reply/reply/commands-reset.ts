@@ -1,11 +1,25 @@
+import {
+  resolveAgentExplicitModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 /** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { getPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
+import { writeSessionLabel } from "./commands-name.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
@@ -26,6 +40,199 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyStripped = resetTail;
   // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
   mutableCtx.AcpDispatchTailAfterReset = true;
+}
+
+function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
+  const refs = new Set<string>();
+  const addModelRefValue = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      return;
+    }
+    refs.add(normalized);
+    const slash = normalized.indexOf("/");
+    if (slash > 0) {
+      refs.add(normalized.slice(0, slash));
+      refs.add(normalized.slice(slash + 1));
+    }
+  };
+  const providers = (
+    params.cfg as {
+      models?: {
+        providers?: Record<string, { models?: Array<Record<string, unknown>> }>;
+      };
+    }
+  ).models?.providers;
+  for (const [providerId, provider] of Object.entries(providers ?? {})) {
+    refs.add(providerId.toLowerCase());
+    for (const model of provider.models ?? []) {
+      const modelId = typeof model.id === "string" ? model.id.trim() : "";
+      const modelName = typeof model.name === "string" ? model.name.trim() : "";
+      for (const value of [modelId, modelName]) {
+        if (!value) {
+          continue;
+        }
+        refs.add(value.toLowerCase());
+        refs.add(`${providerId}/${value}`.toLowerCase());
+      }
+    }
+  }
+  // Configured primary/fallback models may not be duplicated under models.providers,
+  // but the reset-model resolver still honors them, so treat them as model refs here.
+  // Use the canonical helpers so the supported string shorthand for agents.defaults.model
+  // is resolved too, not just the object form.
+  const defaultsModel = params.cfg.agents?.defaults?.model;
+  addModelRefValue(resolveAgentModelPrimaryValue(defaultsModel));
+  for (const fallback of resolveAgentModelFallbackValues(defaultsModel)) {
+    addModelRefValue(fallback);
+  }
+  // Per-agent overrides are honored by the canonical reset-model resolver but are
+  // absent from models.providers and the defaults model. Only the ACTIVE agent's
+  // override matters here: the reset-model resolver scopes allowed model keys to the
+  // active agent, so folding in every agent's overrides would misclassify another
+  // agent's private model as a directive and drop a legitimate session name. The
+  // active agent falls back to the default agent when the turn has no explicit id,
+  // matching resolveDefaultModel's own agent scoping.
+  const activeAgentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  if (activeAgentId) {
+    addModelRefValue(resolveAgentExplicitModelPrimary(params.cfg, activeAgentId));
+    for (const fallback of resolveAgentModelFallbacksOverride(params.cfg, activeAgentId) ?? []) {
+      addModelRefValue(fallback);
+    }
+  }
+  // Plugin-supplied providers publish their models only into the prepared model
+  // catalog, not into cfg.models.providers, so a bare plugin ref like "acme/widget"
+  // is invisible to the config-only refs above and would be captured as a session
+  // name even though the reset-model resolver honors it. Fold in the already
+  // published catalog to recognize it as a directive instead. Use the snapshot
+  // accessor that reads the CURRENT published catalog without waiting or starting
+  // discovery, so this never cold-loads plugins on the /new hot path; it simply
+  // returns undefined until the catalog is warm (graceful degradation to config refs).
+  const catalog = getPreparedModelCatalogSnapshot({
+    config: params.cfg,
+    ...(activeAgentId ? { agentId: activeAgentId } : {}),
+  });
+  for (const entry of catalog?.entries ?? []) {
+    const providerId = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    if (providerId) {
+      refs.add(providerId.toLowerCase());
+    }
+    for (const value of [entry.id, entry.name]) {
+      const normalizedValue = typeof value === "string" ? value.trim() : "";
+      if (!normalizedValue) {
+        continue;
+      }
+      refs.add(normalizedValue.toLowerCase());
+      if (providerId) {
+        refs.add(`${providerId}/${normalizedValue}`.toLowerCase());
+      }
+    }
+  }
+  return refs;
+}
+
+const MODEL_REF_PREFIX_RE =
+  /^(?:gpt|o[134]|claude|gemini|llama|mistral|mixtral|codestral|qwen|deepseek|grok|kimi|command-r|sonar|phi)(?:[-_:./]|\d|$)/i;
+
+function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
+  const normalized = tail.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const refs = collectConfiguredModelRefs(params);
+  const tokens = normalized.split(/\s+/);
+  const firstToken = tokens[0] ?? "";
+  // A leading provider/model ref (e.g. a configured primary) is a model directive even when
+  // trailing tokens form a prompt, so it must not be captured as a session name.
+  if (firstToken.includes("/") && refs.has(firstToken)) {
+    return true;
+  }
+  if (tokens.length >= 2 && !firstToken.includes("/")) {
+    const [provider, model] = tokens;
+    if (provider && model && refs.has(provider)) {
+      return refs.has(`${provider}/${model}`) || refs.has(model) || MODEL_REF_PREFIX_RE.test(model);
+    }
+  }
+  // Classify by the FIRST token, not the whole tail: `/new opus summarize this` leads with a
+  // model alias and must fall through to the reset-model resolver (opus + prompt), not be
+  // captured verbatim as a multi-word session name. Scope the alias index to the active agent
+  // (matching the canonical directive path) so an alias defined only under the selected agent's
+  // `agents.list[].models` is recognized instead of dropping the trailing prompt into the title.
+  if (
+    !firstToken.includes("/") &&
+    buildModelAliasIndex({
+      cfg: params.cfg,
+      defaultProvider: params.provider || DEFAULT_PROVIDER,
+      agentId: params.agentId ?? resolveDefaultAgentId(params.cfg),
+      allowPluginNormalization: false,
+    }).byAlias.has(firstToken)
+  ) {
+    return true;
+  }
+  if (refs.has(firstToken)) {
+    return true;
+  }
+  // MODEL_REF_PREFIX_RE is anchored at the start, so this classifies the leading token: a
+  // single well-formed model ref (`/new gpt-5.6-sol`) or a leading ref plus prompt
+  // (`/new gpt-5.6-sol summarize this`) both fall through to the reset-model resolver.
+  return MODEL_REF_PREFIX_RE.test(firstToken);
+}
+
+function getNativeCommandTitleTail(params: HandleCommandsParams): string | undefined {
+  if ((params.ctx.CommandSource ?? "text") === "text") {
+    return undefined;
+  }
+  const title = params.ctx.CommandArgs?.values?.title;
+  if (typeof title !== "string" || !title.trim()) {
+    return undefined;
+  }
+  const trimmed = title.trim();
+  const newMatch = trimmed.match(/^\/new(?:\s+(.+))?$/i);
+  return newMatch ? newMatch[1]?.trim() : trimmed;
+}
+
+function parseExplicitNamedNewSessionTail(tail: string): string | undefined {
+  if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
+    return undefined;
+  }
+  const flagMatch = tail.match(/^--name(?:=|\s+)(.+)$/i);
+  if (flagMatch?.[1]) {
+    return flagMatch[1].trim();
+  }
+  const prefixMatch = tail.match(/^name:(.+)$/i);
+  if (prefixMatch?.[1]) {
+    return prefixMatch[1].trim();
+  }
+  return undefined;
+}
+
+function parseNamedNewSessionTail(
+  params: HandleCommandsParams,
+  resetTail: string,
+): string | undefined {
+  const nativeTitle = getNativeCommandTitleTail(params);
+  if (nativeTitle) {
+    const explicitNativeName = parseExplicitNamedNewSessionTail(nativeTitle);
+    if (explicitNativeName) {
+      return explicitNativeName;
+    }
+    return isModelRefTail(params, nativeTitle) ? undefined : nativeTitle;
+  }
+  const tail = resetTail.trim();
+  if (!tail) {
+    return undefined;
+  }
+  const explicitName = parseExplicitNamedNewSessionTail(tail);
+  if (explicitName) {
+    return explicitName;
+  }
+  if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
+    return undefined;
+  }
+  return undefined;
 }
 
 function isResetAuthorized(params: HandleCommandsParams): boolean {
@@ -137,6 +344,12 @@ export async function maybeHandleResetCommand(
       ? boundAcpSessionKey.trim()
       : undefined;
   if (boundAcpKey) {
+    if (commandAction === "new" && parseNamedNewSessionTail(params, resetTail)) {
+      return {
+        shouldContinue: false,
+        reply: { text: "Naming a new session isn't supported for ACP-bound sessions yet." },
+      };
+    }
     const resetResult = await resetConfiguredBindingTargetInPlace({
       cfg: params.cfg,
       sessionKey: boundAcpKey,
@@ -186,6 +399,24 @@ export async function maybeHandleResetCommand(
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
+  const newSessionTitle =
+    commandAction === "new" ? parseNamedNewSessionTail(params, resetTail) : undefined;
+  if (newSessionTitle) {
+    const writeResult = await writeSessionLabel(params, newSessionTitle);
+    if (!writeResult.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `✅ New session started, but couldn't name it: ${writeResult.error}` },
+      };
+    }
+    markCommandSessionMetadataChanged(params);
+    return {
+      shouldContinue: false,
+      ...(hookResult.routedReply
+        ? {}
+        : { reply: { text: `✅ New session started as “${writeResult.label}”.` } }),
+    };
+  }
   if (!resetTail) {
     return {
       shouldContinue: false,

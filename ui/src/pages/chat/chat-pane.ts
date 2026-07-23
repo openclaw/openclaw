@@ -383,6 +383,8 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Thread list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+const NEW_SESSION_RENAME_FAILED_MESSAGE =
+  "New Chat reset the thread but could not apply the name. Try renaming it again.";
 
 function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -2169,7 +2171,7 @@ class ChatPane extends OpenClawLightDomElement {
     `;
   }
 
-  private readonly createSession = async (): Promise<boolean> => {
+  private readonly createSession = async (options?: { label?: string }): Promise<boolean> => {
     const state = this.state;
     if (!state || !state.client || !state.connected) {
       return false;
@@ -2236,6 +2238,37 @@ class ChatPane extends OpenClawLightDomElement {
         // Recompute rather than null: the builtin snapshot also carries the
         // swarm card, which must survive an observer-only invalidation.
         this.refreshBuiltinBoardSnapshot();
+        // A board-preserving reset reuses the session key instead of calling
+        // sessions.create, so a requested /new --name label must be applied to
+        // the reset session explicitly or it would be silently dropped. Only
+        // patch on a confirmed-completed reset: an "uncertain" reset may not have
+        // landed a fresh incarnation, so patching the label could rename the wrong
+        // (stale) conversation.
+        if (options?.label && isCurrent() && resetResult === "completed") {
+          const labelAgentId =
+            scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+            resolveAgentIdFromSessionKey(previousSessionKey);
+          // The reset already landed, so a failed label patch is a partial failure:
+          // surface it explicitly instead of rejecting the promise or silently
+          // reporting success without the requested name.
+          let labelPatched: Awaited<ReturnType<typeof sessions.patch>> = null;
+          try {
+            labelPatched = await sessions.patch(
+              previousSessionKey,
+              { label: options.label },
+              labelAgentId ? { agentId: labelAgentId } : undefined,
+            );
+          } catch (error: unknown) {
+            this.publishHeaderError(error);
+            return false;
+          }
+          if (!labelPatched) {
+            state.lastError = NEW_SESSION_RENAME_FAILED_MESSAGE;
+            state.chatError = state.lastError;
+            state.requestUpdate?.();
+            return false;
+          }
+        }
       }
       return resetResult !== "failed";
     }
@@ -2244,6 +2277,7 @@ class ChatPane extends OpenClawLightDomElement {
       agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
+      ...(options?.label ? { label: options.label } : {}),
     });
     if (!isCurrent()) {
       return false;
@@ -2464,7 +2498,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.chatMessagesBySession,
     );
     pageState.chatScrollToEnd = (options) => this.transcript.scrollToEnd(options);
-    pageState.createChatSession = () => this.createSession();
+    pageState.createChatSession = (options?: { label?: string }) => this.createSession(options);
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);

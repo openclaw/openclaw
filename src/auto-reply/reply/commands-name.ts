@@ -49,6 +49,60 @@ function syncNameSessionEntry(params: HandleCommandsParams): void {
   params.sessionEntry = entry;
 }
 
+export type NameWriteResult = { ok: true; label: string } | { ok: false; error: string };
+
+/**
+ * Applies a validated session label to the current session using the canonical
+ * `sessions.patch` projection (same validation and cross-store uniqueness rule
+ * as the web/admin path). Shared by `/name` and the named `/new <title>` flow.
+ */
+export async function writeSessionLabel(
+  params: HandleCommandsParams,
+  title: string,
+): Promise<NameWriteResult> {
+  if (!params.storePath || !params.sessionKey) {
+    return { ok: false, error: "naming is not available for this session" };
+  }
+  const storePath = params.storePath;
+  const sessionKey = normalizeStoreSessionKey(params.sessionKey);
+  const result = await applySessionPatchProjection<{ ok: false; error: string }>({
+    storePath,
+    resolveTarget: () => ({ primaryKey: sessionKey, candidateKeys: [sessionKey] }),
+    project: ({ entries, existingEntry }) => {
+      // Native slash may invoke naming before the fast path persists the entry.
+      // Seed a copy under the canonical key without mutating params on failed writes.
+      const entry = existingEntry ?? (params.sessionEntry ? { ...params.sessionEntry } : undefined);
+      if (!entry) {
+        return { ok: false, error: "no active session to name" };
+      }
+      const validated = parseSessionLabel(title);
+      if (!validated.ok) {
+        return { ok: false, error: validated.error };
+      }
+      for (const other of entries) {
+        if (other.sessionKey !== sessionKey && other.entry.label === validated.label) {
+          return { ok: false, error: `label already in use: ${validated.label}` };
+        }
+      }
+      entry.label = validated.label;
+      entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
+      return {
+        ok: true,
+        entry,
+      };
+    },
+  });
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+  syncNameSessionEntry(params);
+  const label = result.entry.label;
+  if (label === undefined) {
+    return { ok: false, error: "failed to persist session label" };
+  }
+  return { ok: true, label };
+}
+
 export const handleNameCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -88,43 +142,10 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
     return nameReply(lines.join("\n"));
   }
 
-  const storePath = params.storePath;
-  const sessionKey = normalizeStoreSessionKey(params.sessionKey);
-  // Reuse the canonical label validation (`parseSessionLabel`) and the same
-  // cross-store uniqueness rule enforced by the web/admin `sessions.patch`
-  // path so chat naming behaves identically to the session manager.
-  const result = await applySessionPatchProjection<{ ok: false; error: string }>({
-    storePath,
-    resolveTarget: () => ({ primaryKey: sessionKey, candidateKeys: [sessionKey] }),
-    project: ({ entries, existingEntry }) => {
-      // Native slash may invoke `/name` before the fast path persists the entry.
-      // Seed a copy under the canonical key without mutating params on failed writes.
-      const entry = existingEntry ?? (params.sessionEntry ? { ...params.sessionEntry } : undefined);
-      if (!entry) {
-        return { ok: false, error: "no active session to name" };
-      }
-      const validated = parseSessionLabel(title);
-      if (!validated.ok) {
-        return { ok: false, error: validated.error };
-      }
-      for (const other of entries) {
-        if (other.sessionKey !== sessionKey && other.entry.label === validated.label) {
-          return { ok: false, error: `label already in use: ${validated.label}` };
-        }
-      }
-      entry.label = validated.label;
-      entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
-      return {
-        ok: true,
-        entry,
-      };
-    },
-  });
-
+  const result = await writeSessionLabel(params, title);
   if (!result.ok) {
     return nameReply(`Couldn't rename the session: ${result.error}`);
   }
-  syncNameSessionEntry(params);
   markCommandSessionMetadataChanged(params);
-  return nameReply(`✅ Session renamed to “${result.entry.label}”.`);
+  return nameReply(`✅ Session renamed to “${result.label}”.`);
 };

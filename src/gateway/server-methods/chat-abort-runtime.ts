@@ -185,6 +185,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   stopReason?: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  exemptRunId?: string;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
   const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
   // Queued-turn cancel MUST run before active abort so followup drain cannot
@@ -206,6 +207,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
     preserveSideRuns: params.preserveSideRuns,
+    exemptRunId: params.exemptRunId,
   });
   const {
     matchedSessionRuns: matchedPendingAgentRuns,

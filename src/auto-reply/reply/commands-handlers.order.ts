@@ -23,6 +23,7 @@ export const commandHandlerOrder = [
   "goal",
   "learn",
   "name",
+  "delete-session",
   "diagnostics",
   "tasks",
   "steer",

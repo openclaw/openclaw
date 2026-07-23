@@ -24,6 +24,7 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { handleSessionStateSessionDeleted } from "../../sessions/session-state-events.js";
+import { consumeSessionWorkAdmissionHandoff } from "../../sessions/session-work-admission-handoff.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -207,6 +208,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       params: {
         sessionKey: abortSessionKey,
         ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+        ...(p.exemptChatRunId ? { exemptRunId: p.exemptChatRunId } : {}),
       },
       respond: (ok, _payload, error) => {
         abortResult = { ok, ...(error ? { error } : {}) };
@@ -230,171 +232,188 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     let expectedSessionStillCurrent = true;
     let deleteBlockedByModelLock = false;
     let deleteBlockedByWorkerPlacement = false;
-    const deletion = await runExclusiveSessionLifecycleMutation({
-      scope: storePath,
-      identities: deleteLifecycleIdentities,
-      prepare: async () => {
-        sessionMutationAuthorization?.assertCurrent();
-        const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
-        deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
-          preparedEntry,
-          target.canonicalKey,
-        );
-        if (deleteBlockedByModelLock) {
-          return;
-        }
-        expectedSessionStillCurrent = !rejectExpectedSessionMismatch(preparedEntry);
-        if (!expectedSessionStillCurrent) {
-          return;
-        }
-        const placementError = resolveSessionWorkerPlacementMutationError({
-          action: "delete",
-          context,
-          key,
-          sessionId: normalizeOptionalString(preparedEntry?.sessionId),
-        });
-        if (placementError) {
-          deleteBlockedByWorkerPlacement = true;
-          respondSessionWorkerPlacementMutationError(placementError, respond);
-          return;
-        }
-        admittedWorkReleased = await interruptSessionWorkAdmissions({
+    // Adopt the initiator's retained session-work admission when a chat /close
+    // handed it off. Running the lifecycle mutation under the adopted lease keeps
+    // that admission in the current async context, so interruptSessionWorkAdmissions
+    // exempts it as the initiating stack instead of blocking on it. The initiating
+    // reply run still owns final release; adoption only re-enters the context.
+    const adoptedAdmissionLease = p.admissionHandoffId
+      ? consumeSessionWorkAdmissionHandoff({
+          handoffId: p.admissionHandoffId,
           scope: storePath,
-          identities: deleteLifecycleIdentities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-      },
-      run: async () => {
-        if (
-          deleteBlockedByModelLock ||
-          deleteBlockedByWorkerPlacement ||
-          !expectedSessionStillCurrent
-        ) {
-          return undefined;
-        }
-        if (!admittedWorkReleased) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`),
+          identities: [key],
+          onInterrupt: () => {},
+        })
+      : undefined;
+    const runDeletionMutation = () =>
+      runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: deleteLifecycleIdentities,
+        prepare: async () => {
+          sessionMutationAuthorization?.assertCurrent();
+          const preparedEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+          deleteBlockedByModelLock = rejectModelSelectionLockedDelete(
+            preparedEntry,
+            target.canonicalKey,
           );
-          return undefined;
-        }
-        sessionMutationAuthorization?.assertCurrent();
-        const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
-          agentId: requestedAgentId,
-        });
-        if (rejectModelSelectionLockedDelete(entry, canonicalKey ?? target.canonicalKey)) {
-          return undefined;
-        }
-        if (rejectExpectedSessionMismatch(entry)) {
-          return undefined;
-        }
-        // Recheck under the lifecycle lock: an unarchive racing the pre-lock
-        // check must not let an archive-gated delete remove an active session.
-        if (p.archivedOnly === true && entry?.archivedAt === undefined) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Session ${key} is not archived. Archive it first, then delete it.`,
-            ),
-          );
-          return undefined;
-        }
-        if (
-          rejectPluginRuntimeDeleteMismatch({
-            client,
-            key: canonicalKey ?? key,
-            entry,
-            respond,
-          })
-        ) {
-          return undefined;
-        }
-        const mutationCleanupError = await cleanupSessionBeforeMutation({
-          cfg,
-          key,
-          target,
-          entry,
-          legacyKey,
-          canonicalKey,
-          reason: "session-delete",
-        });
-        if (mutationCleanupError) {
-          respond(false, undefined, mutationCleanupError);
-          return undefined;
-        }
-        const postCleanupTarget = loadAccessorSessionEntryForGatewayTarget({
-          key,
-          cfg,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-        });
-        const postCleanupEntry = postCleanupTarget.entry;
-        sessionMutationAuthorization?.assertCurrent();
-        if (
-          !expectedLifecycleRevisionMatches(postCleanupEntry) ||
-          !expectedSessionIdMatches(postCleanupEntry)
-        ) {
-          respondSessionChanged();
-          return undefined;
-        }
-        const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
-        const incognito =
-          postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
-        const deletionParams = {
-          agentId: target.agentId,
-          archiveTranscript: incognito ? false : deleteTranscript,
-          deleteTranscriptWithoutArchive: incognito,
-          expectedEntry: postCleanupEntry,
-          expectedLifecycleRevision,
-          expectedSessionId,
-          expectedUpdatedAt: postCleanupEntry?.updatedAt,
-          storePath,
-          target: {
-            canonicalKey: target.canonicalKey,
-            storeKeys: target.storeKeys,
-          },
-        };
-        // Catalog and other plugin-owned sessions keep model selection locked,
-        // so deletion must use the exact-row owner-validated lifecycle seam.
-        const result =
-          postCleanupEntry && pluginOwnerId && isModelSelectionLocked(postCleanupEntry)
-            ? await rollbackPluginOwnedSessionEntryLifecycle({
-                ...deletionParams,
-                expectedEntry: postCleanupEntry,
-                expectedPluginOwnerId: pluginOwnerId,
-                target: {
-                  canonicalKey: postCleanupTarget.target.canonicalKey,
-                  storeKeys: postCleanupTarget.target.storeKeys,
-                },
-              })
-            : await deleteSessionEntryLifecycle(deletionParams);
-        if (result.expectedEntryMismatch) {
-          respondSessionChanged();
-          return undefined;
-        }
-        if (result.deleted) {
-          emitGatewaySessionEndPluginHook({
+          if (deleteBlockedByModelLock) {
+            return;
+          }
+          expectedSessionStillCurrent = !rejectExpectedSessionMismatch(preparedEntry);
+          if (!expectedSessionStillCurrent) {
+            return;
+          }
+          const placementError = resolveSessionWorkerPlacementMutationError({
+            action: "delete",
+            context,
+            key,
+            sessionId: normalizeOptionalString(preparedEntry?.sessionId),
+          });
+          if (placementError) {
+            deleteBlockedByWorkerPlacement = true;
+            respondSessionWorkerPlacementMutationError(placementError, respond);
+            return;
+          }
+          admittedWorkReleased = await interruptSessionWorkAdmissions({
+            scope: storePath,
+            identities: deleteLifecycleIdentities,
+            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          });
+        },
+        run: async () => {
+          if (
+            deleteBlockedByModelLock ||
+            deleteBlockedByWorkerPlacement ||
+            !expectedSessionStillCurrent
+          ) {
+            return undefined;
+          }
+          if (!admittedWorkReleased) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`),
+            );
+            return undefined;
+          }
+          sessionMutationAuthorization?.assertCurrent();
+          const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
+            agentId: requestedAgentId,
+          });
+          if (rejectModelSelectionLockedDelete(entry, canonicalKey ?? target.canonicalKey)) {
+            return undefined;
+          }
+          if (rejectExpectedSessionMismatch(entry)) {
+            return undefined;
+          }
+          // Recheck under the lifecycle lock: an unarchive racing the pre-lock
+          // check must not let an archive-gated delete remove an active session.
+          if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} is not archived. Archive it first, then delete it.`,
+              ),
+            );
+            return undefined;
+          }
+          if (
+            rejectPluginRuntimeDeleteMismatch({
+              client,
+              key: canonicalKey ?? key,
+              entry,
+              respond,
+            })
+          ) {
+            return undefined;
+          }
+          const mutationCleanupError = await cleanupSessionBeforeMutation({
             cfg,
-            sessionKey: target.canonicalKey ?? key,
-            sessionId: result.deletedSessionId,
-            storePath,
-            sessionFile: result.deletedSessionFile,
-            agentId: target.agentId,
-            reason: "deleted",
-            archivedTranscripts: result.archivedTranscripts,
-          });
-          await emitSessionUnboundLifecycleEvent({
-            targetSessionKey: target.canonicalKey ?? key,
+            key,
+            target,
+            entry,
+            legacyKey,
+            canonicalKey,
             reason: "session-delete",
-            emitHooks: p.emitLifecycleHooks !== false,
           });
-        }
-        return result;
-      },
-    });
+          if (mutationCleanupError) {
+            respond(false, undefined, mutationCleanupError);
+            return undefined;
+          }
+          const postCleanupTarget = loadAccessorSessionEntryForGatewayTarget({
+            key,
+            cfg,
+            ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+          });
+          const postCleanupEntry = postCleanupTarget.entry;
+          sessionMutationAuthorization?.assertCurrent();
+          if (
+            !expectedLifecycleRevisionMatches(postCleanupEntry) ||
+            !expectedSessionIdMatches(postCleanupEntry)
+          ) {
+            respondSessionChanged();
+            return undefined;
+          }
+          const pluginOwnerId = normalizeOptionalString(postCleanupEntry?.pluginOwnerId);
+          const incognito =
+            postCleanupEntry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
+          const deletionParams = {
+            agentId: target.agentId,
+            archiveTranscript: incognito ? false : deleteTranscript,
+            deleteTranscriptWithoutArchive: incognito,
+            expectedEntry: postCleanupEntry,
+            expectedLifecycleRevision,
+            expectedSessionId,
+            expectedUpdatedAt: postCleanupEntry?.updatedAt,
+            storePath,
+            target: {
+              canonicalKey: target.canonicalKey,
+              storeKeys: target.storeKeys,
+            },
+          };
+          // Catalog and other plugin-owned sessions keep model selection locked,
+          // so deletion must use the exact-row owner-validated lifecycle seam.
+          const result =
+            postCleanupEntry && pluginOwnerId && isModelSelectionLocked(postCleanupEntry)
+              ? await rollbackPluginOwnedSessionEntryLifecycle({
+                  ...deletionParams,
+                  expectedEntry: postCleanupEntry,
+                  expectedPluginOwnerId: pluginOwnerId,
+                  target: {
+                    canonicalKey: postCleanupTarget.target.canonicalKey,
+                    storeKeys: postCleanupTarget.target.storeKeys,
+                  },
+                })
+              : await deleteSessionEntryLifecycle(deletionParams);
+          if (result.expectedEntryMismatch) {
+            respondSessionChanged();
+            return undefined;
+          }
+          if (result.deleted) {
+            emitGatewaySessionEndPluginHook({
+              cfg,
+              sessionKey: target.canonicalKey ?? key,
+              sessionId: result.deletedSessionId,
+              storePath,
+              sessionFile: result.deletedSessionFile,
+              agentId: target.agentId,
+              reason: "deleted",
+              archivedTranscripts: result.archivedTranscripts,
+            });
+            await emitSessionUnboundLifecycleEvent({
+              targetSessionKey: target.canonicalKey ?? key,
+              reason: "session-delete",
+              emitHooks: p.emitLifecycleHooks !== false,
+            });
+          }
+          return result;
+        },
+      });
+    const deletion = adoptedAdmissionLease
+      ? await adoptedAdmissionLease.run(runDeletionMutation)
+      : await runDeletionMutation();
     if (!deletion) {
       return;
     }
