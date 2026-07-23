@@ -546,7 +546,7 @@ describe("handleCompactCommand", () => {
       return { ok: true } as never;
     });
     vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
-      input.deferEmbeddedHookSessionReset?.({
+      void input.deferEmbeddedHookSessionReset?.({
         key: "agent:main:whatsapp:direct:12345",
         agentId: "main",
         reason: "new",
@@ -596,7 +596,7 @@ describe("handleCompactCommand", () => {
 
   it("flushes accepted after-compaction reset requests for incomplete terminal compaction", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
-      input.deferEmbeddedHookSessionReset?.({
+      void input.deferEmbeddedHookSessionReset?.({
         key: "agent:main:whatsapp:direct:12345",
         agentId: "main",
         reason: "reset",
@@ -644,7 +644,7 @@ describe("handleCompactCommand", () => {
       },
     };
     vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (input) => {
-      input.deferEmbeddedHookSessionReset?.({
+      void input.deferEmbeddedHookSessionReset?.({
         key: "agent:main:main",
         agentId: "main",
         reason: "new",

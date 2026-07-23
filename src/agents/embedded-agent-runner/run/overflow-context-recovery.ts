@@ -70,7 +70,7 @@ function maybeDeferTerminalToolLoopOverflowReset(input: {
   if (!key) {
     return;
   }
-  input.deferEmbeddedHookSessionReset({
+  void input.deferEmbeddedHookSessionReset({
     key,
     agentId: input.sessionAgentId,
     reason: "new",

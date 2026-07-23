@@ -80,7 +80,7 @@ describe("createEmbeddedHookSessionResetQueue", () => {
     const onCommitted = vi.fn();
     const queue = createEmbeddedHookSessionResetQueue();
 
-    queue.deferResetSession({
+    void queue.deferResetSession({
       key: "agent:main:session-1",
       agentId: "main",
       reason: "new",
