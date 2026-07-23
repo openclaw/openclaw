@@ -594,6 +594,9 @@ export async function migrateLegacyMeetingTranscripts(params: {
         `Archived ${partialRelativeDirs.length} incomplete meeting transcript director${partialRelativeDirs.length === 1 ? "y" : "ies"} → ${recoveryRoot}`,
       );
     }
+    const expectedArchiveRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(
+      detected.sourceDir,
+    );
     if (plans.length === 0) {
       return { changes: recoveryChanges, warnings: [] };
     }
@@ -636,7 +639,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
       archiveRootAfterMove = await archiveLegacyMeetingTranscriptSnapshots({
         sourceRoot: detected.sourceDir,
         snapshots: plans,
-        expectedRelativeDirs: sessionRelativeDirs,
+        expectedRelativeDirs: expectedArchiveRelativeDirs,
         archiveRoot,
       });
     } catch (error) {
