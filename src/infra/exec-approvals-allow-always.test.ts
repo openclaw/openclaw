@@ -916,7 +916,7 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
-  it.each(["--commands", "--execute", "-e"])(
+  it.each(["--commands", "--commands=", "--execute", "--execute=", "-e"])(
     "prevents allowlist bypass for nu %s inline shell payloads",
     async (commandFlag) => {
       if (process.platform === "win32") {
@@ -926,8 +926,11 @@ $0 \\"$1\\"" touch {marker}`,
       const shell = makeExecutable(dir, "nu");
       makeExecutable(dir, "id");
       const env = makePathEnv(dir);
+      const attachedValue = commandFlag.endsWith("=");
       const result = await evaluateShellAllowlistWithAuthorization({
-        command: `${shell} ${commandFlag} 'id > marker'`,
+        command: attachedValue
+          ? `${shell} ${commandFlag}'id > marker'`
+          : `${shell} ${commandFlag} 'id > marker'`,
         allowlist: [{ pattern: shell, source: "allow-always" }],
         safeBins: resolveSafeBins(undefined),
         cwd: dir,

@@ -251,6 +251,7 @@ function extractPosixShellInlineCommand(argv: string[], baseExecutable: string):
       return null;
     }
     return extractInlineCommandByFlags(argv, NUSHELL_INLINE_COMMAND_FLAGS, {
+      allowAttachedLongValues: true,
       allowCombinedC: true,
     });
   }
@@ -298,7 +299,11 @@ function extractPowerShellInlineCommand(argv: string[]): string | null {
 function extractInlineCommandByFlags(
   argv: string[],
   flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean; valueOptions?: ReadonlySet<string> } = {},
+  options: {
+    allowAttachedLongValues?: boolean;
+    allowCombinedC?: boolean;
+    valueOptions?: ReadonlySet<string>;
+  } = {},
 ): string | null {
   return resolveInlineCommandMatch(argv, flags, options).command;
 }
@@ -354,14 +359,18 @@ function startupWrapperRequiresFullArgv(params: {
     params.baseExecutable === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS;
   if (
     LOGIN_STARTUP_SHELL_WRAPPER_CANONICAL.has(params.baseExecutable) &&
-    hasPosixLoginStartupBeforeInlineCommand(params.argv, inlineCommandFlags)
+    hasPosixLoginStartupBeforeInlineCommand(params.argv, inlineCommandFlags, {
+      allowAttachedLongValues: params.baseExecutable === "nu",
+    })
   ) {
     return (
       params.includeLegacyLoginInlineForm ||
       !isLegacyShLoginInlineForm(params.argv, params.baseExecutable)
     );
   }
-  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, inlineCommandFlags);
+  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, inlineCommandFlags, {
+    allowAttachedLongValues: params.baseExecutable === "nu",
+  });
 }
 
 function hasEnvManipulationBeforeShellWrapperInternal(

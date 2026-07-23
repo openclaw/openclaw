@@ -170,6 +170,7 @@ export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
   options: {
+    allowAttachedLongValues?: boolean;
     allowCombinedC?: boolean;
     isOptionToken?: (token: string) => boolean;
     restValueFlags?: ReadonlySet<string>;
@@ -188,6 +189,12 @@ export function resolveInlineCommandMatch(
       break;
     }
     const comparableToken = options.allowCombinedC ? token : lower;
+    const attachedLongValue = options.allowAttachedLongValues
+      ? parseAttachedLongFlagValue(token, flags)
+      : null;
+    if (attachedLongValue !== null) {
+      return { command: attachedLongValue.trim() || null, valueTokenIndex: i };
+    }
     if (flags.has(comparableToken)) {
       const valueTokenIndex = i + 1 < argv.length ? i + 1 : null;
       if (options.restValueFlags?.has(comparableToken)) {
@@ -225,6 +232,18 @@ export function resolveInlineCommandMatch(
     i += options.allowCombinedC ? advancePosixInlineOptionScan(token) : 1;
   }
   return { command: null, valueTokenIndex: null };
+}
+
+function parseAttachedLongFlagValue(token: string, flags: ReadonlySet<string>): string | null {
+  const equalsIndex = token.indexOf("=");
+  if (equalsIndex === -1) {
+    return null;
+  }
+  const flag = normalizeLowercaseStringOrEmpty(token.slice(0, equalsIndex));
+  if (!flag.startsWith("--") || !flags.has(flag)) {
+    return null;
+  }
+  return token.slice(equalsIndex + 1);
 }
 
 /** Return true when an inline shell payload directly dispatches positional args. */
@@ -270,6 +289,7 @@ export function isPowerShellInlineFileCommandFlag(token: string): boolean {
 export function hasPosixInteractiveStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
+  options: { allowAttachedLongValues?: boolean } = {},
 ): boolean {
   let sawInteractiveMode = false;
   for (let i = 1; i < argv.length;) {
@@ -284,7 +304,11 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
     if (isPosixInteractiveModeOption(token)) {
       sawInteractiveMode = true;
     }
-    if (flags.has(token) || isCombinedCommandFlag(token)) {
+    if (
+      flags.has(token) ||
+      (options.allowAttachedLongValues && parseAttachedLongFlagValue(token, flags) !== null) ||
+      isCombinedCommandFlag(token)
+    ) {
       return sawInteractiveMode;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {
@@ -299,6 +323,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
 export function hasPosixLoginStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
+  options: { allowAttachedLongValues?: boolean } = {},
 ): boolean {
   let sawLoginMode = false;
   for (let i = 1; i < argv.length;) {
@@ -313,7 +338,11 @@ export function hasPosixLoginStartupBeforeInlineCommand(
     if (token === "--login" || isPosixShortOption(token, "l")) {
       sawLoginMode = true;
     }
-    if (flags.has(token) || isCombinedCommandFlag(token)) {
+    if (
+      flags.has(token) ||
+      (options.allowAttachedLongValues && parseAttachedLongFlagValue(token, flags) !== null) ||
+      isCombinedCommandFlag(token)
+    ) {
       return sawLoginMode;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {

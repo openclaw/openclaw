@@ -102,6 +102,7 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
           wrapperArgv,
           wrapper === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS,
           {
+            allowAttachedLongValues: wrapper === "nu",
             allowCombinedC: true,
           },
         ).valueTokenIndex;

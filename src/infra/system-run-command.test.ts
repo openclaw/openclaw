@@ -138,6 +138,11 @@ describe("system run command public boundary", () => {
       rawCommand: "/usr/bin/printf ok",
     },
     {
+      name: "nushell attached execute startup flag",
+      argv: ["nu", "--interactive", "--execute=/usr/bin/printf ok"],
+      rawCommand: "/usr/bin/printf ok",
+    },
+    {
       name: "fish init command",
       argv: ["/usr/bin/fish", "--init-command=/tmp/payload.fish", "-c", "/usr/bin/printf ok"],
       rawCommand: "/usr/bin/printf ok",

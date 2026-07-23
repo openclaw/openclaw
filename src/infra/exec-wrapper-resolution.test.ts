@@ -619,12 +619,27 @@ describe("extractShellWrapperCommand", () => {
       expectedCommand: { isWrapper: true, command: "echo hi" },
     },
     {
+      argv: ["nu", "--execute=echo Hi"],
+      expectedInline: "echo Hi",
+      expectedCommand: { isWrapper: true, command: "echo Hi" },
+    },
+    {
+      argv: ["nu", "--commands=echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
       argv: ["nu", "-e", "echo hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: "echo hi" },
     },
     {
       argv: ["nu", "--interactive", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
+    },
+    {
+      argv: ["nu", "--interactive", "--execute=echo hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: null },
     },
