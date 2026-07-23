@@ -8,6 +8,7 @@ import {
   validateSessionVisibilitySetParams,
   type SessionSharingEvent,
   type SessionSharingIdentity,
+  type SessionCreatedActor,
   type SessionVisibility,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -121,12 +122,13 @@ async function knownSessionIdentities(params: {
   actor: SessionSharingIdentity;
 }): Promise<SessionSharingIdentity[]> {
   const identities = new Map<string, SessionSharingIdentity>();
-  const remember = (identity: SessionSharingIdentity | null) => {
-    if (!identity) {
+  const remember = (identity: SessionCreatedActor | null) => {
+    if (!identity?.id) {
       return;
     }
     const current = identities.get(identity.id);
     identities.set(identity.id, {
+      type: identity.type,
       id: identity.id,
       ...((identity.label ?? current?.label) ? { label: identity.label ?? current?.label } : {}),
     });
@@ -325,7 +327,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     });
     for (const member of members) {
       if (!identities.some((identity) => identity.id === member.identityId)) {
-        identities.push({ id: member.identityId });
+        identities.push({ type: "human", id: member.identityId });
       }
     }
     identities.sort(
@@ -333,7 +335,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
         left.id.localeCompare(right.id),
     );
-    const owner = target.entry.createdActor;
+    const owner = target.entry.createdActor?.id ? target.entry.createdActor : undefined;
     respond(
       true,
       {

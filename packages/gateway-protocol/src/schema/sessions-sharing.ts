@@ -2,15 +2,14 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { SessionCreatedActorSchema, type SessionCreatedActor } from "./sessions.js";
-import {
-  SessionSharingRoleSchema,
-  SessionVisibilitySchema,
-  type SessionSharingRole,
-  type SessionVisibility,
-} from "./sessions-sharing-values.js";
+import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+import { SessionCreatedActorSchema } from "./sessions.js";
 
-export const SessionSharingIdentitySchema = SessionCreatedActorSchema;
+/** A selectable sharing identity is a created actor with a durable id. */
+export const SessionSharingIdentitySchema = closedObject({
+  ...SessionCreatedActorSchema.properties,
+  id: NonEmptyString,
+});
 
 export {
   SESSION_VISIBILITY_VALUES,
@@ -82,7 +81,7 @@ export const SessionSharingEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
 });
 
-export type SessionSharingIdentity = SessionCreatedActor;
+export type SessionSharingIdentity = Static<typeof SessionSharingIdentitySchema>;
 export type SessionSharingAction = Static<typeof SessionSharingActionSchema>;
 export type SessionVisibilitySetParams = Static<typeof SessionVisibilitySetParamsSchema>;
 export type SessionVisibilitySetResult = Static<typeof SessionVisibilitySetResultSchema>;

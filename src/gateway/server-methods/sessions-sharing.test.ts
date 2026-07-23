@@ -74,13 +74,13 @@ function soloClient(): GatewayClient {
   };
 }
 
-function identifiedClient(profileId: string): GatewayClient {
+function identifiedClient(profileId: string, displayName: string | null = null): GatewayClient {
   return {
     ...soloClient(),
     authenticatedUserId: `${profileId}@example.com`,
     authenticatedUserProfile: {
       profileId,
-      displayName: null,
+      displayName,
       hasAvatar: false,
       updatedAt: 1,
     },
@@ -158,10 +158,15 @@ describe("session sharing handlers", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:main";
       const owner = { id: "owner@example.com", label: "Owner" };
-      const outsider: GatewayClient = { ...soloClient(), operatorIdentity: { id: "outsider" } };
+      const outsider = identifiedClient("outsider");
       await upsertSessionEntry(
         { agentId: "main", sessionKey },
-        { sessionId: "session-main", updatedAt: 1, createdBy: owner, visibility: "read-only" },
+        {
+          sessionId: "session-main",
+          updatedAt: 1,
+          createdActor: { type: "human", ...owner },
+          visibility: "read-only",
+        },
       );
 
       // The agent-run handler authorizes this resolved (default/effective) key
@@ -178,7 +183,7 @@ describe("session sharing handlers", () => {
       expect(
         authorizeResolvedSessionMutation({
           cfg: {},
-          client: { ...soloClient(), operatorIdentity: owner },
+          client: identifiedClient(owner.id, owner.label),
           sessionKey,
           agentId: "main",
         }),
@@ -203,7 +208,7 @@ describe("session sharing handlers", () => {
         {
           sessionId: "session-shared-member",
           updatedAt: 1,
-          createdBy: { id: "owner@example.com" },
+          createdActor: { type: "human", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -216,7 +221,7 @@ describe("session sharing handlers", () => {
       const responses: Parameters<RespondFn>[] = [];
       await sessionReadHandlers["sessions.list"]?.({
         params: { agentId: "main" },
-        client: { ...soloClient(), operatorIdentity: memberIdentity },
+        client: identifiedClient(memberIdentity.id, memberIdentity.label),
         context: {
           ...context(vi.fn()),
           loadGatewayModelCatalog: async () => [],
@@ -246,7 +251,7 @@ describe("session sharing handlers", () => {
           sessionId: "session-work-global",
           updatedAt: 1,
           visibility: "read-only",
-          createdBy: { id: "owner@example.com" },
+          createdActor: { type: "human", id: "owner@example.com" },
         },
       );
       const { ticket } = createBoardViewTicket({
@@ -256,10 +261,7 @@ describe("session sharing handlers", () => {
         revision: 1,
         viewGeneration: "a".repeat(32),
       });
-      const memberClient: GatewayClient = {
-        ...soloClient(),
-        operatorIdentity: { id: "outsider@example.com" },
-      };
+      const memberClient = identifiedClient("outsider@example.com");
       const requestContext = context(vi.fn());
       const cfg = {
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
@@ -298,16 +300,13 @@ describe("session sharing handlers", () => {
       const sessionKey = "agent:main:member-transition";
       const owner = { id: "owner@example.com", label: "Owner" };
       const memberIdentity = { id: "member@example.com", label: "Member" };
-      const memberClient: GatewayClient = {
-        ...soloClient(),
-        operatorIdentity: memberIdentity,
-      };
+      const memberClient = identifiedClient(memberIdentity.id, memberIdentity.label);
       await upsertSessionEntry(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-member-transition",
           updatedAt: 1,
-          createdBy: owner,
+          createdActor: { type: "human", ...owner },
           visibility: "shared",
         },
       );

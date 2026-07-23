@@ -4140,7 +4140,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let pullrequest: SessionCatalogPullRequestSummary?
     public let archived: Bool
     public let sessionkey: String?
-    public let createdactor: SessionSharingIdentity?
+    public let createdactor: SessionCreatedActor?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -4161,7 +4161,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         pullrequest: SessionCatalogPullRequestSummary? = nil,
         archived: Bool,
         sessionkey: String? = nil,
-        createdactor: SessionSharingIdentity? = nil,
+        createdactor: SessionCreatedActor? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -4810,6 +4810,28 @@ public struct SessionOperationEvent: Codable, Sendable {
     }
 }
 
+public struct SessionCreatedActor: Codable, Sendable {
+    public let type: AnyCodable
+    public let id: String?
+    public let label: String?
+
+    public init(
+        type: AnyCodable,
+        id: String? = nil,
+        label: String? = nil)
+    {
+        self.type = type
+        self.id = id
+        self.label = label
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case label
+    }
+}
+
 public struct SessionObserverPlanProgress: Codable, Sendable {
     public let completed: Int
     public let total: Int
@@ -4907,7 +4929,7 @@ public struct SessionRow: Codable, Sendable {
     public let spawnedworkspacedir: String?
     public let spawnedcwd: String?
     public let createdvia: AnyCodable?
-    public let createdactor: SessionSharingIdentity?
+    public let createdactor: SessionCreatedActor?
     public let visibility: SessionVisibility?
     public let sharingrole: SessionSharingRole?
     public let createdat: Double?
@@ -4959,7 +4981,7 @@ public struct SessionRow: Codable, Sendable {
         spawnedworkspacedir: String? = nil,
         spawnedcwd: String? = nil,
         createdvia: AnyCodable? = nil,
-        createdactor: SessionSharingIdentity? = nil,
+        createdactor: SessionCreatedActor? = nil,
         visibility: SessionVisibility? = nil,
         sharingrole: SessionSharingRole? = nil,
         createdat: Double? = nil,
@@ -5146,12 +5168,12 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
 
 public struct SessionSharingIdentity: Codable, Sendable {
     public let type: AnyCodable
-    public let id: String?
+    public let id: String
     public let label: String?
 
     public init(
         type: AnyCodable,
-        id: String? = nil,
+        id: String,
         label: String? = nil)
     {
         self.type = type
