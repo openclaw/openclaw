@@ -467,6 +467,21 @@ export class TranscriptsStore {
     runOpenClawStateWriteTransaction(
       ({ db: database }) => {
         const db = meetingTranscriptDb(database);
+        if (
+          utterance.id &&
+          executeSqliteQueryTakeFirstSync(
+            database,
+            db
+              .selectFrom("meeting_transcript_utterances")
+              .select("sequence")
+              .where("session_id", "=", session.sessionId)
+              .where("session_started_at", "=", session.startedAt)
+              .where("utterance_id", "=", utterance.id)
+              .limit(1),
+          )
+        ) {
+          return;
+        }
         const stored = executeSqliteQueryTakeFirstSync(
           database,
           db

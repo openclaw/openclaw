@@ -1,4 +1,11 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import type {
+  TranscriptSourceLocator,
+  TranscriptStartRequest,
+  TranscriptsStartResult,
+  TranscriptStopRequest,
+  TranscriptsStopResult,
+} from "../transcripts/provider-types.js";
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
 import type {
@@ -14,6 +21,10 @@ import type {
   MeetingSessionRecord,
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
+import type {
+  MeetingDurableTranscriptBridge,
+  MeetingDurableTranscriptsOptions,
+} from "./transcripts-bridge.js";
 export type {
   MeetingBrowserSessionView,
   MeetingSessionRuntimeHandles,
@@ -100,6 +111,7 @@ export type MeetingSessionRuntimeOptions<
     instructions?: string,
   ): Promise<{ handled: boolean; spoken: boolean } | undefined>;
   defaultSpeechInstructions?: string;
+  durableTranscripts?: MeetingDurableTranscriptsOptions;
 };
 
 export type MeetingSessionLeaveResult<TSession> = {
@@ -129,6 +141,7 @@ export class MeetingSessionRuntime<
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => Partial<THealth>>();
   readonly #transcriptStore: MeetingSessionTranscriptStore<TSession>;
+  #durableTranscripts?: Promise<MeetingDurableTranscriptBridge<TSession> | undefined>;
 
   constructor(
     private readonly options: MeetingSessionRuntimeOptions<
@@ -149,6 +162,10 @@ export class MeetingSessionRuntime<
       hasBrowserTab: (session) => Boolean(this.options.getBrowser(session)?.tab),
       capture: async (session, captureOptions) =>
         await this.options.captureTranscript(session, captureOptions),
+      onLines: async (session, lines) => {
+        const bridge = await this.#getDurableTranscripts();
+        await bridge?.ingest(session, lines);
+      },
     });
   }
 
@@ -185,6 +202,31 @@ export class MeetingSessionRuntime<
     return await this.#transcriptStore.read(sessionId, options);
   }
 
+  async startTranscriptSource(request: TranscriptStartRequest): Promise<TranscriptsStartResult> {
+    const bridge = await this.#getDurableTranscripts();
+    if (!bridge?.enabled) {
+      return { ok: false, error: "meeting transcripts are disabled" };
+    }
+    const session = this.#findTranscriptSourceSession(request.session.source);
+    if (!session) {
+      return {
+        ok: false,
+        error: "No active meeting session matches the transcript source.",
+      };
+    }
+    if (request.session.source.agentId !== session.agentId) {
+      return { ok: false, error: "meeting transcript source belongs to another agent" };
+    }
+    return await bridge.attach(session, request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest): Promise<TranscriptsStopResult> {
+    const bridge = await this.#getDurableTranscripts();
+    return bridge
+      ? await bridge.detach(request)
+      : { ok: true, sessionId: request.sessionId, stoppedAt: new Date().toISOString() };
+  }
+
   isReusableSession(session: TSession, resolved: MeetingResolvedJoin<TTransport, TMode>): boolean {
     return (
       session.state === "active" &&
@@ -213,6 +255,8 @@ export class MeetingSessionRuntime<
     if (!session) {
       return { found: false };
     }
+    // The meeting lock fences joins and leaves before terminal transcript work;
+    // #sessionLeaves then coalesces retries owned by the same session.
     return await this.#meetingLock.run(
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
@@ -427,6 +471,7 @@ export class MeetingSessionRuntime<
     }
     const speechInstructions = this.options.resolveSpeechInstructions(request);
     if (reusable) {
+      await this.#startDurableTranscripts(reusable);
       await this.refreshBrowserHealth(reusable);
       this.#noteSession(reusable, this.options.messages.reusedSessionNote);
       reusable.updatedAt = nowIso();
@@ -471,6 +516,7 @@ export class MeetingSessionRuntime<
     }
 
     this.#sessions.set(session.id, session);
+    await this.#startDurableTranscripts(session);
     const spoken = delegatedSpoken
       ? true
       : this.options.isTalkBackMode(resolved.mode) && speechInstructions
@@ -514,20 +560,21 @@ export class MeetingSessionRuntime<
     options?: { keepBrowserTab?: boolean },
   ): Promise<MeetingSessionLeaveResult<TSession>> {
     const firstAttempt = this.#sessionCleanup.begin(session.id, session.browserLeft);
-    if (firstAttempt && this.options.isTranscribeMode(session.mode)) {
+    const transcribe = this.options.isTranscribeMode(session.mode);
+    let transcriptStopped = false;
+    if (transcribe) {
+      // Fence new live reads before final capture; the store's capture chain drains
+      // reads already admitted before this terminal boundary.
       this.#transcriptStore.startFinalizing(session.id);
-      await this.#transcriptStore.capture(session, { finalize: true }).catch((error: unknown) => {
-        this.options.logger.debug?.(
-          `${this.options.logScope} final transcript snapshot ignored: ${this.options.formatError(error)}`,
-        );
-      });
     }
-    session.state = "ended";
-    session.updatedAt = nowIso();
-    this.#sessionSpeakers.delete(session.id);
-    this.#sessionHealth.delete(session.id);
-    const stop = this.#sessionStops.get(session.id);
     try {
+      await this.#stopDurableTranscripts(session, { allowFallback: firstAttempt });
+      transcriptStopped = true;
+      session.state = "ended";
+      session.updatedAt = nowIso();
+      this.#sessionSpeakers.delete(session.id);
+      this.#sessionHealth.delete(session.id);
+      const stop = this.#sessionStops.get(session.id);
       const cleanup = await this.#sessionCleanup.cleanup({
         sessionId: session.id,
         stop,
@@ -561,8 +608,10 @@ export class MeetingSessionRuntime<
         ...(cleanup.browserLeft === undefined ? {} : { browserLeft: cleanup.browserLeft }),
       };
     } finally {
-      if (firstAttempt) {
+      if (transcriptStopped) {
         this.#transcriptStore.retire(session.id);
+      }
+      if (transcribe) {
         this.#transcriptStore.finishFinalizing(session.id);
       }
     }
@@ -571,6 +620,74 @@ export class MeetingSessionRuntime<
   #meetingKey(transport: TTransport, url: string): string {
     const meeting = this.options.normalizeMeetingUrlForReuse(url) ?? url;
     return `${transport}:${meeting}`;
+  }
+
+  #findTranscriptSourceSession(source: TranscriptSourceLocator): TSession | undefined {
+    const agentId = source.agentId?.trim();
+    const meetingUrl = source.meetingUrl?.trim();
+    const sessionId = source.channelId?.trim();
+    if (!agentId || (!meetingUrl && !sessionId)) {
+      return undefined;
+    }
+    return [...this.#sessions.values()]
+      .filter((session) => session.state === "active")
+      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .find(
+        (session) =>
+          (!agentId || session.agentId === agentId) &&
+          (!sessionId || session.id === sessionId) &&
+          (!meetingUrl || this.options.sameMeetingUrl(session.url, meetingUrl)),
+      );
+  }
+
+  async #getDurableTranscripts(): Promise<MeetingDurableTranscriptBridge<TSession> | undefined> {
+    if (!this.options.durableTranscripts) {
+      return undefined;
+    }
+    this.#durableTranscripts ??= import("./transcripts-bridge.runtime.js")
+      .then(({ createMeetingDurableTranscriptBridge }) =>
+        createMeetingDurableTranscriptBridge<TSession>({
+          logger: this.options.logger,
+          options: this.options.durableTranscripts!,
+        }),
+      )
+      .catch((error: unknown) => {
+        this.options.logger.warn(
+          `${this.options.logScope} durable transcripts unavailable: ${this.options.formatError(error)}`,
+        );
+        return undefined;
+      });
+    return await this.#durableTranscripts;
+  }
+
+  async #startDurableTranscripts(session: TSession): Promise<void> {
+    if (!this.options.isBrowserTransport(session.transport)) {
+      return;
+    }
+    const bridge = await this.#getDurableTranscripts();
+    await bridge?.start(session, async () => await this.#transcriptStore.captureNotes(session));
+  }
+
+  async #stopDurableTranscripts(
+    session: TSession,
+    options: { allowFallback: boolean },
+  ): Promise<void> {
+    const finalCapture = async () =>
+      await this.#transcriptStore.captureNotes(session, { finalize: true });
+    const bridge = await this.#getDurableTranscripts();
+    if (bridge?.enabled) {
+      const handled = await bridge.stop(session, finalCapture);
+      if (handled) {
+        return;
+      }
+    }
+    if (options.allowFallback && this.options.isTranscribeMode(session.mode)) {
+      await finalCapture().catch((error: unknown) => {
+        this.options.logger.debug?.(
+          `${this.options.logScope} final transcript snapshot ignored: ${this.options.formatError(error)}`,
+        );
+      });
+    }
   }
 
   #inheritBrowserTabOwnership(params: {

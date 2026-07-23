@@ -13,6 +13,10 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
+  TranscriptStartRequest,
+  TranscriptStopRequest,
+} from "openclaw/plugin-sdk/transcripts";
+import type {
   GoogleMeetConfig,
   GoogleMeetMode,
   GoogleMeetModeInput,
@@ -218,6 +222,11 @@ export class GoogleMeetRuntime {
         await this.#captureTranscript(session, options),
       speakViaTransport: async (session, instructions) =>
         await this.#speakViaTransport(session, instructions),
+      durableTranscripts: {
+        config: params.fullConfig.transcripts,
+        providerId: "google-meet",
+        providerName: "Google Meet",
+      },
     });
   }
 
@@ -231,6 +240,14 @@ export class GoogleMeetRuntime {
 
   async transcript(sessionId: string, options: { sinceIndex?: number } = {}) {
     return await this.#sessions.transcript(sessionId, options);
+  }
+
+  async startTranscriptSource(request: TranscriptStartRequest) {
+    return await this.#sessions.startTranscriptSource(request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest) {
+    return await this.#sessions.stopTranscriptSource(request);
   }
 
   async setupStatus(
@@ -271,11 +288,13 @@ export class GoogleMeetRuntime {
       ? await recoverCurrentMeetTabOnNode({
           runtime: this.params.runtime,
           config: this.params.config,
+          fullConfig: this.params.fullConfig,
           url,
         })
       : await recoverCurrentMeetTab({
           runtime: this.params.runtime,
           config: this.params.config,
+          fullConfig: this.params.fullConfig,
           url,
         });
   }
@@ -539,6 +558,7 @@ export class GoogleMeetRuntime {
           ? await recoverCurrentMeetTabOnNode({
               runtime: this.params.runtime,
               config: this.params.config,
+              fullConfig: this.params.fullConfig,
               mode: session.mode,
               readOnly: options.readOnly,
               trackedMeetingUrl: session.url,
@@ -548,6 +568,7 @@ export class GoogleMeetRuntime {
           : await recoverCurrentMeetTab({
               runtime: this.params.runtime,
               config: this.params.config,
+              fullConfig: this.params.fullConfig,
               mode: session.mode,
               readOnly: options.readOnly,
               trackedMeetingUrl: session.url,

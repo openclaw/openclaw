@@ -16,6 +16,7 @@ import {
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveTranscriptsConfig } from "openclaw/plugin-sdk/transcripts";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
@@ -47,6 +48,15 @@ type ChromeNodeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
   nodeId: string;
   bridgeId: string;
 };
+
+function shouldCaptureCaptions(mode: GoogleMeetMode, fullConfig?: OpenClawConfig): boolean {
+  return (
+    mode === "transcribe" ||
+    (fullConfig
+      ? resolveTranscriptsConfig(fullConfig.transcripts).enabled
+      : GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.enabled(mode))
+  );
+}
 
 export async function assertBlackHole2chAvailable(params: {
   runtime: PluginRuntime;
@@ -210,6 +220,7 @@ export async function launchChromeMeet(params: {
     callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
     config: params.config.chrome,
     session: {
+      captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
       meetingSessionId: params.meetingSessionId,
       mode: params.mode,
       url: params.url,
@@ -354,6 +365,7 @@ async function openMeetWithBrowserProxy(params: {
   runtime: PluginRuntime;
   nodeId: string;
   config: GoogleMeetConfig;
+  captureCaptions: boolean;
   mode: GoogleMeetMode;
   meetingSessionId: string;
   url: string;
@@ -371,6 +383,7 @@ async function openMeetWithBrowserProxy(params: {
       }),
     config: params.config.chrome,
     session: {
+      captureCaptions: params.captureCaptions,
       mode: params.mode,
       meetingSessionId: params.meetingSessionId,
       url: params.url,
@@ -381,6 +394,7 @@ async function openMeetWithBrowserProxy(params: {
 export async function recoverCurrentMeetTab(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
   trackedMeetingUrl?: string;
@@ -400,6 +414,7 @@ export async function recoverCurrentMeetTab(params: {
     ...(await recoverMeetingBrowserTab({
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
       callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+      captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
       locationLabel: "in local Chrome",
       mode: params.mode ?? "bidi",
@@ -414,6 +429,7 @@ export async function recoverCurrentMeetTab(params: {
 export async function recoverCurrentMeetTabOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
+  fullConfig?: OpenClawConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
   trackedMeetingUrl?: string;
@@ -446,6 +462,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
           body: request.body,
           timeoutMs: request.timeoutMs,
         }),
+      captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
       locationLabel: "on the selected Chrome node",
       mode: params.mode ?? "bidi",
@@ -501,6 +518,7 @@ export async function launchChromeMeetOnNode(params: {
     runtime: params.runtime,
     nodeId,
     config: params.config,
+    captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
     mode: params.mode,
     meetingSessionId: params.meetingSessionId,
     url: params.url,

@@ -8,6 +8,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptsStartResult,
 } from "../../transcripts/provider-types.js";
+import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import type { TranscriptsStore } from "../../transcripts/store.js";
 
 export type TranscriptsLogger = {
@@ -15,6 +16,7 @@ export type TranscriptsLogger = {
 };
 
 export type TranscriptsRuntimeContext = {
+  agentId?: string;
   config?: OpenClawConfig;
   stateDir: string;
   logger: TranscriptsLogger;
@@ -92,13 +94,13 @@ export function createSessionId(): string {
 // share one persisted source descriptor.
 export function sourceFromParams(params: Record<string, unknown>): TranscriptSourceLocator {
   const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
-  return {
+  return sanitizeTranscriptSourceLocator({
     providerId,
     accountId: readStringParam(params, "accountId", { trim: true }),
     guildId: readStringParam(params, "guildId", { trim: true }),
     channelId: readStringParam(params, "channelId", { trim: true }),
     meetingUrl: readStringParam(params, "meetingUrl", { trim: true }),
-  };
+  });
 }
 
 export function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
@@ -146,7 +148,10 @@ export async function startTranscripts(params: {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
   }
-  const source = sourceFromParams(params.rawParams);
+  const source = {
+    ...sourceFromParams(params.rawParams),
+    ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+  };
   const provider = resolveSourceProvider(source.providerId, params.ctx);
   if (!provider?.start) {
     throw new Error(`transcripts provider ${source.providerId} cannot start live capture`);
@@ -156,6 +161,7 @@ export async function startTranscripts(params: {
     title: readStringParam(params.rawParams, "title", { trim: true }),
     source,
     startedAt: new Date().toISOString(),
+    ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);

@@ -9,14 +9,48 @@ type RetainedTranscriptSnapshot = MeetingTranscriptSnapshot & {
   pageNextIndex: number;
 };
 
+type TranscriptStreamCursor = {
+  pageEpoch?: string;
+  pageNextIndex: number;
+  tailKeys: string[];
+};
+
 const ENDED_TRANSCRIPTS_MAX = 4;
+const TRANSCRIPT_CURSOR_TAIL = 64;
 const TRANSCRIPT_MAX_LINES = 2_000;
+
+function transcriptLineKey(line: MeetingTranscriptLine): string {
+  return JSON.stringify([line.at ?? "", line.speaker ?? "", line.text]);
+}
+
+function maximalTranscriptOverlap(previousKeys: string[], currentKeys: string[]): number {
+  const limit = Math.min(previousKeys.length, currentKeys.length);
+  for (let length = limit; length > 0; length -= 1) {
+    const previousStart = previousKeys.length - length;
+    if (
+      currentKeys
+        .slice(0, length)
+        .every((key, index) => key === previousKeys[previousStart + index])
+    ) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+export class MeetingTranscriptDeliveryError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "MeetingTranscriptDeliveryError";
+  }
+}
 
 export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord> {
   readonly #transcripts = new Map<string, RetainedTranscriptSnapshot>();
   readonly #captures = new Map<string, Promise<void>>();
   readonly #finalizing = new Set<string>();
   readonly #retired = new Set<string>();
+  readonly #streamCursors = new Map<string, TranscriptStreamCursor>();
 
   constructor(
     private readonly options: {
@@ -28,6 +62,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         session: TSession,
         options?: { finalize?: boolean },
       ): Promise<MeetingTranscriptSnapshot | undefined>;
+      onLines?(session: TSession, lines: MeetingTranscriptLine[]): Promise<void>;
     },
   ) {}
 
@@ -79,20 +114,64 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
   }
 
   async capture(session: TSession, options: { finalize?: boolean } = {}): Promise<void> {
+    try {
+      await this.#capture(session, options, true);
+    } catch (error) {
+      if (!(error instanceof MeetingTranscriptDeliveryError)) {
+        throw error;
+      }
+    }
+  }
+
+  async captureNotes(session: TSession, options: { finalize?: boolean } = {}): Promise<void> {
+    await this.#capture(session, options, false);
+  }
+
+  async #capture(
+    session: TSession,
+    options: { finalize?: boolean },
+    requireTranscribeMode: boolean,
+  ): Promise<void> {
+    // Live reads, periodic notes, and finalization share this per-session chain.
+    // Keep cursor reads inside it so overlapping snapshots cannot deliver twice.
     const previous = this.#captures.get(session.id) ?? Promise.resolve();
     const capture = previous
       .catch(() => {})
       .then(async () => {
         if (
           !this.options.isBrowserSession(session) ||
-          !this.options.isTranscribeSession(session) ||
+          (requireTranscribeMode && !this.options.isTranscribeSession(session)) ||
           !this.options.hasBrowserTab(session)
         ) {
           return;
         }
         const snapshot = await this.options.capture(session, options);
         if (snapshot) {
-          this.#merge(session.id, snapshot);
+          if (this.options.isTranscribeSession(session)) {
+            this.#merge(session.id, snapshot);
+          }
+          const delta = this.#snapshotDelta(this.#streamCursors.get(session.id), snapshot);
+          let tailKeys = [...delta.prefixKeys];
+          for (const [index, line] of delta.lines.entries()) {
+            try {
+              await this.options.onLines?.(session, [line]);
+            } catch (error) {
+              throw new MeetingTranscriptDeliveryError(error);
+            }
+            tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
+            this.#streamCursors.set(session.id, {
+              pageEpoch: snapshot.epoch,
+              pageNextIndex: delta.startIndex + index + 1,
+              tailKeys,
+            });
+          }
+          if (delta.lines.length === 0 && delta.commitEmpty) {
+            this.#streamCursors.set(session.id, {
+              pageEpoch: snapshot.epoch,
+              pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
+              tailKeys: delta.prefixKeys,
+            });
+          }
         }
       });
     this.#captures.set(session.id, capture);
@@ -128,6 +207,74 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         session.transcriptEvicted = true;
       }
     }
+    this.#streamCursors.delete(sessionId);
+  }
+
+  #snapshotDelta(
+    previous: TranscriptStreamCursor | undefined,
+    snapshot: MeetingTranscriptSnapshot,
+  ): {
+    commitEmpty: boolean;
+    lines: MeetingTranscriptLine[];
+    prefixKeys: string[];
+    startIndex: number;
+  } {
+    const pageNextIndex = snapshot.droppedLines + snapshot.lines.length;
+    if (!previous || previous.pageEpoch !== snapshot.epoch) {
+      return {
+        commitEmpty: previous !== undefined,
+        lines: snapshot.lines,
+        prefixKeys: [],
+        startIndex: snapshot.droppedLines,
+      };
+    }
+    if (snapshot.droppedLines >= previous.pageNextIndex) {
+      return {
+        commitEmpty: true,
+        lines: snapshot.lines,
+        prefixKeys: [],
+        startIndex: snapshot.droppedLines,
+      };
+    }
+    if (snapshot.epoch === undefined && previous.pageEpoch === undefined) {
+      const previousStartIndex = previous.pageNextIndex - previous.tailKeys.length;
+      const overlapStart = Math.max(previousStartIndex, snapshot.droppedLines);
+      const overlapEnd = Math.min(previous.pageNextIndex, pageNextIndex);
+      const continuation =
+        overlapStart < overlapEnd &&
+        Array.from(
+          { length: overlapEnd - overlapStart },
+          (_, offset) => overlapStart + offset,
+        ).every(
+          (absoluteIndex) =>
+            previous.tailKeys[absoluteIndex - previousStartIndex] ===
+            transcriptLineKey(snapshot.lines[absoluteIndex - snapshot.droppedLines]!),
+        );
+      if ((!continuation && snapshot.lines.length > 0) || pageNextIndex < previous.pageNextIndex) {
+        const currentKeys = snapshot.lines.map(transcriptLineKey);
+        const overlap = maximalTranscriptOverlap(previous.tailKeys, currentKeys);
+        return {
+          commitEmpty: true,
+          lines: snapshot.lines.slice(overlap),
+          prefixKeys: previous.tailKeys.slice(previous.tailKeys.length - overlap),
+          startIndex: snapshot.droppedLines + overlap,
+        };
+      }
+    }
+    if (pageNextIndex <= previous.pageNextIndex) {
+      return {
+        commitEmpty: false,
+        lines: [],
+        prefixKeys: previous.tailKeys,
+        startIndex: pageNextIndex,
+      };
+    }
+    return {
+      commitEmpty: false,
+      lines: snapshot.lines.slice(previous.pageNextIndex - snapshot.droppedLines),
+      prefixKeys: previous.tailKeys,
+      startIndex: previous.pageNextIndex,
+    };
   }
 
   #merge(sessionId: string, snapshot: MeetingTranscriptSnapshot): void {
