@@ -114,6 +114,10 @@ type MemoryEmbeddingProviderRequirement = {
   provider: string;
   configuredProvider?: string;
 };
+type HybridMergedSearchResult = MemorySearchResult & {
+  vectorScore: number;
+  textScore: number;
+};
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
@@ -206,6 +210,12 @@ function resolveEffectiveMemorySearchSettings(
       },
     },
   };
+}
+
+function memoryResultRangeKey(
+  entry: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine">,
+): string {
+  return `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`;
 }
 
 function resolveConfiguredMemoryEmbeddingProvider(params: {
@@ -910,28 +920,49 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
+    return this.selectHybridSearchResults(merged, keywordResults, maxResults, minScore);
+  }
+
+  private selectHybridSearchResults(
+    merged: HybridMergedSearchResult[],
+    keywordResults: KeywordSearchHit[],
+    maxResults: number,
+    minScore: number,
+  ): MemorySearchResult[] {
     const strict = merged.filter((entry) => entry.score >= minScore);
-    if (strict.length > 0 || keywordResults.length === 0) {
+    if (keywordResults.length === 0) {
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid defaults can produce keyword-only matches below minScore after
-    // BM25 normalization and textWeight scaling. Preserve FTS-backed lexical
-    // hits when they are the only relevant results.
-    const relaxedMinScore = 0;
-    const keywordKeys = new Set(
-      keywordResults.map(
-        (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
-      ),
-    );
-    return this.selectScoredResults(
-      merged.filter((entry) =>
-        keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
-      ),
-      maxResults,
-      minScore,
-      relaxedMinScore,
-    );
+    const keywordKeys = new Set(keywordResults.map((entry) => memoryResultRangeKey(entry)));
+    if (strict.length === 0) {
+      // Keep the original relaxed keyword-backed fallback for overlapping
+      // hybrid hits whose weighted score falls below minScore.
+      const relaxedMinScore = 0;
+      return this.selectScoredResults(
+        merged.filter((entry) => keywordKeys.has(memoryResultRangeKey(entry))),
+        maxResults,
+        minScore,
+        relaxedMinScore,
+      );
+    }
+
+    // Hybrid weighting can put valid keyword-only FTS hits below minScore.
+    // Preserve those lexical hits without disturbing mergeHybridResults order.
+    const seen = new Set<string>();
+    const selected: HybridMergedSearchResult[] = [];
+    for (const entry of merged) {
+      const key = memoryResultRangeKey(entry);
+      if (seen.has(key)) {
+        continue;
+      }
+      const keywordOnly = entry.vectorScore === 0 && keywordKeys.has(key);
+      if (entry.score >= minScore || keywordOnly) {
+        seen.add(key);
+        selected.push(entry);
+      }
+    }
+    return selected.slice(0, maxResults);
   }
 
   private selectScoredResults<T extends MemorySearchResult & { score: number }>(
@@ -1235,7 +1266,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
-  }): Promise<MemorySearchResult[]> {
+  }): Promise<HybridMergedSearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
         id: r.id,
@@ -1266,7 +1297,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
-    }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
+    }).then((entries) => entries.map((entry) => entry as HybridMergedSearchResult));
   }
 
   async sync(params?: MemorySyncParams): Promise<void> {
