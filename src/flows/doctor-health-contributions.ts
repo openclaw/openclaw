@@ -692,6 +692,16 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
   });
 }
 
+async function runSessionTranscriptLabelsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionTranscriptLabelHealth } =
+    await import("../commands/doctor-session-transcript-labels.js");
+  await noteSessionTranscriptLabelHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+}
+
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionSnapshotHealth } = await import("../commands/doctor-session-snapshots.js");
   await noteSessionSnapshotHealth({
@@ -1872,6 +1882,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcript-labels",
+      label: "Session transcript labels",
+      run: runSessionTranscriptLabelsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-snapshots",
