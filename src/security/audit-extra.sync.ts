@@ -397,14 +397,6 @@ function listOpenInboundPolicies(cfg: OpenClawConfig): string[] {
   return out;
 }
 
-function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
-  const groupKeys = ["groups", "guilds", "channels", "rooms"];
-  return groupKeys.some((key) => {
-    const value = section[key];
-    return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
-  });
-}
-
 function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
   const out = new Set<string>();
   const channels = cfg.channels as Record<string, unknown> | undefined;
@@ -414,10 +406,11 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
 
   const inspectSection = (section: Record<string, unknown>, basePath: string) => {
     const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
+    // A scoped allowlist with configured group/guild/channel/room targets is an
+    // intentional single-operator multi-agent boundary, not evidence of a shared
+    // multi-user gateway. Only broadening policies count as multi-user signals.
     if (groupPolicy === "open") {
       out.add(`${basePath}.groupPolicy="open"`);
-    } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
-      out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
     }
 
     const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
@@ -700,14 +693,17 @@ export function collectHooksHardeningFindings(
   }
 
   if (allowRequestSessionKey) {
+    const hasPrefixConstraint = allowedPrefixes.length > 0;
     findings.push({
       checkId: "hooks.request_session_key_enabled",
-      severity: remoteExposure ? "critical" : "warn",
+      severity: hasPrefixConstraint ? "info" : remoteExposure ? "critical" : "warn",
       title: "External hook payloads may override sessionKey",
-      detail:
-        "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.",
-      remediation:
-        "Set hooks.allowRequestSessionKey=false (recommended) or constrain hooks.allowedSessionKeyPrefixes.",
+      detail: hasPrefixConstraint
+        ? "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key, but hooks.allowedSessionKeyPrefixes constrains the key shape."
+        : "hooks.allowRequestSessionKey=true allows `/hooks/agent` callers to choose the session key. Treat hook token holders as full-trust unless you also restrict prefixes.",
+      remediation: hasPrefixConstraint
+        ? undefined
+        : "Set hooks.allowRequestSessionKey=false (recommended) or constrain hooks.allowedSessionKeyPrefixes.",
     });
   }
 
