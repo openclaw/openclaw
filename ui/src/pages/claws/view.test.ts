@@ -3,6 +3,8 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ClawCatalogDetail,
+  ClawLifecyclePlanResult,
   ClawsDoctorResult,
   ClawsStatusResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -43,6 +45,70 @@ const doctor: ClawsDoctorResult = {
   summary: { info: 0, warnings: 0, errors: 0 },
 };
 
+const catalogDetail: ClawCatalogDetail = {
+  packageName: "financial-analyst",
+  displayName: "Financial Analyst",
+  summary: "Market research and reporting.",
+  channel: "official",
+  official: true,
+  version: "1.3.0",
+  workspaceFiles: 2,
+  skills: 1,
+  plugins: 1,
+  mcpServers: 1,
+  scheduledJobs: 1,
+};
+
+const plan: ClawLifecyclePlanResult = {
+  schemaVersion: "openclaw.clawsGatewayPlan.v1",
+  operation: "update",
+  planIntegrity: "sha256:preview",
+  target: { agentId: "analyst", name: "financial-analyst", targetVersion: "1.3.0" },
+  actions: [{ kind: "workspace-file", id: "SOUL.md", action: "update", blocked: false }],
+  capabilities: [
+    { kind: "plugin", id: "@openclaw/markets", action: "install", reason: "Required" },
+  ],
+  blockers: [],
+  trustWarning: "This release needs review.",
+  riskAcknowledgementRequired: true,
+};
+
+function props(overrides: Partial<Parameters<typeof renderClaws>[0]> = {}) {
+  return {
+    connected: true,
+    available: true,
+    catalogAvailable: true,
+    lifecycleAvailable: true,
+    loading: false,
+    operationBusy: false,
+    error: null,
+    status,
+    doctor,
+    selectedAgentId: "analyst",
+    mode: "installed" as const,
+    query: "",
+    catalogEntries: [],
+    catalogDetail: null,
+    plan: null,
+    outcome: null,
+    removeUnused: false,
+    riskAcknowledged: false,
+    onSelect: vi.fn(),
+    onModeChange: vi.fn(),
+    onQueryChange: vi.fn(),
+    onSearch: vi.fn(),
+    onSelectCatalog: vi.fn(),
+    onPreviewAdd: vi.fn(),
+    onPreviewUpdate: vi.fn(),
+    onPreviewRemove: vi.fn(),
+    onRemoveUnusedChange: vi.fn(),
+    onRiskAcknowledgedChange: vi.fn(),
+    onCancelPlan: vi.fn(),
+    onApplyPlan: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("renderClaws", () => {
   beforeEach(async () => {
     document.body.innerHTML = "";
@@ -51,19 +117,7 @@ describe("renderClaws", () => {
 
   it("renders inventory, provenance, and lifecycle health", () => {
     const container = document.createElement("div");
-    render(
-      renderClaws({
-        connected: true,
-        available: true,
-        loading: false,
-        error: null,
-        status,
-        doctor,
-        selectedAgentId: "analyst",
-        onSelect: vi.fn(),
-      }),
-      container,
-    );
+    render(renderClaws(props()), container);
 
     expect(container.querySelector(".claws-inventory__name")?.textContent).toBe(
       "financial-analyst",
@@ -78,21 +132,71 @@ describe("renderClaws", () => {
 
   it("does not render lifecycle state when the method is unavailable", () => {
     const container = document.createElement("div");
-    render(
-      renderClaws({
-        connected: true,
-        available: false,
-        loading: false,
-        error: null,
-        status,
-        doctor,
-        selectedAgentId: "analyst",
-        onSelect: vi.fn(),
-      }),
-      container,
-    );
+    render(renderClaws(props({ available: false })), container);
 
     expect(container.textContent).toContain("not enabled");
     expect(container.textContent).not.toContain("financial-analyst");
+  });
+
+  it("renders catalog contents and previews an update for an installed Claw", () => {
+    const onPreviewUpdate = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderClaws(
+        props({
+          mode: "discover",
+          catalogDetail,
+          installedCatalogAgent: status.records[0],
+          onPreviewUpdate,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Financial Analyst");
+    expect(container.textContent).toContain("Scheduled work");
+    (container.querySelector(".claws-catalog-detail .btn.primary") as HTMLButtonElement).click();
+    expect(onPreviewUpdate).toHaveBeenCalledWith(status.records[0], catalogDetail);
+  });
+
+  it("requires trust acknowledgement before confirming an unblocked plan", () => {
+    const onApplyPlan = vi.fn();
+    const container = document.createElement("div");
+    render(renderClaws(props({ plan, onApplyPlan })), container);
+
+    const confirm = container.querySelector(
+      ".claws-plan__actions .btn.primary",
+    ) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(container.textContent).toContain("Capabilities requiring consent");
+
+    render(renderClaws(props({ plan, riskAcknowledged: true, onApplyPlan })), container);
+    const enabledConfirm = container.querySelector(
+      ".claws-plan__actions .btn.primary",
+    ) as HTMLButtonElement;
+    expect(enabledConfirm.disabled).toBe(false);
+    enabledConfirm.click();
+    expect(onApplyPlan).toHaveBeenCalledOnce();
+  });
+
+  it("never enables confirmation while the canonical plan has blockers", () => {
+    const container = document.createElement("div");
+    render(
+      renderClaws(
+        props({
+          plan: {
+            ...plan,
+            blockers: [{ code: "workspace_conflict", path: "workspace", message: "Resolve it." }],
+          },
+          riskAcknowledged: true,
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      (container.querySelector(".claws-plan__actions .btn.primary") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(container.textContent).toContain("workspace_conflict");
   });
 });

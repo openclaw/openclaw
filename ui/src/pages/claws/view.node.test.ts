@@ -15,6 +15,35 @@ function fixtureHtml(): string {
   return `
     <main style="max-width: 1180px; margin: 0 auto; padding: 20px">
       <div class="claws-page stack">
+        <div class="settings-segmented claws-mode">
+          <button class="settings-segmented__btn settings-segmented__btn--active">Installed</button>
+          <button class="settings-segmented__btn">Discover</button>
+        </div>
+        <section class="claws-plan">
+          <div class="claws-detail__header">
+            <div>
+              <div class="claws-detail__title">Update Claw</div>
+              <div class="claws-detail__subtitle">financial-analyst</div>
+            </div>
+            <span class="chip chip-warn">Preview</span>
+          </div>
+          <div class="claws-plan__groups">
+            <section>
+              <div class="claws-detail__heading">Changes</div>
+              <div class="claws-plan__list">
+                <div class="claws-plan__row"><span><strong>update</strong> AGENTS.md</span><span class="chip">workspace-file</span></div>
+              </div>
+            </section>
+            <section>
+              <div class="claws-detail__heading">Capabilities requiring consent</div>
+              <div class="claws-plan__list">
+                <div class="claws-plan__row"><span><strong>install</strong> @openclaw/a-very-long-financial-markets-integration-package<small>Required by the selected Claw release.</small></span><span class="chip">plugin</span></div>
+              </div>
+            </section>
+          </div>
+          <label class="claws-consent"><input type="checkbox" /><span>I understand this ClawHub release has a security warning and want to continue.</span></label>
+          <div class="claws-plan__actions"><button class="btn">Cancel</button><button class="btn primary">Update Claw</button></div>
+        </section>
         <section class="claws-summary">
           ${["Healthy", "Needs attention", "Managed", "Referenced"]
             .map(
@@ -109,8 +138,12 @@ describeBrowserLayout("Claws responsive layout", () => {
 
       const inventory = await page.locator(".claws-inventory").boundingBox();
       const detail = await page.locator(".claws-detail").boundingBox();
+      const plan = await page.locator(".claws-plan").boundingBox();
       expect(inventory).not.toBeNull();
       expect(detail).not.toBeNull();
+      expect(plan).not.toBeNull();
+      expect(plan!.x).toBeGreaterThanOrEqual(0);
+      expect(plan!.x + plan!.width).toBeLessThanOrEqual(width);
       if (width <= 760) {
         expect(detail!.y).toBeGreaterThanOrEqual(inventory!.y + inventory!.height - 1);
       } else {

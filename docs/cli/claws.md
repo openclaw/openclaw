@@ -325,11 +325,24 @@ agents, credentials, sessions, and unowned local state are excluded.
 ## Inspect Claws in the Control UI
 
 When the connected Gateway starts with `OPENCLAW_EXPERIMENTAL_CLAWS=1`, the
-Control UI adds a **Claws** destination. It shows installed Claws, lifecycle
-health, doctor findings, and managed/referenced provenance. The Gateway
-advertises this surface to the UI and returns a secret-safe projection; the
-browser does not receive the environment flag, package paths, configuration
-values, file contents, or scheduled prompts.
+Control UI adds a **Claws** destination. Its **Installed** view shows lifecycle
+health, doctor findings, and managed/referenced provenance. **Discover** searches
+ClawHub for published Claws and shows the validated, bounded manifest summary
+for an exact release.
+
+Add, update, and remove are always preview-first. The Gateway builds the same
+canonical plan used by the CLI and returns a secret-safe summary plus a
+`planIntegrity` token. Control UI submits that exact token only after the user
+reviews capability changes and acknowledges any required ClawHub trust warning;
+the Gateway rebuilds the plan before mutation and rejects a stale token. Removal
+retains referenced packages and integrations by default. The optional cleanup
+choice replans removal and only removes references unused outside that Claw.
+
+The Gateway advertises each Claw method to the UI only while the experiment is
+enabled. Catalog reads and lifecycle previews require `operator.read`; mutations
+require `operator.admin` and use the normal control-plane write budget. The
+browser does not receive the environment flag, full manifests, package paths,
+configuration values, file contents, scheduled prompts, or raw diagnostics.
 
 ## Command reference
 
