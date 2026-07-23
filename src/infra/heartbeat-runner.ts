@@ -962,7 +962,12 @@ async function resolveHeartbeatPreflight(params: {
           scratchRevision: monitorScratch.state.currentRevision,
         }
       : {}),
-    ...(heartbeatScratchContent !== undefined ? { heartbeatScratchContent } : {}),
+    // Bypass scopes (commitment-only, cron/exec events, wake payloads) stay
+    // self-contained: only the job identity travels so heartbeat_respond can
+    // still persist scratch, never the monitor instructions themselves.
+    ...(!shouldBypassFileGates && heartbeatScratchContent !== undefined
+      ? { heartbeatScratchContent }
+      : {}),
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
   if (shouldBypassFileGates) {
