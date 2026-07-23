@@ -224,10 +224,35 @@ export function createBlockReplyCoalescer(params: {
     scheduleIdleFlush();
   };
 
+  // Synchronously deliver any buffered text before clearing the timer.
+  // Callers that stop without a prior force-flush (e.g. error/recovery
+  // paths) would otherwise drop the final buffered tail silently.
+  const deliverBufferedBeforeStop = () => {
+    clearIdleTimer();
+    if (!bufferText || shouldAbort()) {
+      return;
+    }
+    // Keep payload shape identical to flush() so visibility-class gates
+    // (commentary suppression, status-notice filtering) apply uniformly.
+    const payload: ReplyPayload = {
+      text: bufferText,
+      replyToId: bufferReplyToId,
+      audioAsVoice: bufferAudioAsVoice,
+      isReasoning: bufferIsReasoning,
+      isCommentary: bufferIsCommentary,
+      isCompactionNotice: bufferIsCompactionNotice,
+      isFallbackNotice: bufferIsFallbackNotice,
+      isStatusNotice: bufferIsStatusNotice,
+    };
+    const payloadWithMetadata = copyReplyPayloadMetadata(bufferMetadataSource ?? payload, payload);
+    resetBuffer();
+    void onFlush(payloadWithMetadata);
+  };
+
   return {
     enqueue,
     flush,
     hasBuffered: () => Boolean(bufferText),
-    stop: () => clearIdleTimer(),
+    stop: deliverBufferedBeforeStop,
   };
 }
