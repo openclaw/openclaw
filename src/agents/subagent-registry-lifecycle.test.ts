@@ -4058,3 +4058,41 @@ describe("requester settle wake trigger", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+describe("run ID masking in lifecycle warnings", () => {
+  it.each([
+    ["run-1234567890", "run-…7890"],
+    ["short", "***"],
+    // Head boundary lands inside a surrogate pair.
+    ["abc😀" + "x".repeat(10), "abc…xxxx"],
+    // Tail boundary lands inside a surrogate pair.
+    ["x".repeat(10) + "😀abc", "xxxx…abc"],
+    // Short value gets fully masked.
+    ["a😀b", "***"],
+  ])("masks run ID %p as %p without splitting surrogate pairs", async (runId, expected) => {
+    const persist = vi.fn();
+    const persistOrThrow = vi.fn();
+    const warn = vi.fn();
+    const entry = createRunEntry({ runId });
+    const runs = new Map([[entry.runId, entry]]);
+    taskExecutorMocks.completeTaskRunByRunId.mockImplementation(() => {
+      throw new Error("task store boom");
+    });
+
+    const controller = createLifecycleController({ entry, runs, persist, persistOrThrow, warn });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const [, warningFields] = firstCall(warn);
+    expect(warningFields).toMatchObject({ runId: expected });
+    // No isolated surrogates are emitted anywhere.
+    const masked = (warningFields as { runId?: string }).runId ?? "";
+    expect(masked).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(masked).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+});

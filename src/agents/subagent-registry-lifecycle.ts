@@ -4,6 +4,7 @@
  * Completes/fails task runs, clears delivery state, emits lifecycle events, and cleans attached resources.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
@@ -146,6 +147,18 @@ function resolveExpiredExplicitRunDeadlineMs(params: {
     params.observedStartedAt,
   );
   return effectiveEndedAt < params.nextEndedAt ? effectiveEndedAt : undefined;
+}
+
+/** Masks a subagent run ID for log/error metadata without splitting UTF-16 surrogate pairs. */
+function maskRunId(runId: string): string {
+  const trimmed = runId.trim();
+  if (!trimmed) {
+    return "unknown";
+  }
+  if (trimmed.length <= 8) {
+    return "***";
+  }
+  return `${sliceUtf16Safe(trimmed, 0, 4)}…${sliceUtf16Safe(trimmed, -4)}`;
 }
 
 function isOlderEquivalentTerminalCallback(params: {
@@ -338,17 +351,6 @@ export function createSubagentRegistryLifecycleController(params: {
         );
       }
     });
-  };
-
-  const maskRunId = (runId: string): string => {
-    const trimmed = runId.trim();
-    if (!trimmed) {
-      return "unknown";
-    }
-    if (trimmed.length <= 8) {
-      return "***";
-    }
-    return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
   };
 
   const maskSessionKey = (sessionKey: string): string => {
