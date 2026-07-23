@@ -2,6 +2,8 @@
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -121,6 +123,8 @@ describe("session store key normalization", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
