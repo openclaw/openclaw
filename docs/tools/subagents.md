@@ -112,6 +112,13 @@ agent decides whether a user-facing update is needed.
     - OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.entries.*` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
 
   </Accordion>
+  <Accordion title="Requester ownership">
+    - After `sessions_spawn`, the **requester** owns the user-facing reply path. Native children do not get the message tool by default; they return evidence to the requester.
+    - Treat the completion handoff `Result` as evidence to verify (claimed paths, status, follow-ups) before deciding the original task is done or telling the user it is done.
+    - If the turn needs child output, call `sessions_yield` after spawning. Do not poll `/subagents list`, `sessions_list`, `sessions_history`, or sleep-loops waiting for completion.
+    - Keep the spawn `task` aligned with the full user intent the requester will review. Avoid shrinking the child to a fragment and inventing the rest in the parent without evidence from the Result or transcript.
+    - Prefer `/subagents info`, announce stats, or `sessions_history` for inspection. Raw transcript fields may be SQLite session markers, not JSONL filesystem paths.
+  </Accordion>
 </AccordionGroup>
 
 ## Context modes
