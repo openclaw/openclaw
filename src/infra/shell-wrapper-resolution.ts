@@ -475,6 +475,22 @@ export function extractShellWrapperCommand(
 
 /** Return true when shell wrapper startup behavior blocks command rebinding. */
 export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string | null): boolean {
+  const candidate = resolveShellWrapperCandidate({ argv, depth: 0, state: null });
+  if (!candidate) {
+    return false;
+  }
+  const baseExecutable = normalizeExecutableToken(candidate.token0);
+  const wrapper = findShellWrapperSpec(baseExecutable);
+  if (!wrapper) {
+    return false;
+  }
+  if (
+    wrapper.kind === "posix" &&
+    baseExecutable === "nu" &&
+    hasNushellStartupOptionBeforeInlineCommand(candidate.argv)
+  ) {
+    return true;
+  }
   const extracted = extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);
   return extracted.isWrapper && extracted.command === null;
 }

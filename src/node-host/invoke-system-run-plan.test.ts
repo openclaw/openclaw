@@ -1147,6 +1147,22 @@ describe("hardenApprovedExecutionPaths", () => {
     expect(snapshot).toEqual({ ok: true, snapshot: null });
   });
 
+  it("denies opaque shell inline payloads hidden by startup options", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-hidden-inline-");
+    const configPath = path.join(tmp, "config.nu");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(configPath, "print hidden\n");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["nu", `--config=${configPath}`, "--commands", "./run.sh"],
+      cwd: tmp,
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
   it("captures fish script operands with plus-prefixed filenames", () => {
     const casesLocal = [
       {
