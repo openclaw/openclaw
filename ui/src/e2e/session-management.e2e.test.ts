@@ -583,10 +583,10 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = sidebar
-        .locator(".sidebar-brand")
+      const collapseButton = page
+        .locator(".shell-chrome-controls")
         .getByRole("button", { name: "Collapse sidebar" });
-      const expandButton = page.locator(".shell-nav-expand");
+      const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
         .first();

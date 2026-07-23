@@ -1,5 +1,6 @@
 // OpenClaw state database manages shared persisted state and migrations.
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import {
@@ -456,6 +457,22 @@ export function runOpenClawStateWriteTransaction<T>(
     // callers never retry an operation that is durable in SQLite.
   }
   return result;
+}
+
+/** Close one cached shared state database handle by exact pathname. */
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(resolvedPath);
+  return true;
 }
 
 /** Close all cached shared state database handles. */

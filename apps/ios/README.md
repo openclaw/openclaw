@@ -71,13 +71,14 @@ Release behavior:
 - App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
 - Before submitting a HealthKit-enabled build, the release owner must update the public privacy policy and App Store Connect privacy details for the Health & Fitness aggregates shared with the user's configured AI provider.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- Release uploads require an explicit CalVer version passed with `--version`.
+- Release uploads require an explicit gateway CalVer passed with `--version` and an explicit App Store revision passed with `--revision`.
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
-- The release version must use CalVer like `2026.4.10`.
-- That release value becomes:
-  - `CFBundleShortVersionString = 2026.4.10`
-  - `CFBundleVersion = next App Store Connect build number for 2026.4.10`
-- Local defaults derive from root `package.json`; App Store uploads use the explicit `--version` value.
+- The gateway version must use CalVer like `2026.7.2`.
+- Gateway `2026.7.2`, App Store revision `1` becomes:
+  - `CFBundleShortVersionString = 2026.7.201`
+  - `CFBundleVersion = next App Store Connect build number for 2026.7.201`
+- Each App Store version has its own build sequence beginning at `1`.
+- Local defaults derive from root `package.json`; App Store uploads derive their marketing version from explicit `--version` and `--revision` values.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
 Relay behavior for App Store builds:
@@ -107,13 +108,13 @@ Release-owner secrets:
 Prepare the generated release xcconfig/project without archiving:
 
 ```bash
-pnpm ios:release:prepare -- --version 2026.6.11 --build-number 7
+pnpm ios:release:prepare -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 Archive without upload:
 
 ```bash
-pnpm ios:release:archive -- --version 2026.6.11
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1
 ```
 
 This command is for local archive validation only. It is not a fallback upload
@@ -122,13 +123,13 @@ path after `pnpm ios:release:upload` fails.
 Archive and upload to App Store Connect:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1
 ```
 
 If you need to force a specific build number:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 7
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 ### Maintainer Quick Release Checklist
@@ -163,16 +164,16 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
-4. If you are starting a brand-new production release train, add or update the matching iOS changelog section and validate the release notes:
+4. For a new App Store revision, add the exact encoded-version changelog section and validate the release notes:
 
 ```bash
-pnpm ios:version:check -- --version 2026.6.11
+pnpm ios:version:check -- --version 2026.7.2 --revision 1
 ```
 
 5. Upload the build with explicit release intent:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 6. If `pnpm ios:release:upload` fails, stop at that failure. Do not archive
@@ -180,7 +181,7 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
    step, then rerun `pnpm ios:release:upload`.
 
 7. Expected behavior:
-   - Fastlane reads the explicit `--version` value
+   - Fastlane reads the explicit gateway `--version` and App Store `--revision`
    - validates iOS versioning inputs for that version
    - resolves the next App Store Connect build number for that short version
    - generates deterministic App Store screenshots
@@ -200,7 +201,8 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 
 ## iOS Versioning Workflow
 
-- Release upload version: explicit `--version`
+- Release gateway version: explicit `--version`
+- App Store revision: explicit `--revision`
 - Local default version: root `package.json`
 - iOS-only changelog: `apps/ios/CHANGELOG.md`
 - Generated local artifacts:
@@ -212,7 +214,7 @@ pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
 ```bash
 pnpm ios:version
 pnpm ios:version:check
-pnpm ios:version -- --version 2026.6.11
+pnpm ios:version -- --version 2026.7.2 --revision 1
 pnpm ios:filelist:gen
 ```
 
@@ -220,18 +222,18 @@ Recommended flow:
 
 ### App Store Connect iteration on an existing train
 
-1. Choose the App Store train explicitly, for example `2026.6.11`.
-2. Update `apps/ios/CHANGELOG.md`, usually under `## Unreleased` while iterating.
-3. Run `pnpm ios:version:check -- --version 2026.6.11` after changelog changes.
-4. Upload additional App Store Connect builds with `pnpm ios:release:upload -- --version 2026.6.11`.
+1. Choose the gateway and App Store revision explicitly, for example `2026.7.2` revision `1`.
+2. Update `apps/ios/CHANGELOG.md` under the encoded `## 2026.7.201` heading.
+3. Run `pnpm ios:version:check -- --version 2026.7.2 --revision 1` after changelog changes.
+4. Upload additional builds with `pnpm ios:release:upload -- --version 2026.7.2 --revision 1`.
 5. Let Fastlane bump only the numeric build number.
 
-### Starting the next production release train
+### Starting the next App Store revision
 
 1. Confirm the target gateway version in root `package.json`.
 2. Update `apps/ios/CHANGELOG.md` for the new release as needed.
-3. Run `pnpm ios:version:check -- --version <release-version>`.
-4. Submit the first App Store Connect build with `pnpm ios:release:upload -- --version <release-version>`.
+3. Run `pnpm ios:version:check -- --version <gateway-version> --revision <revision>`.
+4. Submit the first build with `pnpm ios:release:upload -- --version <gateway-version> --revision <revision>`.
 5. Keep iterating on that same explicit version until the release candidate is ready.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.

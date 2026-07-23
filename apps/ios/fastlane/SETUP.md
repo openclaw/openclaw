@@ -95,7 +95,7 @@ If you pass `--build-number` to `pnpm ios:release:archive`, the local archive pa
 Archive locally without upload:
 
 ```bash
-pnpm ios:release:archive -- --version 2026.6.11 --build-number 3
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 Generate deterministic App Store screenshots:
@@ -109,7 +109,7 @@ The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters
 Upload to App Store Connect:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1
 ```
 
 Direct Fastlane upload is disabled. Use the package script so the release
@@ -135,16 +135,16 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-4. If you are starting a brand-new production release train, validate iOS release notes for the release version:
+4. For a new App Store revision, add an exact encoded-version changelog section and validate it:
 
 ```bash
-pnpm ios:version:check -- --version 2026.6.11
+pnpm ios:version:check -- --version 2026.7.2 --revision 1
 ```
 
 5. Upload:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 Quick verification after upload:
@@ -156,14 +156,14 @@ Quick verification after upload:
 
 Versioning rules:
 
-- App Store release uploads require an explicit `--version`
+- App Store release uploads require an explicit gateway `--version` and App Store `--revision`
 - local defaults derive from root `package.json`
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
-- Supported iOS release versions use CalVer: `YYYY.M.D`
-- Fastlane uses the explicit release version for App Store upload
-- Fastlane sets `CFBundleShortVersionString` to the release version, for example `2026.4.10`
-- Fastlane resolves `CFBundleVersion` as the next integer App Store Connect build number for that short version
-- Run `pnpm ios:version:check -- --version <release-version>` after changing `apps/ios/CHANGELOG.md`
+- Gateway versions use CalVer: `YYYY.M.D`
+- Fastlane derives the App Store version as `YYYY.M.(D * 100 + revision)`
+- Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.201`
+- Fastlane resolves `CFBundleVersion` as the next integer build for that exact App Store version
+- Run `pnpm ios:version:check -- --version <gateway-version> --revision <revision>` after changing `apps/ios/CHANGELOG.md`
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched

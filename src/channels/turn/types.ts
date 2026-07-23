@@ -135,7 +135,7 @@ export type CommandFacts = {
 };
 
 /** Inbound media facts supplied to the agent context. */
-export type InboundMediaFacts = Omit<MediaFact, "workspaceDir">;
+export type InboundMediaFacts = Omit<MediaFact, "staged" | "workspaceDir">;
 
 type MaybePromise<T> = T | Promise<T>;
 

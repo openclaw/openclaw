@@ -236,7 +236,7 @@ export type MsgContext = {
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
-  /** True when current-turn sticker media is present in MediaPaths. */
+  /** True when current-turn sticker media is present in structured facts. */
   StickerMediaIncluded?: boolean;
   /** Skip automatic understanding for the current sticker because its cached description is used. */
   SkipStickerMediaUnderstanding?: boolean;
@@ -399,10 +399,35 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-export type TemplateContext = MsgContext & {
+type RuntimeMediaContextKey =
+  | "MediaPath"
+  | "MediaUrl"
+  | "MediaType"
+  | "MediaDir"
+  | "MediaPaths"
+  | "MediaUrls"
+  | "MediaTypes"
+  | "MediaWorkspaceDir"
+  | "MediaTranscribedIndexes"
+  | "MediaStaged";
+
+/** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
+export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+
+export type FinalizedRuntimeMsgContext = Omit<RuntimeMsgContext, "CommandAuthorized"> & {
+  CommandAuthorized: boolean;
+  CommandTurn?: CommandTurnContext;
+};
+
+export type TemplateContext = RuntimeMsgContext & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
+  /** Documented singular media variables projected only at template execution. */
+  MediaPath?: string;
+  MediaUrl?: string;
+  MediaType?: string;
+  MediaDir?: string;
 };
 
 function formatTemplateValue(value: unknown): string {
