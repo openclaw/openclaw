@@ -127,6 +127,20 @@ description: Broken skill
     expect(result.issues[0]).toMatchObject({ code: "BAD_INDENT" });
   });
 
+  it("preserves blank lines inside multi-line frontmatter values (fallback path)", () => {
+    const content = `---
+name: [broken
+description:
+  line one
+
+  line two
+---`;
+    const result = parseFrontmatterBlock(content);
+    // The blank line is preserved as content rather than terminating the value.
+    // Leading whitespace from the first continuation line is stripped by .trim().
+    expect(result.description).toBe("line one\n\n  line two");
+  });
+
   it("attributes errors positioned on a key to that key", () => {
     const result = parseFrontmatterBlockResult(`---
 name: first
