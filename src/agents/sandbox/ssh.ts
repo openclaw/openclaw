@@ -15,8 +15,10 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
-import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+
+/** Per-stream output cap for SSH sandbox commands (16 MiB each for stdout/stderr). */
+const SSH_SANDBOX_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 export type SshSandboxSettings = {
   command: string;
@@ -689,7 +691,7 @@ export async function runSshSandboxCommand(
     cancelSignal: params.signal,
     encoding: "buffer",
     input: params.stdin ?? Buffer.alloc(0),
-    maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+    maxBuffer: SSH_SANDBOX_MAX_OUTPUT_BYTES,
     reject: false,
     stripFinalNewline: false,
   });
