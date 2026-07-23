@@ -100,7 +100,7 @@ function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
   if (readErrorName(err) === "AbortError") {
     return true;
   }
-  return err instanceof FailoverError;
+  return err instanceof FailoverError && err.reason !== "empty_response";
 }
 
 function resolveClearedCliSessionReason(err: unknown): string {
