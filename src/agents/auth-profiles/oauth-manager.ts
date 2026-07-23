@@ -10,7 +10,12 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
-import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS, log } from "./constants.js";
+import {
+  OAUTH_REFRESH_CALL_TIMEOUT_MS,
+  OAUTH_REFRESH_INLOCK_TIMEOUT_MS,
+  OAUTH_REFRESH_LOCK_OPTIONS,
+  log,
+} from "./constants.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import {
@@ -351,18 +356,26 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return `${provider}\u0000${profileId}`;
   }
 
+  // Ownership token for a deadline-bounded section. The deadline cannot cancel
+  // the running body, only abandon it; once "abandoned" the surrounding
+  // cross-agent file lock is released and a peer refresher may own this key,
+  // so the stale continuation must not persist or mirror credentials.
+  type RefreshSectionOwnership = { state: "owned" | "abandoned" };
+
   async function withRefreshCallTimeout<T>(
     label: string,
     timeoutMs: number,
-    fn: () => Promise<T>,
+    fn: (ownership: RefreshSectionOwnership) => Promise<T>,
   ): Promise<T> {
     let timeoutHandle: NodeJS.Timeout | undefined;
+    const ownership: RefreshSectionOwnership = { state: "owned" };
     try {
       return await new Promise<T>((resolve, reject) => {
         timeoutHandle = setTimeout(() => {
+          ownership.state = "abandoned";
           reject(new Error(`OAuth refresh call "${label}" exceeded hard timeout (${timeoutMs}ms)`));
         }, timeoutMs);
-        fn().then(resolve, reject);
+        fn(ownership).then(resolve, reject);
       });
     } finally {
       if (timeoutHandle) {
@@ -493,179 +506,222 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
-      return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () => {
-        const store = loadStoredOAuthRefreshStore(ownerAgentDir);
-        const cred = store.profiles[params.profileId];
-        if (!cred || cred.type !== "oauth") {
-          return null;
-        }
-        let credentialToRefresh = cred;
-
-        if (!params.forceRefresh && hasUsableOAuthCredential(cred)) {
-          return {
-            apiKey: await adapter.buildApiKey(cred.provider, cred, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential: cred,
-          };
-        }
-
-        if (params.agentDir) {
-          try {
-            const mainStore = loadStoredOAuthRefreshStore(undefined);
-            const mainCred = mainStore.profiles[params.profileId];
-            if (
-              mainCred?.type === "oauth" &&
-              mainCred.provider === cred.provider &&
-              hasUsableOAuthCredential(mainCred) &&
-              !params.forceRefresh &&
-              isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
-            ) {
-              store.profiles[params.profileId] = { ...mainCred };
-              log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
+      // Bound the ENTIRE held-lock critical section (keychain store load +
+      // buildApiKey + network refresh), not just the network call, so a wedged
+      // keychain/hook cannot pin the cross-agent lock and chain-stall every
+      // same-key refresher.
+      return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, () =>
+        withRefreshCallTimeout(
+          `${params.provider} oauth refresh critical section`,
+          OAUTH_REFRESH_INLOCK_TIMEOUT_MS,
+          async (sectionOwnership) => {
+            // The in-lock deadline cannot cancel this body; once it fires the
+            // file lock is released and a successor refresher may own this
+            // key. Every persist/mirror below re-checks ownership and no-ops
+            // when abandoned so a stale continuation cannot clobber the
+            // successor's credentials.
+            const writeBackAllowed = (step: "adopt-bootstrap" | "persist" | "mirror"): boolean => {
+              if (sectionOwnership.state === "owned") {
+                return true;
+              }
+              log.debug("discarded abandoned OAuth refresh write-back after in-lock deadline", {
                 profileId: params.profileId,
-                agentDir: params.agentDir,
-                expires: new Date(mainCred.expires).toISOString(),
+                provider: params.provider,
+                step,
               });
+              return false;
+            };
+            const store = loadStoredOAuthRefreshStore(ownerAgentDir);
+            const cred = store.profiles[params.profileId];
+            if (!cred || cred.type !== "oauth") {
+              return null;
+            }
+            let credentialToRefresh = cred;
+
+            if (!params.forceRefresh && hasUsableOAuthCredential(cred)) {
               return {
-                apiKey: await adapter.buildApiKey(mainCred.provider, mainCred, {
+                apiKey: await adapter.buildApiKey(cred.provider, cred, {
                   cfg: params.cfg,
                   agentDir: params.agentDir,
                 }),
-                credential: mainCred,
+                credential: cred,
               };
-            } else if (
-              mainCred?.type === "oauth" &&
-              mainCred.provider === cred.provider &&
-              hasUsableOAuthCredential(mainCred) &&
-              !isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
-            ) {
-              log.warn("refused to adopt fresh main-store OAuth credential: identity mismatch", {
-                profileId: params.profileId,
-                agentDir: params.agentDir,
-              });
             }
-          } catch (err) {
-            log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
-              profileId: params.profileId,
-              error: formatErrorMessage(err),
-            });
-          }
-        }
 
-        const externallyManaged = adapter.readBootstrapCredential({
-          store,
-          profileId: params.profileId,
-          credential: cred,
-        });
-        if (externallyManaged) {
-          if (externallyManaged.provider !== cred.provider) {
-            log.warn("refused external oauth bootstrap credential: provider mismatch", {
+            if (params.agentDir) {
+              try {
+                const mainStore = loadStoredOAuthRefreshStore(undefined);
+                const mainCred = mainStore.profiles[params.profileId];
+                if (
+                  mainCred?.type === "oauth" &&
+                  mainCred.provider === cred.provider &&
+                  hasUsableOAuthCredential(mainCred) &&
+                  !params.forceRefresh &&
+                  isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
+                ) {
+                  store.profiles[params.profileId] = { ...mainCred };
+                  log.info("adopted fresh OAuth credential from main store (under refresh lock)", {
+                    profileId: params.profileId,
+                    agentDir: params.agentDir,
+                    expires: new Date(mainCred.expires).toISOString(),
+                  });
+                  return {
+                    apiKey: await adapter.buildApiKey(mainCred.provider, mainCred, {
+                      cfg: params.cfg,
+                      agentDir: params.agentDir,
+                    }),
+                    credential: mainCred,
+                  };
+                } else if (
+                  mainCred?.type === "oauth" &&
+                  mainCred.provider === cred.provider &&
+                  hasUsableOAuthCredential(mainCred) &&
+                  !isSafeToAdoptMainStoreOAuthIdentity(cred, mainCred)
+                ) {
+                  log.warn(
+                    "refused to adopt fresh main-store OAuth credential: identity mismatch",
+                    {
+                      profileId: params.profileId,
+                      agentDir: params.agentDir,
+                    },
+                  );
+                }
+              } catch (err) {
+                log.debug("inside-lock main-store adoption failed; proceeding to refresh", {
+                  profileId: params.profileId,
+                  error: formatErrorMessage(err),
+                });
+              }
+            }
+
+            const externallyManaged = adapter.readBootstrapCredential({
+              store,
               profileId: params.profileId,
-              provider: cred.provider,
+              credential: cred,
             });
-          } else if (!isSafeToAdoptBootstrapOAuthIdentity(cred, externallyManaged)) {
-            log.warn(
-              "refused external oauth bootstrap credential: identity mismatch or missing binding",
-              {
-                profileId: params.profileId,
-                provider: cred.provider,
+            if (externallyManaged) {
+              if (externallyManaged.provider !== cred.provider) {
+                log.warn("refused external oauth bootstrap credential: provider mismatch", {
+                  profileId: params.profileId,
+                  provider: cred.provider,
+                });
+              } else if (!isSafeToAdoptBootstrapOAuthIdentity(cred, externallyManaged)) {
+                log.warn(
+                  "refused external oauth bootstrap credential: identity mismatch or missing binding",
+                  {
+                    profileId: params.profileId,
+                    provider: cred.provider,
+                  },
+                );
+              } else {
+                if (
+                  shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
+                  !areOAuthCredentialsEquivalent(cred, externallyManaged) &&
+                  writeBackAllowed("adopt-bootstrap")
+                ) {
+                  store.profiles[params.profileId] = { ...externallyManaged };
+                  await saveOAuthCredentialWithStoreLock({
+                    agentDir: ownerAgentDir,
+                    profileId: params.profileId,
+                    expected: cred,
+                    credential: externallyManaged,
+                  });
+                }
+                credentialToRefresh = externallyManaged;
+                if (!params.forceRefresh && hasUsableOAuthCredential(externallyManaged)) {
+                  return {
+                    apiKey: await adapter.buildApiKey(
+                      externallyManaged.provider,
+                      externallyManaged,
+                      {
+                        cfg: params.cfg,
+                        agentDir: params.agentDir,
+                      },
+                    ),
+                    credential: externallyManaged,
+                  };
+                }
+              }
+            }
+
+            if (normalizeSecretInputString(credentialToRefresh.refresh) === undefined) {
+              return null;
+            }
+            const refreshedCredentials = await withRefreshCallTimeout(
+              `refreshOAuthCredential(${cred.provider})`,
+              OAUTH_REFRESH_CALL_TIMEOUT_MS,
+              async () => {
+                params.attemptedCredentials?.push(credentialToRefresh);
+                const refreshed = await adapter.refreshCredential(credentialToRefresh);
+                return refreshed
+                  ? ({
+                      ...credentialToRefresh,
+                      ...refreshed,
+                      type: "oauth",
+                    } satisfies OAuthCredential)
+                  : null;
               },
             );
-          } else {
-            if (
-              shouldReplaceStoredOAuthCredential(cred, externallyManaged) &&
-              !areOAuthCredentialsEquivalent(cred, externallyManaged)
-            ) {
-              store.profiles[params.profileId] = { ...externallyManaged };
-              await saveOAuthCredentialWithStoreLock({
+            if (!refreshedCredentials) {
+              return null;
+            }
+            if (!writeBackAllowed("persist")) {
+              return null;
+            }
+            store.profiles[params.profileId] = refreshedCredentials;
+            const persisted = await saveOAuthCredentialWithStoreLock({
+              agentDir: ownerAgentDir,
+              profileId: params.profileId,
+              expected:
+                credentialToRefresh === cred ||
+                areOAuthCredentialsEquivalent(credentialToRefresh, cred)
+                  ? credentialToRefresh
+                  : [credentialToRefresh, cred],
+              credential: refreshedCredentials,
+            });
+            if (!persisted) {
+              const recovered = await resolveOAuthCredentialAfterPersistMiss({
                 agentDir: ownerAgentDir,
                 profileId: params.profileId,
-                expected: cred,
-                credential: externallyManaged,
+                refreshed: refreshedCredentials,
               });
+              if (!recovered) {
+                throw new Error("Failed to persist refreshed OAuth credential");
+              }
+              if (recovered !== refreshedCredentials) {
+                return {
+                  apiKey: await adapter.buildApiKey(recovered.provider, recovered, {
+                    cfg: params.cfg,
+                    agentDir: params.agentDir,
+                  }),
+                  credential: recovered,
+                };
+              }
             }
-            credentialToRefresh = externallyManaged;
-            if (!params.forceRefresh && hasUsableOAuthCredential(externallyManaged)) {
-              return {
-                apiKey: await adapter.buildApiKey(externallyManaged.provider, externallyManaged, {
-                  cfg: params.cfg,
-                  agentDir: params.agentDir,
-                }),
-                credential: externallyManaged,
-              };
+            // Re-check after the persist await: the deadline may have fired
+            // mid-write, in which case the mirror must not run either.
+            if (!writeBackAllowed("mirror")) {
+              return null;
             }
-          }
-        }
-
-        if (normalizeSecretInputString(credentialToRefresh.refresh) === undefined) {
-          return null;
-        }
-        const refreshedCredentials = await withRefreshCallTimeout(
-          `refreshOAuthCredential(${cred.provider})`,
-          OAUTH_REFRESH_CALL_TIMEOUT_MS,
-          async () => {
-            params.attemptedCredentials?.push(credentialToRefresh);
-            const refreshed = await adapter.refreshCredential(credentialToRefresh);
-            return refreshed
-              ? ({
-                  ...credentialToRefresh,
-                  ...refreshed,
-                  type: "oauth",
-                } satisfies OAuthCredential)
-              : null;
-          },
-        );
-        if (!refreshedCredentials) {
-          return null;
-        }
-        store.profiles[params.profileId] = refreshedCredentials;
-        const persisted = await saveOAuthCredentialWithStoreLock({
-          agentDir: ownerAgentDir,
-          profileId: params.profileId,
-          expected:
-            credentialToRefresh === cred || areOAuthCredentialsEquivalent(credentialToRefresh, cred)
-              ? credentialToRefresh
-              : [credentialToRefresh, cred],
-          credential: refreshedCredentials,
-        });
-        if (!persisted) {
-          const recovered = await resolveOAuthCredentialAfterPersistMiss({
-            agentDir: ownerAgentDir,
-            profileId: params.profileId,
-            refreshed: refreshedCredentials,
-          });
-          if (!recovered) {
-            throw new Error("Failed to persist refreshed OAuth credential");
-          }
-          if (recovered !== refreshedCredentials) {
+            if (ownerAgentDir) {
+              const mainPath = resolveAuthStorePath(undefined);
+              if (mainPath !== authPath) {
+                await mirrorRefreshedCredentialIntoMainStore({
+                  profileId: params.profileId,
+                  refreshed: refreshedCredentials,
+                });
+              }
+            }
             return {
-              apiKey: await adapter.buildApiKey(recovered.provider, recovered, {
+              apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials, {
                 cfg: params.cfg,
                 agentDir: params.agentDir,
               }),
-              credential: recovered,
+              credential: refreshedCredentials,
             };
-          }
-        }
-        if (ownerAgentDir) {
-          const mainPath = resolveAuthStorePath(undefined);
-          if (mainPath !== authPath) {
-            await mirrorRefreshedCredentialIntoMainStore({
-              profileId: params.profileId,
-              refreshed: refreshedCredentials,
-            });
-          }
-        }
-        return {
-          apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials, {
-            cfg: params.cfg,
-            agentDir: params.agentDir,
-          }),
-          credential: refreshedCredentials,
-        };
-      });
+          },
+        ),
+      );
     } catch (error) {
       if (isGlobalRefreshLockTimeoutError(error, globalRefreshLockPath)) {
         throw buildRefreshContentionError({

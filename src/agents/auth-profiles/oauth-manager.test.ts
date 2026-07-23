@@ -11,6 +11,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  OAUTH_REFRESH_CALL_TIMEOUT_MS,
+  OAUTH_REFRESH_INLOCK_TIMEOUT_MS,
+  OAUTH_REFRESH_LOCK_OPTIONS,
+} from "./constants.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import {
@@ -290,6 +295,35 @@ describe("createOAuthManager", () => {
       cfg,
       agentDir: undefined,
     });
+  });
+
+  it("keeps the in-lock critical-section deadline between the call timeout and the stale window", () => {
+    // The held-lock critical section (keychain load + buildApiKey + network
+    // refresh) is now wrapped by withRefreshCallTimeout(OAUTH_REFRESH_INLOCK_TIMEOUT_MS)
+    // so a wedged in-lock op cannot pin the cross-agent lock. The budget must sit
+    // above the network call timeout (so the tighter network budget fires first)
+    // and below the stale window (so a waiter never reclaims the lock while the
+    // owner is still within its allowed runtime). A timing-based behavior test is
+    // impractical here because the surrounding withFileLock uses a real file lock
+    // that does not coordinate with fake timers; the deadline mechanism itself is
+    // covered by withRuntimeAuthRefreshDeadline's tests and the auth-controller
+    // cold-start regression test.
+    expect(OAUTH_REFRESH_CALL_TIMEOUT_MS).toBeLessThan(OAUTH_REFRESH_INLOCK_TIMEOUT_MS);
+    expect(OAUTH_REFRESH_INLOCK_TIMEOUT_MS).toBeLessThan(OAUTH_REFRESH_LOCK_OPTIONS.stale);
+  });
+
+  it("keeps the minimum lock-wait retry budget above the in-lock owner deadline", () => {
+    // A peer waiter uses OAUTH_REFRESH_LOCK_OPTIONS to retry the file lock; if
+    // its guaranteed (jitter-free) cumulative wait can expire before the owner's
+    // full held-lock ceiling (OAUTH_REFRESH_INLOCK_TIMEOUT_MS), the waiter would
+    // surface refresh_contention while the owner is still legitimately in budget.
+    // Randomization only lengthens delays, so the floor is the worst case.
+    const { retries, factor, minTimeout, maxTimeout } = OAUTH_REFRESH_LOCK_OPTIONS.retries;
+    let minBudgetMs = 0;
+    for (let attempt = 0; attempt < retries; attempt++) {
+      minBudgetMs += Math.min(maxTimeout, minTimeout * factor ** attempt);
+    }
+    expect(minBudgetMs).toBeGreaterThan(OAUTH_REFRESH_INLOCK_TIMEOUT_MS + 10_000);
   });
 
   it("does not overlay external auth while checking main-store adoption", async () => {

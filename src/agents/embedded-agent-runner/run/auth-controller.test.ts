@@ -10,7 +10,7 @@ import {
 } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { FailoverError } from "../../failover-error.js";
-import type { RuntimeAuthState } from "./helpers.js";
+import { RUNTIME_AUTH_REFRESH_RETRY_MS, type RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({
   prepareProviderRuntimeAuth: vi.fn(),
@@ -35,6 +35,7 @@ vi.mock("../../model-auth.js", async () => {
   };
 });
 
+import { RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS } from "../../runtime-auth-refresh.js";
 import {
   createEmbeddedRunAuthController,
   resolveEmbeddedAuthCooldownProbePolicy,
@@ -747,6 +748,177 @@ describe("createEmbeddedRunAuthController", () => {
       const storedBackupApiKey = setRuntimeApiKey.mock.calls.at(-1)?.[1];
       expectProtectedRuntimeValue(storedBackupApiKey, "backup-runtime-api-key");
       controller.stopRuntimeAuthRefreshTimer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the in-flight refresh handle when a refresh hangs past the hard deadline", async () => {
+    // Regression for the rh-bot gateway freeze: a provider auth hook that never
+    // settles left `refreshInFlight` pending forever, and every later model turn
+    // deadlocked at `await refreshInFlight`. The hard deadline must force the
+    // handle to settle so the single-flight cannot wedge the whole gateway.
+    vi.useFakeTimers();
+    try {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: "source-api-key",
+        mode: "api-key",
+        profileId: "default",
+        source: "env",
+      });
+
+      let call = 0;
+      mocks.prepareProviderRuntimeAuth.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) {
+          // Initial exchange resolves so a refresh gets scheduled (expiry soon).
+          return {
+            apiKey: "runtime-api-key",
+            baseUrl: "https://runtime.example.com/v1",
+            request: {
+              auth: { mode: "header", headerName: "api-key", value: "runtime-token" },
+            },
+            expiresAt: Date.now() + 60_000,
+          };
+        }
+        // Every scheduled refresh hangs forever — the provider auth hook wedge.
+        return new Promise(() => {});
+      });
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: ["default"],
+      });
+
+      await controller.initializeAuthProfile();
+
+      // Fire the scheduled refresh (min delay 5s); it hangs, so the handle is set.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const inflight = getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight;
+      expect(typeof inflight?.then).toBe("function");
+
+      // Before the fix this stayed pending forever. The hard deadline rejects it.
+      const rejection = expect(inflight).rejects.toThrow(/exceeded hard deadline/);
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS);
+      await rejection;
+      // The wedged handle is no longer the active in-flight handle.
+      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).not.toBe(inflight);
+
+      controller.stopRuntimeAuthRefreshTimer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards a deadline-abandoned refresh completion after a successful retry", async () => {
+    // Regression for the stale write-back class: the hard deadline abandons a
+    // hung refresh without cancelling it. Once the retry installs fresh
+    // credentials, the abandoned continuation's eventual completion must fail
+    // the generation stale-check and no-op instead of overwriting them.
+    vi.useFakeTimers();
+    try {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+      const staleRefresh = createDeferred<{ apiKey: string; expiresAt: number }>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: "source-api-key",
+        mode: "api-key",
+        profileId: "default",
+        source: "env",
+      });
+
+      let call = 0;
+      mocks.prepareProviderRuntimeAuth.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) {
+          return { apiKey: "runtime-api-key", expiresAt: Date.now() + 60_000 };
+        }
+        if (call === 2) {
+          // First scheduled refresh hangs past the hard deadline.
+          return staleRefresh.promise;
+        }
+        return { apiKey: "retry-runtime-api-key", expiresAt: Date.now() + 60_000 };
+      });
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: ["default"],
+      });
+
+      await controller.initializeAuthProfile();
+
+      // Scheduled refresh (min delay 5s) hangs; the deadline abandons it.
+      await vi.advanceTimersByTimeAsync(5_000);
+      const inflight = getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight;
+      const rejection = expect(inflight).rejects.toThrow(/exceeded hard deadline/);
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS);
+      await rejection;
+
+      // Runtime keys cross this sink as redaction sentinels, so assert on the
+      // resolved plaintext rather than the raw argument.
+      const expectLastRuntimeApiKey = (plaintext: string) => {
+        const lastCall = setRuntimeApiKey.mock.calls.at(-1);
+        expect(lastCall?.[0]).toBe("custom-openai");
+        expectProtectedRuntimeValue(lastCall?.[1], plaintext);
+      };
+
+      // The scheduled-retry lane recovers with fresh credentials.
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_RETRY_MS);
+      expectLastRuntimeApiKey("retry-runtime-api-key");
+
+      // The abandoned refresh finally settles with stale credentials; the
+      // bumped generation must make its write-back a no-op.
+      staleRefresh.resolve({ apiKey: "stale-runtime-api-key", expiresAt: Date.now() + 5_000 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expectLastRuntimeApiKey("retry-runtime-api-key");
+      const staleWrites = setRuntimeApiKey.mock.calls.filter(
+        ([, apiKey]) =>
+          apiKey === "stale-runtime-api-key" ||
+          resolveSecretSentinel(apiKey) === "stale-runtime-api-key",
+      );
+      expect(staleWrites).toHaveLength(0);
+      controller.stopRuntimeAuthRefreshTimer();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails over instead of hanging when cold-start auth prep exceeds the hard deadline", async () => {
+    // The #93952 deadline originally covered only refreshRuntimeAuth. The
+    // cold-start / profile-rotation path (initializeAuthProfile -> applyApiKeyInfo
+    // -> prepareProviderRuntimeAuth) is the exact hook that hung in the rh-bot
+    // incident AND the path a watchdog kickstart lands on first. It must also be
+    // backstopped so a fresh boot can never re-wedge the lane.
+    vi.useFakeTimers();
+    try {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: "source-api-key",
+        mode: "api-key",
+        profileId: "default",
+        source: "env",
+      });
+      // The provider auth hook hangs forever on cold start.
+      mocks.prepareProviderRuntimeAuth.mockImplementation(() => new Promise(() => {}));
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: ["default"],
+      });
+
+      const init = controller.initializeAuthProfile();
+      const rejection = expect(init).rejects.toBeTruthy();
+      await vi.advanceTimersByTimeAsync(RUNTIME_AUTH_REFRESH_HARD_TIMEOUT_MS);
+      await rejection;
     } finally {
       vi.useRealTimers();
     }
