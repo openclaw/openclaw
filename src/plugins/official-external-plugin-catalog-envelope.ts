@@ -8,11 +8,17 @@ import {
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
-const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
+export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
+export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE =
+  "openclaw.official-external-plugin-catalog-shard-root.v1";
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES = 16;
 
 type OfficialExternalPluginCatalogEnvelopeSignature = {
+  keyid?: string;
+  sig?: string;
+};
+type LegacyOfficialExternalPluginCatalogEnvelopeSignature = {
   keyId?: string;
   algorithm?: string;
   signature?: string;
@@ -21,6 +27,31 @@ type OfficialExternalPluginCatalogTrustedSigningKey = {
   keyId: string;
   publicKey: string;
 };
+
+type OfficialExternalPluginCatalogEnvelopeVerificationError = {
+  ok: false;
+  error:
+    | "invalid-envelope"
+    | "unsupported-payload"
+    | "invalid-payload"
+    | "missing-trust-key"
+    | "invalid-signature";
+  message: string;
+  authenticatedPayload?: unknown;
+};
+
+export type OfficialExternalPluginCatalogEnvelopePayloadVerificationResult =
+  | {
+      ok: true;
+      payloadType: string;
+      payload: unknown;
+      payloadBytes: Buffer;
+      signedBy: string;
+      signedByKeyIds?: readonly string[];
+      signatureCount?: number;
+      threshold?: number;
+    }
+  | OfficialExternalPluginCatalogEnvelopeVerificationError;
 
 type OfficialExternalPluginCatalogEnvelopeVerificationResult =
   | {
@@ -31,17 +62,7 @@ type OfficialExternalPluginCatalogEnvelopeVerificationResult =
       signatureCount?: number;
       threshold?: number;
     }
-  | {
-      ok: false;
-      error:
-        | "invalid-envelope"
-        | "unsupported-payload"
-        | "invalid-payload"
-        | "missing-trust-key"
-        | "invalid-signature";
-      message: string;
-      authenticatedPayload?: unknown;
-    };
+  | OfficialExternalPluginCatalogEnvelopeVerificationError;
 function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   payloadType: string;
   payloadBytes: Buffer;
@@ -49,13 +70,14 @@ function createOfficialExternalPluginCatalogEnvelopeSigningInput(params: {
   return dssePreAuthenticationEncoding(params.payloadType, params.payloadBytes);
 }
 
-export function verifyOfficialExternalPluginCatalogSignedEnvelope(
+export function verifyOfficialExternalPluginCatalogEnvelopePayload(
   raw: unknown,
   params: {
     trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
+    acceptedPayloadTypes: ReadonlySet<string>;
     threshold?: number;
   },
-): OfficialExternalPluginCatalogEnvelopeVerificationResult {
+): OfficialExternalPluginCatalogEnvelopePayloadVerificationResult {
   const envelope = parseOfficialExternalPluginCatalogSignedEnvelope(raw);
   if (!envelope) {
     return {
@@ -64,7 +86,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       message: "hosted catalog signed envelope is malformed",
     };
   }
-  if (envelope.payloadType !== OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE) {
+  if (!params.acceptedPayloadTypes.has(envelope.payloadType)) {
     return {
       ok: false,
       error: "unsupported-payload",
@@ -87,7 +109,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
   const trustedSignatureKeyIds: string[] = [];
   const trustedSignaturePublicKeys = new Set<string>();
   for (const envelopeSignature of envelope.signatures) {
-    const keyId = envelopeSignature.keyId;
+    const keyId = envelopeSignature.keyid;
     const trustedKey = params.trustedKeys.find((candidate) => candidate.keyId === keyId);
     if (!trustedKey || trustedSignatureKeyIds.includes(trustedKey.keyId)) {
       continue;
@@ -100,7 +122,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       verifyEd25519SignatureBytes({
         publicKey: trustedKey.publicKey,
         payload: signingInput,
-        signatureBase64Url: envelopeSignature.signature,
+        signatureBase64Url: envelopeSignature.sig,
       })
     ) {
       trustedSignatureKeyIds.push(trustedKey.keyId);
@@ -112,17 +134,18 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
   }
   if (trustedSignaturePublicKeys.size >= threshold) {
     const decoded = decodeOfficialExternalPluginCatalogEnvelopePayload(payloadBytes);
-    if (!decoded?.feed) {
+    if (!decoded) {
       return {
         ok: false,
         error: "invalid-payload",
         message: "hosted catalog signed envelope payload is invalid",
-        ...(decoded ? { authenticatedPayload: decoded.raw } : {}),
       };
     }
     return {
       ok: true,
-      feed: decoded.feed,
+      payloadType: envelope.payloadType,
+      payload: decoded.raw,
+      payloadBytes,
       signedBy: trustedSignatureKeyIds[0] ?? "",
       ...(threshold > 1
         ? {
@@ -134,7 +157,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
     };
   }
   const hasKnownKey = envelope.signatures.some((signature) =>
-    params.trustedKeys.some((key) => key.keyId === signature.keyId),
+    params.trustedKeys.some((key) => key.keyId === signature.keyid),
   );
   return hasKnownKey
     ? {
@@ -152,12 +175,46 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       };
 }
 
+export function verifyOfficialExternalPluginCatalogSignedEnvelope(
+  raw: unknown,
+  params: {
+    trustedKeys: readonly OfficialExternalPluginCatalogTrustedSigningKey[];
+    threshold?: number;
+  },
+): OfficialExternalPluginCatalogEnvelopeVerificationResult {
+  const verification = verifyOfficialExternalPluginCatalogEnvelopePayload(raw, {
+    ...params,
+    acceptedPayloadTypes: new Set([OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE]),
+  });
+  if (!verification.ok) {
+    return verification;
+  }
+  if (!isOfficialExternalPluginCatalogFeed(verification.payload)) {
+    return {
+      ok: false,
+      error: "invalid-payload",
+      message: "hosted catalog signed envelope payload is invalid",
+      authenticatedPayload: verification.payload,
+    };
+  }
+  return {
+    ok: true,
+    feed: verification.payload,
+    signedBy: verification.signedBy,
+    ...(verification.signedByKeyIds ? { signedByKeyIds: verification.signedByKeyIds } : {}),
+    ...(verification.signatureCount !== undefined
+      ? { signatureCount: verification.signatureCount }
+      : {}),
+    ...(verification.threshold !== undefined ? { threshold: verification.threshold } : {}),
+  };
+}
+
 function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   payloadType: string;
   payload: string;
   signatures: readonly Required<OfficialExternalPluginCatalogEnvelopeSignature>[];
 } | null {
-  if (!isRecord(raw) || raw.schemaVersion !== 1) {
+  if (!isRecord(raw)) {
     return null;
   }
   const payloadType = raw.payloadType;
@@ -172,15 +229,38 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   if (signatures.length > OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_SIGNATURES) {
     return null;
   }
-  const parsedSignatures = signatures.filter(
+  // Hosted Feed v1 requires keyid even though generic DSSE makes it optional:
+  // trust thresholds and rotation are resolved against configured key ids.
+  const standardSignatures = signatures.filter(
     (signature): signature is Required<OfficialExternalPluginCatalogEnvelopeSignature> =>
       isRecord(signature) &&
-      typeof signature.keyId === "string" &&
-      signature.keyId.trim().length > 0 &&
-      signature.algorithm === "ed25519" &&
-      typeof signature.signature === "string" &&
-      signature.signature.trim().length > 0,
+      typeof signature.keyid === "string" &&
+      signature.keyid.trim().length > 0 &&
+      typeof signature.sig === "string" &&
+      signature.sig.trim().length > 0,
   );
+  // Beta releases briefly accepted this pre-DSSE field shape. Keep it as an
+  // all-or-nothing read path while every producer moves to the standard shape.
+  const legacySignatures =
+    raw.schemaVersion === 1
+      ? signatures
+          .filter(
+            (
+              signature,
+            ): signature is Required<LegacyOfficialExternalPluginCatalogEnvelopeSignature> =>
+              isRecord(signature) &&
+              typeof signature.keyId === "string" &&
+              signature.keyId.trim().length > 0 &&
+              signature.algorithm === "ed25519" &&
+              typeof signature.signature === "string" &&
+              signature.signature.trim().length > 0,
+          )
+          .map((signature) => ({ keyid: signature.keyId, sig: signature.signature }))
+      : [];
+  if (standardSignatures.length > 0 && legacySignatures.length > 0) {
+    return null;
+  }
+  const parsedSignatures = standardSignatures.length > 0 ? standardSignatures : legacySignatures;
   if (parsedSignatures.length === 0) {
     return null;
   }
@@ -189,10 +269,10 @@ function parseOfficialExternalPluginCatalogSignedEnvelope(raw: unknown): {
   }
   const keyIds = new Set<string>();
   for (const signature of parsedSignatures) {
-    if (keyIds.has(signature.keyId)) {
+    if (keyIds.has(signature.keyid)) {
       return null;
     }
-    keyIds.add(signature.keyId);
+    keyIds.add(signature.keyid);
   }
   return {
     payloadType,
@@ -220,13 +300,10 @@ function decodeOfficialExternalPluginCatalogEnvelopePayloadBytes(payload: string
 
 function decodeOfficialExternalPluginCatalogEnvelopePayload(
   payloadBytes: Buffer,
-): { raw: unknown; feed: OfficialExternalPluginCatalogFeed | null } | null {
+): { raw: unknown } | null {
   try {
     const raw = JSON.parse(payloadBytes.toString("utf8")) as unknown;
-    return {
-      raw,
-      feed: isOfficialExternalPluginCatalogFeed(raw) ? raw : null,
-    };
+    return { raw };
   } catch {
     return null;
   }

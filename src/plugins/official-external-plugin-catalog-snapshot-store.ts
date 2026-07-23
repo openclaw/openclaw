@@ -113,17 +113,28 @@ function decodeBase64Payload(payload: string): string {
 function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicState | undefined {
   try {
     const document = JSON.parse(body) as {
+      kind?: unknown;
+      rootBody?: unknown;
       payload?: unknown;
       sequence?: unknown;
       generatedAt?: unknown;
     };
-    const feed =
-      typeof document.payload === "string"
-        ? (JSON.parse(decodeBase64Payload(document.payload)) as {
+    const wireDocument =
+      document.kind === "official-external-plugin-catalog-shards-v1" &&
+      typeof document.rootBody === "string"
+        ? (JSON.parse(document.rootBody) as {
+            payload?: unknown;
             sequence?: unknown;
             generatedAt?: unknown;
           })
         : document;
+    const feed =
+      typeof wireDocument.payload === "string"
+        ? (JSON.parse(decodeBase64Payload(wireDocument.payload)) as {
+            sequence?: unknown;
+            generatedAt?: unknown;
+          })
+        : wireDocument;
     if (!isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
     }
