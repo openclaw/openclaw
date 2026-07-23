@@ -1,5 +1,8 @@
 /** Combined session MCP runtime facade for static + requester partitions. */
-import { waitForSessionMcpRequest } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  type SessionMcpSharedTask,
+  waitForSessionMcpSharedTask,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
@@ -76,7 +79,7 @@ export function createCombinedSessionMcpRuntime(params: {
   let lastUsedAt = Math.max(...parts.map((part) => part.lastUsedAt));
   let cachedCatalog: McpToolCatalog | null = null;
   let mergedSourceCatalogs: ReadonlyArray<McpToolCatalog> | null = null;
-  let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  let catalogInFlight: SessionMcpSharedTask<McpToolCatalog> | undefined;
   const serverOwner = new Map<string, SessionMcpRuntime>();
 
   const rememberServerOwners = (catalog: McpToolCatalog, owner: SessionMcpRuntime) => {
@@ -93,20 +96,15 @@ export function createCombinedSessionMcpRuntime(params: {
     mergedSourceCatalogs !== null &&
     parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
 
-  const loadCatalog = async (
-    options?: Pick<McpRequestOptions, "signal">,
-  ): Promise<McpToolCatalog> => {
-    if (cachedCatalog && cachedCatalogIsCurrent()) {
-      options?.signal?.throwIfAborted();
-      return cachedCatalog;
-    }
-    if (catalogInFlight) {
-      return await waitForSessionMcpRequest(catalogInFlight, options?.signal);
-    }
-    const inFlight = (async () => {
-      // The combined catalog belongs to the runtime. Individual operation
-      // deadlines only detach their waiters; parts keep warming shared caches.
-      const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
+  const startCatalogLoad = (): SessionMcpSharedTask<McpToolCatalog> => {
+    const controller = new AbortController();
+    const promise = (async () => {
+      // The combined generation is the real waiter on its parts. Propagating its
+      // lifetime lets each part retain work needed by other callers without
+      // keeping abandoned merged-catalog work alive.
+      const catalogs = await Promise.all(
+        parts.map((part) => part.getCatalog({ signal: controller.signal })),
+      );
       serverOwner.clear();
       for (let index = 0; index < parts.length; index += 1) {
         rememberServerOwners(catalogs[index]!, parts[index]!);
@@ -115,15 +113,42 @@ export function createCombinedSessionMcpRuntime(params: {
       cachedCatalog = mergeMcpToolCatalogs(catalogs);
       return cachedCatalog;
     })();
-    catalogInFlight = inFlight;
-    void inFlight
+    const refresh: SessionMcpSharedTask<McpToolCatalog> = {
+      controller,
+      promise,
+      activeWaiters: 0,
+    };
+    catalogInFlight = refresh;
+    void refresh.promise
       .finally(() => {
-        if (catalogInFlight === inFlight) {
+        if (catalogInFlight === refresh) {
           catalogInFlight = undefined;
         }
       })
       .catch(() => {});
-    return await waitForSessionMcpRequest(inFlight, options?.signal);
+    return refresh;
+  };
+
+  const loadCatalog = async (
+    options?: Pick<McpRequestOptions, "signal">,
+  ): Promise<McpToolCatalog> => {
+    options?.signal?.throwIfAborted();
+    if (cachedCatalog && cachedCatalogIsCurrent()) {
+      return cachedCatalog;
+    }
+    const refresh = catalogInFlight ?? startCatalogLoad();
+    return await waitForSessionMcpSharedTask({
+      task: refresh,
+      signal: options?.signal,
+      abandonIfCurrent: () => {
+        if (catalogInFlight !== refresh) {
+          return false;
+        }
+        catalogInFlight = undefined;
+        return true;
+      },
+      abandonedReason: new Error("combined MCP catalog load abandoned by all waiters"),
+    });
   };
 
   // Fresh combined facades have an empty owner map until the catalog is loaded.
@@ -243,6 +268,7 @@ export function createCombinedSessionMcpRuntime(params: {
       return await owner.getPrompt(serverName, name, args);
     },
     async dispose() {
+      catalogInFlight?.controller.abort(new Error("combined MCP runtime disposed"));
       catalogInFlight = undefined;
       await Promise.allSettled(parts.map((part) => part.dispose()));
     },
