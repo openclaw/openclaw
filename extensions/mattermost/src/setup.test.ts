@@ -125,6 +125,11 @@ describe("mattermost setup", () => {
     ).toBe(false);
   });
 
+  it("exposes config-promotion declarations on the setup adapter", () => {
+    expect(mattermostSetupAdapter.singleAccountKeysToMove).toContain("botToken");
+    expect(mattermostSetupAdapter.singleAccountKeysToMove).toContain("baseUrl");
+  });
+
   it("resolves accounts with unresolved secret refs allowed", () => {
     resolveMattermostAccount.mockReturnValue({ accountId: "default" });
 

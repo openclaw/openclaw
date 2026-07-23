@@ -84,6 +84,7 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
 export { parseLineAllowFromId };
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     patchLineAccountConfig({
