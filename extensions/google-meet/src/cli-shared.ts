@@ -244,7 +244,7 @@ export function writeSetupStatus(
   }
 }
 
-export function formatBoolean(value: boolean | undefined): string {
+function formatBoolean(value: boolean | undefined): string {
   return typeof value === "boolean" ? (value ? "yes" : "no") : "unknown";
 }
 

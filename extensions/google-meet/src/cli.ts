@@ -6,6 +6,7 @@ import {
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
 import { registerGoogleMeetArtifactCommands } from "./cli-artifact-commands.js";
+import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import { registerGoogleMeetDoctorCommand } from "./cli-doctor.js";
 import {
   registerGoogleMeetLifecycleCommands,
@@ -206,21 +207,6 @@ function hasCreateOAuth(config: GoogleMeetConfig, options: CreateOptions): boole
     config.oauth.refreshToken,
   );
 }
-
-export type GoogleMeetCliCommandContext = {
-  root: Command;
-  config: GoogleMeetConfig;
-  ensureRuntime: () => Promise<GoogleMeetRuntime>;
-  callGateway: typeof callGatewayFromCli;
-  operationTimeoutMs: number;
-  resolveMeetingInput: typeof resolveMeetingInput;
-  resolveOAuthTokenOptions: typeof resolveOAuthTokenOptions;
-  resolveTokenOptions: typeof resolveTokenOptions;
-  resolveMeetingForToken: typeof resolveMeetingForToken;
-  resolveCreateTokenOptions: typeof resolveCreateTokenOptions;
-  resolveArtifactTokenOptions: typeof resolveArtifactTokenOptions;
-  hasCreateOAuth: typeof hasCreateOAuth;
-};
 
 export function registerGoogleMeetCli(params: {
   program: Command;

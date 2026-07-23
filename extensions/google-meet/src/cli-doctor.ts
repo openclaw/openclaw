@@ -1,3 +1,4 @@
+import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import {
   callGoogleMeetGateway,
   parseOptionalNumber,
@@ -6,7 +7,6 @@ import {
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
-import type { GoogleMeetCliCommandContext } from "./cli.js";
 import type { GoogleMeetConfig } from "./config.js";
 import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";

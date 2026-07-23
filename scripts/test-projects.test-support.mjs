@@ -2426,6 +2426,14 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
   [
+    "extensions/google-meet/src/cli-command-context.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
     "extensions/google-meet/src/cli-shared.ts",
     [
       "extensions/google-meet/src/cli-artifacts.test.ts",

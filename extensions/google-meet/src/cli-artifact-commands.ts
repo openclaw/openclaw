@@ -1,4 +1,5 @@
 import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
+import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import {
   buildGoogleMeetExportManifest,
   googleMeetExportFileNames,
@@ -16,7 +17,6 @@ import {
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
-import type { GoogleMeetCliCommandContext } from "./cli.js";
 import { fetchGoogleMeetArtifacts, fetchGoogleMeetAttendance } from "./meet.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
 

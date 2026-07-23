@@ -1,4 +1,5 @@
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import type { GoogleMeetCliCommandContext } from "./cli-command-context.js";
 import {
   callGoogleMeetGateway,
   parsePositiveNumber,
@@ -11,7 +12,6 @@ import {
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
-import type { GoogleMeetCliCommandContext } from "./cli.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export function registerGoogleMeetProbeCommands(context: GoogleMeetCliCommandContext): void {
