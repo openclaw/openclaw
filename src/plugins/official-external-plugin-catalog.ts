@@ -479,14 +479,10 @@ function shouldRequireManifestInstallSourceRef(params: {
 }): boolean {
   const feedUrl = normalizeOptionalString(params.feedUrl);
   if (feedUrl) {
-    try {
-      return (
-        resolveHostedCatalogFeedUrl(feedUrl).href !==
-        resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
-      );
-    } catch {
-      return true;
-    }
+    return (
+      resolveHostedCatalogFeedUrl(feedUrl).href !==
+      resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
+    );
   }
   const profileName =
     normalizeOptionalString(params.feedProfile) ??
@@ -496,15 +492,10 @@ function shouldRequireManifestInstallSourceRef(params: {
   }
   const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
   const profileUrl = normalizeOptionalString(profileConfig.feeds[profileName]?.url);
-  try {
-    return (
-      resolveHostedCatalogFeedUrl(profileUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
-        .href !==
-      resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
-    );
-  } catch {
-    return true;
-  }
+  return (
+    resolveHostedCatalogFeedUrl(profileUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
+      .href !== resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
+  );
 }
 
 function getManifestInstallSourceRefCandidate(
