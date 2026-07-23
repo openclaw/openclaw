@@ -1319,6 +1319,47 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
+  it("persists sender attribution from ctx when sessionCtx omits it", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: "group",
+          SenderId: "user-42",
+          SenderName: "Ada",
+          SenderUsername: "ada",
+        },
+        sessionCtx: {
+          Body: "hello",
+          BodyStripped: "hello",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: "group",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType: "group",
+          channel: "telegram",
+        } as SessionEntry,
+      }),
+    );
+
+    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+    expect(message).toMatchObject({
+      __openclaw: {
+        senderId: "user-42",
+        senderName: "Ada",
+        senderUsername: "ada",
+      },
+    });
+  });
+
   it("normalizes second-based inbound timestamps before preparing user turns", async () => {
     await runPreparedReply(
       baseParams({
