@@ -1,4 +1,4 @@
-// Telegram plugin module implements delivery.send behavior.
+// Telegram plugin module implements delivery.send behavior with message deduplication.
 import type { Bot } from "grammy";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
@@ -30,8 +30,73 @@ import {
 } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
+import crypto from "node:crypto";
 
 export { buildTelegramSendParams } from "../reply-parameters.js";
+
+// 🔴 消息去重配置
+const DEDUP_WINDOW_SECONDS = 10;
+const sentMessages = new Map<string, number>();
+
+/**
+ * 计算文本内容的哈希值
+ * @param text - 要哈希的文本
+ * @returns MD5 哈希值(32位十六进制字符串)
+ */
+function hash(text: string): string {
+  return crypto
+    .createHash('md5')
+    .update(text.trim())
+    .digest('hex');
+}
+
+/**
+ * 检查是否应该跳过重复消息
+ * @param chatId - Telegram 聊天 ID
+ * @param text - 要发送的文本
+ * @returns true 如果应该跳过, false 如果应该发送
+ */
+function shouldSkipDuplicateMessage(chatId: string, text: string): boolean {
+  const contentHash = hash(text);
+  const key = `${chatId}:${contentHash}`;
+  const now = Date.now();
+
+  const lastSent = sentMessages.get(key);
+  if (lastSent) {
+    const elapsedSeconds = (now - lastSent) / 1000;
+
+    if (elapsedSeconds < DEDUP_WINDOW_SECONDS) {
+      console.log(
+        `[Dedupe] Skipping duplicate message to Telegram ` +
+        `(chatId: ${chatId}, elapsed: ${elapsedSeconds.toFixed(2)}s)`
+      );
+      return true; // 跳过重复消息
+    }
+  }
+
+  // 记录消息发送时间
+  sentMessages.set(key, now);
+
+  // 清理过期的去重缓存
+  cleanupCache();
+
+  return false; // 不跳过,发送消息
+}
+
+/**
+ * 清理过期的去重缓存
+ * 保留 2 倍去重窗口时间内的记录
+ */
+function cleanupCache(): void {
+  const now = Date.now();
+  const maxAge = DEDUP_WINDOW_SECONDS * 2 * 1000; // 20秒
+
+  for (const [key, timestamp] of sentMessages.entries()) {
+    if (now - timestamp > maxAge) {
+      sentMessages.delete(key);
+    }
+  }
+}
 
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 function createTelegramDeliverySendRetry() {
@@ -112,6 +177,12 @@ export async function sendTelegramText(
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
+  // 🔴 检查是否应该跳过重复消息
+  if (shouldSkipDuplicateMessage(chatId, text)) {
+    // 返回一个假的消息 ID，避免调用者认为发送失败
+    return -1;
+  }
+
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteMessageId: opts?.replyQuoteMessageId,
@@ -147,6 +218,7 @@ export async function sendTelegramText(
 
   // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
   // newlines, tag-aware chunking) even on rich accounts.
+
   if (opts?.richMessages === true && textMode !== "html") {
     const richPlan = opts.richMessage
       ? {
