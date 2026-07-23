@@ -25,6 +25,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
@@ -2798,12 +2799,10 @@ describe("task-registry", () => {
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
       const message = sentMessageCall();
-      expectRecordFields(message, {
-        idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
-      });
-      expectRecordFields(message.mirror, {
-        idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
-      });
+      expect(message.idempotencyKey).toMatch(
+        new RegExp(`^task-terminal:${task.taskId}:succeeded:blocked:[0-9a-f]{16}$`),
+      );
+      expectRecordFields(message.mirror, { idempotencyKey: message.idempotencyKey });
       expectRecordFields(requireTaskByRunId("run-racing-delivery"), {
         deliveryStatus: "delivered",
       });
@@ -2840,6 +2839,255 @@ describe("task-registry", () => {
       releaseSend();
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expectRecordFields(requireTaskByRunId("run-held-delivery"), {
+        deliveryStatus: "delivered",
+      });
+    });
+  });
+
+  it.each(["resolves", "rejects"] as const)(
+    "delivers a newer terminal outcome when the replaced send %s",
+    async (settlement) => {
+      await withTaskRegistryTempDir(async () => {
+        resetTaskRegistryMemoryForTest();
+        const firstSendPending = createDeferred();
+        hoisted.sendMessageMock
+          .mockImplementationOnce(async () => {
+            await firstSendPending.promise;
+            return {
+              channel: "notifychat",
+              to: "notifychat:123",
+              via: "direct",
+            };
+          })
+          .mockResolvedValue({
+            channel: "notifychat",
+            to: "notifychat:123",
+            via: "direct",
+          });
+
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "notifychat",
+            to: "notifychat:123",
+          },
+          childSessionKey: "agent:main:acp:terminal-replacement",
+          runId: "run-terminal-replacement",
+          task: "Resolve the terminal outcome",
+          status: "running",
+          deliveryStatus: "pending",
+        });
+
+        finalizeTaskRunByRunId({
+          runId: task.runId!,
+          runtime: "acp",
+          status: "succeeded",
+          endedAt: 200,
+          terminalOutcome: "blocked",
+          terminalSummary: "Waiting for external access.",
+        });
+        await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+
+        finalizeTaskRunByRunId({
+          runId: task.runId!,
+          runtime: "acp",
+          status: "failed",
+          endedAt: 201,
+          error: "External access was denied.",
+          terminalOutcome: null,
+          terminalSummary: "The task cannot continue.",
+        });
+        if (settlement === "resolves") {
+          firstSendPending.resolve();
+        } else {
+          firstSendPending.reject(new Error("first terminal send failed"));
+        }
+
+        await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2));
+        expect(sentMessageCall(0)).toMatchObject({
+          content:
+            "Background task blocked: ACP background task (run run-term). Waiting for external access.",
+        });
+        expect(sentMessageCall(1)).toMatchObject({
+          content:
+            "Background task failed: ACP background task (run run-term). External access was denied.",
+        });
+        expect(sentMessageCall(0).idempotencyKey).toMatch(
+          new RegExp(`^task-terminal:${task.taskId}:succeeded:blocked:[0-9a-f]{16}$`),
+        );
+        expect(sentMessageCall(1).idempotencyKey).toMatch(
+          new RegExp(`^task-terminal:${task.taskId}:failed:default:[0-9a-f]{16}$`),
+        );
+        expect(sentMessageCall(1).idempotencyKey).not.toBe(sentMessageCall(0).idempotencyKey);
+        expectRecordFields(requireTaskById(task.taskId), {
+          status: "failed",
+          deliveryStatus: "delivered",
+        });
+        expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      });
+    },
+  );
+
+  it("delivers a revised terminal payload with the same status and outcome", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const firstSendPending = createDeferred();
+      hoisted.sendMessageMock
+        .mockImplementationOnce(async () => {
+          await firstSendPending.promise;
+          return {
+            channel: "notifychat",
+            to: "notifychat:123",
+            via: "direct",
+          };
+        })
+        .mockResolvedValue({
+          channel: "notifychat",
+          to: "notifychat:123",
+          via: "direct",
+        });
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:main:acp:terminal-revision",
+        runId: "run-terminal-revision",
+        task: "Report the terminal result",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      finalizeTaskRunByRunId({
+        runId: task.runId!,
+        runtime: "acp",
+        status: "failed",
+        endedAt: 200,
+        error: "Initial failure detail.",
+      });
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+
+      finalizeTaskRunByRunId({
+        runId: task.runId!,
+        runtime: "acp",
+        status: "failed",
+        endedAt: 201,
+        error: "Corrected failure detail.",
+      });
+      firstSendPending.resolve();
+
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2));
+      expect(sentMessageCall(0).content).toContain("Initial failure detail.");
+      expect(sentMessageCall(1).content).toContain("Corrected failure detail.");
+      expect(sentMessageCall(1).idempotencyKey).not.toBe(sentMessageCall(0).idempotencyKey);
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "failed",
+        deliveryStatus: "delivered",
+      });
+    });
+  });
+
+  it("delivers a terminal correction after the previous payload was delivered", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:main:acp:terminal-correction",
+        runId: "run-terminal-correction",
+        task: "Correct the terminal result",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      finalizeTaskRunByRunId({
+        runId: task.runId!,
+        runtime: "acp",
+        status: "succeeded",
+        endedAt: 200,
+        terminalOutcome: "blocked",
+        terminalSummary: "Waiting for access.",
+      });
+      await waitForAssertion(() =>
+        expect(requireTaskById(task.taskId).deliveryStatus).toBe("delivered"),
+      );
+
+      finalizeTaskRunByRunId({
+        runId: task.runId!,
+        runtime: "acp",
+        status: "failed",
+        endedAt: 201,
+        error: "Access was denied.",
+        terminalOutcome: null,
+      });
+
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(2));
+      expect(sentMessageCall(0).content).toContain("Waiting for access.");
+      expect(sentMessageCall(1).content).toContain("Access was denied.");
+      expect(sentMessageCall(1).idempotencyKey).not.toBe(sentMessageCall(0).idempotencyKey);
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "failed",
+        deliveryStatus: "delivered",
+      });
+    });
+  });
+
+  it("does not redeliver an unchanged terminal payload", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        childSessionKey: "agent:main:acp:terminal-duplicate",
+        runId: "run-terminal-duplicate",
+        task: "Report once",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const finalize = (endedAt: number) =>
+        finalizeTaskRunByRunId({
+          runId: task.runId!,
+          runtime: "acp",
+          status: "failed",
+          endedAt,
+          error: "Stable failure detail.",
+        });
+      finalize(200);
+      await waitForAssertion(() =>
+        expect(requireTaskById(task.taskId).deliveryStatus).toBe("delivered"),
+      );
+
+      finalize(201);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      expectRecordFields(requireTaskById(task.taskId), {
         deliveryStatus: "delivered",
       });
     });

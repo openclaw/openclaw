@@ -1026,13 +1026,67 @@ function resolveTaskStateChangeIdempotencyKey(params: {
   return `task-event:${params.task.taskId}:${params.latestEvent.at}:${params.latestEvent.kind}`;
 }
 
-function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
+type TaskTerminalDeliveryProjection = {
+  owner: TaskDeliveryOwner;
+  ownerSessionKey?: string;
+  shouldRouteParentReview: boolean;
+  shouldDeliverParentReviewDirect: boolean;
+  canDeliverDirect: boolean;
+  directEventText: string;
+  sessionEventText: string;
+  idempotencyKey: string;
+};
+
+function resolveTaskTerminalDeliveryProjection(task: TaskRecord): TaskTerminalDeliveryProjection {
   const owner = resolveTaskDeliveryOwner(task);
-  if (owner.flowId) {
-    const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
-    return `flow-terminal:${owner.flowId}:${task.taskId}:${task.status}:${outcome}`;
-  }
-  return taskTerminalDeliveryIdempotencyKey(task);
+  const ownerSessionKey = owner.sessionKey?.trim() || undefined;
+  const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(task);
+  const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToBoundDiscordThread(task);
+  const canDeliverDirect = canDeliverTaskToRequesterOrigin(task) || shouldDeliverParentReviewDirect;
+  const directEventText = formatTaskTerminalMessage(task);
+  const sessionEventText = formatTaskTerminalMessage(
+    task,
+    shouldRouteParentReview ? { surface: "parent_session" } : undefined,
+  );
+  const directContent = shouldDeliverParentReviewDirect ? sessionEventText : directEventText;
+  const origin = owner.requesterOrigin;
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify([
+        owner.sessionKey ?? null,
+        origin?.channel ?? null,
+        origin?.to ?? null,
+        origin?.accountId ?? null,
+        origin?.threadId ?? null,
+        directContent,
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 16);
+  const idempotencyKey = owner.flowId
+    ? `flow-terminal:${owner.flowId}:${task.taskId}:${task.status}:${task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default"}:${payloadHash}`
+    : `${taskTerminalDeliveryIdempotencyKey(task)}:${payloadHash}`;
+  return {
+    owner,
+    ownerSessionKey,
+    shouldRouteParentReview,
+    shouldDeliverParentReviewDirect,
+    canDeliverDirect,
+    directEventText,
+    sessionEventText,
+    idempotencyKey,
+  };
+}
+
+function resolveTaskTerminalIdempotencyKey(task: TaskRecord): string {
+  return resolveTaskTerminalDeliveryProjection(task).idempotencyKey;
+}
+
+function isSameTaskTerminalDeliveryGeneration(task: TaskRecord, idempotencyKey: string): boolean {
+  // The key fingerprints destination and rendered payload. A revised terminal
+  // projection must get its own send before it can be marked delivered.
+  return resolveTaskTerminalIdempotencyKey(task) === idempotencyKey;
 }
 
 function getLinkedFlowForDelivery(task: TaskRecord) {
@@ -1470,6 +1524,7 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
     return cloneTaskRecord(current);
   }
   tasksWithPendingDelivery.add(taskId);
+  let retrySupersededTerminalDelivery = false;
   try {
     const latest = tasks.get(taskId);
     if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
@@ -1502,23 +1557,23 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         lastEventAt: Date.now(),
       });
     }
-    const owner = resolveTaskDeliveryOwner(latest);
-    const ownerSessionKey = owner.sessionKey?.trim();
+    const delivery = resolveTaskTerminalDeliveryProjection(latest);
+    const {
+      owner,
+      ownerSessionKey,
+      shouldRouteParentReview,
+      shouldDeliverParentReviewDirect,
+      canDeliverDirect,
+      directEventText,
+      sessionEventText,
+      idempotencyKey: terminalDeliveryIdempotencyKey,
+    } = delivery;
     if (!ownerSessionKey) {
       return updateTask(taskId, {
         deliveryStatus: resolveMissingOwnerDeliveryStatus(latest),
         lastEventAt: Date.now(),
       });
     }
-    const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
-    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToBoundDiscordThread(latest);
-    const canDeliverDirect =
-      canDeliverTaskToRequesterOrigin(latest) || shouldDeliverParentReviewDirect;
-    const directEventText = formatTaskTerminalMessage(latest);
-    const sessionEventText = formatTaskTerminalMessage(
-      latest,
-      shouldRouteParentReview ? { surface: "parent_session" } : undefined,
-    );
     if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
       try {
         queueTaskSystemEvent(latest, sessionEventText);
@@ -1548,8 +1603,11 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       if (!beforeSend || !shouldAutoDeliverTaskTerminalUpdate(beforeSend)) {
         return beforeSend ? cloneTaskRecord(beforeSend) : null;
       }
+      if (!isSameTaskTerminalDeliveryGeneration(beforeSend, terminalDeliveryIdempotencyKey)) {
+        retrySupersededTerminalDelivery = true;
+        return cloneTaskRecord(beforeSend);
+      }
       const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
-      const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
       await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
@@ -1557,16 +1615,20 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
         threadId: owner.requesterOrigin?.threadId,
         content: shouldDeliverParentReviewDirect ? sessionEventText : directEventText,
         agentId: requesterAgentId,
-        idempotencyKey,
+        idempotencyKey: terminalDeliveryIdempotencyKey,
         mirror: {
           sessionKey: ownerSessionKey,
           agentId: requesterAgentId,
-          idempotencyKey,
+          idempotencyKey: terminalDeliveryIdempotencyKey,
         },
       });
       const afterSend = tasks.get(taskId);
       if (!afterSend || !shouldAutoDeliverTaskTerminalUpdate(afterSend)) {
         return afterSend ? cloneTaskRecord(afterSend) : null;
+      }
+      if (!isSameTaskTerminalDeliveryGeneration(afterSend, terminalDeliveryIdempotencyKey)) {
+        retrySupersededTerminalDelivery = true;
+        return cloneTaskRecord(afterSend);
       }
       if (afterSend.terminalOutcome === "blocked") {
         queueBlockedTaskFollowup(afterSend);
@@ -1585,6 +1647,10 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
       const beforeFallback = tasks.get(taskId);
       if (!beforeFallback || !shouldAutoDeliverTaskTerminalUpdate(beforeFallback)) {
         return beforeFallback ? cloneTaskRecord(beforeFallback) : null;
+      }
+      if (!isSameTaskTerminalDeliveryGeneration(beforeFallback, terminalDeliveryIdempotencyKey)) {
+        retrySupersededTerminalDelivery = true;
+        return cloneTaskRecord(beforeFallback);
       }
       try {
         queueTaskSystemEvent(beforeFallback, sessionEventText);
@@ -1605,6 +1671,9 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
     }
   } finally {
     tasksWithPendingDelivery.delete(taskId);
+    if (retrySupersededTerminalDelivery) {
+      void maybeDeliverTaskTerminalUpdate(taskId);
+    }
   }
 }
 
@@ -2126,6 +2195,25 @@ function updateTaskStateByRunId(params: {
       // Teardown suppression must survive redundant lifecycle finalizers that
       // arrive after queues are cleared, or they can repopulate the stopped session.
       patch.deliveryStatus = "not_applicable";
+    }
+    if (!params.suppressDelivery && current.deliveryStatus === "delivered") {
+      const pendingCorrection = {
+        ...current,
+        ...patch,
+        deliveryStatus: "pending" as const,
+      };
+      if (Object.hasOwn(patch, "error") && patch.error === undefined) {
+        delete pendingCorrection.error;
+      }
+      if (
+        shouldAutoDeliverTaskTerminalUpdate(pendingCorrection) &&
+        resolveTaskTerminalIdempotencyKey(current) !==
+          resolveTaskTerminalIdempotencyKey(pendingCorrection)
+      ) {
+        // This mutation path always schedules terminal delivery below, so a
+        // corrected user-visible projection can safely re-arm after an older send.
+        patch.deliveryStatus = "pending";
+      }
     }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
