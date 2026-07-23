@@ -1,8 +1,10 @@
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
+  claimAgentRunContextQueue,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
+  releaseAgentRunContextQueue,
   withAgentRunLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
@@ -57,6 +59,25 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     abortError.name = "AbortError";
     throw abortError;
   };
+  const createRunContextQueueClaim = () => {
+    const runId = options.getParams().runId;
+    const lifecycleGeneration = options.getLifecycleGeneration();
+    const queueClaimId = claimAgentRunContextQueue(runId, lifecycleGeneration);
+    return () => {
+      releaseAgentRunContextQueue(runId, queueClaimId, lifecycleGeneration);
+    };
+  };
+  const enqueueWithRunContextQueueState = <T>(
+    releaseQueueClaim: () => void,
+    enqueue: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return enqueue().finally(releaseQueueClaim);
+    } catch (error) {
+      releaseQueueClaim();
+      throw error;
+    }
+  };
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
     withEmbeddedRunLaneTimeout(
       {
@@ -99,11 +120,13 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     task: () => Promise<EmbeddedAgentRunResult>,
     opts?: CommandQueueEnqueueOptions,
   ) => {
+    const releaseQueueClaim = createRunContextQueueClaim();
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
       priority: sessionQueuePriority,
     };
     const taskWithCurrentLifecycle = async () => {
+      releaseQueueClaim();
       let params = options.getParams();
       params.onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       throwIfAborted();
@@ -154,30 +177,42 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     };
     const params = options.getParams();
     if (params.enqueue) {
-      return params.enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts)));
+      const enqueue = params.enqueue;
+      return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+        enqueue(taskWithCurrentLifecycle, withLaneTimeout(withRunLaneWait(globalOpts))),
+      );
     }
     noteLaneWaitIfBusy(options.globalLane);
-    return enqueueCommandInLane(
-      options.globalLane,
-      taskWithCurrentLifecycle,
-      withLaneTimeout(withRunLaneWait(globalOpts)),
+    return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+      enqueueCommandInLane(
+        options.globalLane,
+        taskWithCurrentLifecycle,
+        withLaneTimeout(withRunLaneWait(globalOpts)),
+      ),
     );
   };
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
+    const releaseQueueClaim = createRunContextQueueClaim();
     const sessionOpts: CommandQueueEnqueueOptions = { ...opts, priority: sessionQueuePriority };
     const taskWithLaneAdmission = () => {
+      releaseQueueClaim();
       options.getParams().onLaneWait?.({ waitMs: 0, queuedAhead: 0, waiting: false });
       return task();
     };
     const params = options.getParams();
     if (params.enqueue) {
-      return params.enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts));
+      const enqueue = params.enqueue;
+      return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+        enqueue(taskWithLaneAdmission, withRunLaneWait(sessionOpts)),
+      );
     }
     noteLaneWaitIfBusy(options.sessionLane);
-    return enqueueCommandInLane(
-      options.sessionLane,
-      taskWithLaneAdmission,
-      withRunLaneWait(sessionOpts),
+    return enqueueWithRunContextQueueState(releaseQueueClaim, () =>
+      enqueueCommandInLane(
+        options.sessionLane,
+        taskWithLaneAdmission,
+        withRunLaneWait(sessionOpts),
+      ),
     );
   };
 
