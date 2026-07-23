@@ -1137,6 +1137,7 @@ export function logToolLoopAction(
     action: "warn" | "block";
     detector:
       | "generic_repeat"
+      | "consecutive_repeat"
       | "unknown_tool_repeat"
       | "known_poll_no_progress"
       | "global_circuit_breaker"
