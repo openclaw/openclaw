@@ -35,8 +35,11 @@ function makeMismatchedWrapperRepo() {
   const originPath = join(root, "origin.git");
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
-  writeFileSync(join(bin, "rg"), "#!/usr/bin/env sh\nexit 0\n");
-  chmodSync(join(bin, "rg"), 0o755);
+  for (const command of ["jq", "rg", "pnpm"]) {
+    const commandPath = join(bin, command);
+    writeFileSync(commandPath, "#!/usr/bin/env sh\nexit 0\n");
+    chmodSync(commandPath, 0o755);
+  }
 
   const fixtureEnv = {
     ...process.env,
@@ -89,10 +92,11 @@ function makeMismatchedWrapperRepo() {
   );
 
   writeFileSync(
-    join(linked, "scripts", "pr-lib", "gates.sh"),
-    'ci_dispatch() { echo "local wrapper executed"; }\n',
+    join(linked, "scripts", "pr-lib", "worktree.sh"),
+    '\nlist_pr_worktrees() { echo "local wrapper executed"; }\n',
+    { flag: "a" },
   );
-  git(linked, ["add", "scripts/pr-lib/gates.sh"]);
+  git(linked, ["add", "scripts/pr-lib/worktree.sh"]);
   git(linked, ["commit", "-m", "test: local wrapper"]);
   const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
 
@@ -180,31 +184,27 @@ describe("scripts/pr wrappers", () => {
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
     const fixture = makeMismatchedWrapperRepo();
     try {
-      const cliResult = spawnSync(
-        join(fixture.linked, "scripts", "pr"),
-        ["--dev-wrapper", "ci-dispatch", "123"],
-        {
-          cwd: fixture.linked,
-          encoding: "utf8",
-          env: fixture.env,
-        },
-      );
+      const cliResult = spawnSync(join(fixture.linked, "scripts", "pr"), ["--dev-wrapper", "ls"], {
+        cwd: fixture.linked,
+        encoding: "utf8",
+        env: fixture.env,
+      });
       expect(cliResult.status, `${cliResult.stderr}\n${cliResult.stdout}`).toBe(0);
       expect(cliResult.stdout).toContain("local wrapper executed");
       expect(cliResult.stderr).toContain(
         `WARNING: running local scripts/pr revision ${fixture.localRevision} via dev-wrapper opt-in.`,
       );
-      expect(cliResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
+      expect(cliResult.stderr).toContain("subcommand 'ls' is classified advisory.");
       expect(cliResult.stderr).toContain("landing subcommands remain refused");
 
-      const envResult = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
+      const envResult = spawnSync(join(fixture.linked, "scripts", "pr"), ["ls"], {
         cwd: fixture.linked,
         encoding: "utf8",
         env: { ...fixture.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
       });
       expect(envResult.status, `${envResult.stderr}\n${envResult.stdout}`).toBe(0);
       expect(envResult.stdout).toContain("local wrapper executed");
-      expect(envResult.stderr).toContain("subcommand 'ci-dispatch' is classified advisory.");
+      expect(envResult.stderr).toContain("subcommand 'ls' is classified advisory.");
     } finally {
       fixture.cleanup();
     }

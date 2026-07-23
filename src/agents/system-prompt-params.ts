@@ -13,6 +13,7 @@ import {
   getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
@@ -23,6 +24,7 @@ import {
 
 type RuntimeInfoInput = {
   agentId?: string;
+  identityName?: string;
   sessionKey?: string;
   sessionId?: string;
   host: string;
@@ -52,7 +54,7 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "identityName">;
   workspaceDir?: string;
   cwd?: string;
 }): SystemPromptRuntimeParams {
@@ -67,6 +69,7 @@ export function buildSystemPromptParams(params: {
   return {
     runtimeInfo: {
       agentId: params.agentId,
+      identityName: resolveAgentIdentityName(params.config, params.agentId),
       ...params.runtime,
       activeNode:
         formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
@@ -76,6 +79,21 @@ export function buildSystemPromptParams(params: {
     userTime,
     userTimeFormat,
   };
+}
+
+function resolveAgentIdentityName(
+  config: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): string | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const agent = config?.agents?.list?.find(
+    (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
+  );
+  const name = agent?.identity?.name?.trim();
+  return name || undefined;
 }
 
 function resolveRepoRoot(params: {

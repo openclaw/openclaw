@@ -145,4 +145,49 @@ describe("buildSystemPromptParams", () => {
     expect(runtimeInfo.sessionKey).toBe("agent:main:main");
     expect(runtimeInfo.sessionId).toBe("23ae7fce-3c27-4a51-b58e-d800d8ca091f");
   });
+
+  it("resolves configured identity name for the active agent", () => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: {
+        agents: {
+          list: [
+            { id: "main", identity: { name: "Runt" } },
+            { id: "coder", identity: { name: "Builder" } },
+          ],
+        },
+      },
+      agentId: "main",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.agentId).toBe("main");
+    expect(runtimeInfo.identityName).toBe("Runt");
+  });
+
+  it("resolves configured identity name through normalized agent ids", () => {
+    const { runtimeInfo } = buildSystemPromptParams({
+      config: {
+        agents: {
+          list: [{ id: "Team Ops", identity: { name: "Ops Navigator" } }],
+        },
+      },
+      agentId: "team-ops",
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
+
+    expect(runtimeInfo.agentId).toBe("team-ops");
+    expect(runtimeInfo.identityName).toBe("Ops Navigator");
+  });
 });
