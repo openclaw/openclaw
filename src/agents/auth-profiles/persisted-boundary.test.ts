@@ -57,6 +57,9 @@ describe("persisted auth profile boundary", () => {
         },
       },
     });
+    if (!store) {
+      throw new Error("expected coerced auth profile store");
+    }
     expect(store.profiles["openai:dead"]).toMatchObject({ refreshDeadAt: deadAt });
     for (const profileId of [
       "openai:corrupt-zero",
