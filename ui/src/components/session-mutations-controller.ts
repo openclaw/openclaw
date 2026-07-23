@@ -1,3 +1,4 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { t } from "../i18n/index.ts";
 import {
   buildAgentMainSessionKey,
@@ -5,21 +6,43 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
   SidebarSessionPatch,
+  SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
+interface SessionMutationsControllerHost extends ReactiveControllerHost {
+  readonly sessionData: Pick<
+    SessionDataController,
+    | "beginSessionMutation"
+    | "isSessionMutationScopeCurrent"
+    | "publishSessionMutationError"
+    | "refreshSidebarSessions"
+  >;
+  createSessionGroup(sessions?: readonly SidebarRecentSession[]): void;
+  pruneSidebarSessionEntry(key: string): void;
+  replaceCurrentSession(sessionKey: string): void;
+  selectSession(sessionKey: string): void;
+  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+}
+
 /** Session patch, fork, archive, and delete operations. */
-export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessionNavigationElement {
-  protected readonly patchSession = async (
+export class SessionMutationsController implements ReactiveController {
+  constructor(private readonly host: SessionMutationsControllerHost) {
+    host.addController(this);
+  }
+
+  hostConnected(): void {}
+
+  readonly patchSession = async (
     session: SidebarRecentSession,
     patch: SidebarSessionPatch,
-    scope: SidebarSessionMutationScope | null = this.sessionData.beginSessionMutation(),
+    scope: SidebarSessionMutationScope | null = this.host.sessionData.beginSessionMutation(),
   ): Promise<SidebarSessionMutationResult> => {
     if (!scope) {
       return "stale";
@@ -27,12 +50,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
     try {
       const patched = await scope.sessions.patch(session.key, patch, { agentId });
-      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
       if (!patched) {
         if (scope.sessions.state.error) {
-          this.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+          this.host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
         }
         return "failed";
       }
@@ -41,18 +64,18 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       // Archiving implicitly unpins server-side (sessions-patch clears
       // pinnedAt), so it retires the slot too.
       if (patch.pinned === false || (patch.archived === true && session.pinned)) {
-        this.pruneSidebarSessionEntry(session.key);
+        this.host.pruneSidebarSessionEntry(session.key);
       }
-      if (this.sidebarSessionStatusFilter() !== "active") {
-        await this.sessionData.refreshSidebarSessions(agentId);
-        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (this.host.sidebarSessionStatusFilter() !== "active") {
+        await this.host.sessionData.refreshSidebarSessions(agentId);
+        if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return "stale";
         }
       }
       if (patch.archived !== true || !session.active) {
         return "completed";
       }
-      this.replaceCurrentSession(
+      this.host.replaceCurrentSession(
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
@@ -63,18 +86,18 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       );
       return "completed";
     } catch (error) {
-      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
-      this.sessionData.publishSessionMutationError(scope, error);
+      this.host.sessionData.publishSessionMutationError(scope, error);
       return "failed";
     }
   };
 
-  protected async patchSessions(
+  async patchSessions(
     rows: readonly SidebarRecentSession[],
     patch: SidebarSessionPatch,
-    scope: SidebarSessionMutationScope | null = this.sessionData.beginSessionMutation(),
+    scope: SidebarSessionMutationScope | null = this.host.sessionData.beginSessionMutation(),
   ): Promise<SidebarSessionMutationResult> {
     if (!scope) {
       return "stale";
@@ -94,13 +117,13 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     return result;
   }
 
-  protected async archiveSessionWithUndo(session: SidebarRecentSession) {
-    const scope = this.sessionData.beginSessionMutation();
+  async archiveSessionWithUndo(session: SidebarRecentSession) {
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     const result = await this.patchSession(session, { archived: true }, scope);
-    if (result !== "completed" || !this.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (result !== "completed" || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     showToast({
@@ -113,7 +136,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
   }
 
   private async archiveSessionsWithUndo(rows: readonly SidebarRecentSession[]) {
-    const scope = this.sessionData.beginSessionMutation();
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -127,7 +150,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         archived.push({ session, pinned: session.pinned });
       }
     }
-    if (archived.length === 0 || !this.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (archived.length === 0 || !this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     showToast({
@@ -144,7 +167,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     archived: readonly { session: SidebarRecentSession; pinned: boolean }[],
     scope: SidebarSessionMutationScope,
   ) {
-    if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     let restoredActiveKey: string | null = null;
@@ -161,20 +184,20 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         restoredActiveKey = session.key;
       }
     }
-    if (restoredActiveKey && this.sessionData.isSessionMutationScopeCurrent(scope)) {
-      this.replaceCurrentSession(restoredActiveKey);
+    if (restoredActiveKey && this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      this.host.replaceCurrentSession(restoredActiveKey);
     }
   }
 
   /** One confirm and one preserved-worktrees alert for the whole selection. */
-  protected async deleteSessionsBatch(rows: readonly SidebarRecentSession[]) {
+  async deleteSessionsBatch(rows: readonly SidebarRecentSession[]) {
     if (rows.length === 0) {
       return;
     }
     if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
       return;
     }
-    const scope = this.sessionData.beginSessionMutation();
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -187,12 +210,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
           ...(row.archived === true ? { archivedOnly: true } : {}),
         })),
       );
-      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
-      if (this.sidebarSessionStatusFilter() !== "active") {
-        await this.sessionData.refreshSidebarSessions(scope.selectedAgentId);
-        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (this.host.sidebarSessionStatusFilter() !== "active") {
+        await this.host.sessionData.refreshSidebarSessions(scope.selectedAgentId);
+        if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
       }
@@ -203,13 +226,13 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
             branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
           }),
         );
-        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+        if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
       }
       const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
       if (deletedActive) {
-        this.replaceCurrentSession(
+        this.host.replaceCurrentSession(
           buildAgentMainSessionKey({
             agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? scope.selectedAgentId,
             mainKey: resolveUiConfiguredMainKey({
@@ -220,14 +243,14 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         );
       }
       if (result.errors.length > 0) {
-        this.sessionData.publishSessionMutationError(scope, result.errors.join("; "));
+        this.host.sessionData.publishSessionMutationError(scope, result.errors.join("; "));
       }
     } catch (error) {
-      this.sessionData.publishSessionMutationError(scope, error);
+      this.host.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
-  protected runBatchSessionAction(
+  runBatchSessionAction(
     action: SessionMenuAction,
     rows: SidebarRecentSession[],
     allUnread: boolean,
@@ -243,7 +266,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         );
         break;
       case "new-group":
-        this.createSessionGroup(rows);
+        this.host.createSessionGroup(rows);
         break;
       case "toggle-archived":
         if (rows.every((row) => row.archived === true)) {
@@ -260,8 +283,8 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     }
   }
 
-  protected async forkSession(session: SidebarRecentSession) {
-    const scope = this.sessionData.beginSessionMutation();
+  async forkSession(session: SidebarRecentSession) {
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -272,23 +295,23 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         fork: true,
         agentId,
       });
-      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
       if (key) {
-        this.selectSession(key);
+        this.host.selectSession(key);
       } else {
-        this.sessionData.publishSessionMutationError(
+        this.host.sessionData.publishSessionMutationError(
           scope,
           scope.sessions.state.error ?? t("newSession.createFailed"),
         );
       }
     } catch (error) {
-      this.sessionData.publishSessionMutationError(scope, error);
+      this.host.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
-  protected async stopCloudWorker(session: SidebarRecentSession) {
+  async stopCloudWorker(session: SidebarRecentSession) {
     if (
       !session.cloudWorkerActive ||
       session.hasActiveRun ||
@@ -296,7 +319,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
     ) {
       return;
     }
-    const scope = this.sessionData.beginSessionMutation();
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -307,20 +330,20 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         { key: session.key, agentId },
         { timeoutMs: 10 * 60_000 },
       );
-      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
       await scope.sessions.refreshReplacement(agentId);
     } catch (error) {
-      this.sessionData.publishSessionMutationError(scope, error);
+      this.host.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
-  protected async deleteSession(session: SidebarRecentSession) {
+  async deleteSession(session: SidebarRecentSession) {
     if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
       return;
     }
-    const scope = this.sessionData.beginSessionMutation();
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -331,12 +354,12 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         deleteTranscript: true,
         ...(session.archived === true ? { archivedOnly: true } : {}),
       });
-      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
-      if (this.sidebarSessionStatusFilter() !== "active") {
-        await this.sessionData.refreshSidebarSessions(agentId);
-        if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (this.host.sidebarSessionStatusFilter() !== "active") {
+        await this.host.sessionData.refreshSidebarSessions(agentId);
+        if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
       }
@@ -348,7 +371,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
             t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
           )
         ) {
-          if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+          if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
             return;
           }
           try {
@@ -357,9 +380,9 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
               force: true,
             });
           } catch (error) {
-            this.sessionData.publishSessionMutationError(scope, error);
+            this.host.sessionData.publishSessionMutationError(scope, error);
           }
-          if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
+          if (!this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
             return;
           }
         }
@@ -367,7 +390,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
       if (!outcome.deleted || !session.active) {
         return;
       }
-      this.replaceCurrentSession(
+      this.host.replaceCurrentSession(
         buildAgentMainSessionKey({
           agentId,
           mainKey: resolveUiConfiguredMainKey({
@@ -377,9 +400,7 @@ export abstract class AppSidebarSessionMutationsElement extends AppSidebarSessio
         }),
       );
     } catch (error) {
-      this.sessionData.publishSessionMutationError(scope, error);
+      this.host.sessionData.publishSessionMutationError(scope, error);
     }
   }
-
-  protected abstract createSessionGroup(sessions?: readonly SidebarRecentSession[]): void;
 }

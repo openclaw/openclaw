@@ -91,10 +91,9 @@ describe("AppSidebar session section visibility", () => {
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
 
-    const dragSidebar = sidebar as SidebarLifecycleState & { draggingSessionKey: string | null };
-    dragSidebar.draggingSessionKey = "agent:main:alpha";
-    dragSidebar.requestUpdate();
-    await dragSidebar.updateComplete;
+    sidebar.sessionGroups.draggingSessionKey = "agent:main:alpha";
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
   });
 });

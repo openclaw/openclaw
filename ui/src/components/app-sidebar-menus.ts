@@ -28,21 +28,26 @@ import {
   renderSidebarMoreMenu,
   renderSidebarNavRoute,
 } from "./app-sidebar-nav-menus.ts";
-import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
   SidebarSessionMenuState,
+  SidebarSessionMutationResult,
+  SidebarSessionMutationScope,
+  SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
+import { SessionGroupsController } from "./session-groups-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
+import { SessionMutationsController } from "./session-mutations-controller.ts";
 
 /** Popup ownership and stateless menu-renderer wiring. */
-export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElement {
+export abstract class AppSidebarMenusElement extends AppSidebarSessionNavigationElement {
   @state() protected customizeMenuPosition: { x: number; y: number } | null = null;
   @state() protected moreMenuPosition: { x: number; y: number } | null = null;
   @state() sessionMenu: SidebarSessionMenuState | null = null;
@@ -52,6 +57,61 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() protected agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() protected agentMenuFilter = "";
+
+  protected readonly sessionMutations = new SessionMutationsController(this);
+  readonly sessionGroups = new SessionGroupsController(this);
+
+  get collapsedSessionSections(): ReadonlySet<string> {
+    return this.sessionGroups.collapsedSessionSections;
+  }
+
+  get draggingSessionKey(): string | null {
+    return this.sessionGroups.draggingSessionKey;
+  }
+
+  get draggingSessionGroup(): string | null {
+    return this.sessionGroups.draggingSessionGroup;
+  }
+
+  get sessionDropTarget(): string | null {
+    return this.sessionGroups.sessionDropTarget;
+  }
+
+  get sessionGroupDropTarget() {
+    return this.sessionGroups.sessionGroupDropTarget;
+  }
+
+  get sessionListRemovalDrop(): boolean {
+    return this.sessionGroups.sessionListRemovalDrop;
+  }
+
+  protected get draggingSidebarEntry(): string | null {
+    return this.sessionGroups.draggingSidebarEntry;
+  }
+
+  protected get sidebarZoneDropTarget() {
+    return this.sessionGroups.sidebarZoneDropTarget;
+  }
+
+  createSessionGroup(sessions?: readonly SidebarRecentSession[]): void {
+    this.sessionGroups.createSessionGroup(sessions);
+  }
+
+  patchSession(
+    session: SidebarRecentSession,
+    patch: SidebarSessionPatch,
+    scope?: SidebarSessionMutationScope | null,
+  ): Promise<SidebarSessionMutationResult> {
+    return this.sessionMutations.patchSession(session, patch, scope);
+  }
+
+  patchSessions(
+    rows: readonly SidebarRecentSession[],
+    patch: SidebarSessionPatch,
+    scope?: SidebarSessionMutationScope | null,
+  ): Promise<SidebarSessionMutationResult> {
+    return this.sessionMutations.patchSessions(rows, patch, scope);
+  }
 
   private customizeMenuTrigger: HTMLElement | null = null;
   private moreMenuTrigger: HTMLElement | null = null;
@@ -448,7 +508,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
           }}
           .onAction=${(action: SessionMenuAction) => {
             if (batchRows) {
-              this.runBatchSessionAction(action, batchRows, allUnread);
+              this.sessionMutations.runBatchSessionAction(action, batchRows, allUnread);
               return;
             }
             switch (action.kind) {
@@ -462,42 +522,42 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
                 openEditor(action.editor, action.path);
                 break;
               case "toggle-pin":
-                void this.patchSession(session, { pinned: !session.pinned });
+                void this.sessionMutations.patchSession(session, { pinned: !session.pinned });
                 break;
               case "set-icon":
-                void this.patchSession(session, { icon: action.icon });
+                void this.sessionMutations.patchSession(session, { icon: action.icon });
                 break;
               case "toggle-unread":
-                void this.patchSession(session, { unread: !session.unread });
+                void this.sessionMutations.patchSession(session, { unread: !session.unread });
                 break;
               case "rename":
-                this.renameSession(session);
+                this.sessionGroups.renameSession(session);
                 break;
               case "fork":
-                void this.forkSession(session);
+                void this.sessionMutations.forkSession(session);
                 break;
               case "workboard":
                 break;
               case "move-to-group":
                 if (action.category === null || session.category !== action.category) {
-                  this.assignSessionCategory(session, action.category);
+                  this.sessionGroups.assignSessionCategory(session, action.category);
                 }
                 break;
               case "new-group":
-                this.createSessionGroup([session]);
+                this.sessionGroups.createSessionGroup([session]);
                 break;
               case "toggle-archived":
                 if (session.archived) {
-                  void this.patchSession(session, { archived: false });
+                  void this.sessionMutations.patchSession(session, { archived: false });
                 } else {
-                  void this.archiveSessionWithUndo(session);
+                  void this.sessionMutations.archiveSessionWithUndo(session);
                 }
                 break;
               case "stop-cloud-worker":
-                void this.stopCloudWorker(session);
+                void this.sessionMutations.stopCloudWorker(session);
                 break;
               case "delete":
-                void this.deleteSession(session);
+                void this.sessionMutations.deleteSession(session);
                 break;
             }
           }}
@@ -516,13 +576,13 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeSessionGroupMenu({ restoreFocus: true });
         switch (action) {
           case "rename-group":
-            this.renameSessionGroupFromMenu(group);
+            this.sessionGroups.renameSessionGroupFromMenu(group);
             break;
           case "new-group":
-            this.createSessionGroup();
+            this.sessionGroups.createSessionGroup();
             break;
           case "delete-group":
-            this.deleteSessionGroupFromMenu(group);
+            this.sessionGroups.deleteSessionGroupFromMenu(group);
             break;
         }
       },
@@ -545,7 +605,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       statusFilter: this.sessionsStatusFilter,
       showCron: this.sessionsShowCron,
       onGroupingChange: (grouping) => {
-        this.setSessionsGrouping(grouping);
+        this.sessionGroups.setSessionsGrouping(grouping);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onSortModeChange: (mode) => {
@@ -553,11 +613,11 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onStatusFilterChange: (statusFilter) => {
-        this.setSessionsStatusFilter(statusFilter);
+        this.sessionGroups.setSessionsStatusFilter(statusFilter);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onShowCronChange: (show) => {
-        this.setSessionsShowCron(show);
+        this.sessionGroups.setSessionsShowCron(show);
         this.closeSessionSortMenu({ restoreFocus: true });
       },
       onClose: (restoreFocus) => {
