@@ -326,6 +326,56 @@ describe("exec shell snapshots", () => {
     await expect(runWithPnpmHome("/second")).resolves.toBe("/second");
   });
 
+  it("treats a blank trusted HOME as unset when resolving the snapshot home", async () => {
+    const bash = resolveBashForTest();
+    if (!bash) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-home-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-state-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-cwd-"));
+    tempDirs.push(home, stateDir, cwd);
+    setSnapshotStateForTest(stateDir, { home });
+    fs.writeFileSync(path.join(home, ".bashrc"), 'export PNPM_HOME="/rc-home"\n');
+
+    const shellArgs = getPosixShellArgs(bash);
+    const runWithCapturedPnpmHome = async (): Promise<string> => {
+      const env = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const wrapped = await maybeWrapCommandWithShellSnapshot({
+        command: 'printf "%s" "$PNPM_HOME"',
+        shell: bash,
+        shellArgs,
+        cwd,
+        env,
+      });
+      const result = spawnSync(bash, [...shellArgs, wrapped], {
+        cwd,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      expect(result.status).toBe(0);
+      return result.stdout;
+    };
+
+    await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
+
+    // A blank trusted HOME must fall back to USERPROFILE; resolving to "" would
+    // change the snapshot identity and drop the previously captured rc values.
+    process.env.HOME = "";
+    process.env.USERPROFILE = home;
+    try {
+      await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
+    } finally {
+      delete process.env.USERPROFILE;
+    }
+  });
+
   it("preserves per-call env outside the snapshot allowlist", async () => {
     const bash = resolveBashForTest();
     if (!bash) {
