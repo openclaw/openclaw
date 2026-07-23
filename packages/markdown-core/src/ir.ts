@@ -1152,16 +1152,21 @@ function closeRemainingStyles(target: RenderTarget) {
   target.openStyles = [];
 }
 
+function sliceListMarker(
+  marker: { start: number; end: number },
+  start: number,
+  end: number,
+): { start: number; end: number } | undefined {
+  const sliceStart = Math.max(marker.start, start);
+  const sliceEnd = Math.min(marker.end, end);
+  return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
+}
+
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
   const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
-  const sliceMarker = (marker: { start: number; end: number }) => {
-    const sliceStart = Math.max(marker.start, start);
-    const sliceEnd = Math.min(marker.end, end);
-    return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
-  };
   const listItems = (ir.listItems ?? []).flatMap((item) => {
-    const listMarker = item.listMarker ? sliceMarker(item.listMarker) : undefined;
-    const taskMarker = item.taskMarker ? sliceMarker(item.taskMarker) : undefined;
+    const listMarker = item.listMarker ? sliceListMarker(item.listMarker, start, end) : undefined;
+    const taskMarker = item.taskMarker ? sliceListMarker(item.taskMarker, start, end) : undefined;
     return listMarker || taskMarker
       ? [
           {
@@ -1241,19 +1246,31 @@ export function markdownToIRWithMeta(
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
   const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const listItems = state.listItems.flatMap((item) => {
+    const listMarker = item.listMarker
+      ? sliceListMarker(item.listMarker, 0, finalLength)
+      : undefined;
+    const taskMarker = item.taskMarker
+      ? sliceListMarker(item.taskMarker, 0, finalLength)
+      : undefined;
+    return listMarker || taskMarker
+      ? [
+          {
+            kind: item.kind,
+            ...(listMarker ? { listMarker } : {}),
+            ...(item.task ? { task: true as const } : {}),
+            ...(taskMarker ? { taskMarker } : {}),
+          },
+        ]
+      : [];
+  });
 
   const ir: MarkdownIR = {
     text: finalText,
     styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
     links: clampLinkSpans(state.links, finalLength),
     ...(annotations.length > 0 ? { annotations } : {}),
-    ...(state.listItems.length > 0
-      ? {
-          listItems: state.listItems.filter(
-            (item) => (item.listMarker?.end ?? item.taskMarker?.end ?? 0) <= finalLength,
-          ),
-        }
-      : {}),
+    ...(listItems.length > 0 ? { listItems } : {}),
   };
   return {
     ir,

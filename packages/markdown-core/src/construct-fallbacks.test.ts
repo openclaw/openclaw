@@ -281,4 +281,15 @@ describe("applyConstructFallbacks", () => {
       expect(stripped.text, `start=${start}`).toBe("done");
     }
   });
+
+  it("clips trailing empty list-marker provenance during finalization", () => {
+    const cases = [
+      { markdown: "-", construct: "bulletList" as const },
+      { markdown: "1.", construct: "orderedList" as const },
+    ];
+    for (const { markdown, construct } of cases) {
+      const ir = markdownToIR(markdown);
+      expect(applyConstructFallbacks(ir, withSupport(construct, "strip")).text, markdown).toBe("");
+    }
+  });
 });
