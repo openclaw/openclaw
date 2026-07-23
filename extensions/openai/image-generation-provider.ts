@@ -514,11 +514,7 @@ function inferImageUploadFileName(params: {
 
 async function readResponseBodyText(response: Response): Promise<string> {
   if (!response.body) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > MAX_CODEX_IMAGE_SSE_BYTES) {
-      throw new Error("OpenAI Codex image generation response exceeded size limit");
-    }
-    return text;
+    throw new Error("OpenAI Codex image generation response malformed");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
