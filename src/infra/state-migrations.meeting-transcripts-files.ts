@@ -512,6 +512,7 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
     if (rollbackErrors.length > 0) {
       throw new Error(
         `partial transcript recovery failed and rollback was incomplete; inspect ${params.recoveryRoot}: ${String(error)}; rollback errors: ${rollbackErrors.join("; ")}`,
+        { cause: error },
       );
     }
     throw error;
@@ -644,6 +645,7 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
       if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
         throw new Error(
           `canonical transcript export destination is not a directory: ${destination}`,
+          { cause: error },
         );
       }
       await assertNoSymlinkParents({
