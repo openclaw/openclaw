@@ -532,7 +532,11 @@ export async function buildModelsListResult(
       snapshot = escalatedCatalog;
     }
   }
-  if (loadedSnapshot && !loadedSnapshot.agentId) {
+  if (
+    loadedSnapshot &&
+    (!loadedSnapshot.agentId ||
+      (params.agentId !== undefined && loadedSnapshot.agentId !== initialAgentId))
+  ) {
     return { models: [] };
   }
   const cfg = loadedSnapshot?.config ?? initialConfig;

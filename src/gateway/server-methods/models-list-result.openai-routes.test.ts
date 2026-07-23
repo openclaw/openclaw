@@ -180,18 +180,18 @@ describe("models.list OpenAI routes", () => {
     expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
-  it("uses the published fallback owner's agent identity for projection", async () => {
+  it("uses the published fallback owner's identity for implicit projection", async () => {
     const config = {
       agents: {
         defaults: {},
         list: [
           {
             id: "main",
-            default: true,
             models: { "openai/gpt-owner": { agentRuntime: { id: "codex" } } },
           },
           {
             id: "worker",
+            default: true,
             models: { "openai/gpt-owner": { agentRuntime: { id: "openclaw" } } },
           },
         ],
@@ -214,7 +214,6 @@ describe("models.list OpenAI routes", () => {
 
     const result = await buildModelsListResult({
       context,
-      agentId: "worker",
       params: { view: "all" },
     });
 
@@ -284,6 +283,37 @@ describe("models.list OpenAI routes", () => {
           config,
           entries: [ownerlessEntry],
           routeVariants: [ownerlessEntry],
+        }),
+      ),
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({
+        context,
+        agentId: "worker",
+        params: { view: "all" },
+      }),
+    ).resolves.toEqual({ models: [] });
+  });
+
+  it("does not project another owner's catalog as an explicitly requested agent", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [{ id: "main", default: true }, { id: "worker" }],
+      },
+    } as OpenClawConfig;
+    const mainEntry = catalogEntry("gpt-main", "openai-responses");
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(() =>
+        Promise.resolve({
+          agentId: "main",
+          agentDir: "/tmp/models-list-main-agent",
+          config,
+          entries: [mainEntry],
+          routeVariants: [mainEntry],
         }),
       ),
       logGateway: { debug: vi.fn() },

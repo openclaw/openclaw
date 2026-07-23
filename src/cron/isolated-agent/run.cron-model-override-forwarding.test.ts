@@ -165,14 +165,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     ensureAgentWorkspaceMock.mockImplementationOnce(async ({ dir }: { dir: string }) => ({ dir }));
     runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 
-    const result = await runCronIsolatedAgentTurn(
-      makeParams({ cfg: callerConfig, agentId: "worker" }),
-    );
+    const result = await runCronIsolatedAgentTurn(makeParams({ cfg: callerConfig }));
 
     expect(result.status).toBe("ok");
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: callerConfig,
-      agentId: "worker",
+      agentId: "default",
       agentDir: "/tmp/agent-dir",
       workspaceDir: "/tmp/workspace",
       readOnly: true,
@@ -189,6 +187,24 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(resolveCronSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: ownerConfig, agentId: "main" }),
     );
+  });
+
+  it("rejects a replacement owner that changes an explicitly requested agent", async () => {
+    const callerConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+    };
+    loadModelCatalogOwnerMock.mockResolvedValueOnce({
+      agentId: "main",
+      agentDir: "/tmp/main-agent",
+      workspaceDir: "/tmp/main-workspace",
+      config: callerConfig,
+      modelCatalog: { entries: [], routeVariants: [] },
+    });
+
+    await expect(
+      runCronIsolatedAgentTurn(makeParams({ cfg: callerConfig, agentId: "worker" })),
+    ).rejects.toThrow("cron model catalog owner changed from worker to main");
+    expect(runWithModelFallbackMock).not.toHaveBeenCalled();
   });
 
   it("passes the cron payload model override to runWithModelFallback", async () => {

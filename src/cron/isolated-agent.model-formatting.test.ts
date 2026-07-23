@@ -339,7 +339,6 @@ describe("cron model formatting and precedence edge cases", () => {
 
       const result = await selectModel({
         cfg: callerConfig,
-        agentId: "worker",
         payload: {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
@@ -350,7 +349,7 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(loadModelCatalogMock).toHaveBeenCalledOnce();
       expect(loadModelCatalogMock).toHaveBeenCalledWith({
         config: callerConfig,
-        agentId: "worker",
+        agentId: undefined,
         agentDir: "/tmp/agent",
         workspaceDir: "/tmp/workspace",
         readOnly: true,

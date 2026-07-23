@@ -2,6 +2,7 @@ import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob } from "../types.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
@@ -90,6 +91,7 @@ function formatCronPayloadModelRejection(params: {
 export async function resolveCronModelSelectionOwner(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  requiredAgentId?: string;
   agentDir: string;
   workspaceDir: string;
 }): Promise<CronModelSelectionOwner> {
@@ -102,6 +104,14 @@ export async function resolveCronModelSelectionOwner(params: {
   });
   if (!owner.agentId) {
     throw new Error(`cron model catalog owner did not identify an agent (${owner.agentDir})`);
+  }
+  if (
+    params.requiredAgentId &&
+    normalizeAgentId(owner.agentId) !== normalizeAgentId(params.requiredAgentId)
+  ) {
+    throw new Error(
+      `cron model catalog owner changed from ${normalizeAgentId(params.requiredAgentId)} to ${normalizeAgentId(owner.agentId)}`,
+    );
   }
   return {
     config: owner.config,
@@ -121,6 +131,7 @@ export async function resolveCronModelSelection(
     (await resolveCronModelSelectionOwner({
       cfg: params.cfg,
       agentId: params.agentId,
+      requiredAgentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     }));
