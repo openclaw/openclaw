@@ -11,7 +11,7 @@ import { assertCronJobScratchContent } from "./scratch-contract.js";
 import { cronStoreKey } from "./store/key.js";
 import { getCronStoreKysely } from "./store/schema.js";
 
-export type CronJobScratch = {
+type CronJobScratch = {
   content: string;
   revision: number;
   sourceSha256?: string;

@@ -386,6 +386,8 @@ enum class GatewayMethod(
   CronGet("cron.get"),
   CronList("cron.list"),
   CronStatus("cron.status"),
+  CronScratchGet("cron.scratch.get"),
+  CronScratchSet("cron.scratch.set"),
   CronAdd("cron.add"),
   CronUpdate("cron.update"),
   CronRemove("cron.remove"),

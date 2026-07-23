@@ -13294,6 +13294,28 @@ public struct CronRunsParams: Codable, Sendable {
     }
 }
 
+public struct CronScratchGetResult: Codable, Sendable {
+    public let scratch: AnyCodable
+    public let currentrevision: Int
+    public let maxbytes: Int
+
+    public init(
+        scratch: AnyCodable,
+        currentrevision: Int,
+        maxbytes: Int)
+    {
+        self.scratch = scratch
+        self.currentrevision = currentrevision
+        self.maxbytes = maxbytes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case scratch
+        case currentrevision = "currentRevision"
+        case maxbytes = "maxBytes"
+    }
+}
+
 public struct CronRunLogEntry: Codable, Sendable {
     public let ts: Int
     public let jobid: String

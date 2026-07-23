@@ -68,6 +68,7 @@ async function readHeartbeatSource(
     if (!options?.recoverClaims) {
       throw new Error(
         `an interrupted migration claim exists at ${staleClaim}; run openclaw doctor --fix to restore it`,
+        { cause: error },
       );
     }
     await restoreClaimNoClobber(staleClaim, heartbeatPath);
@@ -214,7 +215,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
   const claimPath = `${source.path}${HEARTBEAT_CLAIM_INFIX}${process.pid}-${source.sha256.slice(0, 12)}`;
   await fs.rename(source.path, claimPath);
   const restore = async (cause: unknown) => {
-    await restoreClaimNoClobber(claimPath, source.path).catch((restoreError) => {
+    await restoreClaimNoClobber(claimPath, source.path).catch((restoreError: unknown) => {
       throw restoreError instanceof Error && restoreError.message.includes("preserved at")
         ? restoreError
         : new Error(`HEARTBEAT.md migration claim could not be restored from ${claimPath}`, {
