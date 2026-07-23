@@ -59,6 +59,27 @@ function hasNewerStoredOAuthCredential(
   );
 }
 
+/** Returns true when a stored OAuth credential's refresh grant is known permanently dead. */
+export function isOAuthRefreshDead(credential: OAuthCredential | undefined): boolean {
+  // Only a finite positive timestamp counts: corrupt/coerced values (0, -1,
+  // NaN) must not flag a grant dead and reopen the external re-seed gate.
+  const deadAt = credential?.type === "oauth" ? credential.refreshDeadAt : undefined;
+  return typeof deadAt === "number" && Number.isFinite(deadAt) && deadAt > 0;
+}
+
+/** Returns true when both credentials carry the same non-empty refresh grant. */
+export function isSameOAuthRefreshGrant(
+  a: OAuthCredential | undefined,
+  b: OAuthCredential | undefined,
+): boolean {
+  if (a?.type !== "oauth" || b?.type !== "oauth" || a.provider !== b.provider) {
+    return false;
+  }
+  const aRefresh = typeof a.refresh === "string" ? a.refresh.trim() : "";
+  const bRefresh = typeof b.refresh === "string" ? b.refresh.trim() : "";
+  return aRefresh.length > 0 && aRefresh === bRefresh;
+}
+
 /** Returns true when an incoming OAuth credential should replace stored state. */
 export function shouldReplaceStoredOAuthCredential(
   existing: OAuthCredential | undefined,
@@ -69,6 +90,11 @@ export function shouldReplaceStoredOAuthCredential(
   }
   if (areOAuthCredentialsEquivalent(existing, incoming)) {
     return false;
+  }
+  // A dead refresh grant must never win the "stored is fresher" comparison:
+  // its expiry says nothing once the provider rejected the grant for good.
+  if (isOAuthRefreshDead(existing) && !isSameOAuthRefreshGrant(existing, incoming)) {
+    return true;
   }
   return !hasNewerStoredOAuthCredential(existing, incoming);
 }
