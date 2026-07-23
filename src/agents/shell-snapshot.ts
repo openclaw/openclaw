@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveRequiredOsHomeDir } from "../infra/home-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 
 const SNAPSHOT_VERSION = 1;
@@ -139,7 +140,7 @@ function buildSnapshotKey(opts: ShellSnapshotWrapOptions): string {
         shell: opts.shell,
         shellArgs: opts.shellArgs,
         cwd: path.resolve(opts.cwd),
-        home: getTrustedShellHome(),
+        home: resolveRequiredOsHomeDir(),
         stateDir: resolveStateDir(process.env),
         env: buildSafeEnvSignature(process.env),
         startup: buildStartupSignature(opts.shell),
@@ -158,7 +159,7 @@ function buildSafeEnvSignature(
 
 function buildStartupSignature(shell: string): Array<[string, number, number] | [string, null]> {
   const shellName = path.basename(shell);
-  const home = getTrustedShellHome();
+  const home = resolveRequiredOsHomeDir();
   const zdotdir = process.env.ZDOTDIR?.trim() || home;
   const candidates =
     shellName === "zsh"
@@ -174,10 +175,6 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
       return [candidate, null];
     }
   });
-}
-
-function getTrustedShellHome(): string {
-  return process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
 }
 
 async function createShellSnapshot(

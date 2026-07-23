@@ -187,6 +187,18 @@ describe("resolveRequiredHomeDir", () => {
 });
 
 describe("resolveOsHomeDir", () => {
+  it("falls back to USERPROFILE when HOME is blank", () => {
+    expect(
+      resolveOsHomeDir(
+        {
+          HOME: "   ",
+          USERPROFILE: " C:/Users/alice ",
+        } as NodeJS.ProcessEnv,
+        () => "/fallback",
+      ),
+    ).toBe(path.resolve("C:/Users/alice"));
+  });
+
   it("ignores OPENCLAW_HOME and uses HOME", () => {
     expect(
       resolveOsHomeDir(
