@@ -911,7 +911,7 @@ const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-07-22",
     deprecated: "2026-07-22",
     warningStarts: "2026-07-22",
-    removeAfter: "2026-10-22",
+    removeAfter: "2026-09-08",
     replacement:
       "`MsgContext.ChannelPromptContext`, `MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, `SupplementalContextFacts.channelStructuredContext`, and `buildChannelMetadata`",
     docsPath: "/plugins/compatibility",

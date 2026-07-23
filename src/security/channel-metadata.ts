@@ -52,5 +52,5 @@ export function buildChannelMetadata(params: {
   });
 }
 
-/** @deprecated Use buildChannelMetadata. Removal: after 2026-10-22 (see sdk-untrusted-context-identifier-aliases). */
+/** @deprecated Use buildChannelMetadata. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
 export const buildUntrustedChannelMetadata = buildChannelMetadata;
