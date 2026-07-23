@@ -1520,6 +1520,8 @@
     "ios:gen": "bash -c 'export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ./scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && node scripts/ios-write-swift-filelist.mjs && cd apps/ios && xcodegen generate'",
     "ios:open": "bash -c 'export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ./scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && node scripts/ios-write-swift-filelist.mjs && cd apps/ios && xcodegen generate && open OpenClaw.xcodeproj'",
     "ios:release:archive": "bash scripts/ios-release-archive.sh",
+    "ios:release:cut": "bash scripts/ios-release-cut.sh",
+    "ios:release:plan": "bash scripts/ios-release-plan.sh",
     "ios:release:prepare": "bash scripts/ios-release-prepare.sh",
     "ios:release:signing:check": "bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_check'",
     "ios:release:signing:plan": "bash -lc 'source ./scripts/lib/ios-fastlane.sh && cd apps/ios && run_ios_fastlane ios signing_plan'",

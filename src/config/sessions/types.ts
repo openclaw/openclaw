@@ -247,7 +247,7 @@ export type SessionEntry = SessionRestartRecoveryState &
      * a real user/session-scoped key that merely happens to end with `:heartbeat`.
      */
     heartbeatIsolatedBaseSessionKey?: string;
-    /** Heartbeat task state (task name -> last run timestamp ms). */
+    /** Legacy heartbeat task timestamps consumed and cleared only by doctor migration. */
     heartbeatTaskState?: Record<string, number>;
     /** Plugin-owned session state, grouped by plugin id then extension namespace. */
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;

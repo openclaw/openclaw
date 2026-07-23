@@ -4,11 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-release-upload.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
+  scripts/ios-release-plan.sh [--json] [--version 2026.7.2] [--revision 1] [--build-number 3]
 
-Generates App Store screenshots, updates release metadata, archives, and uploads
-an App Store distribution build to App Store Connect. This does not submit the
-build for App Review.
+Reads App Store Connect state and prints the deterministic iOS release plan.
+This command does not mutate App Store Connect or repository files.
 EOF
 }
 
@@ -21,7 +20,6 @@ source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 require_option_value() {
   local option="$1"
   local value="${2-}"
-
   if [[ -z "${value}" || "${value}" == --* ]]; then
     echo "Missing value for ${option}." >&2
     usage >&2
@@ -32,6 +30,9 @@ require_option_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --)
+      shift
+      ;;
+    --json)
       shift
       ;;
     --build-number)
@@ -55,25 +56,24 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown argument: $1" >&2
-      usage
+      usage >&2
       exit 1
       ;;
   esac
 done
 
-FASTLANE_ARGS=(ios release_upload)
-if [[ -n "${RELEASE_VERSION}" ]]; then
-  FASTLANE_ARGS+=("release_version:${RELEASE_VERSION}")
-fi
-if [[ -n "${APP_STORE_REVISION}" ]]; then
-  FASTLANE_ARGS+=("app_store_revision:${APP_STORE_REVISION}")
-fi
-if [[ -n "${BUILD_NUMBER}" ]]; then
-  FASTLANE_ARGS+=("build_number:${BUILD_NUMBER}")
-fi
+PLAN_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-ios-release-plan.XXXXXX")"
+trap 'rm -f "${PLAN_FILE}"' EXIT
+FASTLANE_ARGS=(ios release_plan "output_path:${PLAN_FILE}")
+[[ -n "${RELEASE_VERSION}" ]] && FASTLANE_ARGS+=("release_version:${RELEASE_VERSION}")
+[[ -n "${APP_STORE_REVISION}" ]] && FASTLANE_ARGS+=("app_store_revision:${APP_STORE_REVISION}")
+[[ -n "${BUILD_NUMBER}" ]] && FASTLANE_ARGS+=("build_number:${BUILD_NUMBER}")
 
-(
+if ! (
   cd "${ROOT_DIR}/apps/ios"
-  # App Store Connect screenshot reservations can fail with 500s under parallel deliver uploads.
-  DELIVER_NUMBER_OF_THREADS=1 FL_MAX_NUMBER_OF_THREADS=1 OPENCLAW_IOS_RELEASE_WRAPPER=1 run_ios_fastlane "${FASTLANE_ARGS[@]}"
-)
+  run_ios_fastlane "${FASTLANE_ARGS[@]}" 1>&2
+); then
+  echo "Failed to resolve the iOS release plan." >&2
+  exit 1
+fi
+cat "${PLAN_FILE}"

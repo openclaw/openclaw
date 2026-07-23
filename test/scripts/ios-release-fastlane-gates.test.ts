@@ -65,6 +65,8 @@ describe("iOS Fastlane release upload gates", () => {
     };
 
     expect(packageJson.scripts).toHaveProperty("ios:release:upload");
+    expect(packageJson.scripts).toHaveProperty("ios:release:plan");
+    expect(packageJson.scripts).toHaveProperty("ios:release:cut");
     expect(packageJson.scripts).not.toHaveProperty("ios:release");
     expect(existsSync(legacyReleaseScriptPath)).toBe(false);
   });
@@ -73,8 +75,8 @@ describe("iOS Fastlane release upload gates", () => {
     const script = readFileSync(uploadScriptPath, "utf8");
 
     expect(script).toContain("OPENCLAW_IOS_RELEASE_WRAPPER=1");
-    expect(script).toContain("Missing required --version.");
-    expect(script).toContain("Missing required --revision.");
+    expect(script).not.toContain("Missing required --version.");
+    expect(script).not.toContain("Missing required --revision.");
     expect(script).toContain('"release_version:${RELEASE_VERSION}"');
     expect(script).toContain('"app_store_revision:${APP_STORE_REVISION}"');
     expect(script).toContain('"build_number:${BUILD_NUMBER}"');
@@ -103,8 +105,10 @@ describe("iOS Fastlane release upload gates", () => {
     expect(prepareContext).toContain("options[:release_version]");
     expect(prepareContext).toContain("options[:app_store_revision]");
     expect(prepareContext).toContain("options[:build_number]");
-    expect(prepareContext).toContain("Missing iOS gateway version");
-    expect(prepareContext).toContain("Missing iOS App Store revision");
+    expect(prepareContext).toContain("resolve_ios_release_plan!");
+    expect(prepareContext).toContain('release_plan.fetch("gatewayVersion")');
+    expect(prepareContext).toContain('release_plan.fetch("appStoreRevision")');
+    expect(prepareContext).toContain('release_plan.fetch("buildNumber")');
     expect(releaseUpload).toContain("app_store_revision: context[:app_store_revision]");
     expect(laneBody(fastfile, "metadata")).toContain("options[:release_version]");
     expect(laneBody(fastfile, "metadata")).toContain("Missing iOS gateway version");
@@ -141,10 +145,25 @@ describe("iOS Fastlane release upload gates", () => {
   it("validates explicit build numbers against the exact App Store version", () => {
     const resolver = functionBody(readFastfile(), "resolve_release_build_number");
 
-    expect(resolver).toContain("version: short_version");
+    expect(resolver).toContain("app_store_build_uploads");
+    expect(resolver).toContain("IOS_BUILD_UPLOAD_STATES");
     expect(resolver).toContain("expected #{next_build}");
     expect(resolver).toContain("explicit.to_i != next_build");
     expect(resolver).toContain("api_key.nil?");
+    expect(resolver).not.toContain("latest_testflight_build_number");
+  });
+
+  it("plans revisions and builds from App Store versions and build uploads", () => {
+    const fastfile = readFastfile();
+    const planner = functionBody(fastfile, "resolve_ios_release_plan!");
+    const planLane = laneBody(fastfile, "release_plan");
+
+    expect(planner).toContain("get_app_store_versions");
+    expect(planner).toContain("app_store_build_uploads");
+    expect(planner).toContain("does not match canonical root version");
+    expect(planner).toContain('File.join(repo_root, "scripts", "ios-release-plan.ts")');
+    expect(planLane).toContain("resolve_ios_release_plan!");
+    expect(planLane).toContain("JSON.pretty_generate(plan)");
   });
 
   it("validates the exported IPA before the sole TestFlight upload call", () => {
@@ -154,6 +173,28 @@ describe("iOS Fastlane release upload gates", () => {
 
     expect(validationCall).toBeGreaterThanOrEqual(0);
     expect(uploadCall).toBeGreaterThan(validationCall);
+  });
+
+  it("validates with Apple and rechecks the plan before the first remote mutation", () => {
+    const releaseUpload = laneBody(readFastfile(), "release_upload");
+    const binaryValidation = releaseUpload.indexOf("verify_app_store_binary!");
+    const planRecheck = releaseUpload.lastIndexOf("resolve_ios_release_plan!");
+    const metadata = releaseUpload.indexOf("\n    metadata(");
+
+    expect(binaryValidation).toBeGreaterThanOrEqual(0);
+    expect(planRecheck).toBeGreaterThan(binaryValidation);
+    expect(metadata).toBeGreaterThan(planRecheck);
+  });
+
+  it("waits for Apple build processing without submitting to TestFlight review", () => {
+    const releaseUpload = laneBody(readFastfile(), "release_upload");
+
+    expect(releaseUpload).toContain("skip_waiting_for_build_processing: false");
+    expect(releaseUpload).toContain("skip_submission: true");
+    expect(releaseUpload).toContain(
+      "wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS",
+    );
+    expect(releaseUpload).not.toContain("skip_waiting_for_build_processing: true");
   });
 
   it("finishes fallible local release work before mutating App Store metadata", () => {
