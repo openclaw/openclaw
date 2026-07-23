@@ -412,6 +412,7 @@ export async function completeReplyAgentRun(input: {
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
+          requireWriteSuccess: true,
         },
       );
     }
