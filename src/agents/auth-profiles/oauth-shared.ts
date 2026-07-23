@@ -61,7 +61,10 @@ function hasNewerStoredOAuthCredential(
 
 /** Returns true when a stored OAuth credential's refresh grant is known permanently dead. */
 export function isOAuthRefreshDead(credential: OAuthCredential | undefined): boolean {
-  return credential?.type === "oauth" && credential.refreshDeadAt !== undefined;
+  // Only a finite positive timestamp counts: corrupt/coerced values (0, -1,
+  // NaN) must not flag a grant dead and reopen the external re-seed gate.
+  const deadAt = credential?.type === "oauth" ? credential.refreshDeadAt : undefined;
+  return typeof deadAt === "number" && Number.isFinite(deadAt) && deadAt > 0;
 }
 
 /** Returns true when both credentials carry the same non-empty refresh grant. */
