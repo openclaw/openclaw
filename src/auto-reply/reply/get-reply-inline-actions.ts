@@ -640,7 +640,7 @@ export async function handleInlineActions(params: {
     cleanedBody = command.commandBodyNormalized;
   } else {
     const bodyAfterRun = sessionCtx.agentText;
-    if (bodyAfterRun !== bodyBeforeRun) {
+    if (bodyAfterRun !== undefined && bodyAfterRun !== bodyBeforeRun) {
       cleanedBody = bodyAfterRun;
     }
   }
