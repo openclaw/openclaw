@@ -8,6 +8,7 @@ import {
   isLegacyParentWritableUpdateDoctorPass,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
 } from "../commands/doctor/shared/update-phase.js";
+import { parseNonNegativeByteSize } from "../config/byte-size.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -849,6 +850,52 @@ type ToolResultCapTarget = {
   scopeLabel: string;
   target?: string;
 };
+
+async function collectCompactionByteGuardFindings(
+  cfg: OpenClawConfig,
+): Promise<readonly HealthFinding[]> {
+  const compaction = cfg.agents?.defaults?.compaction;
+  if (!compaction) {
+    return [];
+  }
+
+  const configured = compaction.maxActiveTranscriptBytes;
+  if (configured === undefined || configured === null) {
+    return [];
+  }
+
+  const effectiveBytes = parseNonNegativeByteSize(configured);
+  if (effectiveBytes === null || effectiveBytes <= 0) {
+    return [];
+  }
+
+  const truncateEnabled = compaction.truncateAfterCompaction === true;
+  if (truncateEnabled) {
+    return [];
+  }
+
+  const displayValue = String(configured).trim();
+  return [
+    {
+      checkId: "core/doctor/inactive-compaction-byte-guard",
+      severity: "warning",
+      message: `agents.defaults.compaction.maxActiveTranscriptBytes is set to "${displayValue}" but truncateAfterCompaction is not enabled, so the byte guard has no effect.`,
+      path: "agents.defaults.compaction",
+      requirement: "truncateAfterCompaction enabled when maxActiveTranscriptBytes is configured",
+      fixHint:
+        "Set agents.defaults.compaction.truncateAfterCompaction to true or remove maxActiveTranscriptBytes.",
+    },
+  ];
+}
+
+async function runCompactionByteGuardHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const findings = await collectCompactionByteGuardFindings(ctx.cfg);
+  if (findings.length === 0) {
+    return;
+  }
+  const { note } = await loadNoteModule();
+  note(formatHealthFindings(findings), "Compaction byte guard");
+}
 
 async function collectToolResultCapFindings(
   cfg: OpenClawConfig,
@@ -2064,6 +2111,17 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Hooks model",
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:compaction-byte-guard",
+      label: "Compaction byte guard",
+      healthChecks: {
+        id: "core/doctor/inactive-compaction-byte-guard",
+        description:
+          "Warn when maxActiveTranscriptBytes is configured but truncateAfterCompaction is not enabled, leaving the byte guard inactive.",
+        detect: async (ctx) => collectCompactionByteGuardFindings(ctx.cfg),
+      },
+      run: runCompactionByteGuardHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:tool-result-cap",
