@@ -89,6 +89,22 @@ type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
+export type MatrixParticipationStrategy = "ai-first" | "deterministic";
+
+export type MatrixParticipationConfig = {
+  /**
+   * Opt in to Matrix group participation control. Default: false.
+   *
+   * When enabled, the Matrix monitor classifies a room turn before dispatch and
+   * can suppress agents that clearly should not answer that turn.
+   */
+  enabled?: boolean;
+  /** Parser strategy. ai-first never silently falls back to deterministic parsing. */
+  strategy?: MatrixParticipationStrategy;
+  /** Optional model override for ai-first participation parsing. */
+  model?: string;
+};
+
 export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 
 export type MatrixStreamingConfig = {
@@ -179,6 +195,8 @@ export type MatrixConfig = {
   reactionNotifications?: "off" | "own";
   /** Thread/session binding behavior for Matrix room threads. */
   threadBindings?: MatrixThreadBindingsConfig;
+  /** Opt-in participation control for multi-agent Matrix rooms. */
+  participation?: MatrixParticipationConfig;
   /** Whether Matrix should auto-request self verification on startup when unverified. */
   startupVerification?: "off" | "if-unverified";
   /** Cooldown window for automatic startup verification requests. Default: 24 hours. */

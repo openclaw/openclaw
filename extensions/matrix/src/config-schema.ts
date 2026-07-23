@@ -46,6 +46,15 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
+const matrixParticipationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    strategy: z.enum(["ai-first", "deterministic"]).optional(),
+    model: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 const botLoopProtectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -140,6 +149,7 @@ const MatrixConfigSchema = z.object({
     .optional(),
   reactionNotifications: z.enum(["off", "own"]).optional(),
   threadBindings: matrixThreadBindingsSchema,
+  participation: matrixParticipationSchema,
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),

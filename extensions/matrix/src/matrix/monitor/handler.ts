@@ -92,6 +92,12 @@ import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import {
+  findParticipationMentionedAgents,
+  parseParticipationDirectiveWithStrategy,
+  resolveParticipationDecision,
+  type ParticipationAgentIdentity,
+} from "./participation-policy.js";
+import {
   formatMatrixAudioTranscript,
   isMatrixAudioContent,
   resolveMatrixPreflightAudioTranscript,
@@ -427,6 +433,36 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
     return "mentions";
   }
   return "off";
+}
+
+function resolveMatrixParticipationAgents(cfg: CoreConfig): ParticipationAgentIdentity[] {
+  const rawAgents = (
+    cfg as {
+      agents?: {
+        list?: Array<{
+          id?: unknown;
+          groupChat?: { mentionPatterns?: unknown };
+          name?: unknown;
+        }>;
+      };
+    }
+  ).agents?.list;
+  if (!Array.isArray(rawAgents)) {
+    return [];
+  }
+  return rawAgents
+    .map((entry) => ({
+      agentId: typeof entry.id === "string" ? entry.id.trim() : "",
+      aliases: [
+        ...(typeof entry.name === "string" ? [entry.name] : []),
+        ...(Array.isArray(entry.groupChat?.mentionPatterns)
+          ? entry.groupChat.mentionPatterns.filter(
+              (value): value is string => typeof value === "string",
+            )
+          : []),
+      ],
+    }))
+    .filter((entry) => entry.agentId);
 }
 
 function formatMatrixToolProgressMarkdownCode(text: string): string {
@@ -1183,29 +1219,90 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         });
         const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-        if (mentionDecision.shouldSkip) {
+        const recordSkippedRoomHistory = () => {
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
             : pendingHistoryText || pendingHistoryPollText;
-          if (historyLimit > 0 && pendingHistoryBody) {
-            const pendingEntry: HistoryEntry = {
-              sender: senderId,
-              body: pendingHistoryBody,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            };
-            if (reservedHistorySlot) {
-              roomHistoryTracker.finalizePending(
-                roomId,
-                reservedHistorySlot,
-                pendingEntry,
-                historyThreadId,
-              );
-              reservedHistorySlotConsumed = true;
-            } else {
-              roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
-            }
+          if (!(historyLimit > 0 && pendingHistoryBody)) {
+            return;
           }
+          const pendingEntry: HistoryEntry = {
+            sender: senderId,
+            body: pendingHistoryBody,
+            timestamp: eventTs ?? undefined,
+            messageId,
+          };
+          if (reservedHistorySlot) {
+            roomHistoryTracker.finalizePending(
+              roomId,
+              reservedHistorySlot,
+              pendingEntry,
+              historyThreadId,
+            );
+            reservedHistorySlotConsumed = true;
+          } else {
+            roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
+          }
+        };
+        const participationConfig = accountConfig?.participation;
+        const availableParticipationAgents =
+          isRoom && participationConfig?.enabled === true
+            ? resolveMatrixParticipationAgents(core.config.current() as CoreConfig)
+            : [];
+        const participationEnabled =
+          isRoom &&
+          participationConfig?.enabled === true &&
+          availableParticipationAgents.length > 0 &&
+          !hasControlCommandInMessage &&
+          !shouldBypassMention;
+        if (participationEnabled) {
+          const explicitlyMentionedParticipationAgents =
+            hasExplicitMention && !/@room/i.test(mentionPrecheckText)
+              ? findParticipationMentionedAgents({
+                  text: mentionPrecheckText,
+                  availableAgents: availableParticipationAgents,
+                })
+              : [];
+          const directive = await parseParticipationDirectiveWithStrategy({
+            text: mentionPrecheckText,
+            availableAgents: availableParticipationAgents,
+            strategy: participationConfig?.strategy,
+            cfg: cfg as never,
+            agentId: _route.agentId,
+            modelRef: participationConfig?.model?.trim() || undefined,
+            explicitMentionOnly: explicitlyMentionedParticipationAgents.length > 0,
+            log: logVerboseMessage,
+          });
+          const participationDecision = resolveParticipationDecision({
+            agentId: _route.agentId,
+            directive,
+          });
+          if (participationDecision.directive) {
+            logger.info("matrix participation decision", {
+              roomId,
+              eventId: messageId,
+              agentId: _route.agentId,
+              strategy: participationConfig?.strategy ?? "ai-first",
+              allowed: !participationDecision.shouldSuppress,
+              suppressed: participationDecision.shouldSuppress,
+              reason: participationDecision.reason,
+              matchedAgentIds: participationDecision.matchedAgentIds,
+            });
+          }
+          if (participationDecision.shouldSuppress) {
+            recordSkippedRoomHistory();
+            logger.info("skipping room message", {
+              roomId,
+              reason: "participation-policy",
+              agentId: _route.agentId,
+              participationReason: participationDecision.reason,
+            });
+            await commitInboundEventIfClaimed();
+            return undefined;
+          }
+        }
+        if (mentionDecision.shouldSkip) {
+          recordSkippedRoomHistory();
           logger.info("skipping room message", { roomId, reason: "no-mention" });
           await commitInboundEventIfClaimed();
           return undefined;

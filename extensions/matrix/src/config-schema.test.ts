@@ -156,4 +156,29 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts opt-in Matrix participation control config", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      participation: {
+        enabled: true,
+        strategy: "deterministic",
+        model: "openai/gpt-5.1-mini",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown Matrix participation control fields", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      participation: {
+        enabled: true,
+        surprise: true,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });

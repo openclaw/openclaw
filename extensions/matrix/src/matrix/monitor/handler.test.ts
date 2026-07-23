@@ -697,6 +697,101 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it("leaves group dispatch unchanged when Matrix participation control is not enabled", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountConfig: {},
+      cfg: {
+        channels: { matrix: {} },
+        agents: {
+          list: [
+            { id: "ops", groupChat: { mentionPatterns: ["ops"] } },
+            { id: "sentinel", groupChat: { mentionPatterns: ["sentinel"] } },
+          ],
+        },
+      },
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$participation-default-off",
+        body: "sentinel, handle this",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("suppresses room dispatch when deterministic participation targets another agent", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountConfig: { participation: { enabled: true, strategy: "deterministic" } },
+      cfg: {
+        channels: { matrix: {} },
+        agents: {
+          list: [
+            { id: "ops", groupChat: { mentionPatterns: ["ops"] } },
+            { id: "sentinel", groupChat: { mentionPatterns: ["sentinel"] } },
+          ],
+        },
+      },
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$participation-suppress",
+        body: "sentinel, handle this",
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("allows room dispatch when deterministic participation targets this agent", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountConfig: { participation: { enabled: true, strategy: "deterministic" } },
+      cfg: {
+        channels: { matrix: {} },
+        agents: {
+          list: [
+            { id: "ops", groupChat: { mentionPatterns: ["ops"] } },
+            { id: "sentinel", groupChat: { mentionPatterns: ["sentinel"] } },
+          ],
+        },
+      },
+      resolveAgentRoute: () => ({
+        agentId: "sentinel",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:sentinel:main",
+        mainSessionKey: "agent:sentinel:main",
+        matchedBy: "binding.account" as const,
+      }),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$participation-allow",
+        body: "sentinel, handle this",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
   it('drops configured Matrix bot room messages without a mention when allowBots="mentions"', async () => {
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
