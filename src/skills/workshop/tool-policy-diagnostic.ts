@@ -35,7 +35,7 @@ function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLoca
   );
   const tools = index !== undefined && index >= 0 ? config.agents?.list?.[index]?.tools : undefined;
   return index !== undefined && index >= 0 && tools
-    ? { path: `agents.list[${index}].tools`, tools }
+    ? { path: `agents.entries[${JSON.stringify(agentId)}].tools`, tools }
     : undefined;
 }
 
@@ -107,7 +107,7 @@ function describeExclusion(params: {
   });
   const agentProvider = providerPolicyPath({
     tools: agent?.tools,
-    basePath: agent?.path ?? "agents.list[].tools",
+    basePath: agent?.path ?? "agents.entries.*.tools",
     capabilityProfile: params.capabilityProfile,
   });
 
@@ -148,13 +148,13 @@ function describeExclusion(params: {
   const normalizedLabel = label.startsWith(`agents.${params.agentId}.tools.byProvider`)
     ? label.replace(
         `agents.${params.agentId}.tools.byProvider`,
-        agentProvider?.path ?? `${agent?.path ?? "agents.list[].tools"}.byProvider`,
+        agentProvider?.path ?? `${agent?.path ?? "agents.entries.*.tools"}.byProvider`,
       )
     : label.startsWith("tools.byProvider")
       ? label.replace("tools.byProvider", globalProvider?.path ?? "tools.byProvider")
       : label
-          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.list[].tools")
-          .replace("agent tools", agent?.path ?? "agents.list[].tools");
+          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
+          .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
   if (policyDeniesWorkshop(params.event)) {
     const source = normalizedLabel.replace(/\.allow$/, ".deny");
     return {

@@ -1484,7 +1484,7 @@ export function normalizeModelSelection(value: unknown): string | undefined {
 }
 
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
-const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.list[].modelPolicy.allow";
+const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
 
 function resolvePolicyAliasAgentId(
   configPath: string | null,
