@@ -1,6 +1,6 @@
 // Verifies provider API family helpers gate GPT parallel tool-call payloads.
 import { describe, expect, it } from "vitest";
-import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
+import { supportsGptParallelToolCallsPayload } from "./embedded-agent-runner/extra-params.js";
 
 describe("provider api families", () => {
   it.each([

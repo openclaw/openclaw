@@ -16,8 +16,8 @@ import {
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
+import { supportsGptParallelToolCallsPayload } from "./embedded-agent-runner/extra-params.js";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
-import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
 beforeEach(() => {
   installNoopProviderRuntimeDeps();
