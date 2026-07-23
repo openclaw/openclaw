@@ -11,6 +11,8 @@ function runGit(args, options = {}) {
     cwd: repoRoot,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
+    timeout: options.timeout ?? 10_000,
+    killSignal: "SIGKILL",
     ...options,
   });
 }
