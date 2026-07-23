@@ -56,21 +56,15 @@ describe("validateSessionId", () => {
   });
 
   it("throws a controlled error for undefined instead of crashing with TypeError", () => {
-    expect(() => validateSessionId(undefined as unknown as string)).toThrow(
-      /Invalid session ID/,
-    );
+    expect(() => validateSessionId(undefined as unknown as string)).toThrow(/Invalid session ID/);
   });
 
   it("throws a controlled error for null", () => {
-    expect(() => validateSessionId(null as unknown as string)).toThrow(
-      /Invalid session ID/,
-    );
+    expect(() => validateSessionId(null as unknown as string)).toThrow(/Invalid session ID/);
   });
 
   it("throws a controlled error for non-string types", () => {
-    expect(() => validateSessionId(42 as unknown as string)).toThrow(
-      /Invalid session ID/,
-    );
+    expect(() => validateSessionId(42 as unknown as string)).toThrow(/Invalid session ID/);
   });
 });
 
