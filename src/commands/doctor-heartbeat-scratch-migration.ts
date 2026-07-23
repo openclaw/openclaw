@@ -23,6 +23,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveHeartbeatAgents } from "../infra/heartbeat-runner.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { shortenHomePath } from "../utils.js";
 
 const HEARTBEAT_SCRATCH_MIGRATION_CHECK_ID = "core/doctor/heartbeat-scratch-migration";
@@ -35,7 +36,6 @@ type HeartbeatScratchMigrationResult = {
 
 type HeartbeatSource = {
   path: string;
-  canonicalPath: string;
   content: string;
   sha256: string;
 };
@@ -97,7 +97,6 @@ async function readHeartbeatSource(
   }
   return {
     path: heartbeatPath,
-    canonicalPath: sourceRealPath,
     content,
     sha256: hashCronScratchSource(content),
   };
@@ -160,21 +159,28 @@ type HeartbeatSourceClaim = {
 const HEARTBEAT_CLAIM_INFIX = ".doctor-importing-";
 const HEARTBEAT_CLAIM_CHANGED_ERROR = "HeartbeatClaimChangedError";
 
-/** Newest interrupted-claim sibling for a missing canonical heartbeat path. */
+/** Interrupted-claim sibling for a missing canonical heartbeat path. */
 async function findStaleHeartbeatClaim(heartbeatPath: string): Promise<string | undefined> {
   const dir = path.dirname(heartbeatPath);
-  const claimPrefix = `${path.basename(heartbeatPath)}${HEARTBEAT_CLAIM_INFIX}`;
+  // Match the exact generated claim shape so an unrelated user file that
+  // merely shares the prefix is never consumed by recovery.
+  const claimPattern = new RegExp(
+    `^${escapeRegExp(path.basename(heartbeatPath))}${escapeRegExp(HEARTBEAT_CLAIM_INFIX)}\\d+-[0-9a-f]{12}$`,
+  );
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
   } catch {
     return undefined;
   }
-  const claims = entries
-    .filter((entry) => entry.startsWith(claimPrefix) && !entry.includes(".conflict-"))
-    .toSorted();
-  const newest = claims.at(-1);
-  return newest ? path.join(dir, newest) : undefined;
+  const claims = entries.filter((entry) => claimPattern.test(entry));
+  if (claims.length > 1) {
+    throw new Error(
+      `multiple interrupted migration claims exist for ${heartbeatPath}; remove or restore the stale .doctor-importing-* files manually`,
+    );
+  }
+  const claim = claims[0];
+  return claim ? path.join(dir, claim) : undefined;
 }
 
 /**
@@ -429,9 +435,12 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     if (!source) {
       continue;
     }
-    const group = groups.get(source.canonicalPath) ?? { source, agents: [] };
+    // Group by the directory entry being removed, not its resolved target:
+    // two distinct symlinks pointing at one shared file must each be claimed
+    // and removed, while agents sharing the same workspace path dedupe.
+    const group = groups.get(source.path) ?? { source, agents: [] };
     group.agents.push([agentId, monitor]);
-    groups.set(source.canonicalPath, group);
+    groups.set(source.path, group);
   }
 
   for (const { source, agents } of groups.values()) {
