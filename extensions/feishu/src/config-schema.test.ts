@@ -62,6 +62,27 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.groupPolicy).toBe("open");
   });
 
+  it("accepts custom HTTPS domains with a case-insensitive scheme", () => {
+    expect(FeishuConfigSchema.parse({ domain: "HTTPS://tenant.example/" }).domain).toBe(
+      "https://tenant.example",
+    );
+    expect(
+      FeishuConfigSchema.parse({
+        accounts: { work: { domain: "HTTPS://tenant.example/base/" } },
+      }).accounts?.work?.domain,
+    ).toBe("https://tenant.example/base");
+  });
+
+  it("rejects custom HTTP domains", () => {
+    expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: "http://tenant.example" }), "domain");
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({
+        accounts: { work: { domain: "http://tenant.example" } },
+      }),
+      "accounts.work.domain",
+    );
+  });
+
   it("accepts the canonical disabled DM policy", () => {
     expect(FeishuConfigSchema.parse({ dmPolicy: "disabled" }).dmPolicy).toBe("disabled");
     expect(
