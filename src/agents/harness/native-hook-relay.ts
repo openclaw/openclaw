@@ -26,6 +26,7 @@ import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   cancelDeferredPluginToolApproval,
@@ -42,6 +43,19 @@ import { payloadTextResult } from "../tools/common.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
+import {
+  isNativeHookRelayAdmissionOverloadedError,
+  NativeHookRelayAdmissionCancelledError,
+  NativeHookRelayAdmissionClosedError,
+  NativeHookRelayAdmissionController,
+  NativeHookRelayAdmissionOverloadedError,
+} from "./native-hook-relay-admission.js";
+import {
+  renderCodexNativeHookNoopResponse,
+  renderCodexNativeHookPermissionResponse,
+  renderCodexNativeHookPreToolUseBlockResponse,
+  renderCodexNativeHookUnavailableResponse,
+} from "./native-hook-relay-response.js";
 import {
   clearNativeHookRelayBridgeRecordsForTests,
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -169,6 +183,8 @@ type InvokeNativeHookRelayParams = {
   event: unknown;
   rawPayload: unknown;
   requireGeneration?: boolean;
+  admissionReserved?: boolean;
+  admissionSignal?: AbortSignal;
 };
 
 type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
@@ -212,6 +228,7 @@ type NativeHookRelayProviderAdapter = {
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
+const NATIVE_HOOK_RELAY_MAX_OLD_SPACE_MIB = 64;
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
@@ -231,6 +248,7 @@ const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
 const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
+const MAX_PERMISSION_EXACT_DECISION_ENTRIES = 512;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
@@ -249,12 +267,18 @@ type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
   | "defer";
+type NativeHookRelayPermissionTerminalApprovalResult = Exclude<
+  NativeHookRelayPermissionApprovalResult,
+  "defer"
+>;
 
 type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  admissions: Map<string, NativeHookRelayAdmissionController>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
+  permissionExactDecisions: Map<string, NativeHookRelayPermissionTerminalApprovalResult>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
   permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
@@ -279,8 +303,10 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
   globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL] ??= {
     relays: new Map<string, ActiveNativeHookRelayRegistration>(),
     relayBridges: new Map<string, NativeHookRelayBridgeRegistration>(),
+    admissions: new Map<string, NativeHookRelayAdmissionController>(),
     invocations: [],
     pendingPermissionApprovals: new Map<string, Promise<NativeHookRelayPermissionApprovalResult>>(),
+    permissionExactDecisions: new Map<string, NativeHookRelayPermissionTerminalApprovalResult>(),
     pendingPreToolUseApprovals: new Map<string, NativeHookRelayPreToolUseApproval>(),
     permissionApprovalWindows: new Map<string, number[]>(),
     permissionAllowAlwaysApprovals: new Map<string, { expiresAtMs: number }>(),
@@ -291,8 +317,10 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
 const nativeHookRelayState = getNativeHookRelaySharedState();
 const relays = nativeHookRelayState.relays;
 const relayBridges = nativeHookRelayState.relayBridges;
+const admissions = nativeHookRelayState.admissions;
 const invocations = nativeHookRelayState.invocations;
 const pendingPermissionApprovals = nativeHookRelayState.pendingPermissionApprovals;
+const permissionExactDecisions = nativeHookRelayState.permissionExactDecisions;
 const pendingPreToolUseApprovals = nativeHookRelayState.pendingPreToolUseApprovals;
 const permissionApprovalWindows = nativeHookRelayState.permissionApprovalWindows;
 const permissionAllowAlwaysApprovals = nativeHookRelayState.permissionAllowAlwaysApprovals;
@@ -367,22 +395,9 @@ const nativeHookRelayProviderAdapters: Record<
     normalizeMetadata: normalizeCodexHookMetadata,
     readToolInput: readCodexToolInput,
     readToolResponse: readCodexToolResponse,
-    renderNoopResponse: () => {
-      // Codex treats empty stdout plus exit 0 as no decision/no additional context.
-      return { stdout: "", stderr: "", exitCode: 0 };
-    },
-    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-      ...(failureDisposition ? { failureDisposition } : {}),
-    }),
+    renderNoopResponse: () => renderCodexNativeHookNoopResponse(),
+    renderPreToolUseBlockResponse: (reason, failureDisposition) =>
+      renderCodexNativeHookPreToolUseBlockResponse(reason, failureDisposition),
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
         decision: "block",
@@ -399,22 +414,8 @@ const nativeHookRelayProviderAdapters: Record<
       stderr: "",
       exitCode: 0,
     }),
-    renderPermissionDecisionResponse: (decision, message) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision:
-            decision === "allow"
-              ? { behavior: "allow" }
-              : {
-                  behavior: "deny",
-                  message: message?.trim() || "Denied by OpenClaw",
-                },
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    }),
+    renderPermissionDecisionResponse: (decision, message) =>
+      renderCodexNativeHookPermissionResponse(decision, message),
   },
 };
 
@@ -436,6 +437,7 @@ export function registerNativeHookRelay(
   unregisterNativeHookRelay(relayId, undefined, {
     deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   });
+  admissions.set(relayId, new NativeHookRelayAdmissionController());
   const registration: ActiveNativeHookRelayRegistration = {
     relayId,
     provider: params.provider,
@@ -467,6 +469,7 @@ export function registerNativeHookRelay(
         provider: params.provider,
         relayId,
         stateDbPath,
+        stateSchemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
         generation: registration.generation,
         event,
         preToolUseUnavailable:
@@ -527,6 +530,13 @@ function unregisterNativeHookRelay(
 ): void {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
     return;
+  }
+  const admission = admissions.get(relayId);
+  if (admission) {
+    const snapshot = admission.snapshot();
+    admission.close();
+    admissions.delete(relayId);
+    log.debug("native hook relay admission summary", { relayId, ...snapshot });
   }
   unregisterNativeHookRelayBridge(relayId, options);
   relays.delete(relayId);
@@ -601,6 +611,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
   provider: NativeHookRelayProvider;
   relayId: string;
   stateDbPath?: string;
+  stateSchemaVersion?: number;
   generation?: string;
   event: NativeHookRelayEvent;
   preToolUseUnavailable?: "noop";
@@ -610,22 +621,34 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
   nodeExecutable?: string;
 }): string {
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
-  const executable = params.executable ?? resolveOpenClawCliExecutable();
-  const argv =
-    executable === "openclaw"
+  const fastExecutable =
+    params.executable === undefined && params.stateDbPath
+      ? resolveOpenClawNativeHookRelayExecutable()
+      : undefined;
+  const executable = fastExecutable ?? params.executable ?? resolveOpenClawCliExecutable();
+  const argv = fastExecutable
+    ? [
+        params.nodeExecutable ?? process.execPath,
+        `--max-old-space-size=${NATIVE_HOOK_RELAY_MAX_OLD_SPACE_MIB}`,
+        "--disable-warning=ExperimentalWarning",
+        fastExecutable,
+      ]
+    : executable === "openclaw"
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
   const command = shellQuoteArgs([
     ...nicePrefix,
     ...argv,
-    "hooks",
-    "relay",
+    ...(fastExecutable ? [] : ["hooks", "relay"]),
     "--provider",
     params.provider,
     "--relay-id",
     params.relayId,
     ...(params.stateDbPath ? ["--state-db", params.stateDbPath] : []),
+    ...(fastExecutable && params.stateSchemaVersion !== undefined
+      ? ["--state-schema-version", String(params.stateSchemaVersion)]
+      : []),
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
@@ -709,31 +732,70 @@ export async function invokeNativeHookRelay(
     throw new Error("native hook relay payload must be JSON-compatible");
   }
 
+  const adapter = getNativeHookRelayProviderAdapter(provider);
   const normalized = normalizeNativeHookInvocation({
     registration,
     event,
     rawPayload: params.rawPayload,
   });
-  recordNativeHookRelayInvocation(normalized);
-  const startedAt = Date.now();
-  const response = await processNativeHookRelayInvocation({
-    registration,
-    invocation: normalized,
-    adapter: getNativeHookRelayProviderAdapter(provider),
-  });
-  if (
-    normalized.toolUseId &&
-    response.failureDisposition &&
-    readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
-  ) {
-    projectNativeHookRelayPreToolUseFailure(registration, {
-      toolName: normalizeNativeHookToolName(normalized.toolName),
-      toolCallId: normalized.toolUseId,
-      disposition: response.failureDisposition,
-      durationMs: Date.now() - startedAt,
+  const admissionKey =
+    event === "permission_request"
+      ? `permission:${nativeHookRelayPermissionApprovalKey({
+          registration,
+          request: buildNativeHookRelayPermissionApprovalRequest({
+            registration,
+            invocation: normalized,
+            adapter,
+          }),
+        })}`
+      : undefined;
+  const execute = async () => {
+    recordNativeHookRelayInvocation(normalized);
+    const startedAt = Date.now();
+    const response = await processNativeHookRelayInvocation({
+      registration,
+      invocation: normalized,
+      adapter,
+    });
+    if (
+      normalized.toolUseId &&
+      response.failureDisposition &&
+      readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
+    ) {
+      projectNativeHookRelayPreToolUseFailure(registration, {
+        toolName: normalizeNativeHookToolName(normalized.toolName),
+        toolCallId: normalized.toolUseId,
+        disposition: response.failureDisposition,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return response;
+  };
+  const admission = admissions.get(relayId);
+  if (params.admissionReserved || !admission) {
+    return execute();
+  }
+  try {
+    const signal = params.admissionSignal ?? registration.signal;
+    return await admission.run(execute, {
+      ...(signal ? { signal } : {}),
+      ...(admissionKey ? { key: admissionKey } : {}),
+    });
+  } catch (error) {
+    if (!isNativeHookRelayAdmissionOverloadedError(error)) {
+      throw error;
+    }
+    log.warn("native hook relay admission rejected overloaded invocation", {
+      relayId,
+      runId: registration.runId,
+      event,
+      ...admission.snapshot(),
+    });
+    return renderCodexNativeHookUnavailableResponse({
+      event,
+      message: "Native hook relay overloaded",
     });
   }
-  return response;
 }
 
 function projectNativeHookRelayPreToolUseFailure(
@@ -919,23 +981,14 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   preToolUseUnavailable?: unknown;
   message?: string;
 }): NativeHookRelayProcessResponse {
-  const provider = readNativeHookRelayProvider(params.provider);
+  readNativeHookRelayProvider(params.provider);
   const event = readNativeHookRelayEvent(params.event);
-  const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
-  if (event === "pre_tool_use") {
-    // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
-      return adapter.renderNoopResponse(event);
-    }
-    return adapter.renderPreToolUseBlockResponse(message);
-  }
-  if (event === "permission_request") {
-    return adapter.renderPermissionDecisionResponse("deny", message);
-  }
-  return adapter.renderNoopResponse(event);
+  return renderCodexNativeHookUnavailableResponse({
+    event,
+    ...(params.preToolUseUnavailable === "noop" ? { preToolUseUnavailable: "noop" } : {}),
+    message,
+  });
 }
 
 export function isNativeHookRelayBridgeStaleRegistrationError(error: unknown): boolean {
@@ -1181,49 +1234,87 @@ async function handleNativeHookRelayBridgeRequest(
   res: ServerResponse,
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
+  if (req.method !== "POST" || req.url !== "/invoke") {
+    writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
+    return;
+  }
+  if (req.headers.authorization !== `Bearer ${auth.token}`) {
+    writeNativeHookRelayBridgeJson(res, 403, { ok: false, error: "forbidden" });
+    return;
+  }
+  if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+    writeNativeHookRelayBridgeJson(res, 410, {
+      ok: false,
+      error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+    });
+    return;
+  }
+  const admission = admissions.get(auth.relayId);
+  if (!admission) {
+    writeNativeHookRelayBridgeJson(res, 410, {
+      ok: false,
+      error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+    });
+    return;
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
   try {
-    if (req.method !== "POST" || req.url !== "/invoke") {
-      writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
-      return;
-    }
-    if (req.headers.authorization !== `Bearer ${auth.token}`) {
-      writeNativeHookRelayBridgeJson(res, 403, { ok: false, error: "forbidden" });
-      return;
-    }
-    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
-      return;
-    }
-    const body = await readNativeHookRelayBridgeBody(req);
-    const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
-    if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
-      writeNativeHookRelayBridgeJson(res, 403, {
-        ok: false,
-        error: "native hook relay bridge target mismatch",
-      });
-      return;
-    }
-    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
-      return;
-    }
-    const result = await invokeNativeHookRelay({ ...payload, requireGeneration: true });
+    const result = await admission.run(
+      async () => {
+        if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+          throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+        }
+        const body = await readNativeHookRelayBridgeBody(req);
+        const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
+        if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
+          throw new Error("native hook relay bridge target mismatch");
+        }
+        if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+          throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+        }
+        return invokeNativeHookRelay({
+          ...payload,
+          requireGeneration: true,
+          admissionReserved: true,
+          admissionSignal: controller.signal,
+        });
+      },
+      { signal: controller.signal },
+    );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {
-    writeNativeHookRelayBridgeJson(
-      res,
-      isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
-      {
+    if (error instanceof NativeHookRelayAdmissionCancelledError) {
+      return;
+    }
+    if (isNativeHookRelayAdmissionOverloadedError(error)) {
+      log.warn("native hook relay bridge rejected overloaded invocation", {
+        relayId: auth.relayId,
+        ...admission.snapshot(),
+      });
+      writeNativeHookRelayBridgeJson(res, 429, {
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      },
-    );
+        code: "overloaded",
+        error: "native hook relay overloaded",
+      });
+      return;
+    }
+    const stale =
+      isNativeHookRelayBridgeStaleRegistrationError(error) ||
+      error instanceof NativeHookRelayAdmissionClosedError;
+    writeNativeHookRelayBridgeJson(res, stale ? 410 : 500, {
+      ok: false,
+      error: stale
+        ? NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
   }
 }
 
@@ -1265,6 +1356,9 @@ function writeNativeHookRelayBridgeJson(
   statusCode: number,
   payload: unknown,
 ): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
     "content-type": "application/json",
@@ -1359,9 +1453,13 @@ function postNativeHookRelayBridgeRecord(params: {
           try {
             const parsed = JSON.parse(responseText) as
               | { ok: true; result: NativeHookRelayProcessResponse }
-              | { ok: false; error?: string };
+              | { ok: false; code?: string; error?: string };
             if (parsed.ok) {
               resolveOnce(parsed.result);
+              return;
+            }
+            if (parsed.code === "overloaded") {
+              rejectOnce(new NativeHookRelayAdmissionOverloadedError());
               return;
             }
             rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));
@@ -1534,19 +1632,7 @@ async function runNativeHookRelayPermissionRequest(params: {
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
-  const request: NativeHookRelayPermissionApprovalRequest = {
-    provider: params.registration.provider,
-    ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-    sessionId: params.registration.sessionId,
-    ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-    runId: params.registration.runId,
-    toolName: normalizeNativeHookToolName(params.invocation.toolName),
-    ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-    ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
-    ...(params.invocation.model ? { model: params.invocation.model } : {}),
-    toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
-    ...(params.registration.signal ? { signal: params.registration.signal } : {}),
-  };
+  const request = buildNativeHookRelayPermissionApprovalRequest(params);
   const approvalKey = nativeHookRelayPermissionApprovalKey({
     registration: params.registration,
     request,
@@ -1558,7 +1644,10 @@ async function runNativeHookRelayPermissionRequest(params: {
   if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey)) {
     return params.adapter.renderPermissionDecisionResponse("allow");
   }
-  const pendingApproval = pendingPermissionApprovals.get(approvalKey);
+  const exactDecision = permissionExactDecisions.get(approvalKey);
+  const pendingApproval = exactDecision
+    ? Promise.resolve(exactDecision)
+    : pendingPermissionApprovals.get(approvalKey);
   try {
     const decision = await (pendingApproval ??
       startNativeHookRelayPermissionApprovalWithBudget({
@@ -1584,6 +1673,26 @@ async function runNativeHookRelayPermissionRequest(params: {
   // A PermissionRequest no-op is not an allow decision. Codex interprets it as
   // "no hook decision" and falls through to its normal guardian/user approval path.
   return params.adapter.renderNoopResponse(params.invocation.event);
+}
+
+function buildNativeHookRelayPermissionApprovalRequest(params: {
+  registration: NativeHookRelayRegistration;
+  invocation: NativeHookRelayInvocation;
+  adapter: NativeHookRelayProviderAdapter;
+}): NativeHookRelayPermissionApprovalRequest {
+  return {
+    provider: params.registration.provider,
+    ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+    sessionId: params.registration.sessionId,
+    ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+    runId: params.registration.runId,
+    toolName: normalizeNativeHookToolName(params.invocation.toolName),
+    ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
+    ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+    ...(params.invocation.model ? { model: params.invocation.model } : {}),
+    toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
+    ...(params.registration.signal ? { signal: params.registration.signal } : {}),
+  };
 }
 
 async function runNativeHookRelayBeforeAgentFinalize(params: {
@@ -1639,13 +1748,35 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
     return "defer";
   }
   const approval: Promise<NativeHookRelayPermissionApprovalResult> =
-    nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
-      if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
-        pendingPermissionApprovals.delete(params.approvalKey);
-      }
-    });
+    nativeHookRelayPermissionApprovalRequester(params.request)
+      .then((decision) => {
+        if (decision !== "defer") {
+          rememberNativeHookRelayPermissionExactDecision(params.approvalKey, decision);
+        }
+        return decision;
+      })
+      .finally(() => {
+        if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
+          pendingPermissionApprovals.delete(params.approvalKey);
+        }
+      });
   pendingPermissionApprovals.set(params.approvalKey, approval);
   return approval;
+}
+
+function rememberNativeHookRelayPermissionExactDecision(
+  key: string,
+  decision: NativeHookRelayPermissionTerminalApprovalResult,
+): void {
+  permissionExactDecisions.delete(key);
+  permissionExactDecisions.set(key, decision);
+  while (permissionExactDecisions.size > MAX_PERMISSION_EXACT_DECISION_ENTRIES) {
+    const oldestKey = permissionExactDecisions.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    permissionExactDecisions.delete(oldestKey);
+  }
 }
 
 function nativeHookRelayPermissionApprovalKey(params: {
@@ -1867,6 +1998,11 @@ function removeNativeHookRelayPermissionState(relayId: string): void {
   for (const key of pendingPermissionApprovals.keys()) {
     if (key.startsWith(`${relayId}:`)) {
       pendingPermissionApprovals.delete(key);
+    }
+  }
+  for (const key of permissionExactDecisions.keys()) {
+    if (key.startsWith(`${relayId}:`)) {
+      permissionExactDecisions.delete(key);
     }
   }
 }
@@ -2258,6 +2394,19 @@ function resolveOpenClawCliExecutable(): string {
   throw new Error("Cannot resolve OpenClaw CLI executable path for native hook relay");
 }
 
+function resolveOpenClawNativeHookRelayExecutable(): string | undefined {
+  const packageRoot = resolveOpenClawPackageRootSync({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  if (!packageRoot) {
+    return undefined;
+  }
+  const candidate = path.join(packageRoot, "dist", "native-hook-relay-entry.js");
+  return existsSync(candidate) ? candidate : undefined;
+}
+
 function normalizeAllowedEvents(
   events: readonly NativeHookRelayEvent[] | undefined,
 ): readonly NativeHookRelayEvent[] {
@@ -2415,9 +2564,14 @@ export const testing = {
     for (const relayId of relayBridges.keys()) {
       unregisterNativeHookRelayBridge(relayId);
     }
+    for (const admission of admissions.values()) {
+      admission.close();
+    }
+    admissions.clear();
     relays.clear();
     invocations.length = 0;
     pendingPermissionApprovals.clear();
+    permissionExactDecisions.clear();
     for (const pendingApproval of pendingPreToolUseApprovals.values()) {
       cancelDeferredPluginToolApproval(pendingApproval.deferredApproval);
     }
