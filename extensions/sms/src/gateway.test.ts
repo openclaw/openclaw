@@ -131,6 +131,23 @@ describe("startSmsGatewayAccount", () => {
     expect(registerPluginHttpRoute).toHaveBeenCalledTimes(1);
   });
 
+  // Startup order (RCS-first-then-SMS): the RCS channel already owns this exact
+  // Twilio path, so core rejects the SMS registration. SMS must fail loudly
+  // instead of recording the no-op unregister and going silently dark.
+  it("fails startup when another channel already owns the SMS webhook path", async () => {
+    registerPluginHttpRoute.mockImplementationOnce(() => {
+      throw new Error("plugin: route conflict at /webhooks/sms");
+    });
+
+    await expect(
+      startRoute({
+        cfg: {},
+        account: createAccount("default"),
+        channelRuntime: {} as SmsChannelRuntime,
+      }),
+    ).rejects.toThrow(/route conflict at \/webhooks\/sms/u);
+  });
+
   it("allows distinct webhook paths across SMS accounts", async () => {
     const channelRuntime = {} as SmsChannelRuntime;
     await startRoute({

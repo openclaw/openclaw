@@ -105,6 +105,7 @@ async function registerSmsWebhookRoute(params: {
     unregisterRoute = registerPluginHttpRoute({
       path: webhookPath,
       auth: "plugin",
+      conflictPolicy: "throw",
       pluginId: CHANNEL_ID,
       accountId: params.account.accountId,
       log: (msg) => params.log?.info?.(msg),
