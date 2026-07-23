@@ -8,6 +8,14 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 
+const getPreparedModelCatalogSnapshot = vi.hoisted(() => vi.fn(() => undefined));
+
+// This suite exercises verified-route presentation, not catalog lifecycle.
+// Keep the optional nonblocking catalog snapshot deterministic and absent.
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  getPreparedModelCatalogSnapshot,
+}));
+
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
