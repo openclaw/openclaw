@@ -24,7 +24,7 @@ const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
 const AWS_SECRET_ACCESS_KEY_RE =
-  /(?<!;base64,[A-Za-z0-9+/=]*)(?<![A-Za-z0-9/+=_])(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=_])/gu;
+  /(?<![A-Za-z0-9/+=_])(?<!;base64,[A-Za-z0-9+/=]*)(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=_])/gu;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
