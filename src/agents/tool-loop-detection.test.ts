@@ -492,6 +492,91 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("advances the global breaker after critical tool-loop vetoes", () => {
+      const state = createState();
+      const fixture = createReadNoProgressFixture();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 5,
+      };
+
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: 3,
+      });
+      const critical = detectToolCallLoop(state, fixture.toolName, fixture.params, config);
+      expect(critical.stuck && critical.detector).toBe("generic_repeat");
+
+      for (let i = 0; i < 2; i += 1) {
+        recordToolCallOutcome(state, {
+          toolName: fixture.toolName,
+          toolParams: fixture.params,
+          toolCallId: `loop-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config,
+        });
+      }
+
+      const global = detectToolCallLoop(state, fixture.toolName, fixture.params, config);
+      expect(global.stuck).toBe(true);
+      if (global.stuck) {
+        expect(global.detector).toBe("global_circuit_breaker");
+        expect(global.count).toBe(5);
+      }
+    });
+
+    it("resets earlier loop vetoes after output progresses", () => {
+      const state = createState();
+      const fixture = createReadNoProgressFixture();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 4,
+        detectors: { genericRepeat: false, knownPollNoProgress: false, pingPong: false },
+      };
+
+      recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, 0);
+      for (let i = 0; i < 2; i += 1) {
+        recordToolCallOutcome(state, {
+          toolName: fixture.toolName,
+          toolParams: fixture.params,
+          toolCallId: `old-loop-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config,
+        });
+      }
+
+      const progressedResult = {
+        content: [{ type: "text", text: "new output" }],
+        details: { ok: true },
+      };
+      recordSuccessfulCall(state, fixture.toolName, fixture.params, progressedResult, 3);
+      recordSuccessfulCall(state, fixture.toolName, fixture.params, progressedResult, 4);
+
+      expect(detectToolCallLoop(state, fixture.toolName, fixture.params, config).stuck).toBe(false);
+
+      recordSuccessfulCall(state, fixture.toolName, fixture.params, progressedResult, 5);
+      recordSuccessfulCall(state, fixture.toolName, fixture.params, progressedResult, 6);
+      const global = detectToolCallLoop(state, fixture.toolName, fixture.params, config);
+      expect(global.stuck).toBe(true);
+      if (global.stuck) {
+        expect(global.detector).toBe("global_circuit_breaker");
+        expect(global.count).toBe(4);
+      }
+    });
+
     it("blocks repeated completed exec calls despite volatile runtime details", () => {
       const state = createState();
       const params = { command: "grafana-api.sh datasources" };

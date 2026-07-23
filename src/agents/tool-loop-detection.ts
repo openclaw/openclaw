@@ -289,7 +289,7 @@ function hashToolOutcome(
   params: unknown,
   result: unknown,
   error: unknown,
-): { resultHash?: string; unknownToolName?: string } {
+): { resultHash?: string; outcome?: ToolCallRecord["outcome"]; unknownToolName?: string } {
   if (error !== undefined) {
     const unknownToolName = extractUnknownToolName(error);
     return {
@@ -303,10 +303,10 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
-  // The loop detector's own veto is not real progress; giving it no result hash keeps a
-  // critical loop block sticky instead of letting the block reset the streak (#89090).
+  // Keep the detector's own veto distinct from real tool outcomes so it advances the
+  // no-progress streak without being confused with policy or approval denials (#89090).
   if (isLoopVetoResult(details)) {
-    return { resultHash: undefined };
+    return { outcome: "loop-veto" };
   }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
@@ -383,16 +383,30 @@ function getUnknownToolRepeatStreak(
 }
 
 function getNoProgressStreak(
-  history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
+  history: Array<{
+    toolName: string;
+    argsHash: string;
+    resultHash?: string;
+    outcome?: ToolCallRecord["outcome"];
+  }>,
   toolName: string,
   argsHash: string,
 ): { count: number; latestResultHash?: string } {
   let streak = 0;
   let latestResultHash: string | undefined;
+  let pendingVetoes = 0;
 
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const record = history[i];
     if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
+      continue;
+    }
+    if (record.outcome === "loop-veto") {
+      if (latestResultHash) {
+        pendingVetoes += 1;
+      } else {
+        streak += 1;
+      }
       continue;
     }
     if (typeof record.resultHash !== "string" || !record.resultHash) {
@@ -400,16 +414,18 @@ function getNoProgressStreak(
     }
     if (!latestResultHash) {
       latestResultHash = record.resultHash;
-      streak = 1;
+      streak += 1;
       continue;
     }
     if (record.resultHash !== latestResultHash) {
+      pendingVetoes = 0;
       break;
     }
-    streak += 1;
+    streak += pendingVetoes + 1;
+    pendingVetoes = 0;
   }
 
-  return { count: streak, latestResultHash };
+  return { count: streak + pendingVetoes, latestResultHash };
 }
 
 function getPingPongStreak(
@@ -727,7 +743,7 @@ export function recordToolCallOutcome(
   const runId = normalizeRunId(params.runId);
   const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
   const resultHash = outcome.resultHash;
-  if (!resultHash) {
+  if (!resultHash && !outcome.outcome) {
     return undefined;
   }
 
@@ -752,10 +768,15 @@ export function recordToolCallOutcome(
     if (call.toolName !== params.toolName || call.argsHash !== argsHash) {
       continue;
     }
-    if (call.resultHash !== undefined) {
+    if (call.resultHash !== undefined || call.outcome !== undefined) {
       continue;
     }
-    call.resultHash = resultHash;
+    if (resultHash) {
+      call.resultHash = resultHash;
+    }
+    if (outcome.outcome) {
+      call.outcome = outcome.outcome;
+    }
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
     recordedOutcome = call;
@@ -768,7 +789,8 @@ export function recordToolCallOutcome(
       argsHash,
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
-      resultHash,
+      ...(resultHash && { resultHash }),
+      ...(outcome.outcome && { outcome: outcome.outcome }),
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     };
