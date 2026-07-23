@@ -93,6 +93,44 @@ function isFilePath(candidate: string): boolean {
   }
 }
 
+function readCaseInsensitiveEnvironmentValue(
+  env: NodeJS.ProcessEnv,
+  uppercaseKey: string,
+): { found: boolean; value?: string } {
+  const titleCaseKey = `${uppercaseKey.slice(0, 1)}${uppercaseKey.slice(1).toLowerCase()}`;
+  const matchingEntries: Array<[string, string]> = [];
+  for (const [candidateKey, value] of Object.entries(env)) {
+    if (candidateKey.toUpperCase() === uppercaseKey && value !== undefined) {
+      matchingEntries.push([candidateKey, value]);
+    }
+  }
+  const priority = (candidateKey: string) =>
+    candidateKey === uppercaseKey ? 0 : candidateKey === titleCaseKey ? 1 : 2;
+  matchingEntries.sort(([leftKey], [rightKey]) => {
+    return priority(leftKey) - priority(rightKey);
+  });
+
+  let firstDefined: string | undefined;
+  for (const [, value] of matchingEntries) {
+    firstDefined ??= value;
+    if (value.trim().length > 0) {
+      return { found: true, value };
+    }
+  }
+  return firstDefined === undefined ? { found: false } : { found: true, value: firstDefined };
+}
+
+function resolveEnvironmentValue(
+  env: NodeJS.ProcessEnv,
+  fallbackEnv: NodeJS.ProcessEnv,
+  key: string,
+): string | undefined {
+  const configured = readCaseInsensitiveEnvironmentValue(env, key);
+  return configured.found
+    ? configured.value
+    : readCaseInsensitiveEnvironmentValue(fallbackEnv, key).value;
+}
+
 function readCommandToken(command: string): { token: string; rest: string } | null {
   const trimmed = command.trim();
   if (!trimmed) {
@@ -143,15 +181,13 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
     return command;
   }
 
-  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  // Windows env keys are case-insensitive, but ProcessEnv objects can contain
+  // multiple casings. Prefer a usable sibling without discarding an explicitly
+  // empty search path when every matching entry is blank.
+  const pathValue = resolveEnvironmentValue(env, process.env, "PATH") ?? "";
   const pathEntries = normalizeStringEntries(pathValue.split(";"));
   const hasExtension = path.extname(command).length > 0;
-  const pathExtRaw =
-    env.PATHEXT ??
-    env.Pathext ??
-    process.env.PATHEXT ??
-    process.env.Pathext ??
-    ".EXE;.CMD;.BAT;.COM";
+  const pathExtRaw = resolveEnvironmentValue(env, process.env, "PATHEXT") ?? ".EXE;.CMD;.BAT;.COM";
   const pathExt = hasExtension
     ? [""]
     : normalizeStringEntries(pathExtRaw.split(";")).map((ext) =>
