@@ -117,7 +117,7 @@ export async function readRecentUserAssistantReplayRecordsFromJsonl(params: {
       // Skip malformed lines.
     }
   }
-  return selectRecentUserAssistantReplayRecords(recordsNewestFirst.reverse(), max);
+  return selectRecentUserAssistantReplayRecords(recordsNewestFirst.toReversed(), max);
 }
 
 export function selectRecentUserAssistantReplayRecords(

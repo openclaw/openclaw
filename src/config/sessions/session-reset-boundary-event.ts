@@ -142,11 +142,12 @@ async function readLegacyTranscriptEvents(sessionFile: string | undefined): Prom
         break;
       }
     }
-    const selected = selectRecentUserAssistantReplayRecords(newestFirst.reverse());
-    return selected.map((record, index) => ({
-      ...(record as Record<string, unknown>),
-      parentId: index === 0 ? null : (recordId(selected[index - 1]) ?? null),
-    }));
+    const selected = selectRecentUserAssistantReplayRecords(newestFirst.toReversed());
+    return selected.map((record, index) =>
+      Object.assign({}, record as Record<string, unknown>, {
+        parentId: index === 0 ? null : (recordId(selected[index - 1]) ?? null),
+      }),
+    );
   } catch {
     return [];
   }
