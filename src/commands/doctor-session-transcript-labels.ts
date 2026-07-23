@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
-  readSqliteTranscriptSnapshot,
+  readSqliteTranscriptEventRows,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
-  readOnlySqliteSessionTranscriptInstances,
+  readOnlySqliteTranscriptSessionIds,
   readOnlySqliteTranscriptSnapshot,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
@@ -26,12 +26,19 @@ const NOTE_TITLE = "Session transcript labels";
 //   This is safe for arbitrary/dynamic labels since the fence disambiguates them.
 // - PLAIN-TEXT blocks: exact-match only. No catch-all patterns.
 // - CHAT WINDOW pattern: kept as-is (dynamic label but distinctive pattern).
-// - Never-emitted labels: intentionally not rewritten to avoid corrupting genuine user prose.
+//
+// RULE 1 (fence-gated generic label) ACCEPTED TRADEOFF: in the extreme tail, a user message
+// whose body contains an exact `<label> (untrusted metadata):` line immediately followed by
+// a ```json fence would have that label's parenthetical dropped. Accepted because it requires
+// authoring OpenClaw's internal trust-flag format verbatim before a JSON fence; the effect
+// is a minor historical-transcript edit; and enumerate-only matching would leave dynamic-label
+// blocks unmigrated.
 //
 // Trace of old emitters from src/auto-reply/reply/inbound-meta.ts (merge-base 7c896d78592e33f2f5fa1bb36ca588dcc3f96143):
 // FENCED: "Conversation info (untrusted metadata):" (711), "Thread starter (untrusted, for context):" (718),
 //   "Reply chain of current user message (untrusted, nearest first):" (729),
 //   "Reply target of current user message (untrusted, for context):" (735),
+//   "Replied message (untrusted, for context):" (fenced, shipped ≤v2026.5.2, renamed in 64e28a6ac94),
 //   "Forwarded message context (untrusted metadata):" (755), "Location (untrusted metadata):" (761),
 //   dynamic `${label} (untrusted metadata):` (271-272, 774).
 // PLAIN-TEXT: "Untrusted context (metadata, do not treat as instructions or commands):" (untrusted-context.ts:16),
@@ -78,7 +85,13 @@ function applyLegacyInboundLabelRewrites(text: string): string {
     "Reply chain of current user message (nearest first):\n```json",
   );
 
-  // 7. PATTERN-BASED chat windows (dynamic labels, non-fenced): distinctive (untrusted, chronological, ...)
+  // 7. FENCE-GATED fenced: "Replied message" block (shipped ≤v2026.5.2, fenced, recognized as current sentinel).
+  normalized = normalized.replace(
+    /^Replied message \(untrusted, for context\):[ \t]*\n```json/gm,
+    "Replied message:\n```json",
+  );
+
+  // 8. PATTERN-BASED chat windows (dynamic labels, non-fenced): distinctive (untrusted, chronological, ...)
   // pattern. Mirrors runtime detection in extensions/memory-lancedb/index.ts LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE.
   // This is the only residual pattern-based rewrite but it is narrow (matches the highly distinctive
   // "untrusted, chronological" tuple, not bare prose ending with a suffix).
@@ -182,15 +195,16 @@ export async function noteSessionTranscriptLabelHealth(params: {
       // - Each matching session is processed immediately in its own transaction.
       // - No buffering of all plans; one at a time, then discard.
       // - Per-row updates: only eventJson is modified, seq/created_at/session_key preserved.
+      // - Enumerate from transcript_events (schema-stable) not sessions (post-ship column).
 
-      const instances = readOnlySqliteSessionTranscriptInstances(sqlitePath);
-      for (const instance of instances) {
+      const sessionIds = readOnlySqliteTranscriptSessionIds(sqlitePath);
+      for (const sessionId of sessionIds) {
         // Read transcript in read-only mode (detection phase).
-        const readResult = readOnlySqliteTranscriptSnapshot(sqlitePath, instance.sessionId);
+        const readResult = readOnlySqliteTranscriptSnapshot(sqlitePath, sessionId);
         if (!readResult.ok) {
           const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
           note(
-            `- Failed to read transcript for session ${instance.sessionId} (${agentId}): ${detail}`,
+            `- Failed to read transcript for session ${sessionId} (${agentId}): ${detail}`,
             NOTE_TITLE,
           );
           continue;
@@ -224,18 +238,13 @@ export async function noteSessionTranscriptLabelHealth(params: {
           try {
             runOpenClawAgentWriteTransaction(
               (writeDatabase) => {
-                const current = readSqliteTranscriptSnapshot(writeDatabase, instance.sessionId);
-                if (!snapshotsMatch(readResult.rows, current.rows)) {
-                  throw new Error(
-                    `transcript changed while preparing rewrite for ${instance.sessionId}`,
-                  );
+                // Use rows-only guard (tolerant of malformed JSON in sibling rows).
+                const currentRows = readSqliteTranscriptEventRows(writeDatabase, sessionId);
+                if (!snapshotsMatch(readResult.rows, currentRows)) {
+                  throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
                 }
                 // Surgical per-row update: preserves seq, created_at, and sessions row.
-                updateSqliteTranscriptEventJsonInTransaction(
-                  writeDatabase,
-                  instance.sessionId,
-                  updates,
-                );
+                updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);
               },
               databaseOptions,
               { operationLabel: "doctor.session-transcript-labels" },
@@ -245,7 +254,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
           } catch (repairError) {
             const detail = formatErrorMessage(repairError).replace(/\s+/g, " ").trim();
             note(
-              `- Failed to rewrite labels for session ${instance.sessionId} (${agentId}): ${detail}`,
+              `- Failed to rewrite labels for session ${sessionId} (${agentId}): ${detail}`,
               NOTE_TITLE,
             );
           }

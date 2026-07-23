@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
+  readSqliteTranscriptEventRows,
   readSqliteTranscriptSnapshot,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
@@ -512,7 +513,7 @@ describe("doctor SQLite session transcript label migration", () => {
     );
   });
 
-  it("does not rewrite deleted rule 7: Replied message never-emitted", async () => {
+  it("rewrites fenced rule 7: Replied message", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const scope = {
       ...databaseOptions,
@@ -544,6 +545,55 @@ describe("doctor SQLite session transcript label migration", () => {
     }, databaseOptions);
 
     const database = openOpenClawAgentDatabase(databaseOptions);
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Rewrote legacy inbound-context labels"),
+      expect.anything(),
+    );
+
+    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repairedUser = after.events.find(
+      (e) => !Array.isArray(e) && (e as { id?: unknown }).id === "replied-test",
+    ) as { message?: { content?: unknown } } | undefined;
+    const content = repairedUser?.message?.content;
+
+    expect(content).toContain("Replied message:");
+    expect(content).not.toContain("Replied message (untrusted, for context):");
+  });
+
+  it("does not rewrite unfenced rule 7: Replied message", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    const unfencedContent = "Replied message (untrusted, for context): just some prose";
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "unfenced-replied",
+        parentId: null,
+        message: { role: "user", content: unfencedContent },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
     const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
 
     await noteSessionTranscriptLabelHealth({
@@ -556,5 +606,107 @@ describe("doctor SQLite session transcript label migration", () => {
 
     const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
     expect(after.rows).toEqual(before.rows);
+  });
+
+  it("isolates a session with a malformed row without blocking other repairs", async () => {
+    // event_json is self-generated JSON, so a malformed row is only possible via corruption.
+    // We do not engineer intra-session tolerance for it (the shared FTS reconcile in
+    // session-transcript-index.ts parses every row); instead the per-session transaction is
+    // isolated: the corrupted session is skipped with a diagnostic note, and a clean session
+    // in the same run is still repaired. This locks that graceful-degradation contract.
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const CORRUPT_SESSION_ID = "corrupt-sibling-session";
+    const CORRUPT_SESSION_KEY = "agent:main:corrupt-sibling-session";
+
+    // Clean session that must still be repaired.
+    seedLegacyLabelTranscript(databaseOptions);
+
+    // Corrupt session: one legacy-label user row plus a sibling row we corrupt below.
+    const corruptLegacyContent = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_type":"direct"}',
+      "```",
+    ].join("\n");
+    const corruptEvents: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: CORRUPT_SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "corrupt-legacy-user",
+        parentId: null,
+        message: { role: "user", content: corruptLegacyContent },
+      },
+      {
+        type: "message",
+        id: "malformed-sibling",
+        parentId: null,
+        message: { role: "assistant", content: "response" },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(
+        appendTranscriptEventsInTransaction(
+          database,
+          { ...databaseOptions, sessionId: CORRUPT_SESSION_ID, sessionKey: CORRUPT_SESSION_KEY },
+          corruptEvents,
+        ),
+      ).toBe(corruptEvents.length);
+    }, databaseOptions);
+
+    // Corrupt the sibling row's event_json in place. transcript_events has no type/id columns,
+    // so match on the encoded event body.
+    runOpenClawAgentWriteTransaction((database) => {
+      const changed = database.db
+        .prepare(
+          "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND event_json LIKE ?",
+        )
+        .run("{malformed", CORRUPT_SESSION_ID, "%malformed-sibling%");
+      expect(Number(changed.changes)).toBe(1);
+    }, databaseOptions);
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+
+    // The clean session was repaired.
+    const cleanRepaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const cleanUser = cleanRepaired.events.find(
+      (event) =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        (event as { id?: unknown }).id === "legacy-user",
+    ) as { message?: { content?: unknown } } | undefined;
+    expect(cleanUser?.message?.content).toContain("Conversation info:");
+    expect(cleanUser?.message?.content).not.toContain("Conversation info (untrusted metadata):");
+
+    // The corrupt session was skipped with a diagnostic note naming it.
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to rewrite labels for session ${CORRUPT_SESSION_ID}`),
+      "Session transcript labels",
+    );
+    // Only the clean session counts as repaired.
+    expect(note).toHaveBeenCalledWith(
+      "- Rewrote legacy inbound-context labels in 1 session (1 event).",
+      "Session transcript labels",
+    );
+
+    // The corrupt session was rolled back: legacy label survives, malformed row untouched.
+    // Read raw rows without parsing: readSqliteTranscriptSnapshot would throw on the malformed row.
+    const corruptRows = readSqliteTranscriptEventRows(database, CORRUPT_SESSION_ID);
+    const corruptLegacyJson = corruptRows.find((row) =>
+      row.eventJson.includes("corrupt-legacy-user"),
+    );
+    expect(corruptLegacyJson?.eventJson).toContain("Conversation info (untrusted metadata):");
+    expect(corruptRows.some((row) => row.eventJson === "{malformed")).toBe(true);
   });
 });

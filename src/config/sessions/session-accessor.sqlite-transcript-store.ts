@@ -27,6 +27,7 @@ import {
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
+  deleteSessionTranscriptIndexInTransaction,
   indexAppendedTranscriptEventInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
@@ -371,6 +372,7 @@ export function updateSqliteTranscriptEventJsonInTransaction(
     );
   }
   rotateTranscriptGenerationInTransaction(database, sessionId);
+  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
   touchTranscriptMutationInTransaction(database, sessionId);
 }

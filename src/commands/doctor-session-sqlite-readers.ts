@@ -47,7 +47,6 @@ type TranscriptEventCountResult =
   | { status: "malformed"; message: string };
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
-const INTERNAL_SESSION_EFFECTS_SEGMENT = "internal-session-effects";
 
 export function countTranscriptEventsForPath(
   transcriptPath: string | undefined,
@@ -358,17 +357,10 @@ function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string
   }
 }
 
-// Read-only session transcript instance lister for dry-run detection (avoids writable lifecycle).
-// Mirrors listSqliteTranscriptInstancesFromDatabase from session-accessor.sqlite-history.ts,
-// but uses read-only database access to allow `openclaw doctor` (no --fix) to run read-only.
-export type ReadOnlySessionTranscriptInstance = {
-  sessionId: string;
-  sessionKey: string;
-};
-
-export function readOnlySqliteSessionTranscriptInstances(
-  sqlitePath: string,
-): ReadOnlySessionTranscriptInstance[] {
+// Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).
+// Queries transcript_events table (schema-stable) instead of sessions table.
+// Returns read-only view of all distinct session IDs with events.
+export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[] {
   if (!fs.existsSync(sqlitePath)) {
     return [];
   }
@@ -378,33 +370,19 @@ export function readOnlySqliteSessionTranscriptInstances(
     database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
     const table = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("sessions");
+      .get("transcript_events");
     if (!table) {
       return [];
     }
     const rows = database
-      .prepare(
-        "SELECT session_id, session_key FROM sessions WHERE transcript_updated_at IS NOT NULL ORDER BY session_id ASC",
-      )
-      .all() as Array<{ session_id?: unknown; session_key?: unknown }>;
+      .prepare("SELECT DISTINCT session_id FROM transcript_events ORDER BY session_id ASC")
+      .all() as Array<{ session_id?: unknown }>;
     return rows
-      .filter(
-        (row): row is { session_id: string; session_key: string } =>
-          typeof row.session_id === "string" && typeof row.session_key === "string",
-      )
-      .filter((row) => !isInternalSessionEffectsKey(row.session_key))
-      .map((row) => ({
-        sessionId: row.session_id,
-        sessionKey: row.session_key,
-      }));
+      .filter((row): row is { session_id: string } => typeof row.session_id === "string")
+      .map((row) => row.session_id);
   } finally {
     database?.close();
   }
-}
-
-function isInternalSessionEffectsKey(sessionKey: string): boolean {
-  const parts = sessionKey.split(":");
-  return parts.length >= 4 && parts[0] === "agent" && parts[2] === INTERNAL_SESSION_EFFECTS_SEGMENT;
 }
 
 // Read-only transcript snapshot reader for dry-run detection phase.
