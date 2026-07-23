@@ -1,4 +1,4 @@
-import type { AllowAlwaysPersistenceDecision } from "./exec-approvals-allow-always.js";
+import type { AllowAlwaysPersistenceDecision } from "./exec-approvals-contracts.js";
 // Resolves exec approval requirements and approval-decision availability.
 import {
   normalizeExecAsk,

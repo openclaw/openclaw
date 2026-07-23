@@ -7,8 +7,8 @@ import {
   createExecApprovalPolicySnapshot,
   hasExactCommandDurableExecApproval,
   isExecApprovalPolicySnapshotCurrent,
-  type AllowAlwaysPersistenceDecision,
 } from "./exec-approvals-allow-always.js";
+import type { AllowAlwaysPersistenceDecision } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";

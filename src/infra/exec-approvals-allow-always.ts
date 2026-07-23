@@ -3,11 +3,12 @@ import { sha256HexPrefix } from "./crypto-digest.js";
 // Owns durable approval matching and allow-always persistence.
 import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-import {
-  type AllowAlwaysPattern,
-  resolveAllowAlwaysPatternEntries,
-} from "./exec-approvals-allowlist.js";
+import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import type {
+  AllowAlwaysPersistenceDecision,
+  AllowAlwaysPersistenceReason,
+} from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import { replaceExecApprovalsSnapshot, updateExecApprovalsSync } from "./exec-approvals-store.js";
@@ -351,17 +352,6 @@ export function persistAllowAlwaysPatterns(params: {
   });
   return coverage.patterns;
 }
-
-export type AllowAlwaysPersistenceReason =
-  | "no-reusable-pattern"
-  | "prompt-only"
-  | "runtime-payload"
-  | "unplanned";
-
-export type AllowAlwaysPersistenceDecision =
-  | { kind: "patterns"; patterns: readonly AllowAlwaysPattern[]; commandText?: string }
-  | { kind: "exact-command"; commandText: string }
-  | { kind: "one-shot"; reasons: AllowAlwaysPersistenceReason[] };
 
 function hasRuntimeShellPayload(argv: readonly string[]): boolean {
   const inlineCommand = extractBindableShellWrapperInlineCommand([...argv]);

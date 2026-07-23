@@ -4,12 +4,8 @@ import {
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
-import type {
-  ExecApprovalsFile,
-  ExecApprovalsResolved,
-  ExecAsk,
-  ExecSecurity,
-} from "./exec-approvals-core.js";
+import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
+import type { ExecApprovalsFile, ExecApprovalsResolved } from "./exec-approvals-core.js";
 import { withExecApprovalsReadLock, withExecApprovalsReadLockSync } from "./exec-approvals-lock.js";
 import { resolveExecApprovalsFromFilePrepared } from "./exec-approvals-resolver.js";
 import {
@@ -24,6 +20,7 @@ export * from "./exec-approvals-allowlist.js";
 export * from "./exec-approvals-core.js";
 export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+export type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 export {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   mergeExecApprovalsSocketDefaults,
@@ -53,14 +50,6 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     socket: { path: socketPath, token },
   });
 }
-
-export type ExecApprovalsDefaultOverrides = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-  requireSocket?: boolean;
-};
 
 function shapeResolvedExecApprovals(params: {
   file: ExecApprovalsFile;
@@ -203,7 +192,7 @@ export {
 export type {
   AllowAlwaysPersistenceDecision,
   AllowAlwaysPersistenceReason,
-} from "./exec-approvals-allow-always.js";
+} from "./exec-approvals-contracts.js";
 export {
   commitExecAuthorizationLocked,
   recordAllowlistMatchesUse,

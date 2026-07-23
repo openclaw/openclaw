@@ -80,7 +80,7 @@ function saveExecApprovalsUnlocked(file: ExecApprovalsFile): void {
   writeExecApprovalsRaw(filePath, raw);
 }
 
-export type ExecApprovalsUpdate = {
+type ExecApprovalsUpdate = {
   baseHash?: string;
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
 };

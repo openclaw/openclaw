@@ -9,6 +9,7 @@ import {
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
+import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 import type {
   ExecApprovalsAgent,
   ExecApprovalsDefaults,
@@ -17,7 +18,6 @@ import type {
   ExecAsk,
   ExecSecurity,
 } from "./exec-approvals-core.js";
-import type { ExecApprovalsDefaultOverrides } from "./exec-approvals.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 function isExecSecurity(value: unknown): value is ExecSecurity {
