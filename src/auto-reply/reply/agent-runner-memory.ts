@@ -222,13 +222,22 @@ function resolveEffectivePromptTokens(
 
 function isPreflightCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
-  // Preflight compaction is a guardrail, not a hard dependency. These classes
-  // mean the context engine found nothing useful to compact, so the reply should
-  // continue instead of surfacing a generic user-facing failure.
-  return (
+  // Preflight compaction is a guardrail, not a hard dependency. Skip when the
+  // context engine found nothing useful to compact, when compaction timed out,
+  // or when a retryable provider failure (5xx or explicit 429 rate limit)
+  // occurred. Other provider failures (400/401/403) remain terminal so auth
+  // and request-shape problems are surfaced at this boundary.
+  if (
     classification === "below_threshold" ||
     classification === "no_compactable_entries" ||
-    classification === "already_compacted_recently"
+    classification === "already_compacted_recently" ||
+    classification === "timeout" ||
+    classification === "provider_error_5xx"
+  ) {
+    return true;
+  }
+  return (
+    classification === "provider_error_4xx" && /\b429\b/.test(reason ?? "")
   );
 }
 
