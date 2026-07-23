@@ -12,6 +12,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
+import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -82,7 +83,7 @@ export function createMessageSentEmitter(params: {
           toPluginMessageSentEvent(canonical),
           toPluginMessageContext(canonical),
         ),
-        "deliverOutboundPayloads: message_sent plugin hook failed",
+        `${OUTBOUND_DELIVERY_LOG_SCOPE}: message_sent plugin hook failed`,
         (message) => {
           log.warn(message);
         },
@@ -100,7 +101,7 @@ export function createMessageSentEmitter(params: {
           toInternalMessageSentContext(canonical),
         ),
       ),
-      "deliverOutboundPayloads: message:sent internal hook failed",
+      `${OUTBOUND_DELIVERY_LOG_SCOPE}: message:sent internal hook failed`,
       (message) => {
         log.warn(message);
       },

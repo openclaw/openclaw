@@ -17,6 +17,7 @@ import {
   suppressedPayloadOutcome,
   toOutboundDeliveryError,
 } from "./deliver-hooks.js";
+import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import {
   buildPayloadSummary,
   deliveryKindForPayload,
@@ -228,7 +229,7 @@ export async function deliverOutboundPayloadsCore(
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
-      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
+      `${OUTBOUND_DELIVERY_LOG_SCOPE}: session.agentId present without session key; internal message:sent hook will be skipped`,
       {
         channel,
         to,

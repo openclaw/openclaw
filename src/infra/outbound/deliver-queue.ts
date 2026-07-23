@@ -88,20 +88,13 @@ function materializeQueueCustodyMedia(
   });
 }
 
-/**
- * @deprecated Direct outbound delivery is compatibility/runtime substrate.
- * New message lifecycle code should use `sendDurableMessageBatch` from
- * `src/channels/message/send.ts` or `deliverInboundReplyWithMessageSendContext`
- * from `src/channels/turn/durable-delivery.ts`. Keep direct use only for
- * outbound substrate, recovery, and compatibility paths.
- */
-export async function deliverOutboundPayloads(
+export async function runOutboundDelivery(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  return await deliverOutboundPayloadsInternal(params);
+  return await runOutboundDeliveryInternal(params);
 }
 
-export async function deliverOutboundPayloadsInternal(
+export async function runOutboundDeliveryInternal(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
