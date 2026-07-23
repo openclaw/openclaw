@@ -1,6 +1,10 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type {
+  ClawCatalogDetail,
+  ClawCatalogEntry,
+  ClawLifecycleApplyResult,
+  ClawLifecyclePlanResult,
   ClawResourceStatus,
   ClawStatusEntry,
   ClawsDoctorResult,
@@ -10,15 +14,40 @@ import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 
+type ClawsMode = "installed" | "discover";
+
 type ClawsProps = {
   connected: boolean;
   available: boolean;
+  catalogAvailable: boolean;
+  lifecycleAvailable: boolean;
   loading: boolean;
+  operationBusy: boolean;
   error: string | null;
   status: ClawsStatusResult | null;
   doctor: ClawsDoctorResult | null;
   selectedAgentId: string | null;
+  mode: ClawsMode;
+  query: string;
+  catalogEntries: readonly ClawCatalogEntry[];
+  catalogDetail: ClawCatalogDetail | null;
+  installedCatalogAgent?: ClawStatusEntry;
+  plan: ClawLifecyclePlanResult | null;
+  outcome: ClawLifecycleApplyResult | null;
+  removeUnused: boolean;
+  riskAcknowledged: boolean;
   onSelect: (agentId: string) => void;
+  onModeChange: (mode: ClawsMode) => void;
+  onQueryChange: (query: string) => void;
+  onSearch: () => void;
+  onSelectCatalog: (entry: ClawCatalogEntry) => void;
+  onPreviewAdd: (detail: ClawCatalogDetail) => void;
+  onPreviewUpdate: (record: ClawStatusEntry, detail?: ClawCatalogDetail) => void;
+  onPreviewRemove: (record: ClawStatusEntry) => void;
+  onRemoveUnusedChange: (value: boolean) => void;
+  onRiskAcknowledgedChange: (value: boolean) => void;
+  onCancelPlan: () => void;
+  onApplyPlan: () => void;
 };
 
 function recordHealthy(record: ClawStatusEntry): boolean {
@@ -92,6 +121,10 @@ function sourceKindLabel(sourceKind: ClawStatusEntry["sourceKind"]): string {
     : t("clawsPage.sources.development");
 }
 
+function operationLabel(operation: ClawLifecyclePlanResult["operation"]): string {
+  return t(`clawsPage.operations.${operation}`);
+}
+
 function renderSummary(status: ClawsStatusResult) {
   const stats: Array<{ key: string; label: string; value: number; iconName: IconName }> = [
     {
@@ -142,29 +175,25 @@ function renderInventory(records: readonly ClawStatusEntry[], props: ClawsProps)
       ${repeat(
         records,
         (record) => record.agentId,
-        (record) => {
-          const healthy = recordHealthy(record);
-          return html`
-            <button
-              class="claws-inventory__row"
-              type="button"
-              role="listitem"
-              aria-pressed=${record.agentId === props.selectedAgentId}
-              @click=${() => props.onSelect(record.agentId)}
+        (record) => html`
+          <button
+            class="claws-inventory__row"
+            type="button"
+            role="listitem"
+            aria-pressed=${record.agentId === props.selectedAgentId}
+            @click=${() => props.onSelect(record.agentId)}
+          >
+            <span class="claws-inventory__main"
+              ><span class="claws-inventory__name">${record.name}</span
+              ><span class="claws-inventory__agent">${record.agentId}</span></span
             >
-              <span class="claws-inventory__main">
-                <span class="claws-inventory__name">${record.name}</span>
-                <span class="claws-inventory__agent">${record.agentId}</span>
-              </span>
-              <span class="claws-inventory__meta">
-                <span class="chip ${healthy ? "chip-ok" : "chip-warn"}">
-                  ${healthy ? t("clawsPage.healthy") : t("clawsPage.attention")}
-                </span>
-                <span>${t("clawsPage.versionCompact", { version: record.version })}</span>
-              </span>
-            </button>
-          `;
-        },
+            <span class="claws-inventory__meta"
+              ><span class="chip ${recordHealthy(record) ? "chip-ok" : "chip-warn"}"
+                >${recordHealthy(record) ? t("clawsPage.healthy") : t("clawsPage.attention")}</span
+              ><span>${t("clawsPage.versionCompact", { version: record.version })}</span></span
+            >
+          </button>
+        `,
       )}
     </div>
   `;
@@ -181,8 +210,8 @@ function renderResources(record: ClawStatusEntry) {
           (resource) => html`
             <div class="claws-resource">
               <div class="claws-resource__identity">
-                <span class="claws-resource__kind">${resourceKindLabel(resource.kind)}</span>
-                <span class="claws-resource__id">${resource.id}</span>
+                <span class="claws-resource__kind">${resourceKindLabel(resource.kind)}</span
+                ><span class="claws-resource__id">${resource.id}</span>
               </div>
               <div class="claws-resource__state">
                 ${resource.relationship
@@ -192,13 +221,13 @@ function renderResources(record: ClawStatusEntry) {
                   ? html`<span class="chip">${originLabel(resource.origin)}</span>`
                   : nothing}
                 ${resource.independentOwner
-                  ? html`<span class="chip" title=${t("clawsPage.independentOwner")}>
-                      ${t("clawsPage.referenced")}
-                    </span>`
+                  ? html`<span class="chip" title=${t("clawsPage.independentOwner")}
+                      >${t("clawsPage.referenced")}</span
+                    >`
                   : nothing}
-                <span class="chip ${chipClassForState(resource.state)}">
-                  ${resourceStateLabel(resource.state)}
-                </span>
+                <span class="chip ${chipClassForState(resource.state)}"
+                  >${resourceStateLabel(resource.state)}</span
+                >
               </div>
             </div>
           `,
@@ -212,8 +241,7 @@ function renderDiagnostics(doctor: ClawsDoctorResult | null) {
   return html`
     <section class="claws-detail__section">
       <div class="claws-detail__heading">
-        ${t("clawsPage.diagnostics")}
-        ${doctor
+        ${t("clawsPage.diagnostics")}${doctor
           ? html`<span class="claws-detail__count">${doctor.findings.length}</span>`
           : nothing}
       </div>
@@ -240,7 +268,7 @@ function renderDiagnostics(doctor: ClawsDoctorResult | null) {
   `;
 }
 
-function renderDetail(record: ClawStatusEntry) {
+function renderDetail(record: ClawStatusEntry, props: ClawsProps) {
   return html`
     <section class="claws-detail">
       <div class="claws-detail__header">
@@ -248,9 +276,27 @@ function renderDetail(record: ClawStatusEntry) {
           <div class="claws-detail__title">${record.name}</div>
           <div class="claws-detail__subtitle">${t("clawsPage.agent")}: ${record.agentId}</div>
         </div>
-        <span class="chip ${recordHealthy(record) ? "chip-ok" : "chip-warn"}">
-          ${recordHealthy(record) ? t("clawsPage.healthy") : t("clawsPage.attention")}
-        </span>
+        <span class="chip ${recordHealthy(record) ? "chip-ok" : "chip-warn"}"
+          >${recordHealthy(record) ? t("clawsPage.healthy") : t("clawsPage.attention")}</span
+        >
+      </div>
+      <div class="claws-detail__actions">
+        <button
+          class="btn"
+          type="button"
+          ?disabled=${!props.lifecycleAvailable || props.operationBusy}
+          @click=${() => props.onPreviewUpdate(record)}
+        >
+          ${t("clawsPage.actions.previewUpdate")}
+        </button>
+        <button
+          class="btn danger"
+          type="button"
+          ?disabled=${!props.lifecycleAvailable || props.operationBusy}
+          @click=${() => props.onPreviewRemove(record)}
+        >
+          ${t("clawsPage.actions.previewRemove")}
+        </button>
       </div>
       <dl class="claws-metadata">
         <div>
@@ -273,6 +319,276 @@ function renderDetail(record: ClawStatusEntry) {
   `;
 }
 
+function renderModeControl(props: ClawsProps) {
+  return html`
+    <div
+      class="settings-segmented claws-mode"
+      role="tablist"
+      aria-label=${t("clawsPage.modeLabel")}
+    >
+      ${(["installed", "discover"] as const).map(
+        (mode) => html`
+          <button
+            class="settings-segmented__btn ${props.mode === mode
+              ? "settings-segmented__btn--active"
+              : ""}"
+            type="button"
+            role="tab"
+            aria-selected=${props.mode === mode}
+            ?disabled=${mode === "discover" && !props.catalogAvailable}
+            @click=${() => props.onModeChange(mode)}
+          >
+            ${t(`clawsPage.modes.${mode}`)}
+          </button>
+        `,
+      )}
+    </div>
+  `;
+}
+
+function renderCatalogDetail(detail: ClawCatalogDetail, props: ClawsProps) {
+  const counts = [
+    [t("clawsPage.resourceKinds.workspaceFile"), detail.workspaceFiles],
+    [t("clawsPage.resourceKinds.skill"), detail.skills],
+    [t("clawsPage.resourceKinds.plugin"), detail.plugins],
+    [t("clawsPage.resourceKinds.mcpServer"), detail.mcpServers],
+    [t("clawsPage.resourceKinds.cronJob"), detail.scheduledJobs],
+  ] as const;
+  return html`
+    <section class="claws-detail claws-catalog-detail">
+      <div class="claws-detail__header">
+        <div>
+          <div class="claws-detail__title">${detail.displayName}</div>
+          <div class="claws-detail__subtitle">${detail.packageName} · ${detail.version}</div>
+        </div>
+        ${detail.official
+          ? html`<span class="chip chip-ok">${t("clawsPage.official")}</span>`
+          : nothing}
+      </div>
+      ${detail.summary
+        ? html`<p class="claws-catalog-detail__summary">${detail.summary}</p>`
+        : nothing}
+      ${detail.agentDescription
+        ? html`<p class="muted claws-catalog-detail__summary">${detail.agentDescription}</p>`
+        : nothing}
+      <dl class="claws-metadata claws-catalog-counts">
+        ${counts.map(
+          ([label, value]) =>
+            html`<div>
+              <dt>${label}</dt>
+              <dd>${value}</dd>
+            </div>`,
+        )}
+      </dl>
+      ${detail.scanStatus
+        ? html`<div class="claws-scan">
+            <span>${t("clawsPage.scanStatus")}</span><span class="chip">${detail.scanStatus}</span>
+          </div>`
+        : nothing}
+      <div class="claws-detail__actions">
+        ${props.installedCatalogAgent
+          ? html`<button
+              class="btn primary"
+              type="button"
+              ?disabled=${!props.lifecycleAvailable || props.operationBusy}
+              @click=${() => props.onPreviewUpdate(props.installedCatalogAgent!, detail)}
+            >
+              ${t("clawsPage.actions.previewUpdate")}
+            </button>`
+          : html`<button
+              class="btn primary"
+              type="button"
+              ?disabled=${!props.lifecycleAvailable || props.operationBusy}
+              @click=${() => props.onPreviewAdd(detail)}
+            >
+              ${t("clawsPage.actions.previewAdd")}
+            </button>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderDiscover(props: ClawsProps) {
+  if (!props.catalogAvailable) {
+    return html`<div class="callout warn">${t("clawsPage.catalogUnavailable")}</div>`;
+  }
+  return html`
+    <form
+      class="claws-search"
+      @submit=${(event: SubmitEvent) => {
+        event.preventDefault();
+        props.onSearch();
+      }}
+    >
+      <label class="claws-search__field"
+        ><span>${t("clawsPage.searchLabel")}</span
+        ><input
+          type="search"
+          .value=${props.query}
+          placeholder=${t("clawsPage.searchPlaceholder")}
+          @input=${(event: Event) =>
+            props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
+      /></label>
+      <button
+        class="btn primary"
+        type="submit"
+        ?disabled=${props.operationBusy || !props.query.trim()}
+      >
+        ${t("clawsPage.search")}
+      </button>
+    </form>
+    <div class="claws-workspace claws-catalog-workspace">
+      <div class="claws-inventory" role="list">
+        ${props.catalogEntries.length === 0
+          ? html`<div class="muted claws-empty">${t("clawsPage.searchEmpty")}</div>`
+          : repeat(
+              props.catalogEntries,
+              (entry) => entry.packageName,
+              (entry) => html`
+                <button
+                  class="claws-inventory__row"
+                  type="button"
+                  role="listitem"
+                  aria-pressed=${entry.packageName === props.catalogDetail?.packageName}
+                  @click=${() => props.onSelectCatalog(entry)}
+                >
+                  <span class="claws-inventory__main"
+                    ><span class="claws-inventory__name">${entry.displayName}</span
+                    ><span class="claws-inventory__agent">${entry.packageName}</span></span
+                  >
+                  <span class="claws-inventory__meta"
+                    >${entry.official
+                      ? html`<span class="chip chip-ok">${t("clawsPage.official")}</span>`
+                      : nothing}${entry.latestVersion
+                      ? html`<span
+                          >${t("clawsPage.versionCompact", { version: entry.latestVersion })}</span
+                        >`
+                      : nothing}</span
+                  >
+                </button>
+              `,
+            )}
+      </div>
+      ${props.catalogDetail
+        ? renderCatalogDetail(props.catalogDetail, props)
+        : html`<div class="muted claws-empty claws-catalog-prompt">
+            ${t("clawsPage.selectCatalog")}
+          </div>`}
+    </div>
+  `;
+}
+
+function renderPlan(plan: ClawLifecyclePlanResult, props: ClawsProps) {
+  const blocked = plan.blockers.length > 0;
+  const consentMissing = plan.riskAcknowledgementRequired && !props.riskAcknowledged;
+  return html`
+    <section class="claws-plan" aria-label=${t("clawsPage.plan.title")}>
+      <div class="claws-detail__header">
+        <div>
+          <div class="claws-detail__title">
+            ${t("clawsPage.plan.heading", { operation: operationLabel(plan.operation) })}
+          </div>
+          <div class="claws-detail__subtitle">${plan.target.name ?? plan.target.agentId ?? ""}</div>
+        </div>
+        <span class="chip ${blocked ? "chip-danger" : "chip-warn"}"
+          >${blocked ? t("clawsPage.plan.blocked") : t("clawsPage.plan.preview")}</span
+        >
+      </div>
+      <div class="claws-plan__groups">
+        <section>
+          <div class="claws-detail__heading">${t("clawsPage.plan.actions")}</div>
+          <div class="claws-plan__list">
+            ${repeat(
+              plan.actions,
+              (action) => `${action.kind}:${action.id}:${action.action}`,
+              (action) =>
+                html`<div class="claws-plan__row">
+                  <span><strong>${action.action}</strong> ${action.id}</span
+                  ><span class="chip ${action.blocked ? "chip-danger" : ""}">${action.kind}</span>
+                </div>`,
+            )}
+          </div>
+        </section>
+        ${plan.capabilities.length > 0
+          ? html`<section>
+              <div class="claws-detail__heading">${t("clawsPage.plan.capabilities")}</div>
+              <div class="claws-plan__list">
+                ${repeat(
+                  plan.capabilities,
+                  (capability) => `${capability.kind}:${capability.id}`,
+                  (capability) =>
+                    html`<div class="claws-plan__row">
+                      <span
+                        ><strong>${capability.action}</strong> ${capability.id}<small
+                          >${capability.reason}</small
+                        ></span
+                      ><span class="chip">${capability.kind}</span>
+                    </div>`,
+                )}
+              </div>
+            </section>`
+          : nothing}
+        ${plan.blockers.length > 0
+          ? html`<section>
+              <div class="claws-detail__heading">${t("clawsPage.plan.blockers")}</div>
+              <div class="claws-plan__list">
+                ${repeat(
+                  plan.blockers,
+                  (blocker) => `${blocker.code}:${blocker.path}`,
+                  (blocker) =>
+                    html`<div class="claws-plan__row claws-plan__row--blocked">
+                      <span><strong>${blocker.code}</strong><small>${blocker.message}</small></span>
+                    </div>`,
+                )}
+              </div>
+            </section>`
+          : nothing}
+      </div>
+      ${plan.operation === "remove"
+        ? html`<label class="claws-consent"
+            ><input
+              type="checkbox"
+              .checked=${props.removeUnused}
+              ?disabled=${props.operationBusy}
+              @change=${(event: Event) =>
+                props.onRemoveUnusedChange((event.currentTarget as HTMLInputElement).checked)}
+            /><span>${t("clawsPage.plan.removeUnused")}</span></label
+          >`
+        : nothing}
+      ${plan.trustWarning ? html`<div class="callout warn">${plan.trustWarning}</div>` : nothing}
+      ${plan.riskAcknowledgementRequired
+        ? html`<label class="claws-consent"
+            ><input
+              type="checkbox"
+              .checked=${props.riskAcknowledged}
+              @change=${(event: Event) =>
+                props.onRiskAcknowledgedChange((event.currentTarget as HTMLInputElement).checked)}
+            /><span>${t("clawsPage.plan.acknowledgeRisk")}</span></label
+          >`
+        : nothing}
+      <div class="claws-plan__actions">
+        <button
+          class="btn"
+          type="button"
+          ?disabled=${props.operationBusy}
+          @click=${props.onCancelPlan}
+        >
+          ${t("common.cancel")}</button
+        ><button
+          class="btn primary"
+          type="button"
+          ?disabled=${props.operationBusy || blocked || consentMissing}
+          @click=${props.onApplyPlan}
+        >
+          ${props.operationBusy
+            ? t("clawsPage.plan.applying")
+            : t("clawsPage.plan.confirm", { operation: operationLabel(plan.operation) })}
+        </button>
+      </div>
+    </section>
+  `;
+}
+
 export function renderClaws(props: ClawsProps) {
   if (!props.connected) {
     return html`<div class="callout warn">${t("clawsPage.disconnected")}</div>`;
@@ -280,26 +596,32 @@ export function renderClaws(props: ClawsProps) {
   if (!props.available) {
     return html`<div class="callout warn">${t("clawsPage.unavailable")}</div>`;
   }
-  if (props.error) {
-    return html`<div class="callout danger">${props.error}</div>`;
-  }
-  if (props.loading && !props.status) {
-    return html`<div class="muted claws-empty">${t("clawsPage.loading")}</div>`;
-  }
-  if (!props.status || props.status.records.length === 0) {
-    return html`<div class="muted claws-empty">${t("clawsPage.empty")}</div>`;
-  }
   const selected =
-    props.status.records.find((record) => record.agentId === props.selectedAgentId) ??
-    props.status.records[0];
+    props.status?.records.find((record) => record.agentId === props.selectedAgentId) ??
+    props.status?.records[0];
   return html`
     <div class="claws-page stack">
-      ${renderSummary(props.status)}
-      <div class="claws-workspace">
-        ${renderInventory(props.status.records, props)}
-        ${selected ? renderDetail(selected) : nothing}
-      </div>
-      ${renderDiagnostics(props.doctor)}
+      ${renderModeControl(props)}
+      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${props.outcome
+        ? html`<div class="callout ${props.outcome.status === "complete" ? "success" : "warn"}">
+            ${props.outcome.message}
+          </div>`
+        : nothing}
+      ${props.plan ? renderPlan(props.plan, props) : nothing}
+      ${props.mode === "discover"
+        ? renderDiscover(props)
+        : props.loading && !props.status
+          ? html`<div class="muted claws-empty">${t("clawsPage.loading")}</div>`
+          : !props.status || props.status.records.length === 0
+            ? html`<div class="muted claws-empty">${t("clawsPage.empty")}</div>`
+            : html`${renderSummary(props.status)}
+                <div class="claws-workspace">
+                  ${renderInventory(props.status.records, props)}${selected
+                    ? renderDetail(selected, props)
+                    : nothing}
+                </div>
+                ${renderDiagnostics(props.doctor)}`}
     </div>
   `;
 }
