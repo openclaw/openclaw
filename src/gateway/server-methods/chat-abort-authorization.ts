@@ -299,7 +299,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ),
   );
   const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
-  let matchedSessionRuns = 0;
+  let hasUnauthorizedRuns = false;
   for (const [key, entry] of params.context.dedupe) {
     const run = readPreRegisteredRun({ key, entry, keyPrefix: params.keyPrefix });
     if (!run) {
@@ -331,14 +331,15 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedSessionRuns += 1;
     if (canRequesterAbortPreRegisteredRun(run.payload, params.requester)) {
       authorizedByRunId.set(run.runId, run);
+    } else {
+      hasUnauthorizedRuns = true;
     }
   }
   return {
-    matchedSessionRuns,
     authorizedRuns: [...authorizedByRunId.values()],
+    hasUnauthorizedRuns,
   };
 }
 
@@ -363,7 +364,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
-  let matchedSessionRuns = 0;
+  let hasUnauthorizedRuns = false;
   for (const [runId, active] of params.chatAbortControllers) {
     if (active.controlUiVisible === false) {
       continue;
@@ -381,14 +382,15 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ) {
       continue;
     }
-    matchedSessionRuns += 1;
     if (canRequesterAbortChatRun(active, params.requester)) {
       authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+    } else {
+      hasUnauthorizedRuns = true;
     }
   }
   return {
-    matchedSessionRuns,
     authorizedRuns,
+    hasUnauthorizedRuns,
   };
 }
 
