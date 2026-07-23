@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import {
-  buildSessionResetBoundaryEvent,
-  buildSessionResetBoundaryPlan,
-} from "./session-reset-boundary-event.js";
+import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 
 function message(params: {
   id: string;
@@ -24,7 +21,7 @@ function message(params: {
 }
 
 describe("reset boundary planning", () => {
-  it("selects repeated reset tails from the current logical window", () => {
+  it("selects repeated reset tails from the current logical window", async () => {
     const oldUser = message({
       id: "old-user",
       parentId: null,
@@ -63,17 +60,19 @@ describe("reset boundary planning", () => {
     };
 
     expect(
-      buildSessionResetBoundaryEvent({
-        events: [oldUser, oldAssistant, keptUser, keptAssistant, firstReset],
-        reason: "reset",
-      }),
+      (
+        await buildSessionResetBoundaryPlan({
+          events: [oldUser, oldAssistant, keptUser, keptAssistant, firstReset],
+          reason: "reset",
+        })
+      ).event,
     ).toMatchObject({
       parentId: firstReset.id,
       firstKeptEntryId: keptUser.id,
     });
   });
 
-  it("keeps a compaction retained tail when planning the next reset", () => {
+  it("keeps a compaction retained tail when planning the next reset", async () => {
     const discarded = message({
       id: "discarded-user",
       parentId: null,
@@ -106,10 +105,12 @@ describe("reset boundary planning", () => {
     };
 
     expect(
-      buildSessionResetBoundaryEvent({
-        events: [discarded, keptUser, keptAssistant, compaction],
-        reason: "new",
-      }),
+      (
+        await buildSessionResetBoundaryPlan({
+          events: [discarded, keptUser, keptAssistant, compaction],
+          reason: "new",
+        })
+      ).event,
     ).toMatchObject({
       parentId: compaction.id,
       firstKeptEntryId: keptUser.id,

@@ -18,19 +18,19 @@ type ResetWindowDatabase = Pick<
   | "transcript_events"
 >;
 
-export type ResetWindowProjection = {
+type ResetWindowProjection = {
   database: OpenClawAgentDatabase;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
 };
 
-export type VisibleMessagePositions = {
+type VisibleMessagePositions = {
   kept: number[];
   postStart: number;
   total: number;
 };
 
-export type ResetWindowMessageEvent = {
+type ResetWindowMessageEvent = {
   event: TranscriptEvent;
   seq: number;
 };

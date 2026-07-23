@@ -61,7 +61,7 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
-export type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
+type ResetReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
 
 export interface ResetEntry extends SessionTreeEntryBase {
   type: "reset";

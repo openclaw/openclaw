@@ -10,7 +10,7 @@ import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js"
 
 export type SessionResetBoundaryReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
 
-export type SessionResetBoundaryEvent = {
+type SessionResetBoundaryEvent = {
   type: "reset";
   id: string;
   parentId: string | null;
@@ -73,7 +73,7 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
   return [...kept, ...entries.slice(boundaryIndex + 1)];
 }
 
-export function buildSessionResetBoundaryEvent(params: {
+function buildSessionResetBoundaryEvent(params: {
   events: readonly unknown[];
   reason: SessionResetBoundaryReason;
 }): SessionResetBoundaryEvent {

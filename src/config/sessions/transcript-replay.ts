@@ -1,9 +1,4 @@
-// Copies safe transcript tails across session lifecycle rotations.
-import fs from "node:fs";
-import fsp from "node:fs/promises";
-import path from "node:path";
-import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
-import { CURRENT_SESSION_VERSION } from "./version.js";
+// Selects safe user/assistant tails for in-log lifecycle boundaries.
 
 /** Tail kept so DM continuity survives silent session rotations. */
 export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
@@ -15,7 +10,6 @@ type SessionRecord = {
   timestamp?: unknown;
   message?: { role?: unknown };
 };
-type KeptRecord = { role: "user" | "assistant"; line: string };
 type KeptParsedRecord = { role: "user" | "assistant"; record: unknown };
 
 function isValidReplayTimestamp(value: unknown): boolean {
@@ -46,80 +40,6 @@ export function replayableTranscriptRole(
   return role === "user" || role === "assistant" ? role : undefined;
 }
 
-/**
- * Copy the tail of user/assistant JSONL records from a prior transcript into a
- * freshly-rotated one. Tool, system, and compaction records are skipped so
- * replay cannot reshape tool/role ordering, and the tail is aligned and
- * coalesced into alternating user/assistant turns so role-ordering resets
- * cannot immediately recur. Uses async I/O so long transcripts do not block
- * the event loop. Returns 0 on any error.
- */
-export async function replayRecentUserAssistantMessages(params: {
-  sourceTranscript?: string;
-  targetTranscript: string;
-  newSessionId: string;
-  maxMessages?: number;
-}): Promise<number> {
-  const max = Math.max(0, params.maxMessages ?? DEFAULT_REPLAY_MAX_MESSAGES);
-  const src = params.sourceTranscript;
-  if (max === 0 || !src || !fs.existsSync(src)) {
-    return 0;
-  }
-  try {
-    const tail = await readRecentUserAssistantReplayLines({
-      sourceTranscript: src,
-      maxMessages: max,
-    });
-    if (tail.length === 0) {
-      return 0;
-    }
-    if (!fs.existsSync(params.targetTranscript)) {
-      await fsp.mkdir(path.dirname(params.targetTranscript), { recursive: true });
-      const header = JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: params.newSessionId,
-        timestamp: new Date().toISOString(),
-        cwd: process.cwd(),
-      });
-      await fsp.writeFile(params.targetTranscript, `${header}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-      });
-    }
-    await fsp.appendFile(params.targetTranscript, `${tail.join("\n")}\n`, "utf-8");
-    return tail.length;
-  } catch {
-    return 0;
-  }
-}
-
-export async function readRecentUserAssistantReplayRecordsFromJsonl(params: {
-  sourceTranscript?: string;
-  maxMessages?: number;
-}): Promise<unknown[]> {
-  const max = Math.max(0, params.maxMessages ?? DEFAULT_REPLAY_MAX_MESSAGES);
-  const src = params.sourceTranscript;
-  if (max === 0 || !src || !fs.existsSync(src)) {
-    return [];
-  }
-  const recordsNewestFirst: unknown[] = [];
-  for await (const line of streamSessionTranscriptLinesReverse(src)) {
-    try {
-      const record = JSON.parse(line) as unknown;
-      if (replayableTranscriptRole(record as SessionRecord | null)) {
-        recordsNewestFirst.push(record);
-        if (recordsNewestFirst.length >= max) {
-          break;
-        }
-      }
-    } catch {
-      // Skip malformed lines.
-    }
-  }
-  return selectRecentUserAssistantReplayRecords(recordsNewestFirst.toReversed(), max);
-}
-
 export function selectRecentUserAssistantReplayRecords(
   records: readonly unknown[],
   maxMessages = DEFAULT_REPLAY_MAX_MESSAGES,
@@ -137,27 +57,6 @@ export function selectRecentUserAssistantReplayRecords(
   }
   const tail = selectAlternatingReplayTail(kept, max);
   return tail.map((entry) => entry.record);
-}
-
-async function readRecentUserAssistantReplayLines(params: {
-  sourceTranscript: string;
-  maxMessages: number;
-}): Promise<string[]> {
-  const kept: KeptRecord[] = [];
-  for (const line of (await fsp.readFile(params.sourceTranscript, "utf-8")).split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const role = replayableTranscriptRole(JSON.parse(line) as SessionRecord | null);
-      if (role) {
-        kept.push({ role, line });
-      }
-    } catch {
-      // Skip malformed lines.
-    }
-  }
-  return selectAlternatingReplayTail(kept, params.maxMessages).map((entry) => entry.line);
 }
 
 function selectAlternatingReplayTail<T extends { role: "user" | "assistant" }>(
