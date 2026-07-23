@@ -20,8 +20,7 @@ export async function transcribeElevenLabsAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
-  const apiKey =
-    req.apiKey || process.env.ELEVENLABS_API_KEY?.trim() || process.env.XI_API_KEY?.trim();
+  const apiKey = req.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
   if (!apiKey) {
     throw new Error("ElevenLabs API key missing");
   }

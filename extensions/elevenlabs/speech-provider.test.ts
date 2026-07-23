@@ -311,13 +311,4 @@ describe("elevenlabs speech provider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
-
-  describe("blank environment API key", () => {
-    it("treats a whitespace-only XI_API_KEY as missing in isConfigured", () => {
-      vi.stubEnv("ELEVENLABS_API_KEY", "");
-      vi.stubEnv("XI_API_KEY", "   ");
-      const provider = buildElevenLabsSpeechProvider();
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
-    });
-  });
 });

@@ -5,6 +5,15 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
+
+const { resolveElevenLabsApiKeyWithProfileFallbackMock } = vi.hoisted(() => ({
+  resolveElevenLabsApiKeyWithProfileFallbackMock: vi.fn(),
+}));
+
+vi.mock("./config-api.js", () => ({
+  resolveElevenLabsApiKeyWithProfileFallback: resolveElevenLabsApiKeyWithProfileFallbackMock,
+}));
+
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 let cleanup: (() => Promise<void>) | undefined;
@@ -48,6 +57,8 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   afterEach(async () => {
     await cleanup?.();
     cleanup = undefined;
+    vi.unstubAllEnvs();
+    resolveElevenLabsApiKeyWithProfileFallbackMock.mockReset();
   });
 
   it("normalizes nested provider config", () => {
@@ -161,12 +172,15 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
   });
 
-  describe("blank environment API key", () => {
-    it("treats a whitespace-only XI_API_KEY as not configured", () => {
-      vi.stubEnv("ELEVENLABS_API_KEY", "");
-      vi.stubEnv("XI_API_KEY", "   ");
-      const provider = buildElevenLabsRealtimeTranscriptionProvider();
-      expect(provider.isConfigured({ cfg: {} as OpenClawConfig, providerConfig: {} })).toBe(false);
-    });
+  it("rejects whitespace-only environment keys before session creation", () => {
+    resolveElevenLabsApiKeyWithProfileFallbackMock.mockReturnValue(null);
+    vi.stubEnv("ELEVENLABS_API_KEY", "");
+    vi.stubEnv("XI_API_KEY", "   ");
+    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+
+    expect(provider.isConfigured({ cfg: {} as OpenClawConfig, providerConfig: {} })).toBe(false);
+    expect(() => provider.createSession({ providerConfig: {} })).toThrow(
+      "ElevenLabs API key missing",
+    );
   });
 });
