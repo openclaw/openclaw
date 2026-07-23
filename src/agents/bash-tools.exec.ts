@@ -1255,7 +1255,7 @@ async function validateScriptFileForShellBleed(params: {
 
     // Common failure mode: shell env var syntax leaking into Python/JS.
     // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
-    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
+    const envVarRegex = /\$[A-Z_][A-Z0-9_]{0,}/g;
     const first = envVarRegex.exec(content);
     if (first) {
       const idx = first.index;
