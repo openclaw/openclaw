@@ -59,11 +59,11 @@ function safeJsonStringify(value: unknown): string {
 function extractFileOperations(
   messages: AgentMessage[],
   entries: SessionTreeEntry[],
-  prevCompactionIndex: number,
+  prevBoundaryIndex: number,
 ): FileOperations {
   const fileOps = createFileOps();
-  if (prevCompactionIndex >= 0) {
-    const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
+  if (prevBoundaryIndex >= 0 && entries[prevBoundaryIndex]?.type === "compaction") {
+    const prevCompaction = entries[prevBoundaryIndex] as CompactionEntry;
     if (!prevCompaction.fromHook && prevCompaction.details) {
       const details = prevCompaction.details as CompactionDetails;
       if (Array.isArray(details.readFiles)) {
@@ -454,7 +454,7 @@ export function findCutPoint(
     if (!prevEntry) {
       break;
     }
-    if (prevEntry.type === "compaction") {
+    if (prevEntry.type === "compaction" || prevEntry.type === "reset") {
       break;
     }
     if (getMessageFromEntryForCompaction(prevEntry)) {
@@ -709,27 +709,34 @@ export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
 ): Result<CompactionPreparation | undefined, CompactionError> {
-  if (pathEntries.at(-1)?.type === "compaction" || pathEntries.length === 0) {
+  if (
+    pathEntries.at(-1)?.type === "compaction" ||
+    pathEntries.at(-1)?.type === "reset" ||
+    pathEntries.length === 0
+  ) {
     return ok(undefined);
   }
 
-  let prevCompactionIndex = -1;
+  let prevBoundaryIndex = -1;
   for (let i = pathEntries.length - 1; i >= 0; i--) {
-    if (pathEntries.at(i)?.type === "compaction") {
-      prevCompactionIndex = i;
+    const type = pathEntries.at(i)?.type;
+    if (type === "compaction" || type === "reset") {
+      prevBoundaryIndex = i;
       break;
     }
   }
 
   let previousSummary: string | undefined;
   let boundaryStart = 0;
-  if (prevCompactionIndex >= 0) {
-    const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
-    previousSummary = prevCompaction.summary;
-    const firstKeptEntryIndex = pathEntries.findIndex(
-      (entry) => entry.id === prevCompaction.firstKeptEntryId,
-    );
-    boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1;
+  if (prevBoundaryIndex >= 0) {
+    const prevBoundary = pathEntries[prevBoundaryIndex];
+    previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
+    const firstKeptEntryId =
+      prevBoundary?.type === "compaction" || prevBoundary?.type === "reset"
+        ? prevBoundary.firstKeptEntryId
+        : undefined;
+    const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === firstKeptEntryId);
+    boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
   }
   const boundaryEnd = pathEntries.length;
 
@@ -769,7 +776,7 @@ export function prepareCompaction(
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
     return ok(undefined);
   }
-  const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevCompactionIndex);
+  const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevBoundaryIndex);
   if (cutPoint.isSplitTurn) {
     for (const msg of turnPrefixMessages) {
       extractFileOpsFromMessage(msg, fileOps);

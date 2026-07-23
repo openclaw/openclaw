@@ -39,6 +39,7 @@ function isCanonicalSessionEntryType(value: unknown): boolean {
     case "thinking_level_change":
     case "model_change":
     case "compaction":
+    case "reset":
     case "branch_summary":
     case "custom":
     case "custom_message":
@@ -287,7 +288,8 @@ export function selectSessionTranscriptActiveEntries<T, R>(params: {
       typeof record === "object" &&
       record !== null &&
       !Array.isArray(record) &&
-      (record as TranscriptRecord).type === "compaction"
+      ((record as TranscriptRecord).type === "compaction" ||
+        (record as TranscriptRecord).type === "reset")
     ) {
       const entry = params.entries[index];
       return entry === undefined ? activeEntries : [entry, ...activeEntries];

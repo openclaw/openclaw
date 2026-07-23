@@ -359,7 +359,8 @@ export class SessionManagerCore {
       : this.resolveCanonicalParentId(entry.parentId);
     let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
     if (
-      normalized.type === "compaction" &&
+      (normalized.type === "compaction" || normalized.type === "reset") &&
+      normalized.firstKeptEntryId !== undefined &&
       !this.byId.has(normalized.firstKeptEntryId) &&
       this.opaqueParentsById.has(normalized.firstKeptEntryId)
     ) {
