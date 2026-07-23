@@ -10,6 +10,10 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+} from "../process/gateway-work-admission.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -1093,6 +1097,32 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       await server.close({ reason: "openresponses token auth owner test done" });
     }
+  });
+
+  it("keeps streaming agent work admitted after the HTTP handler returns", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async () => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      if (isGatewaySubordinateWorkAdmissionClosed()) {
+        throw new GatewayDrainingError();
+      }
+      return { payloads: [{ text: "hello" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain("response.completed");
+    expect(text).toContain("hello");
+    expect(text).not.toContain("response.failed");
   });
 
   it("preserves assistant text alongside non-stream function_call output", async () => {
