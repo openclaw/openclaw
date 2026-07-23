@@ -331,7 +331,7 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
-  const { assistantTranscriptOwned } = mirrorOutcome;
+  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey } = mirrorOutcome;
   const shouldCaptureSettledTurnFinalizationContext =
     turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
@@ -521,6 +521,7 @@ export async function finalizeCodexAttempt(
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+    ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding

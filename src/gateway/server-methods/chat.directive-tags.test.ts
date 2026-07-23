@@ -1732,6 +1732,68 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("replaces a runtime-owned media reply instead of appending a duplicate assistant", async () => {
+    await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
+      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+      const savedImagePath = path.join(fixtureDir, "reply.png");
+      fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+      mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+      await appendSourceReplyMirrorEntry({
+        idempotencyKey: "older-distinct-assistant",
+        text: "A distinct earlier reply.",
+        provider: "openai",
+        model: "codex",
+      });
+      await appendSourceReplyMirrorEntry({
+        idempotencyKey: "runtime-owned-assistant",
+        text: `Dinner options\nMEDIA:${mediaUrl}`,
+        provider: "openai",
+        model: "codex",
+      });
+      mockState.triggerAgentRunStart = true;
+      mockState.dispatchedReplies = [
+        {
+          kind: "final",
+          payload: setReplyPayloadMetadata(
+            {
+              text: "Dinner options",
+              mediaUrl,
+              mediaUrls: [mediaUrl],
+            },
+            {
+              assistantTranscriptOwned: true,
+              assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
+            },
+          ),
+        },
+      ];
+      const respond = vi.fn();
+      const context = createChatContext();
+
+      await runNonStreamingChatSend({
+        context,
+        respond,
+        idempotencyKey: "idem-owned-media",
+        expectBroadcast: false,
+        waitFor: "dedupe",
+      });
+
+      const messages = await readActiveAssistantTranscriptMessages();
+      expect(messages).toHaveLength(2);
+      expect(messages.map((message) => message.idempotencyKey)).toEqual([
+        "older-distinct-assistant",
+        "runtime-owned-assistant",
+      ]);
+      const rewritten = messages[1];
+      const content = Array.isArray(rewritten?.content)
+        ? (rewritten.content as Array<Record<string, unknown>>)
+        : [];
+      expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
+      expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+    });
+  });
+
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");

@@ -172,6 +172,8 @@ export type EmbeddedRunAttemptResult = {
   aborted: boolean;
   /** True when the runtime made the authoritative final-assistant transcript decision. */
   assistantTranscriptOwned?: boolean;
+  /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
+  assistantTranscriptIdempotencyKey?: string;
   /** True when the abort originated from the caller-provided abortSignal. */
   externalAbort: boolean;
   timedOut: boolean;
