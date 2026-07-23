@@ -122,7 +122,7 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
-  it("reports the provider response after the first persistent preview lands", async () => {
+  it("reports the provider response after the first preview becomes durable", async () => {
     const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
     const onProviderMessage = vi.fn();
     const observedStream = createDraftStream(api, {
@@ -133,10 +133,36 @@ describe("createTelegramDraftStream", () => {
     observedStream.update("A provider-observed preview response");
     await observedStream.flush();
 
+    expect(onProviderMessage).not.toHaveBeenCalled();
+    await observedStream.stop();
+
     expect(onProviderMessage).toHaveBeenCalledTimes(1);
     expect(onProviderMessage).toHaveBeenCalledWith(
       expect.objectContaining({ message_id: 101, message_thread_id: 99 }),
     );
+  });
+
+  it("stops accepting updates before awaiting durable provider observation", async () => {
+    let resolveObservation: (() => void) | undefined;
+    const observation = new Promise<void>((resolve) => {
+      resolveObservation = resolve;
+    });
+    const api = createMockDraftApi();
+    const onProviderMessage = vi.fn(() => observation);
+    const stream = createDraftStream(api, { onProviderMessage });
+
+    stream.update("Durable preview");
+    await stream.flush();
+    const stopPromise = stream.stop();
+    await vi.waitFor(() => expect(onProviderMessage).toHaveBeenCalledTimes(1));
+
+    stream.update("Late update");
+    resolveObservation?.();
+    await stopPromise;
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("sends stream preview message with message_thread_id when provided", async () => {
@@ -612,6 +638,8 @@ describe("createTelegramDraftStream", () => {
 
         // The raced first send is NOT retained as a durable chunk...
         expect(onSupersededPreview).not.toHaveBeenCalled();
+        expect(onProviderMessage).not.toHaveBeenCalled();
+        await stream.stop();
         expect(onProviderMessage).toHaveBeenCalledTimes(1);
         expect(onProviderMessage).toHaveBeenCalledWith(expect.objectContaining({ message_id: 42 }));
         expect(api.deleteMessage).not.toHaveBeenCalled();
@@ -628,6 +656,35 @@ describe("createTelegramDraftStream", () => {
       }
     },
   );
+
+  it("does not report a first preview cleared while its send is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSend: ((value: { message_id: number }) => void) | undefined;
+      const send = new Promise<{ message_id: number }>((resolve) => {
+        resolveSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(send);
+      const onProviderMessage = vi.fn();
+      const stream = createDraftStream(api, { onProviderMessage });
+
+      stream.update("Temporary preview");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      const clearPromise = stream.clear();
+      resolveSend?.({ message_id: 17 });
+      await vi.advanceTimersByTimeAsync(0);
+      await clearPromise;
+
+      expect(onProviderMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["first", "batched"] as const)(
     "keeps an in-flight %s reply target owned when reposition cleanup fails",
