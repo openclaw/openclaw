@@ -303,6 +303,53 @@ describe("subagent-orphan-recovery", () => {
     );
   });
 
+  it("does not double-resume one orphan across overlapping scans", async () => {
+    // #103724: scan B starts while scan A's resume dispatch is still in flight
+    // (abortedLastRun not yet cleared) with its own private de-dupe set — the
+    // exact shape scheduleOrphanRecovery produces from its three call sites.
+    mockSingleAbortedSession();
+    let releaseResume!: () => void;
+    vi.mocked(gateway.callGateway).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseResume = () => resolve({ runId: "test-run-id" });
+        }),
+    );
+    const activeRuns = createActiveRuns(createTestRunRecord());
+
+    const scanA = recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    // Flush microtasks until scan A parks inside its resume dispatch; the
+    // mocked async boundaries resolve on the microtask queue, no timers.
+    for (let flush = 0; flush < 20 && vi.mocked(gateway.callGateway).mock.calls.length === 0; ) {
+      await Promise.resolve();
+      flush += 1;
+    }
+    expect(gateway.callGateway).toHaveBeenCalledTimes(1);
+
+    const scanB = await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    expect(scanB.recovered).toBe(0);
+    expect(scanB.failed).toBe(0);
+
+    releaseResume();
+    const resultA = await scanA;
+    expect(resultA.recovered).toBe(1);
+    // The one orphan produced exactly one resume dispatch across both scans.
+    expect(gateway.callGateway).toHaveBeenCalledTimes(1);
+
+    // Once the first scan finishes, later scans run normally again and skip
+    // the recovered session via its cleared abortedLastRun flag.
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: false,
+      },
+    });
+    const scanC = await recoverOrphanedSubagentSessions({ getActiveRuns: () => activeRuns });
+    expect(scanC.skipped).toBe(1);
+    expect(gateway.callGateway).toHaveBeenCalledTimes(1);
+  });
+
   it("skips sessions that are not aborted", async () => {
     await expectSkippedRecovery({
       "agent:main:subagent:test-session-1": {

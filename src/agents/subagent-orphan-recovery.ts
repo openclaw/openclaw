@@ -44,6 +44,14 @@ const log = createSubsystemLogger("subagent-interrupted-resume");
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 
+// Overlapping scans double-resume the same orphan: each scheduleOrphanRecovery
+// call carries a private de-dupe set and abortedLastRun only clears after a
+// resume completes, so a second scan launched while a resume is in flight sees
+// the same still-flagged entry (#103724). Mirrors the registry reaper's
+// sweepInProgress: the overlapping scan skips, and the in-flight scan's own
+// retry loop covers anything it misses.
+let recoveryScanInProgress = false;
+
 function isLegacyRestartInterruptedTimeout(
   runRecord: SubagentRunRecord,
   entry: SessionEntry | undefined,
@@ -266,6 +274,12 @@ export async function recoverOrphanedSubagentSessions(params: {
   const pendingStaleFinalizations = params.pendingStaleFinalizations ?? new Map<string, string>();
   const readSessionMessages = params.readSessionMessages ?? readSessionMessagesAsync;
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
+
+  if (recoveryScanInProgress) {
+    log.info("orphan recovery scan already in progress; skipping overlapping scan");
+    return result;
+  }
+  recoveryScanInProgress = true;
 
   try {
     const activeRuns = params.getActiveRuns();
@@ -541,6 +555,8 @@ export async function recoverOrphanedSubagentSessions(params: {
     if (result.failed === 0) {
       result.failed = 1;
     }
+  } finally {
+    recoveryScanInProgress = false;
   }
 
   if (result.recovered > 0 || result.failed > 0) {
