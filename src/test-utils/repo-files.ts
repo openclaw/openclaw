@@ -5,6 +5,12 @@ import path from "node:path";
 
 const gitTrackedFilesCache = new Map<string, string[] | null>();
 
+// Bound the `git ls-files` probe used by test helpers so a wedged git binary
+// (for example, a corrupted repo, or a packed-refs lock contention during a
+// parallel test run) cannot stall the whole test suite. On timeout the spawn
+// returns a non-zero status and `listGitTrackedFiles` falls back to `null`.
+export const GIT_LS_FILES_TIMEOUT_MS = 5_000;
+
 function filterExistingRepoFiles(repoRoot: string, files: readonly string[]): string[] {
   return files.filter((file) => fs.existsSync(path.join(repoRoot, file)));
 }
@@ -38,6 +44,8 @@ export function listGitTrackedFiles(params: {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: GIT_LS_FILES_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (result.status !== 0) {
     gitTrackedFilesCache.set(cacheKey, null);
