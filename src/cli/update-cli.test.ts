@@ -4534,6 +4534,79 @@ describe("update-cli", () => {
     },
   );
 
+  it.each([
+    { label: "en", detail: "ERROR: Access is denied." },
+    { label: "zh", detail: "错误: 拒绝访问。" },
+    { label: "de", detail: "Zugriff verweigert" },
+  ])(
+    "continues a no-restart package update when Windows Scheduled Task disable reports access denied ($label)",
+    async ({ detail }) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      mockPackageInstallStatus(createCaseDir("openclaw-update-task-access-denied"));
+      serviceReadCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+      });
+      serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+      suspendScheduledTaskAutoStartForUpdate.mockRejectedValueOnce(
+        new Error(`schtasks disable failed: ${detail}`),
+      );
+
+      await updateCommand({ yes: true, restart: false });
+      platformSpy.mockRestore();
+
+      // Hard-fail path is bypassed: update proceeds with package install and
+      // never reaches the access-restricted exit branch.
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(packageInstallCommandCall()).toBeDefined();
+      // The task was never actually suspended, so the resume path must not run.
+      expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+      const warnLog = vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .find((line) =>
+          line.includes("Could not disable the Windows Scheduled Task before update"),
+        );
+      expect(warnLog).toBeDefined();
+      expect(warnLog).toContain(detail);
+      expect(warnLog).toContain("openclaw gateway restart");
+    },
+  );
+
+  it("still hard-fails a no-restart package update when Windows Scheduled Task disable fails for a non-access reason", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockPackageInstallStatus(createCaseDir("openclaw-update-task-non-access-failure"));
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    suspendScheduledTaskAutoStartForUpdate.mockRejectedValueOnce(
+      new Error("schtasks disable failed: schtasks timed out after 15000ms"),
+    );
+
+    await updateCommand({ yes: true, restart: false });
+    platformSpy.mockRestore();
+
+    // Non-access failures stay fatal: exit(1) is invoked, the package install
+    // never runs, and the resume path stays untouched.
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
+    const errorLog = vi
+      .mocked(defaultRuntime.error)
+      .mock.calls.map((call) => String(call[0]))
+      .find((line) => line.includes("Failed to stop managed gateway service before update"));
+    expect(errorLog).toBeDefined();
+    expect(errorLog).toContain("schtasks timed out after 15000ms");
+  });
+
   it("stops a running managed gateway when git checkout rebuild starts", async () => {
     const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
     serviceReadCommand.mockResolvedValue({

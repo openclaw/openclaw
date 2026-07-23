@@ -429,6 +429,24 @@ async function abortWindowsTaskUpdateIfInterrupted(
   throw new UpdateCommandAbort();
 }
 
+// Windows schtasks /Change /DISABLE surfaces access-denied failures with
+// locale-localized text. The patterns below cover the localizations observed
+// in issue reports and existing tests so we can degrade to a warn+continue path
+// instead of blocking the update with a hard exit. Add new locales here when a
+// real report surfaces them; do not speculatively expand the list.
+const WINDOWS_ACCESS_DENIED_PATTERNS: readonly RegExp[] = [
+  /access(?:\s+is)?\s+denied/iu,
+  /拒绝访问/u,
+  /zugriff\s+verweigert/iu,
+];
+
+function isWindowsAccessDeniedError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return WINDOWS_ACCESS_DENIED_PATTERNS.some((pattern) => pattern.test(err.message));
+}
+
 async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
   updateInstallKind: "git" | "package";
   serviceEnv: NodeJS.ProcessEnv | undefined;
@@ -447,6 +465,20 @@ async function maybeSuspendWindowsTaskAutoStartForPackageUpdate(params: {
   } catch (err) {
     await recovery.restore().catch(() => undefined);
     recovery.complete();
+    // A user-permission gap on /Change /DISABLE (task owned by another identity
+    // or an elevated shell required) leaves the task in its prior enabled state.
+    // Let the package update proceed; warn the user that the gateway may need a
+    // manual restart from an elevated shell after the update. Other schtasks
+    // failures stay fatal so real environmental problems are not masked.
+    if (isWindowsAccessDeniedError(err)) {
+      const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
+      defaultRuntime.log(
+        theme.warn(
+          `Could not disable the Windows Scheduled Task before update (${String(err)}); leaving it enabled and continuing. Run \`${restartCommand}\` from an elevated shell if the gateway fails to restart after update.`,
+        ),
+      );
+      return undefined;
+    }
     throw err;
   }
   await abortWindowsTaskUpdateIfInterrupted(recovery);
