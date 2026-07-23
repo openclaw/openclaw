@@ -16,7 +16,6 @@ import {
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./embedded-agent-runner/extra-params.js";
-import { supportsGptParallelToolCallsPayload } from "./embedded-agent-runner/extra-params.js";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 beforeEach(() => {
@@ -74,14 +73,14 @@ describe("transport params runtime contract (embedded OpenClaw/OpenAI path)", ()
   it.each(GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS)(
     "advertises %s as accepting the GPT parallel_tool_calls payload patch",
     (api) => {
-      expect(supportsGptParallelToolCallsPayload(api)).toBe(true);
+      expect(extraParamsTesting.supportsGptParallelToolCallsPayload(api)).toBe(true);
     },
   );
 
   it.each(UNRELATED_TOOL_CALLS_PAYLOAD_APIS)(
     "does not advertise %s as accepting the GPT parallel_tool_calls payload patch",
     (api) => {
-      expect(supportsGptParallelToolCallsPayload(api)).toBe(false);
+      expect(extraParamsTesting.supportsGptParallelToolCallsPayload(api)).toBe(false);
     },
   );
 
