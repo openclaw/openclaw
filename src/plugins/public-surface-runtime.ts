@@ -41,20 +41,25 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   return normalized;
 }
 
+/** True when the value can name a bundled plugin directory (one path segment). */
+export function isBundledPluginDirName(dirName: string): boolean {
+  const normalized = dirName.trim();
+  return (
+    Boolean(normalized) &&
+    normalized !== "." &&
+    normalized !== ".." &&
+    !normalized.includes("/") &&
+    !normalized.includes("\\") &&
+    !normalized.includes(":")
+  );
+}
+
 /** Normalizes a bundled plugin directory name and rejects path-like values. */
 function normalizeBundledPluginDirName(dirName: string): string {
-  const normalized = dirName.trim();
-  if (
-    !normalized ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.includes("/") ||
-    normalized.includes("\\") ||
-    normalized.includes(":")
-  ) {
+  if (!isBundledPluginDirName(dirName)) {
     throw new Error(`Bundled plugin dirName must be a single directory: ${dirName}`);
   }
-  return normalized;
+  return dirName.trim();
 }
 
 /** Resolves a source-tree public surface artifact path for bundled plugin development. */
