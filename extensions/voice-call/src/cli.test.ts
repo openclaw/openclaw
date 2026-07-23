@@ -14,6 +14,20 @@ const sleepMock = vi.hoisted(() =>
       }),
   ),
 );
+const tempDirs = new Set<string>();
+
+function makeTempDir(prefix: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.add(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  tempDirs.clear();
+});
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
@@ -265,8 +279,7 @@ describe("voice-call CLI status fallback", () => {
   });
 
   it("drops a partial leading JSONL record from capped diagnostic reads", async () => {
-    // openclaw-temp-dir: allow extension tests cannot import repo-only test helpers
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-cli-"));
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-");
     const file = path.join(tempRoot, "diagnostics.jsonl");
     const completeRecords = [
       JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 120 } } }),
