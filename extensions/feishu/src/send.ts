@@ -594,6 +594,25 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
+  // Feishu card size guard: interactive cards degrade to "(see attached image)"
+  // when the JSON payload exceeds ~28KB. Fallback to post (rich text) which
+  // auto-splits into 4KB chunks and retains markdown formatting.
+  const FEISHU_CARD_SIZE_LIMIT = 25000;
+  if (content.length > FEISHU_CARD_SIZE_LIMIT) {
+    const cardText = parseInteractiveCardContent(card);
+    if (cardText && cardText !== INTERACTIVE_CARD_FALLBACK_TEXT) {
+      return sendMessageFeishu({
+        cfg,
+        to,
+        text: cardText,
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
+        accountId,
+      });
+    }
+  }
+
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
@@ -706,7 +725,7 @@ function buildStructuredCard(
   const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
   if (options?.note) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+    elements.push({ tag: "markdown", content: `<font color=grey>${options.note}</font>` });
   }
   const card: Record<string, unknown> = {
     schema: "2.0",
