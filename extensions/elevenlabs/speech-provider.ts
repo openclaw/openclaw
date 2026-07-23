@@ -29,7 +29,10 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -192,7 +195,7 @@ function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): stri
   return resolveSpeechProviderApiKey(
     ...candidates,
     resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
-    process.env.XI_API_KEY,
+    normalizeOptionalString(process.env.XI_API_KEY),
   );
 }
 

@@ -77,33 +77,62 @@ describe("elevenlabs speech provider", () => {
     );
   });
 
-  it("rejects blank credentials across discovery and synthesis before requests", async () => {
-    vi.stubEnv("ELEVENLABS_API_KEY", "   ");
-    vi.stubEnv("XI_API_KEY", "   ");
+  it.each([{ XI_API_KEY: "   " }, { XI_API_KEY: "" }, { XI_API_KEY: undefined }])(
+    "rejects blank credentials across discovery and synthesis before requests (%#)",
+    async ({ XI_API_KEY }) => {
+      vi.stubEnv("ELEVENLABS_API_KEY", "   ");
+      vi.stubEnv("XI_API_KEY", XI_API_KEY);
+      const provider = buildElevenLabsSpeechProvider();
+      const providerConfig = { apiKey: "   " };
+
+      expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
+      await expect(
+        provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
+      ).rejects.toThrow("ElevenLabs API key missing");
+
+      const request = {
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        target: "audio-file" as const,
+        timeoutMs: 1_000,
+      };
+      await expect(provider.synthesize(request)).rejects.toThrow("ElevenLabs API key missing");
+      await expect(provider.streamSynthesize?.(request)).rejects.toThrow(
+        "ElevenLabs API key missing",
+      );
+      await expect(provider.synthesizeTelephony?.(request)).rejects.toThrow(
+        "ElevenLabs API key missing",
+      );
+
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("resolves a trimmed XI_API_KEY fallback only after configured keys", async () => {
+    vi.stubEnv("XI_API_KEY", "  xi-env-key  ");
     const provider = buildElevenLabsSpeechProvider();
-    const providerConfig = { apiKey: "   " };
-
-    expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
-    await expect(
-      provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
-    ).rejects.toThrow("ElevenLabs API key missing");
-
-    const request = {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const request = (apiKey: string) => ({
       text: "hello",
       cfg: {} as never,
-      providerConfig,
+      providerConfig: { apiKey },
       target: "audio-file" as const,
       timeoutMs: 1_000,
-    };
-    await expect(provider.synthesize(request)).rejects.toThrow("ElevenLabs API key missing");
-    await expect(provider.streamSynthesize?.(request)).rejects.toThrow(
-      "ElevenLabs API key missing",
-    );
-    await expect(provider.synthesizeTelephony?.(request)).rejects.toThrow(
-      "ElevenLabs API key missing",
-    );
+    });
 
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1_000 })).toBe(true);
+    await provider.synthesize(request(" config-key "));
+    await provider.synthesize(request("   "));
+
+    const sentKeys = fetchMock.mock.calls.map(([, init]) =>
+      new Headers(init?.headers).get("xi-api-key"),
+    );
+    expect(sentKeys).toEqual(["config-key", "xi-env-key"]);
   });
 
   it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {

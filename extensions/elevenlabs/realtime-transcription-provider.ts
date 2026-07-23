@@ -259,12 +259,14 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
         resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY,
+        normalizeOptionalString(process.env.XI_API_KEY),
       ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+        config.apiKey ||
+        resolveElevenLabsApiKeyWithProfileFallback() ||
+        normalizeOptionalString(process.env.XI_API_KEY);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }

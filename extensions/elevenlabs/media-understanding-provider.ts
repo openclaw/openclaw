@@ -12,6 +12,7 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_ELEVENLABS_BASE_URL, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 const DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2";
@@ -20,7 +21,10 @@ export async function transcribeElevenLabsAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
-  const apiKey = req.apiKey || process.env.ELEVENLABS_API_KEY || process.env.XI_API_KEY;
+  const apiKey =
+    normalizeOptionalString(req.apiKey) ??
+    normalizeOptionalString(process.env.ELEVENLABS_API_KEY) ??
+    normalizeOptionalString(process.env.XI_API_KEY);
   if (!apiKey) {
     throw new Error("ElevenLabs API key missing");
   }
