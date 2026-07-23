@@ -6,6 +6,8 @@ Alias-rollback follow-up: `14230f2e84a fix(sessions): restore alias layout after
 
 Final rollback redesign: `b5cc8061a9b fix(sessions): isolate archive audit rollback`
 
+Final best-effort policy: `320237964e0 fix(sessions): make archive audit note best-effort`
+
 ## Files changed
 
 Session state and mutation:
@@ -54,7 +56,7 @@ Task handoff:
 
 - `archivedBy` uses the canonical `SessionCreatedActor` shape and is written only on a real unarchived-to-archived transition. Repeating `archived: true` preserves the original archiver. Unarchive clears it.
 - The acting identity comes only from `gatewayClientSessionCreator(client)`. Unidentified token/password clients get no fabricated identity and no actor-stamped audit line.
-- Archive and unarchive audit notes use the same shared `SessionManager.appendMessage` helper as visibility/membership audit notes. If audit append fails, the complete combined `sessions.patch` entry is restored (or a newly created row is removed) while the session lifecycle lock is still held, so the RPC cannot leave partial metadata changes behind.
+- Archive and unarchive audit notes use the same shared `SessionManager.appendMessage` helper as visibility/membership audit notes. Archive notes are deliberately best-effort: if append fails, the durable archive remains committed, the RPC succeeds, and `sessionLog.warn` records the lost note. Visibility audit remains rollback-on-failure because it protects an access boundary.
 - The existing `applySessionPatchProjection` candidate resolver already supplies the freshest authoritative alias entry. Archive transition comparison uses that `existingEntry`, so alias migration does not invent or suppress a transition.
 - The session catalog is stored as canonical `session_entries.entry_json`; `archivedBy` is an additive JSON field. No SQL DDL, schema-version bump, backfill, dual path, or migration is needed.
 - `sessions.changed` remains the existing event and is still emitted with its concrete session-key scope, so draft/visibility filtering remains in force. No new event or `EVENT_SCOPE_GUARDS` entry was needed.
@@ -87,7 +89,7 @@ node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archiv
 Test Files 1 passed, Tests 3 passed (exit 0)
 ```
 
-The archive-attribution handler tests cover actor stamping, idempotent re-archive, unarchive clearing, exact audit text, unidentified-client behavior, and full rollback of a combined archive plus label patch when audit append fails. The UI suite includes the required collaborative and solo-dormancy archive-row cases.
+The archive-attribution handler tests cover actor stamping, idempotent re-archive, unarchive clearing, exact audit text, unidentified-client behavior, alias archiving, and successful best-effort audit failure with no reversal writes. The UI suite includes the required collaborative and solo-dormancy archive-row cases.
 
 Protocol and i18n generation/checks:
 
@@ -176,7 +178,7 @@ test 322 added, 11 deleted, net +311
 total 460 added, 48 deleted, net +412
 ```
 
-The shared audit extraction is nearly LOC-neutral by moving the former sharing-only implementation into one reusable helper. The main production growth is the actor field plumbing, complete audit-failure rollback, event tombstones, protocol/UI types, and accessible archive-chip state.
+The shared audit extraction is nearly LOC-neutral by moving the former sharing-only implementation into one reusable helper. The main production growth is the actor field plumbing, event tombstones, protocol/UI types, and accessible archive-chip state.
 
 ## Skipped or deferred
 
@@ -255,7 +257,9 @@ total 250 added, 16 deleted, net +234
 
 No push, PR, changelog edit, protocol change, schema-version bump, or `CLAUDE.md` edit was performed.
 
-## Final archive-only rollback redesign
+## Superseded archive-only rollback redesign
+
+This section records the intermediate `b5cc8061a9b` approach. It was superseded by `320237964e0`; archive audit notes no longer trigger any rollback.
 
 The final design treats candidate-key canonicalization as the normal benign behavior of `sessions.patch`; alias layout is not rolled back. If archive auditing fails, the handler re-reads the current candidate state and applies the inverse archived boolean through a second `applySessionPatchProjection` plus `projectSessionsPatchEntry` pass. It then restores only the prior `archivedAt` and `archivedBy` values. Other valid patch effects remain, and the rollback never reads or writes `session_members`.
 
@@ -298,6 +302,56 @@ Final redesign LOC from `git show --numstat b5cc8061a9b`:
 prod 45 added, 166 deleted, net -121
 test 24 added, 62 deleted, net -38
 total 69 added, 228 deleted, net -159
+```
+
+No push was performed. `SPEC.md` remains the only untracked file.
+
+## Final best-effort archive audit policy
+
+The final policy deletes the archive rollback path entirely. `archivedAt` and `archivedBy` are the durable result. If the actor-stamped transcript note cannot be appended, `sessions.patch` logs `sessionLog.warn`, returns success, and keeps the archive. The catch performs no entry, alias, pin, or membership writes. This is a deliberate tradeoff for a non-security lifecycle note; visibility audit remains rollback-on-failure because visibility is an access boundary.
+
+Final focused behavior proof:
+
+```text
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts -- --reporter=verbose
+Test Files 1 passed
+Tests 4 passed
+[test] passed 1 Vitest shard in 8.85s (exit 0)
+```
+
+The forced-failure case archives through an alias and verifies:
+
+- the RPC succeeds;
+- the derived row has `archived: true`, `archivedAt`, and `archivedBy`;
+- the expected warning includes the audit failure and “archive kept” decision;
+- candidate entry state and `session_members` match their state at the failure point;
+- SQLite `total_changes()` does not advance after the audit throw, proving there are no reversal writes.
+
+Final gates:
+
+```text
+OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json
+exit 0 (no diagnostics)
+
+OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/server-methods/sessions-mutations.ts
+lanes=core, coreTests
+format, core/core-test typechecks, changed-file lint, database-first guard, runtime sidecar loader guard, import-cycle guard, webhook and pairing guards passed
+exit 0
+
+.agents/skills/autoreview/scripts/autoreview --mode uncommitted --engine codex
+trufflehog: clean
+autoreview clean: no accepted/actionable findings reported
+overall: patch is correct (0.98)
+```
+
+The full branch review uses base `3023d69fd8858882470da009c8874541c2ddd9e9`. Its only initial finding was this report's stale rollback wording; the implementation was accepted as consistent with the deliberate best-effort policy.
+
+Best-effort cleanup LOC from `git show --numstat 320237964e0`:
+
+```text
+prod 14 added, 40 deleted, net -26
+test 61 added, 38 deleted, net +23
+total 75 added, 78 deleted, net -3
 ```
 
 No push was performed. `SPEC.md` remains the only untracked file.
