@@ -238,4 +238,18 @@ describe("wide-area DNS zone writes", () => {
       "utf-8",
     );
   });
+
+  it("throws a descriptive error when zone file write fails", async () => {
+    vi.spyOn(utils, "ensureDir").mockResolvedValue(undefined);
+    const existing = renderWideAreaGatewayZoneText({ ...makeZoneOpts(), serial: 2026031301 });
+    vi.spyOn(fs, "readFileSync").mockReturnValue(existing);
+    // Change content so write is attempted
+    vi.spyOn(fs, "writeFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    });
+
+    await expect(
+      writeWideAreaGatewayZone(makeZoneOpts({ gatewayTlsEnabled: true })),
+    ).rejects.toThrow("Failed to write wide-area DNS zone");
+  });
 });

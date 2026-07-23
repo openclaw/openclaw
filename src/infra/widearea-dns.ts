@@ -233,6 +233,13 @@ export async function writeWideAreaGatewayZone(
   const existingSerial = existing ? extractSerial(existing) : null;
   const serial = nextSerial(existingSerial, new Date());
   const next = renderWideAreaGatewayZoneText({ ...normalizedOpts, serial });
-  fs.writeFileSync(zonePath, next, "utf-8");
+  try {
+    fs.writeFileSync(zonePath, next, "utf-8");
+  } catch (err) {
+    throw new Error(
+      `Failed to write wide-area DNS zone at ${zonePath}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
   return { zonePath, changed: true };
 }
