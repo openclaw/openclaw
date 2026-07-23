@@ -109,6 +109,10 @@ function resolveNativeDeliveryState(params: {
 
 function createQQBotApprovalCapability(): ChannelApprovalCapability {
   return createChannelApprovalCapability({
+    // QQBot renders markdown on markdown-enabled accounts (msg_type 2). When
+    // native approvals fall back to forwarder delivery, keep the canonical
+    // subset so fenced commands still render instead of being stripped.
+    approvalText: "markdown",
     authorizeActorAction: ({ cfg, accountId, senderId, approvalKind }) =>
       authorizeQQBotApprovalAction({ cfg, accountId, senderId, approvalKind }),
 

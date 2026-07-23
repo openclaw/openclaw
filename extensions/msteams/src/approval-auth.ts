@@ -22,18 +22,25 @@ function resolveMSTeamsChannelConfig(cfg: OpenClawConfig) {
   return cfg.channels?.msteams;
 }
 
-export const msTeamsApprovalAuth = createChannelApprovalAuth({
-  channelLabel: "Microsoft Teams",
-  resolveInputs: ({ cfg }) => {
-    const channel = resolveMSTeamsChannelConfig(cfg);
-    return { allowFrom: channel?.allowFrom, defaultTo: channel?.defaultTo };
-  },
-  normalizeApprover: normalizeMSTeamsApproverId,
-  normalizeSenderId: (value) => {
-    const trimmed = normalizeOptionalLowercaseString(value);
-    if (!trimmed) {
-      return undefined;
-    }
-    return MSTEAMS_ID_RE.test(trimmed) ? trimmed : undefined;
-  },
-}).approvalAuth;
+export const msTeamsApprovalAuth = {
+  ...createChannelApprovalAuth({
+    channelLabel: "Microsoft Teams",
+    resolveInputs: ({ cfg }) => {
+      const channel = resolveMSTeamsChannelConfig(cfg);
+      return { allowFrom: channel?.allowFrom, defaultTo: channel?.defaultTo };
+    },
+    normalizeApprover: normalizeMSTeamsApproverId,
+    normalizeSenderId: (value) => {
+      const trimmed = normalizeOptionalLowercaseString(value);
+      if (!trimmed) {
+        return undefined;
+      }
+      return MSTEAMS_ID_RE.test(trimmed) ? trimmed : undefined;
+    },
+  }).approvalAuth,
+  // Teams has no render adapter, so approval text comes from the forwarder
+  // fallback, but its Adaptive Card TextBlocks render markdown
+  // (markdownDialect: "markdown"). Without this the plaintext default would
+  // strip fenced commands from the approval card.
+  approvalText: "markdown" as const,
+};

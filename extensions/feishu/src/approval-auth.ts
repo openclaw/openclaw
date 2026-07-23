@@ -10,11 +10,18 @@ function normalizeFeishuApproverId(value: string | number): string | undefined {
   return trimmed?.startsWith("ou_") ? trimmed : undefined;
 }
 
-export const feishuApprovalAuth = createChannelApprovalAuth({
-  channelLabel: "Feishu",
-  resolveInputs: ({ cfg, accountId }) => {
-    const account = resolveFeishuAccount({ cfg, accountId }).config;
-    return { allowFrom: account.allowFrom };
-  },
-  normalizeApprover: normalizeFeishuApproverId,
-}).approvalAuth;
+export const feishuApprovalAuth = {
+  ...createChannelApprovalAuth({
+    channelLabel: "Feishu",
+    resolveInputs: ({ cfg, accountId }) => {
+      const account = resolveFeishuAccount({ cfg, accountId }).config;
+      return { allowFrom: account.allowFrom };
+    },
+    normalizeApprover: normalizeFeishuApproverId,
+  }).approvalAuth,
+  // Feishu has no render adapter, so approval text comes from the forwarder
+  // fallback, but its outbound presentation renders markdown
+  // (markdownDialect: "markdown"). Without this the plaintext default would
+  // strip fenced commands from the approval card.
+  approvalText: "markdown" as const,
+};
