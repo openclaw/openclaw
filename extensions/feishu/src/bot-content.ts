@@ -69,8 +69,7 @@ export function resolveFeishuGroupSession(params: {
     replyInThread?: "enabled" | "disabled";
   };
 }): ResolvedFeishuGroupSession {
-  const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
-    params;
+  const { chatId, senderOpenId, messageId, rootId, threadId, groupConfig, feishuCfg } = params;
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
   const threadReply = Boolean(normalizedThreadId || normalizedRootId);
@@ -83,14 +82,9 @@ export function resolveFeishuGroupSession(params: {
     groupConfig?.groupSessionScope ??
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
-  const normalizedTopicGroupThreadId =
-    chatType === "topic_group" ? (normalizedThreadId ?? normalizedRootId) : undefined;
   const topicScope =
     groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
-      ? (normalizedTopicGroupThreadId ??
-        normalizedRootId ??
-        normalizedThreadId ??
-        (replyInThread ? messageId : null))
+      ? (normalizedThreadId ?? normalizedRootId ?? (replyInThread ? messageId : null))
       : null;
 
   let peerId;

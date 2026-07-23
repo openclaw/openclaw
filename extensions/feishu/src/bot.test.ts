@@ -3523,7 +3523,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(routeRequest.parentPeer).toEqual({ kind: "group", id: "oc-group" });
   });
 
-  it("keeps root_id as topic key when root_id and thread_id both exist", async () => {
+  it("prefers thread_id as topic key when root_id and thread_id both exist", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -3560,7 +3560,7 @@ describe("handleFeishuMessage command authorization", () => {
     }>(mockResolveAgentRoute, 0, 0);
     expect(routeRequest.peer).toEqual({
       kind: "group",
-      id: "oc-group:topic:om_root_topic:sender:ou-topic-user",
+      id: "oc-group:topic:omt_topic_1:sender:ou-topic-user",
     });
     expect(routeRequest.parentPeer).toEqual({ kind: "group", id: "oc-group" });
   });
@@ -3696,7 +3696,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("maps legacy topicSessionMode=enabled to root_id when both root_id and thread_id exist", async () => {
+  it("maps legacy topicSessionMode=enabled to thread_id when both root_id and thread_id exist", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -3729,7 +3729,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     expectResolvedRouteCall(
       0,
-      { kind: "group", id: "oc-group:topic:om_root_legacy" },
+      { kind: "group", id: "oc-group:topic:omt_topic_legacy" },
       { kind: "group", id: "oc-group" },
     );
   });
@@ -3771,7 +3771,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("keeps topic session key stable after first turn creates a thread", async () => {
+  it("prefers the Feishu thread_id once a follow-up event includes it", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -3815,7 +3815,7 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event: secondTurn });
 
     expectResolvedRouteCall(0, { kind: "group", id: "oc-group:topic:msg-topic-first" });
-    expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:msg-topic-first" });
+    expectResolvedRouteCall(1, { kind: "group", id: "oc-group:topic:omt_topic_created" });
   });
 
   it("hydrates missing native topic thread_id before routing starter events", async () => {
