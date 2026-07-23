@@ -149,20 +149,40 @@ describe("TranscriptsStore", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32" && process.platform !== "darwin")(
-    "does not let a case-distinct SQLite owner mask a legacy directory",
-    async () => {
-      const { store } = createStore();
-      const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-      const lower = session("capital", "2026-07-01T11:00:00.000Z");
-      await store.writeSession(upper);
-      fs.mkdirSync(store.sessionDir(lower), { recursive: true });
-      fs.writeFileSync(path.join(store.sessionDir(lower), "transcript.jsonl"), "legacy\n");
+  it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
+    const { stateDir, store } = createStore();
+    const upper = session("Capital", "2026-07-01T10:00:00.000Z");
+    const lower = session("capital", "2026-07-01T11:00:00.000Z");
+    await store.writeSession(upper);
+    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } })
+      .db.prepare(
+        "UPDATE meeting_transcript_sessions SET export_pending_json = ? WHERE session_id = ?",
+      )
+      .run('["metadata.json","transcript.jsonl"]', upper.sessionId);
+    fs.mkdirSync(store.sessionDir(lower), { recursive: true });
+    fs.writeFileSync(path.join(store.sessionDir(lower), "transcript.jsonl"), "legacy\n");
 
+    await expect(store.writeSession(lower)).rejects.toThrow("run openclaw doctor --fix");
+    await expect(store.readSession(lower.sessionId)).resolves.toBeUndefined();
+  });
+
+  it("recognizes case-variant artifact names only when the filesystem aliases them", async () => {
+    const { store } = createStore();
+    const upper = session("Capital", "2026-07-01T10:00:00.000Z");
+    const lower = session("capital", "2026-07-01T11:00:00.000Z");
+    await store.writeSession(upper);
+    expect(fs.existsSync(store.sessionDir(upper))).toBe(false);
+    fs.mkdirSync(store.sessionDir(lower), { recursive: true });
+    fs.rmSync(path.join(store.sessionDir(lower), "transcript.jsonl"), { force: true });
+    fs.writeFileSync(path.join(store.sessionDir(lower), "TRANSCRIPT.JSONL"), "legacy\n");
+    expect(fs.readdirSync(store.sessionDir(lower))).toContain("TRANSCRIPT.JSONL");
+
+    if (fs.existsSync(path.join(store.sessionDir(lower), "transcript.jsonl"))) {
       await expect(store.writeSession(lower)).rejects.toThrow("run openclaw doctor --fix");
-      await expect(store.readSession(lower.sessionId)).resolves.toBeUndefined();
-    },
-  );
+    } else {
+      await expect(store.writeSession(lower)).resolves.toBeUndefined();
+    }
+  });
 
   it("refuses to overwrite an unclaimed legacy export directory", async () => {
     const { store } = createStore();

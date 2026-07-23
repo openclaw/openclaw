@@ -1,7 +1,9 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -20,6 +22,13 @@ type ExportOwnershipParams = {
   exportRootDir: string;
   databaseOptions: OpenClawStateDatabaseOptions;
 };
+
+const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
+  "metadata.json",
+  "summary.json",
+  "summary.md",
+  "transcript.jsonl",
+]);
 
 function database(options: OpenClawStateDatabaseOptions) {
   ensureMeetingTranscriptsSchema(options);
@@ -89,15 +98,15 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   params: ExportOwnershipParams,
 ): Promise<boolean> {
   const stateDatabase = database(params.databaseOptions);
-  const owner = executeSqliteQueryTakeFirstSync(
+  const owners = executeSqliteQuerySync(
     stateDatabase.db,
     meetingTranscriptDb(stateDatabase.db)
       .selectFrom("meeting_transcript_sessions")
-      .select("session_id")
+      .select(["session_id", "started_at", "export_manifest_json", "export_pending_json"])
       .where("export_key", "=", transcriptSessionExportKey(params.session))
-      .limit(1),
-  );
-  if (!owner) {
+      .orderBy("selector", "asc"),
+  ).rows;
+  if (owners.length === 0) {
     return false;
   }
   try {
@@ -108,5 +117,76 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
     }
     throw error;
   }
-  return !(await isCaseSensitiveDirectory(params.exportRootDir));
+  if (await isCaseSensitiveDirectory(params.exportRootDir)) {
+    return false;
+  }
+  const sessionDir = path.join(params.exportRootDir, transcriptSessionSelector(params.session));
+  let entries;
+  try {
+    entries = await fs.readdir(sessionDir, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return true;
+    }
+    throw error;
+  }
+  const artifactCaseSensitive = await isCaseSensitiveDirectory(sessionDir);
+  const artifacts = entries.flatMap((entry) => {
+    const canonicalName = artifactCaseSensitive ? entry.name : entry.name.toLowerCase();
+    return TRANSCRIPT_EXPORT_FILE_NAMES.has(canonicalName) ? [{ entry, canonicalName }] : [];
+  });
+  if (artifacts.length === 0) {
+    return true;
+  }
+  let owner;
+  let identityVerified = false;
+  const metadataArtifact = artifacts.find(({ canonicalName }) => canonicalName === "metadata.json");
+  if (metadataArtifact) {
+    if (metadataArtifact.entry.isSymbolicLink() || !metadataArtifact.entry.isFile()) {
+      return false;
+    }
+    const metadataPath = path.join(sessionDir, metadataArtifact.entry.name);
+    let handle;
+    try {
+      handle = await fs.open(metadataPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+      const metadata = JSON.parse(await handle.readFile("utf8")) as {
+        sessionId?: unknown;
+        startedAt?: unknown;
+      };
+      owner = owners.find(
+        (row) => row.session_id === metadata.sessionId && row.started_at === metadata.startedAt,
+      );
+      identityVerified = owner !== undefined;
+    } catch {
+      return false;
+    } finally {
+      await handle?.close();
+    }
+  }
+  if (!owner) {
+    const pendingOwners = owners.filter((row) =>
+      (JSON.parse(row.export_pending_json) as string[]).includes("metadata.json"),
+    );
+    owner = pendingOwners.length === 1 ? pendingOwners[0] : undefined;
+  }
+  if (!owner) {
+    return false;
+  }
+  const manifest = JSON.parse(owner.export_manifest_json) as Record<string, string>;
+  const pending = new Set(JSON.parse(owner.export_pending_json) as string[]);
+  let verifiedArtifactCount = 0;
+  for (const { entry, canonicalName } of artifacts) {
+    if (entry.isSymbolicLink() || !entry.isFile()) {
+      return false;
+    }
+    if (pending.has(canonicalName)) {
+      return false;
+    }
+    const expectedHash = manifest[canonicalName];
+    if (!expectedHash || (await sha256File(path.join(sessionDir, entry.name))) !== expectedHash) {
+      return false;
+    }
+    verifiedArtifactCount += 1;
+  }
+  return identityVerified || verifiedArtifactCount > 0;
 }

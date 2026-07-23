@@ -20,6 +20,7 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
+  isCaseSensitiveDirectory,
   normalizeExportText,
   removeTranscriptArtifact,
   safeTranscriptPathSegment,
@@ -280,10 +281,12 @@ export class TranscriptsStore {
       throw error;
     }
     const ownership = this.readExportOwnership(session);
+    const caseSensitive = await isCaseSensitiveDirectory(sessionDir);
     let expectedHashes: Record<string, string> | undefined;
     const repairedHashes: Record<string, string> = {};
     for (const entry of entries) {
-      if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(entry.name)) {
+      const canonicalName = caseSensitive ? entry.name : entry.name.toLowerCase();
+      if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(canonicalName)) {
         continue;
       }
       const filePath = path.join(sessionDir, entry.name);
@@ -293,16 +296,19 @@ export class TranscriptsStore {
         );
       }
       const actualHash = await sha256File(filePath);
-      if (ownership.manifest[entry.name] === actualHash || ownership.pending.has(entry.name)) {
+      if (
+        ownership.manifest[canonicalName] === actualHash ||
+        ownership.pending.has(canonicalName)
+      ) {
         continue;
       }
       expectedHashes ??= await this.expectedExportHashes(session);
-      if (expectedHashes[entry.name] !== actualHash) {
+      if (expectedHashes[canonicalName] !== actualHash) {
         throw new Error(
           `legacy transcript artifacts require migration before writing ${sessionDir}; run openclaw doctor --fix`,
         );
       }
-      repairedHashes[entry.name] = actualHash;
+      repairedHashes[canonicalName] = actualHash;
     }
     if (Object.keys(repairedHashes).length > 0) {
       this.updateExportManifest(session, repairedHashes);
