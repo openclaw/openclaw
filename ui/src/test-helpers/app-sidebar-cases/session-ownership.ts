@@ -375,8 +375,12 @@ describe("AppSidebar session ownership", () => {
     if (!result) {
       throw new Error("expected session list");
     }
+    const parentRow = result.sessions[0];
+    if (!parentRow) {
+      throw new Error("expected parent row");
+    }
     result.sessions[0] = {
-      ...result.sessions[0],
+      ...parentRow,
       key: parentKey,
       createdActor: { type: "human", id: "profile-ada", label: "Ada" },
       childSessions: [childKey],
