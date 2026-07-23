@@ -41,12 +41,12 @@ export type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
-export type GoogleMeetCreateSpaceResult = {
+type GoogleMeetCreateSpaceResult = {
   space: GoogleMeetSpace;
   meetingUri: string;
 };
 
-export type GoogleMeetEndActiveConferenceResult = {
+type GoogleMeetEndActiveConferenceResult = {
   space: string;
   ended: true;
 };
@@ -81,14 +81,14 @@ export type GoogleMeetParticipantSession = {
   endTime?: string;
 };
 
-export type GoogleMeetRecording = {
+type GoogleMeetRecording = {
   name: string;
   startTime?: string;
   endTime?: string;
   driveDestination?: Record<string, unknown>;
 };
 
-export type GoogleMeetTranscript = {
+type GoogleMeetTranscript = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -97,7 +97,7 @@ export type GoogleMeetTranscript = {
   documentTextError?: string;
 };
 
-export type GoogleMeetTranscriptEntry = {
+type GoogleMeetTranscriptEntry = {
   name: string;
   participant?: string;
   text?: string;
@@ -106,13 +106,13 @@ export type GoogleMeetTranscriptEntry = {
   endTime?: string;
 };
 
-export type GoogleMeetTranscriptEntries = {
+type GoogleMeetTranscriptEntries = {
   transcript: string;
   entries: GoogleMeetTranscriptEntry[];
   entriesError?: string;
 };
 
-export type GoogleMeetSmartNote = {
+type GoogleMeetSmartNote = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -121,7 +121,7 @@ export type GoogleMeetSmartNote = {
   documentTextError?: string;
 };
 
-export type GoogleMeetArtifactsEntry = {
+type GoogleMeetArtifactsEntry = {
   conferenceRecord: GoogleMeetConferenceRecord;
   participants: GoogleMeetParticipant[];
   recordings: GoogleMeetRecording[];
