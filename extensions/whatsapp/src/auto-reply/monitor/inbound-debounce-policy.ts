@@ -38,6 +38,8 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
   if (!hookRunner?.hasHooks("inbound_debounce")) {
     return defaultDecision;
   }
+  const mediaItems =
+    normalized.payload.mediaItems ?? (normalized.payload.media ? [normalized.payload.media] : []);
   return hookRunner
     .runInboundDebounce(
       {
@@ -48,10 +50,8 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
         defaultDebounceMs: params.defaultDebounceMs,
         conversationKind: admission.conversation.kind,
         message: {
-          hasMedia: Boolean(
-            normalized.payload.media?.path ||
-            normalized.payload.media?.type ||
-            normalized.payload.media?.url,
+          hasMedia: mediaItems.some((entry) =>
+            Boolean(entry.path || entry.url || entry.type || entry.kind),
           ),
           hasLocation: Boolean(normalized.payload.location),
           hasQuote: Boolean(normalized.quote?.id || normalized.quote?.body),

@@ -1131,7 +1131,7 @@ describe("web auto-reply connection", () => {
       debounceKey: "custom:rich-message",
       payload: {
         body: "<media:image>",
-        media: { path: "/tmp/inbound.jpg", type: "image/jpeg" },
+        mediaItems: [{ kind: "image" }],
       },
       platform: {
         chatJid: "120363@g.us",
