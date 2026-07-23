@@ -57,7 +57,7 @@ const MAX_ROTATED_LOG_FILES = 5;
 type LogObj = { date?: Date } & Record<string, unknown>;
 type LogMethodName = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 type OpenClawLogMethod = (...args: unknown[]) => unknown;
-export type OpenClawLogger = TsLogger<LogObj> & Record<LogMethodName, OpenClawLogMethod>;
+type OpenClawLogger = TsLogger<LogObj> & Record<LogMethodName, OpenClawLogMethod>;
 
 type ResolvedSettings = {
   level: LogLevel;
