@@ -31,6 +31,77 @@ export function parseFeishuMarkdown(text: string): FeishuMarkdownNode {
   }) as FeishuMarkdownNode;
 }
 
+// Feishu's OAPI rejects cards rendering more than 3 markdown tables with
+// 230099 / sub-error 11310 "card table number over limit"; the retired
+// official @larksuite plugin shipped the same measured cap. Exceeding it
+// fails the whole send, so extra tables degrade to code blocks instead.
+const FEISHU_CARD_TABLE_LIMIT = 3;
+
+// Every GFM table has exactly one delimiter row built only from `|:- ` plus
+// optional indent/blockquote prefixes, with at least one dash and one pipe,
+// so this cheap line scan never undercounts real tables. It may overcount
+// (fenced examples, ASCII art), which only means the precise parse below
+// runs; card writes are throttled, so most streaming snapshots skip the
+// full markdown parse here.
+function countTableDelimiterLines(text: string): number {
+  let count = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.includes("|") && trimmed.includes("-") && /^[|:>\s-]+$/.test(trimmed)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Keep card markdown under Feishu's table limit by fencing the 4th+ table
+ * as a code block. Fenced content no longer counts as a card table element,
+ * so the send succeeds and the overflow tables stay readable as text.
+ */
+export function sanitizeFeishuCardMarkdownTables(text: string): string {
+  if (countTableDelimiterLines(text) <= FEISHU_CARD_TABLE_LIMIT) {
+    return text;
+  }
+  // Nested tables (inside lists/quotes) count toward the server-side limit
+  // but cannot be fenced in place, so top-level tables absorb the overflow.
+  // If nested tables alone exceed the limit the remainder stays unfenced.
+  const topLevelTables: FeishuMarkdownNode[] = [];
+  let nestedTableCount = 0;
+  for (const child of parseFeishuMarkdown(text).children ?? []) {
+    if (child.type === "table") {
+      topLevelTables.push(child);
+      continue;
+    }
+    const pending = [...(child.children ?? [])];
+    while (pending.length > 0) {
+      const node = pending.pop();
+      if (node?.type === "table") {
+        nestedTableCount += 1;
+      } else if (node?.children) {
+        pending.push(...node.children);
+      }
+    }
+  }
+  const overflow = topLevelTables.length + nestedTableCount - FEISHU_CARD_TABLE_LIMIT;
+  if (overflow <= 0) {
+    return text;
+  }
+  const fenceCount = Math.min(overflow, topLevelTables.length);
+  let sanitized = text;
+  // Fence the last tables first so earlier offsets stay valid and the
+  // leading tables keep their native card rendering.
+  for (const table of topLevelTables.slice(topLevelTables.length - fenceCount).toReversed()) {
+    const start = table.position?.start.offset;
+    const end = table.position?.end.offset;
+    if (start === undefined || end === undefined) {
+      continue;
+    }
+    sanitized = `${sanitized.slice(0, start)}\`\`\`\n${sanitized.slice(start, end)}\n\`\`\`${sanitized.slice(end)}`;
+  }
+  return sanitized;
+}
+
 function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
   if (!mentions?.length) {
     return [];
