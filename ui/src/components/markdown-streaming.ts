@@ -45,7 +45,7 @@ function isFenceClose(line: string, fence: { marker: "`" | "~"; length: number }
   return trimmed.slice(match[0].length).trim() === "";
 }
 
-export type StreamingMarkdownSplit = {
+type StreamingMarkdownSplit = {
   /** Offset just past the last blank line outside a code fence; the prefix is block-stable. */
   boundary: number;
   /** True when the text after the boundary contains a code fence that has not closed yet. */
