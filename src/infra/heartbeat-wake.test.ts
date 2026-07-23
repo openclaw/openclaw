@@ -305,38 +305,161 @@ describe("heartbeat-wake", () => {
     expect(handler).toHaveBeenCalledWith(wake("exec-event"));
   });
 
-  it("resets running/scheduled flags when new handler is registered", async () => {
+  it("does not let a stale run release a replacement handler's execution slot", async () => {
     vi.useFakeTimers();
 
-    // Simulate a handler that's mid-execution when SIGUSR1 fires.
-    // We do this by having the handler hang forever (never resolve).
-    let resolveHang: () => void;
-    const hangPromise = new Promise<void>((r) => {
-      resolveHang = r;
+    let resolveA!: () => void;
+    let resolveB!: () => void;
+    const pendingA = new Promise<void>((resolve) => {
+      resolveA = resolve;
+    });
+    const pendingB = new Promise<void>((resolve) => {
+      resolveB = resolve;
     });
     const handlerA = vi
       .fn()
-      .mockReturnValue(hangPromise.then(() => ({ status: "ran" as const, durationMs: 1 })));
+      .mockReturnValue(pendingA.then(() => ({ status: "ran" as const, durationMs: 1 })));
+    const handlerB = vi
+      .fn()
+      .mockReturnValue(pendingB.then(() => ({ status: "ran" as const, durationMs: 1 })));
     setHeartbeatWakeHandler(handlerA);
 
-    // Trigger the handler — it starts running but never finishes
     requestHeartbeat(wake("interval", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerA).toHaveBeenCalledTimes(1);
 
-    // Now simulate SIGUSR1: register a new handler while handlerA is still running.
-    // Without the fix, `running` would stay true and handlerB would never fire.
-    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     setHeartbeatWakeHandler(handlerB);
-
-    // handlerB should be able to fire (running was reset)
-    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    requestHeartbeat(wake("manual", { coalesceMs: 0 }));
     await vi.advanceTimersByTimeAsync(1);
     expect(handlerB).toHaveBeenCalledTimes(1);
 
-    // Clean up the hanging promise
-    resolveHang!();
-    await Promise.resolve();
+    resolveA();
+    await vi.advanceTimersByTimeAsync(0);
+
+    requestHeartbeat(wake("hook:after-restart", { coalesceMs: 100 }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(handlerB).toHaveBeenCalledTimes(1);
+
+    resolveB();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handlerB).toHaveBeenCalledTimes(2);
+    expectWakeCall(handlerB, 1, wake("hook:after-restart"));
+  });
+
+  it("does not let a stale run preempt a replacement handler timer", async () => {
+    vi.useFakeTimers();
+
+    let resolveA!: () => void;
+    const pendingA = new Promise<void>((resolve) => {
+      resolveA = resolve;
+    });
+    const handlerA = vi
+      .fn()
+      .mockReturnValue(pendingA.then(() => ({ status: "ran" as const, durationMs: 1 })));
+    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handlerA);
+
+    requestHeartbeat(wake("interval", { coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledTimes(1);
+
+    setHeartbeatWakeHandler(handlerB);
+    requestHeartbeat(wake("manual", { coalesceMs: 1_000 }));
+
+    resolveA();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(handlerB).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerB).toHaveBeenCalledOnce();
+    expect(handlerB).toHaveBeenCalledWith(wake("manual"));
+  });
+
+  it("does not let a stale busy result queue a retry on a replacement handler", async () => {
+    vi.useFakeTimers();
+
+    let resolveA!: (result: { status: "skipped"; reason: string }) => void;
+    const pendingA = new Promise<{ status: "skipped"; reason: string }>((resolve) => {
+      resolveA = resolve;
+    });
+    const handlerA = vi.fn().mockReturnValue(pendingA);
+    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handlerA);
+
+    requestHeartbeat(wake("interval", { coalesceMs: 0, agentId: "old" }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledOnce();
+
+    setHeartbeatWakeHandler(handlerB);
+    requestHeartbeat(wake("manual", { coalesceMs: 2_000, agentId: "new" }));
+    resolveA({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(handlerB).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerB).toHaveBeenCalledOnce();
+    expect(handlerB).toHaveBeenCalledWith(wake("manual", { agentId: "new" }));
+  });
+
+  it("does not let a stale rejection queue a retry on a replacement handler", async () => {
+    vi.useFakeTimers();
+
+    let rejectA!: (error: Error) => void;
+    const pendingA = new Promise<never>((_resolve, reject) => {
+      rejectA = reject;
+    });
+    const handlerA = vi.fn().mockReturnValue(pendingA);
+    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handlerA);
+
+    requestHeartbeat(wake("interval", { coalesceMs: 0, agentId: "old" }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledOnce();
+
+    setHeartbeatWakeHandler(handlerB);
+    requestHeartbeat(wake("manual", { coalesceMs: 2_000, agentId: "new" }));
+    rejectA(new Error("stale run failed"));
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(handlerB).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerB).toHaveBeenCalledOnce();
+    expect(handlerB).toHaveBeenCalledWith(wake("manual", { agentId: "new" }));
+  });
+
+  it("hands unattempted stale batch entries to the replacement handler", async () => {
+    vi.useFakeTimers();
+
+    let resolveA!: () => void;
+    const pendingA = new Promise<void>((resolve) => {
+      resolveA = resolve;
+    });
+    const handlerA = vi
+      .fn()
+      .mockReturnValue(pendingA.then(() => ({ status: "ran" as const, durationMs: 1 })));
+    const handlerB = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handlerA);
+
+    requestHeartbeat(wake("cron:first", { coalesceMs: 0, agentId: "first" }));
+    requestHeartbeat(wake("cron:second", { coalesceMs: 0, agentId: "second" }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledOnce();
+    expect(handlerA).toHaveBeenCalledWith(wake("cron:first", { agentId: "first" }));
+
+    setHeartbeatWakeHandler(handlerB);
+    requestHeartbeat(wake("manual", { coalesceMs: 2_000, agentId: "second" }));
+    resolveA();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(handlerB).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handlerA).toHaveBeenCalledOnce();
+    expect(handlerB).toHaveBeenCalledOnce();
+    expect(handlerB).toHaveBeenCalledWith(wake("manual", { agentId: "second" }));
+
+    await vi.advanceTimersByTimeAsync(1_750);
+    expect(handlerB).toHaveBeenCalledOnce();
   });
 
   it("does not let a stale disposer clear a newer handler", async () => {
