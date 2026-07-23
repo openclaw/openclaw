@@ -64,6 +64,8 @@ export type ControlUiMockGatewayScenario = {
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
+  /** Simulate the one-time legacy Control UI device-auth pairing transition. */
+  deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
@@ -281,6 +283,7 @@ function normalizeScenario(
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
+    deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
@@ -398,6 +401,8 @@ function installControlUiMockGateway(input: {
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{ readonly url: string }> = [];
+  let deviceAuthMigrationPending = scenario.deviceAuthMigrationPending;
+  let deviceAuthMigrationDeviceId = "";
   let sessionMessageEventIndex = 0;
   let sessionMessageEventTimer: number | null = null;
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -764,6 +769,28 @@ function installControlUiMockGateway(input: {
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    if (method === "connect") {
+      const device = isRecord(params) ? params.device : undefined;
+      deviceAuthMigrationDeviceId =
+        isRecord(device) && typeof device.id === "string" ? device.id : "";
+    }
+    if (deviceAuthMigrationPending && method === "device.pair.list") {
+      return {
+        paired: [],
+        pending: deviceAuthMigrationDeviceId
+          ? [
+              {
+                requestId: "mock-device-auth-migration-request",
+                deviceId: deviceAuthMigrationDeviceId,
+              },
+            ]
+          : [],
+      };
+    }
+    if (deviceAuthMigrationPending && method === "device.pair.approve") {
+      deviceAuthMigrationPending = false;
+      return { requestId: "mock-device-auth-migration-request" };
+    }
     if (method === "sessions.patch") {
       recordSessionPatch(params);
     }
@@ -844,7 +871,7 @@ function installControlUiMockGateway(input: {
       case "connect":
         return {
           auth: {
-            deviceToken: scenario.deviceToken,
+            ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
             scopes: [
               "operator.admin",
@@ -861,6 +888,9 @@ function installControlUiMockGateway(input: {
           },
           controlUiTabs: scenario.controlUiTabs,
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,
+          ...(deviceAuthMigrationPending
+            ? { deviceAuthMigration: { pending: true as const } }
+            : {}),
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {

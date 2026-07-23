@@ -99,6 +99,20 @@ describe("Matrix QA Lab scenario flows", () => {
     }
   });
 
+  it("applies the portable thread override through Matrix flow preparation", () => {
+    expect(readQaScenarioById("thread-reply-override").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      timeoutMs: 60_000,
+      retryCount: 0,
+      config: {
+        matrixConfigOverrides: {
+          threadReplies: "always",
+        },
+      },
+    });
+  });
+
   it("runs the allowlist scenario through its config-file reload owner", () => {
     const scenario = catalog.scenarios.find((entry) => entry.id === "matrix-allowlist-hot-reload");
     expect(scenario?.execution.kind).toBe("flow");

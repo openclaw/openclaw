@@ -1,5 +1,4 @@
 // Covers heartbeat system-event isolation by stable session keys.
-import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -7,6 +6,7 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -386,15 +386,13 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       };
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      await fs.writeFile(
-        `${tmpDir}/HEARTBEAT.md`,
-        `tasks:
+      await seedHeartbeatScratchForTest({
+        content: `tasks:
   - name: daily-check
     interval: 1d
     prompt: "Check status"
 `,
-        "utf-8",
-      );
+      });
 
       await seedSessionStore(storePath, baseSessionKey, {
         sessionId: "sid",

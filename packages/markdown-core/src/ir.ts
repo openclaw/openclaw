@@ -1,6 +1,9 @@
 // Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
+import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
+import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
+import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
@@ -9,6 +12,7 @@ import {
   type AssistantTranscriptRoleTokenMeta,
 } from "./assistant-transcript.js";
 import { chunkText } from "./chunk-text.js";
+import { tokenizeHtmlTags } from "./html-tags.js";
 import {
   appendAssistantTranscriptRoleImage,
   appendAssistantTranscriptRoleText,
@@ -68,6 +72,14 @@ type MarkdownToken = {
   map?: [number, number] | null;
   markup?: string;
   meta?: unknown;
+  taskListMarker?: boolean;
+};
+
+type MarkdownListItemMarker = {
+  kind: "bullet" | "ordered";
+  listMarker?: { start: number; end: number };
+  task?: true;
+  taskMarker?: { start: number; end: number };
 };
 
 export type MarkdownIR = {
@@ -75,6 +87,7 @@ export type MarkdownIR = {
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
   annotations?: MarkdownAnnotationSpan[];
+  listItems?: MarkdownListItemMarker[];
 };
 
 type MarkdownTableAlignment = "left" | "center" | "right";
@@ -135,6 +148,8 @@ type RenderState = RenderTarget & {
   horizontalRuleText: string;
   preserveSourceBlockSpacing: boolean;
   headingLineEnd: number | undefined;
+  listItems: MarkdownListItemMarker[];
+  openListItems: MarkdownListItemMarker[];
 };
 
 export type MarkdownParseOptions = {
@@ -142,6 +157,10 @@ export type MarkdownParseOptions = {
   assistantTranscriptRoleHeaders?: boolean;
   linkify?: boolean;
   enableSpoilers?: boolean;
+  /** Parse authored HTML <u>/<ins> tags into underline spans. */
+  enableHtmlUnderline?: boolean;
+  /** Preserve task-list checkboxes as semantic list markers. */
+  enableTaskLists?: boolean;
   headingStyle?: "none" | "bold" | "rich";
   blockquotePrefix?: string;
   autolink?: boolean;
@@ -178,6 +197,12 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
   });
   md.use(markdownItCjkFriendly);
   md.use(markdownItAssistantTranscriptRoles);
+  if (options.enableTaskLists) {
+    md.core.ruler.before("inline", "markdown_core_task_lists", protectTaskListMarkers);
+  }
+  if (options.enableHtmlUnderline) {
+    md.inline.ruler.before("html_inline", "markdown_core_html_underline", parseHtmlUnderline);
+  }
   if (options.enableSpoilers) {
     // Spoiler delimiters can surround a line-leading role header. Normalize
     // them before semantic detection so later rendering cannot expose a role
@@ -196,6 +221,64 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     md.disable("autolink");
   }
   return md;
+}
+
+function protectTaskListMarkers(state: StateCore): void {
+  const stack: Array<{ contentStarted: boolean }> = [];
+  for (const token of state.tokens as MarkdownToken[]) {
+    if (token.type === "list_item_open") {
+      stack.push({ contentStarted: false });
+      continue;
+    }
+    if (token.type === "list_item_close") {
+      stack.pop();
+      continue;
+    }
+    const item = stack.at(-1);
+    if (!item || item.contentStarted) {
+      continue;
+    }
+    if (token.type === "inline") {
+      item.contentStarted = true;
+      if (/^\[[ xX]\](?:[ \t]|\n|$)/u.test(token.content ?? "")) {
+        token.taskListMarker = true;
+        token.content = `\\${token.content}`;
+      }
+      continue;
+    }
+    if (token.type !== "paragraph_open") {
+      item.contentStarted = true;
+    }
+  }
+}
+
+function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
+  if (state.src.charCodeAt(state.pos) !== 0x3c) {
+    return false;
+  }
+  const raw = HTML_TAG_RE.exec(state.src.slice(state.pos))?.[0];
+  if (!raw) {
+    return false;
+  }
+  const tag = tokenizeHtmlTags(raw).next().value;
+  const underlineTag =
+    tag && tag.start === 0 && (tag.name === "u" || tag.name === "ins") ? tag : undefined;
+  if (!silent) {
+    const token = state.push(
+      !underlineTag || underlineTag.selfClosing
+        ? "text"
+        : underlineTag.closing
+          ? "underline_close"
+          : "underline_open",
+      "",
+      0,
+    );
+    if (!underlineTag || underlineTag.selfClosing) {
+      token.content = raw;
+    }
+  }
+  state.pos += raw.length;
+  return true;
 }
 
 function getAttr(token: MarkdownToken, name: string): string | null {
@@ -387,16 +470,35 @@ function appendNestedListSeparator(state: RenderState) {
   }
 }
 
-function appendListPrefix(state: RenderState) {
+function appendListPrefix(state: RenderState, isTask: boolean): MarkdownListItemMarker | undefined {
   const stack = state.env.listStack;
   const top = stack[stack.length - 1];
   if (!top) {
-    return;
+    return undefined;
   }
   top.index += 1;
   const indent = "  ".repeat(Math.max(0, stack.length - 1));
   const prefix = top.type === "ordered" ? `${top.index}. ` : "• ";
-  state.text += `${indent}${prefix}`;
+  state.text += indent;
+  const start = state.text.length;
+  state.text += prefix;
+  return {
+    kind: top.type,
+    listMarker: { start, end: state.text.length },
+    ...(isTask ? { task: true as const } : {}),
+  };
+}
+
+function recordTaskMarker(state: RenderState, content: string): void {
+  const item = state.openListItems.at(-1);
+  if (!item?.task || item.taskMarker) {
+    return;
+  }
+  const marker = /^\[[ xX]\][ \t]?/u.exec(content)?.[0];
+  if (marker) {
+    const start = resolveRenderTarget(state).text.length;
+    item.taskMarker = { start, end: start + marker.length };
+  }
 }
 
 function renderInlineCode(state: RenderState, content: string) {
@@ -770,7 +872,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         }
         break;
       case "text":
+        recordTaskMarker(state, token.content ?? "");
         appendText(state, token.content ?? "");
+        break;
+      case "underline_open":
+        openStyle(state, "underline");
+        break;
+      case "underline_close":
+        closeStyle(state, "underline");
         break;
       case ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE: {
         const meta = (token.meta as AssistantTranscriptRoleTokenMeta | undefined)
@@ -906,15 +1015,32 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           appendTopLevelListSeparator(state);
         }
         break;
-      case "list_item_open":
-        appendListPrefix(state);
+      case "list_item_open": {
+        const leadingInline =
+          tokens[tokenIndex + 1]?.type === "paragraph_open" ? tokens[tokenIndex + 2] : undefined;
+        const isTask = leadingInline?.type === "inline" && leadingInline.taskListMarker === true;
+        const item = appendListPrefix(state, isTask);
+        if (item) {
+          state.openListItems.push(item);
+        }
         break;
-      case "list_item_close":
+      }
+      case "list_item_close": {
+        const item = state.openListItems.pop();
+        if (item) {
+          state.listItems.push({
+            kind: item.kind,
+            ...(item.listMarker ? { listMarker: item.listMarker } : {}),
+            ...(item.task ? { task: true } : {}),
+            ...(item.taskMarker ? { taskMarker: item.taskMarker } : {}),
+          });
+        }
         // Avoid double newlines (nested list's last item already added newline)
         if (!state.text.endsWith("\n")) {
           state.text += "\n";
         }
         break;
+      }
       case "code_block":
       case "fence":
         renderCodeBlock(
@@ -1026,14 +1152,40 @@ function closeRemainingStyles(target: RenderTarget) {
   target.openStyles = [];
 }
 
+function sliceListMarker(
+  marker: { start: number; end: number },
+  start: number,
+  end: number,
+): { start: number; end: number } | undefined {
+  const sliceStart = Math.max(marker.start, start);
+  const sliceEnd = Math.min(marker.end, end);
+  return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
+}
+
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
   const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
-  return {
+  const listItems = (ir.listItems ?? []).flatMap((item) => {
+    const listMarker = item.listMarker ? sliceListMarker(item.listMarker, start, end) : undefined;
+    const taskMarker = item.taskMarker ? sliceListMarker(item.taskMarker, start, end) : undefined;
+    return listMarker || taskMarker
+      ? [
+          {
+            kind: item.kind,
+            ...(listMarker ? { listMarker } : {}),
+            ...(item.task ? { task: true as const } : {}),
+            ...(taskMarker ? { taskMarker } : {}),
+          },
+        ]
+      : [];
+  });
+  const sliced: MarkdownIR = {
     text: ir.text.slice(start, end),
     styles: sliceStyleSpans(ir.styles, start, end),
     links: sliceLinkSpans(ir.links, start, end),
     ...(annotations.length > 0 ? { annotations } : {}),
+    ...(listItems.length > 0 ? { listItems } : {}),
   };
+  return sliced;
 }
 
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
@@ -1072,6 +1224,8 @@ export function markdownToIRWithMeta(
     horizontalRuleText: options.horizontalRuleText ?? "───",
     preserveSourceBlockSpacing: options.preserveSourceBlockSpacing ?? false,
     headingLineEnd: undefined,
+    listItems: [],
+    openListItems: [],
   };
 
   renderTokens(tokens as MarkdownToken[], state);
@@ -1092,14 +1246,34 @@ export function markdownToIRWithMeta(
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
   const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const listItems = state.listItems.flatMap((item) => {
+    const listMarker = item.listMarker
+      ? sliceListMarker(item.listMarker, 0, finalLength)
+      : undefined;
+    const taskMarker = item.taskMarker
+      ? sliceListMarker(item.taskMarker, 0, finalLength)
+      : undefined;
+    return listMarker || taskMarker
+      ? [
+          {
+            kind: item.kind,
+            ...(listMarker ? { listMarker } : {}),
+            ...(item.task ? { task: true as const } : {}),
+            ...(taskMarker ? { taskMarker } : {}),
+          },
+        ]
+      : [];
+  });
 
+  const ir: MarkdownIR = {
+    text: finalText,
+    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
+    links: clampLinkSpans(state.links, finalLength),
+    ...(annotations.length > 0 ? { annotations } : {}),
+    ...(listItems.length > 0 ? { listItems } : {}),
+  };
   return {
-    ir: {
-      text: finalText,
-      styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
-      links: clampLinkSpans(state.links, finalLength),
-      ...(annotations.length > 0 ? { annotations } : {}),
-    },
+    ir,
     hasTables: state.hasTables,
     tables: state.collectedTables.map((table) =>
       Object.assign({}, table, {
@@ -1132,13 +1306,9 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
     }
     const start = cursor;
     const end = Math.min(ir.text.length, start + chunk.length);
-    const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
-    results.push({
-      text: chunk,
-      styles: sliceStyleSpans(ir.styles, start, end),
-      links: sliceLinkSpans(ir.links, start, end),
-      ...(annotations.length > 0 ? { annotations } : {}),
-    });
+    const sliced = sliceMarkdownIR(ir, start, end);
+    sliced.text = chunk;
+    results.push(sliced);
     cursor = end;
   });
 

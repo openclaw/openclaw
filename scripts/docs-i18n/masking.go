@@ -14,7 +14,7 @@ var (
 	linkLabelRe           = regexp.MustCompile(`!?\[([^\]\r\n]+)\]\(([^)\r\n]+)\)`)
 	placeholderRe         = regexp.MustCompile(`__OC_I18N_\d+__`)
 	listMarkerRe          = regexp.MustCompile(`^([ \t]*(?:>[ \t]*)*)([-+*]|[0-9]+[.)])([ \t]+)`)
-	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:>[ \t]*)*$`)
+	listContainerPrefixRe = regexp.MustCompile(`^[ \t]*(?:(?:>[ \t]*)|(?:(?:[-+*]|[0-9]+[.)])[ \t]+))*$`)
 	// Hard validation stays limited to low-ambiguity composite literals. Plain numbers remain
 	// model-visible so target-language plurals and ordinals can change grammar without false failures.
 	numericValueRe = regexp.MustCompile(`(?:0[xX][0-9A-Za-z_]+|0[bB][0-9A-Za-z_]+|0[oO][0-9A-Za-z_]+|[0-9]+(?:\.[0-9]+)?(?::[0-9]+(?:\.[0-9]+)?)+|[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)+|(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)[eE][+-]?[0-9]+)`)
@@ -148,6 +148,99 @@ func normalizeMaskedListMarkerPlaceholders(text string, mapping map[string]strin
 		lines[index] = line[span[0]:]
 	}
 	return strings.Join(lines, "")
+}
+
+func maskedListMarkerPlaceholders(mapping map[string]string) map[string]string {
+	placeholders := make(map[string]string)
+	for placeholder, original := range mapping {
+		markerSpan := listMarkerRe.FindStringIndex(original)
+		if markerSpan != nil && markerSpan[0] == 0 && markerSpan[1] == len(original) {
+			placeholders[placeholder] = original
+		}
+	}
+	return placeholders
+}
+
+func normalizeMaskedListMarkerSpacing(source, translated string, listPlaceholders map[string]string) string {
+	type replacement struct {
+		start int
+		end   int
+		value string
+	}
+	replacements := make([]replacement, 0, len(listPlaceholders))
+	for placeholder := range listPlaceholders {
+		sourcePosition := strings.Index(source, placeholder)
+		translatedPosition := strings.Index(translated, placeholder)
+		if sourcePosition < 0 || translatedPosition < 0 {
+			continue
+		}
+		sourceStart := markdownWhitespaceRunStart(source, sourcePosition)
+		translatedStart := markdownWhitespaceRunStart(translated, translatedPosition)
+		sourceSpacing := source[sourceStart:sourcePosition]
+		if translated[translatedStart:translatedPosition] == sourceSpacing {
+			continue
+		}
+		replacements = append(replacements, replacement{
+			start: translatedStart,
+			end:   translatedPosition,
+			value: sourceSpacing,
+		})
+	}
+	sort.Slice(replacements, func(i, j int) bool { return replacements[i].start > replacements[j].start })
+	for _, item := range replacements {
+		translated = translated[:item.start] + item.value + translated[item.end:]
+	}
+	return translated
+}
+
+func markdownWhitespaceRunStart(text string, position int) int {
+	for position > 0 {
+		switch text[position-1] {
+		case ' ', '\t', '\r', '\n':
+			position--
+		default:
+			return position
+		}
+	}
+	return position
+}
+
+func escapeUnexpectedMarkdownListMarkers(text string, listPlaceholders map[string]string) string {
+	ranges := markdownListMarkerRanges(text)
+	if len(ranges) == 0 {
+		return text
+	}
+	var out strings.Builder
+	position := 0
+	for _, span := range ranges {
+		lineEnd := strings.IndexByte(text[span[1]:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(text)
+		} else {
+			lineEnd += span[1]
+		}
+		if placeholder := placeholderRe.FindString(text[span[1]:lineEnd]); placeholder != "" {
+			if _, ok := listPlaceholders[placeholder]; ok && strings.HasPrefix(text[span[1]:lineEnd], placeholder) {
+				continue
+			}
+		}
+		value := text[span[0]:span[1]]
+		match := listMarkerRe.FindStringSubmatchIndex(value)
+		if len(match) < 6 {
+			continue
+		}
+		markerStart, markerEnd := match[4], match[5]
+		insertAt := markerStart
+		if markerEnd-markerStart > 1 {
+			insertAt = markerEnd - 1
+		}
+		absolute := span[0] + insertAt
+		out.WriteString(text[position:absolute])
+		out.WriteByte('\\')
+		position = absolute
+	}
+	out.WriteString(text[position:])
+	return out.String()
 }
 
 func protectedMarkdownLinkRanges(text string) [][2]int {

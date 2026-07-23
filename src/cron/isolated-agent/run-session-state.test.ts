@@ -7,6 +7,14 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+
+const resetBoundaryMocks = vi.hoisted(() => ({
+  clearBootstrap: vi.fn(),
+}));
+
+vi.mock("../../agents/bootstrap-cache.js", () => ({
+  clearBootstrapSnapshotOnSessionBoundary: resetBoundaryMocks.clearBootstrap,
+}));
 import {
   adoptCronRunSessionMetadata,
   CronSessionLifecycleClaimError,
@@ -45,6 +53,7 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
   return vi.fn(
     async (params: {
       fallbackEntry: SessionEntry;
+      resetBoundaryReason?: "cron-stale";
       sessionKey: string;
       storePath: string;
       update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -55,6 +64,62 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
 }
 
 describe("createPersistCronSessionEntry", () => {
+  it("commits a pending reset boundary with the guarded session row", async () => {
+    resetBoundaryMocks.clearBootstrap.mockClear();
+    const lifecycleRevision = "00000000-0000-4000-8000-000000000001";
+    const existingEntry = makeSessionEntry({ lifecycleRevision });
+    const cronSession = {
+      ...makeCronSession(existingEntry),
+      initialSessionEntry: existingEntry,
+      lifecycleRevision,
+      resetBoundaryPending: {
+        reason: "cron-stale" as const,
+        sessionFile: "sqlite:main:run-session-id:/tmp/sessions.json",
+      },
+    } as MutableCronSession;
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job": existingEntry,
+    };
+    const persistSessionEntry = makeGuardedPersistSessionEntry(store);
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: "agent:main:cron:job",
+      persistSessionEntry,
+    });
+
+    await persist();
+
+    expect(persistSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ resetBoundaryReason: "cron-stale" }),
+    );
+    expect(resetBoundaryMocks.clearBootstrap).toHaveBeenCalledWith({
+      boundaryAppended: true,
+      sessionKey: "agent:main:cron:job",
+    });
+    expect(cronSession.resetBoundaryPending).toBeUndefined();
+  });
+
+  it("keeps a pending reset boundary when the guarded row commit fails", async () => {
+    const cronSession = {
+      ...makeCronSession(),
+      resetBoundaryPending: {
+        reason: "cron-stale" as const,
+        sessionFile: "sqlite:main:run-session-id:/tmp/sessions.json",
+      },
+    } as MutableCronSession;
+    const persist = createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: "agent:main:cron:job",
+      persistSessionEntry: vi.fn(async () => {
+        throw new Error("write failed");
+      }),
+    });
+
+    await expect(persist()).rejects.toThrow("write failed");
+
+    expect(cronSession.resetBoundaryPending).toBeDefined();
+  });
+
   it("owns an exact hidden continuation row without colliding with another run", async () => {
     const runSessionKey = "agent:main:cron:job:run:run-session-id";
     const lifecycleRevision = crypto.randomUUID();
@@ -65,6 +130,9 @@ describe("createPersistCronSessionEntry", () => {
           lifecycleRevision,
           modelProvider: "claude-cli",
           model: "claude-opus-4-8",
+          // Node-local lineage on the base row must not leak onto the :run: node.
+          previousSessionId: "base-prior-generation",
+          forkSource: { sessionKey: "agent:main:other", sessionId: "other-generation" },
         }),
       ),
       lifecycleRevision,
@@ -87,7 +155,12 @@ describe("createPersistCronSessionEntry", () => {
       storePath: cronSession.storePath,
       update: expect.any(Function),
     });
+    expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
+    expect(store[runSessionKey]?.forkSource).toBeUndefined();
     expect(store[runSessionKey]).toMatchObject({
+      createdVia: "cron",
+      createdActor: { type: "system" },
+      createdAt: expect.any(Number),
       sessionId: "run-session-id",
       modelProvider: "claude-cli",
       model: "claude-opus-4-8",
@@ -165,7 +238,8 @@ describe("createPersistCronSessionEntry", () => {
         },
       }),
     );
-    const persistSessionEntry = vi.fn(async () => {});
+    const persistedStore: Record<string, SessionEntry> = {};
+    const persistSessionEntry = makeGuardedPersistSessionEntry(persistedStore);
 
     const persist = createPersistCronSessionEntry({
       cronSession,
@@ -175,12 +249,21 @@ describe("createPersistCronSessionEntry", () => {
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
+    expect(cronSession.store["agent:main:cron:job"]).toMatchObject({
+      createdVia: "cron",
+      createdActor: { type: "system" },
+      createdAt: expect.any(Number),
+    });
+    expect(persistedStore["agent:main:cron:job"]).toMatchObject({
+      createdVia: "cron",
+      createdActor: { type: "system" },
+      createdAt: expect.any(Number),
+    });
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
     expect(persistSessionEntry).toHaveBeenCalledWith({
       storePath: "/tmp/sessions.json",
       sessionKey: "agent:main:cron:job",
-      fallbackEntry: cronSession.sessionEntry,
+      fallbackEntry: expect.objectContaining({ sessionId: "run-session-id" }),
       update: expect.any(Function),
     });
   });

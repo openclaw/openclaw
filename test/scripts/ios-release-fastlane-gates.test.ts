@@ -7,6 +7,16 @@ const fastfilePath = path.join(process.cwd(), "apps", "ios", "fastlane", "Fastfi
 const packageJsonPath = path.join(process.cwd(), "package.json");
 const legacyReleaseScriptPath = path.join(process.cwd(), "scripts", "ios-release.sh");
 const uploadScriptPath = path.join(process.cwd(), "scripts", "ios-release-upload.sh");
+const snapshotUITestPath = path.join(
+  process.cwd(),
+  "apps",
+  "ios",
+  "UITests",
+  "OpenClawSnapshotUITests.swift",
+);
+const rootSidebarPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootSidebar.swift");
+const rootTabsPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootTabs.swift");
+const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml");
 
 function readFastfile(): string {
   return readFileSync(fastfilePath, "utf8");
@@ -33,6 +43,18 @@ function functionBody(source: string, name: string): string {
 
   const rest = source.slice(start + startMarker.length);
   const nextFunction = rest.search(/\ndef /);
+  return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
+}
+
+function swiftFunctionBody(source: string, name: string): string {
+  const startMarker = `func ${name}(`;
+  const start = source.indexOf(startMarker);
+  if (start < 0) {
+    throw new Error(`missing Swift function ${name}`);
+  }
+
+  const rest = source.slice(start + startMarker.length);
+  const nextFunction = rest.search(/\n    (?:private )?func /);
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
 }
 
@@ -117,10 +139,15 @@ describe("iOS Fastlane release upload gates", () => {
     const screenshots = laneBody(fastfile, "screenshots");
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
 
-    expect(screenshots).toContain("snapshot_devices.each_with_index");
+    expect(screenshots).toContain("devices = snapshot_devices");
+    expect(screenshots).toContain("devices.each_with_index");
+    expect(screenshots).toContain(
+      'only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/testConnectedGatewayTabs"]',
+    );
     expect(screenshots).toContain("result_bundle: true");
     expect(screenshots).toContain("number_of_retries: 0");
     expect(screenshots).toContain("stop_after_first_error: true");
+    expect(screenshots).toContain("verify_release_ios_screenshot_manifest!(");
     expect(screenshots).toContain("verify_snapshot_test_result!(result_bundle_path, device)");
     expect(screenshots).toContain(
       'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
@@ -136,6 +163,64 @@ describe("iOS Fastlane release upload gates", () => {
     expect(verifier).toContain('"xcresulttool"');
     expect(verifier).toContain('summary.fetch("failedTests")');
     expect(verifier).toContain("UI.test_failure!");
+  });
+
+  it("captures all release screens from one app launch with targeted launch recovery", () => {
+    const snapshotUITest = readFileSync(snapshotUITestPath, "utf8");
+    const releaseTest = swiftFunctionBody(snapshotUITest, "testConnectedGatewayTabs");
+    const launchHelper = swiftFunctionBody(snapshotUITest, "launchApp");
+    const rootSidebar = readFileSync(rootSidebarPath, "utf8");
+    const rootTabs = readFileSync(rootTabsPath, "utf8");
+
+    expect(releaseTest.match(/self\.launchApp\(/g)).toHaveLength(1);
+    expect(snapshotUITest).toContain(
+      'releaseScreenshotLaunchArguments = ["-sidebar.pinnedPages", "overview,agents"]',
+    );
+    expect(releaseTest).toContain("selectReleaseScreenshotDestination");
+    expect(releaseTest).toContain("waitForReleaseScreenshotTarget");
+    expect(launchHelper).toContain("screenshotLaunchRetryThreshold");
+    expect(launchHelper).toContain("Recover before making any element query");
+    expect(launchHelper).toContain("app.wait(for: .notRunning, timeout: 5)");
+    expect(snapshotUITest).toContain("Recover stalled screenshot transition");
+    expect(snapshotUITest).toContain("self.launchApp(for: target");
+    expect(rootTabs).toContain("self.scenePhase == .active");
+    expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
+    expect(rootSidebar).toContain('"RootTabs.Sidebar.Destination.chat"');
+    expect(rootSidebar).toContain('"RootTabs.Sidebar.Destination.settings"');
+    expect(rootSidebar).toContain('"RootTabs.Sidebar.Destination.\\(destination.rawValue)"');
+  });
+
+  it("requires the exact nonempty PNG manifest before Watch capture", () => {
+    const fastfile = readFastfile();
+    const screenshots = laneBody(fastfile, "screenshots");
+    const verifier = functionBody(fastfile, "verify_release_ios_screenshot_manifest!");
+
+    expect(fastfile).toContain("REQUIRED_IOS_SCREENSHOT_NAMES");
+    expect(verifier).toContain("expected_names - actual_names");
+    expect(verifier).toContain("actual_names - expected_names");
+    expect(verifier).toContain("File.size?(path)");
+    expect(verifier).toContain("PNG_SIGNATURE");
+    expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeGreaterThan(
+      screenshots.indexOf("devices.each_with_index"),
+    );
+    expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
+      screenshots.indexOf("watch_screenshot("),
+    );
+  });
+
+  it("runs the exact screenshot lane during manual and full release CI", () => {
+    const workflow = readFileSync(ciWorkflowPath, "utf8");
+    const iosJobStart = workflow.indexOf("\n  ios-build:\n");
+    const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
+    const iosJob = workflow.slice(iosJobStart, iosJobEnd);
+
+    expect(iosJob).toContain("timeout-minutes: 75");
+    expect(iosJob).toContain("Capture iOS release screenshots");
+    expect(iosJob).toContain("github.event_name == 'workflow_dispatch'");
+    expect(iosJob).toContain("run: pnpm ios:screenshots");
+    expect(iosJob).toContain("Upload iOS release screenshot evidence");
+    expect(iosJob).toContain("apps/ios/build/SnapshotTestResults/*.xcresult");
+    expect(iosJob).toContain("if-no-files-found: error");
   });
 
   it("preserves caller-pinned Swift tools in archive build PATH", () => {
