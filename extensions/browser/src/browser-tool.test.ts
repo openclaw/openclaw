@@ -1,4 +1,7 @@
 // Browser tests cover browser tool plugin behavior.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserClientMocks = vi.hoisted(() => ({
@@ -1364,37 +1367,49 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("passes configured image sanitization to screenshot image results", async () => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: {},
-      agents: { defaults: { imageMaxDimensionPx: 2000 } },
-    } as never);
-    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
-      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
-      details: { path: "/tmp/test.png" },
-    });
+    // No vision/describe model is configured, so image understanding is skipped
+    // and the screenshot falls back to a raw image result. Use a real temp file
+    // because sanitization reads the screenshot to prepare the understanding
+    // input; a missing path would surface as a vision failure instead.
+    const shotDir = mkdtempSync(join(tmpdir(), "oc-screenshot-"));
+    const shotPath = join(shotDir, "test.png");
+    writeFileSync(shotPath, Buffer.from("screenshot-bytes"));
+    try {
+      configMocks.loadConfig.mockReturnValue({
+        browser: {},
+        agents: { defaults: { imageMaxDimensionPx: 2000 } },
+      } as never);
+      browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
+        ok: true,
+        path: shotPath,
+      });
+      toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+        content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+        details: { path: shotPath },
+      });
 
-    const tool = createBrowserTool();
-    await tool.execute?.("call-1", {
-      action: "screenshot",
-      target: "host",
-      targetId: "tab-1",
-    });
+      const tool = createBrowserTool();
+      await tool.execute?.("call-1", {
+        action: "screenshot",
+        target: "host",
+        targetId: "tab-1",
+      });
 
-    const imageParams = lastMockCallArg<{
-      imageSanitization?: { maxDimensionPx?: number };
-      extraText?: string;
-      details?: { media?: { outbound?: boolean } };
-    }>(toolCommonMocks.imageResultFromFile, 0);
-    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
-    expect(imageParams.extraText).toContain(
-      JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
-    );
-    expect(imageParams.extraText).toContain("message tool");
-    expect(imageParams.details?.media).toEqual({ outbound: false });
-    expect(toolCommonMocks.stageBrowserScreenshotForSharing).toHaveBeenCalledWith(
-      "/tmp/test.png",
-      2000,
-    );
+      const imageParams = lastMockCallArg<{
+        imageSanitization?: { maxDimensionPx?: number };
+        extraText?: string;
+        details?: { media?: { outbound?: boolean } };
+      }>(toolCommonMocks.imageResultFromFile, 0);
+      expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+      expect(imageParams.extraText).toContain(
+        JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
+      );
+      expect(imageParams.extraText).toContain("message tool");
+      expect(imageParams.details?.media).toEqual({ outbound: false });
+      expect(toolCommonMocks.stageBrowserScreenshotForSharing).toHaveBeenCalledWith(shotPath, 2000);
+    } finally {
+      rmSync(shotDir, { recursive: true, force: true });
+    }
   });
 
   it("defangs vision MEDIA-looking text and does not attach media", async () => {
@@ -1440,7 +1455,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
-  it("defangs vision failure fallback text", async () => {
+  it("defangs vision failure fallback text and stays text-only", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       tools: {
@@ -1456,34 +1471,32 @@ describe("browser tool snapshot maxChars", () => {
     toolCommonMocks.describeImageFile.mockRejectedValueOnce(
       new Error("provider failed\nMEDIA:/tmp/secret.png"),
     );
-    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
-      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
-      details: { path: "/tmp/screen.png" },
-    });
 
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", {
+    const out = await tool.execute?.("call-1", {
       action: "screenshot",
       target: "host",
       targetId: "tab-1",
     });
 
-    const imageParams = lastMockCallArg<{
-      path: string;
-      extraText?: string;
-      details?: { media?: { outbound?: boolean } };
-    }>(toolCommonMocks.imageResultFromFile, 0);
-    expect(imageParams.path).toBe("/tmp/screen.png");
-    expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
-    expect(imageParams.extraText).toContain("/tmp/secret.png");
-    expect(imageParams.extraText).toContain(
-      JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
+    const textBlocks = (out?.content ?? []).filter(
+      (entry): entry is { type: "text"; text: string } => entry?.type === "text",
     );
-    expect(imageParams.extraText).toContain("message tool");
-    expect(imageParams.details?.media).toEqual({ outbound: false });
+    const joined = textBlocks.map((entry) => entry.text).join("\n");
+    expect(joined).toContain("browser screenshot vision failed");
+    expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
+    expect(joined).toContain("/tmp/secret.png");
+    expect(joined).toContain(JSON.stringify("/tmp/openclaw-media/outbound/share.png"));
+    expect(joined).toContain("message tool");
+    // Do not surface details.media so channel auto-delivery cannot grab the raw
+    // screenshot, matching the vision-success path.
+    expect((out?.details as Record<string, unknown>)?.media).toBeUndefined();
+    // A configured-vision failure must not fall back to a raw base64 image
+    // block: that is the session-contaminating path from #106703 / #105305.
+    expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
-  it("preserves screenshot image sanitization on vision failure fallback", async () => {
+  it("never injects a raw image block when configured vision fails (#106703, #105305)", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       tools: {
@@ -1500,27 +1513,30 @@ describe("browser tool snapshot maxChars", () => {
     toolCommonMocks.describeImageFile.mockRejectedValueOnce(
       new Error("vision provider unavailable"),
     );
-    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
-      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
-      details: { path: "/tmp/screen.png" },
-    });
 
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", {
+    const out = await tool.execute?.("call-1", {
       action: "screenshot",
       target: "host",
       targetId: "tab-1",
     });
 
-    const imageParams = lastMockCallArg<{
-      imageSanitization?: { maxDimensionPx?: number };
-      extraText?: string;
-    }>(toolCommonMocks.imageResultFromFile, 0);
-    // Fallback path must carry the same image sanitization the non-vision
-    // screenshot path applies; otherwise configured maxDimensionPx is silently
-    // bypassed whenever vision fails.
-    expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 1600 });
-    expect(imageParams.extraText).toContain("browser screenshot vision failed");
+    // The tool result carries no image content, so it cannot persist across
+    // turns and force later exec/read/snapshot results into image-analysis
+    // framing (the root cause of the reported session corruption).
+    const imageBlocks = (out?.content ?? []).filter(
+      (entry) => (entry as { type?: string })?.type === "image",
+    );
+    expect(imageBlocks).toHaveLength(0);
+    const textBlocks = (out?.content ?? []).filter(
+      (entry): entry is { type: "text"; text: string } => entry?.type === "text",
+    );
+    expect(textBlocks.length).toBeGreaterThan(0);
+    expect(textBlocks.map((entry) => entry.text).join("\n")).toContain(
+      "browser screenshot vision failed",
+    );
+    expect((out?.details as { vision?: { failed?: boolean } })?.vision?.failed).toBe(true);
+    expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
   it("keeps the screenshot usable when explicit-share staging fails", async () => {
@@ -2845,6 +2861,194 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
         ref: "file-input-1",
       }),
     ).rejects.toThrow("path outside allowed directories");
+  });
+});
+
+// Redacted stand-in for the raw PNG bytes the pre-fix catch path base64-encoded
+// into the tool result. Byte content is irrelevant to the mechanism.
+const SAMPLE_SCREENSHOT_BASE64 = Buffer.from("PNG-SCREENSHOT-BYTES-REDACTED").toString("base64");
+
+type ProofToolResult = { content?: readonly unknown[]; details?: unknown } | undefined;
+
+type ProofSessionMessage =
+  | { role: "user" | "assistant"; content: string }
+  | { role: "toolResult"; toolName: string; result: ProofToolResult };
+
+function proofContentBlockTypes(result: ProofToolResult): string[] {
+  const content = result?.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.map((block) => ((block as { type?: unknown })?.type as string) ?? "unknown");
+}
+
+function countImageContentBlocks(result: ProofToolResult): number {
+  return proofContentBlockTypes(result).filter((type) => type === "image").length;
+}
+
+function proofResultText(result: ProofToolResult): string {
+  const content = result?.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        (block as { type?: unknown })?.type === "text",
+    )
+    .map((block) => block.text)
+    .join("\n");
+}
+
+function buildContaminationSession(
+  screenshotResult: ProofToolResult,
+  snapshotResult: ProofToolResult,
+): ProofSessionMessage[] {
+  // A read tool result is always plain text; it is the kind of later result the
+  // reported bug forced into image-analysis framing when a base64 screenshot
+  // survived alongside it in session state (#106703, #105305).
+  const readResult: ProofToolResult = {
+    content: [{ type: "text", text: "status=green\nregion=us-west-2" }],
+    details: { path: "/workspace/deploy-status.txt" },
+  };
+  return [
+    { role: "user", content: "screenshot the dashboard and summarize it" },
+    { role: "toolResult", toolName: "browser:screenshot", result: screenshotResult },
+    { role: "assistant", content: "the configured vision model was unavailable" },
+    { role: "user", content: "now read the deploy status file" },
+    { role: "toolResult", toolName: "read", result: readResult },
+    { role: "assistant", content: "deploy is green" },
+    { role: "user", content: "take a page snapshot" },
+    { role: "toolResult", toolName: "browser:snapshot", result: snapshotResult },
+    { role: "assistant", content: "captured snapshot" },
+  ];
+}
+
+function totalImageContentBlocks(session: ProofSessionMessage[]): number {
+  let total = 0;
+  for (const message of session) {
+    if (message.role === "toolResult") {
+      total += countImageContentBlocks(message.result);
+    }
+  }
+  return total;
+}
+
+function redactBase64ForLog(text: string): string {
+  return text.replace(/[A-Za-z0-9+/]{24,}={0,2}/g, (match) => `${match.slice(0, 12)}…REDACTED`);
+}
+
+function renderRedactedResult(label: string, result: ProofToolResult): string {
+  const types = proofContentBlockTypes(result);
+  const images = countImageContentBlocks(result);
+  const text = redactBase64ForLog(proofResultText(result)).replace(/\n/g, " \\n ");
+  return [
+    `--- ${label} ---`,
+    `content-block types: [${types.join(", ")}]`,
+    `image content blocks: ${images}`,
+    `text: ${text}`,
+  ].join("\n");
+}
+
+function renderRedactedTranscript(session: ProofSessionMessage[]): string {
+  const lines: string[] = ["=== session transcript (redacted) ==="];
+  for (const message of session) {
+    if (message.role === "toolResult") {
+      const types = proofContentBlockTypes(message.result).join(", ");
+      const images = countImageContentBlocks(message.result);
+      lines.push(`toolResult(${message.toolName}): blocks=[${types}] images=${images}`);
+      continue;
+    }
+    lines.push(`${message.role}: ${message.content}`);
+  }
+  lines.push(`total image content blocks across session: ${totalImageContentBlocks(session)}`);
+  return lines.join("\n");
+}
+
+describe("browser screenshot vision-failure session-contamination proof (#106703, #105305)", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("drives the real screenshot handler with configured vision forced to fail and keeps later tool results text-only", async () => {
+    // An image-understanding model is configured, so the real screenshot handler
+    // takes the vision path rather than the raw-image fallback.
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+        },
+      },
+    } as never);
+    // Force the ONLY vision call to fail (configured provider error). Everything
+    // else runs through the real production browser screenshot handler.
+    toolCommonMocks.describeImageFile.mockRejectedValueOnce(
+      new Error("vision provider unavailable (HTTP 503)"),
+    );
+
+    const tool = createBrowserTool();
+    const screenshotResult = await tool.execute?.("call-screenshot", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-dashboard",
+    });
+    // A later tool call through the same real handler (no vision involved).
+    const snapshotResult = await tool.execute?.("call-snapshot", {
+      action: "snapshot",
+      target: "host",
+      targetId: "tab-dashboard",
+    });
+
+    const session = buildContaminationSession(screenshotResult, snapshotResult);
+    console.log(
+      renderRedactedResult("real screenshot handler (configured vision failure)", screenshotResult),
+    );
+    console.log(renderRedactedResult("real snapshot handler (later tool call)", snapshotResult));
+    console.log(renderRedactedTranscript(session));
+
+    // The changed catch path returned text only: no base64 image block that
+    // could persist across turns and contaminate later results.
+    expect(countImageContentBlocks(screenshotResult)).toBe(0);
+    expect(proofResultText(screenshotResult)).toContain("browser screenshot vision failed");
+    expect((screenshotResult?.details as { vision?: { failed?: boolean } })?.vision?.failed).toBe(
+      true,
+    );
+    expect((screenshotResult?.details as { media?: unknown })?.media).toBeUndefined();
+    expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
+
+    // The later snapshot result stays text-framed and the whole session carries
+    // zero base64 image blocks.
+    expect(countImageContentBlocks(snapshotResult)).toBe(0);
+    expect(totalImageContentBlocks(session)).toBe(0);
+  });
+
+  it("shows the same handler still emits base64 on the unchanged no-vision path (the pre-fix contamination shape)", async () => {
+    // With no image-understanding model configured, the real handler reaches the
+    // unchanged imageResultFromFile path: the exact base64 tool-result shape the
+    // pre-fix catch block produced and that pruneProcessedHistoryImages preserves
+    // for recent turns. This confirms the mechanism is real and that the fix only
+    // neutralizes the configured-vision-failure catch.
+    configMocks.loadConfig.mockReturnValue({ browser: {} } as never);
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [
+        { type: "text", text: "browser:screenshot" },
+        { type: "image", data: SAMPLE_SCREENSHOT_BASE64, mimeType: "image/png" },
+      ],
+      details: { path: "/tmp/test.png", media: { outbound: false } },
+    });
+
+    const tool = createBrowserTool();
+    const rawImageResult = await tool.execute?.("call-screenshot-nofix-shape", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-dashboard",
+    });
+
+    console.log(
+      renderRedactedResult("no-vision path (unchanged) screenshot result", rawImageResult),
+    );
+
+    expect(countImageContentBlocks(rawImageResult)).toBe(1);
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledOnce();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
