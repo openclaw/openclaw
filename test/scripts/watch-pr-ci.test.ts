@@ -126,6 +126,7 @@ describe("watch-pr-ci", () => {
         classifyRollup({
           state,
           contexts: {
+            totalCount: 3,
             nodes: [
               {
                 kind: "CheckRun",
@@ -141,6 +142,25 @@ describe("watch-pr-ci", () => {
       ).toEqual({ verdict: "STALE-CANCELLED", pendingCount: 0, failingNames: ["unit"] });
     },
   );
+
+  it("does not soften a truncated failing rollup to stale-cancelled", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          totalCount: 4,
+          nodes: [
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["unit", "+2 more contexts not shown"],
+    });
+  });
 
   it("keeps cancelled attempts in failing-name output", () => {
     expect(

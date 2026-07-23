@@ -14,7 +14,7 @@ const FAILURE_CONCLUSIONS = new Set([
   "STALE",
   "TIMED_OUT",
 ]);
-const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100){nodes{kind:__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100){totalCount nodes{kind:__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
 
 function positiveInteger(value, name) {
   const parsed = Number(value);
@@ -76,6 +76,10 @@ const isAutoResponse = (check) =>
 
 export function classifyRollup(rollup) {
   const nodes = rollup?.contexts?.nodes ?? [];
+  const hiddenContextCount = Math.max(
+    0,
+    (rollup?.contexts?.totalCount ?? nodes.length) - nodes.length,
+  );
   const checks = nodes.filter((check) => !isAutoResponse(check));
   const successfulNames = new Set(checks.filter(isSuccess).map(checkName));
   const pendingCount = checks.filter((check) =>
@@ -99,6 +103,7 @@ export function classifyRollup(rollup) {
   }
   if (rollup?.state === "ERROR" || rollup?.state === "FAILURE") {
     const staleCancelled =
+      hiddenContextCount === 0 &&
       pendingCount === 0 &&
       failingChecks.length > 0 &&
       failingChecks.every(
@@ -114,7 +119,10 @@ export function classifyRollup(rollup) {
     return {
       verdict: "FAILING",
       pendingCount,
-      failingNames: failingNames.length > 0 ? failingNames : ["status rollup"],
+      failingNames: [
+        ...(failingNames.length > 0 ? failingNames : ["status rollup"]),
+        ...(hiddenContextCount > 0 ? [`+${hiddenContextCount} more contexts not shown`] : []),
+      ],
     };
   }
   return { verdict: "PENDING", pendingCount, failingNames: [] };
