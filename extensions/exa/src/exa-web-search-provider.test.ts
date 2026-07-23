@@ -4,6 +4,18 @@ import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
+const EXA_TEST_CONFIG = {
+  plugins: {
+    entries: {
+      exa: {
+        config: {
+          webSearch: { apiKey: "exa-test-key" },
+        },
+      },
+    },
+  },
+};
+
 function cancelTrackedResponse(
   text: string,
   init: ResponseInit,
@@ -229,9 +241,7 @@ describe("exa web search provider", () => {
   it("exposes newer documented Exa search types and count limits", () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
+      config: EXA_TEST_CONFIG,
       searchConfig: {},
     });
     if (!tool) {
@@ -265,9 +275,7 @@ describe("exa web search provider", () => {
   it("returns validation errors for conflicting time filters", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
+      config: EXA_TEST_CONFIG,
       searchConfig: {},
     });
     if (!tool) {
@@ -291,9 +299,7 @@ describe("exa web search provider", () => {
   it("returns validation errors for invalid date input", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
+      config: EXA_TEST_CONFIG,
       searchConfig: {},
     });
     if (!tool) {
@@ -314,7 +320,18 @@ describe("exa web search provider", () => {
 
   it("reports malformed Exa API JSON with a stable provider error", async () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
-      "Exa API returned malformed JSON",
+      "Exa API: malformed JSON response",
+    );
+  });
+
+  it("rejects malformed UTF-8 in Exa search results", async () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ results: [{ url: "https://example.com", title: "bad X title" }] }),
+    );
+    bytes[bytes.indexOf("X".charCodeAt(0))] = 0xff;
+
+    await expect(testing.readExaSearchResults(new Response(bytes))).rejects.toThrow(
+      "Exa API: malformed JSON response",
     );
   });
 
@@ -334,7 +351,7 @@ describe("exa web search provider", () => {
 
     await expect(
       testing.readExaSearchResults(streamed.response, { maxBytes: 4096 }),
-    ).rejects.toThrow(/Exa API response exceeds 4096 bytes/);
+    ).rejects.toThrow(/Exa API: JSON response exceeds 4096 bytes/);
 
     expect(streamed.getReadCount()).toBeLessThan(64);
   });
