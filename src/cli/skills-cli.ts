@@ -987,11 +987,25 @@ export function registerSkillsCli(program: Command) {
     .description("Apply a pending skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
     .option("--json", "Output as JSON", false)
+    .option(
+      "--approve",
+      "Approve low-continuity replacement (required when proposal has insufficient content continuity)",
+      false,
+    )
     .action(
-      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+      async (
+        proposalId: string,
+        opts: { json?: boolean; agent?: string; approve?: boolean },
+        command: Command,
+      ) => {
         try {
           const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const applied = await applySkillProposal({ workspaceDir, config, proposalId });
+          const applied = await applySkillProposal({
+            workspaceDir,
+            config,
+            proposalId,
+            explicitApprovalGranted: opts.approve,
+          });
           if (opts.json) {
             defaultRuntime.writeJson(applied);
             return;

@@ -523,6 +523,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
           reason: parsedParams.reason,
+          explicitApprovalGranted: true,
         }),
     });
   },

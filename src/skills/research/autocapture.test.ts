@@ -259,6 +259,7 @@ describe("skill research auto-capture", () => {
     await applySkillProposal({
       workspaceDir,
       proposalId: expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      explicitApprovalGranted: true,
     });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Preserve this original review checklist.");
@@ -359,6 +360,7 @@ describe("skill research auto-capture", () => {
     await applySkillProposal({
       workspaceDir,
       proposalId: expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      explicitApprovalGranted: true,
     });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Capture first, score later.");
@@ -419,6 +421,7 @@ describe("skill research auto-capture", () => {
     await applySkillProposal({
       workspaceDir,
       proposalId: expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      explicitApprovalGranted: true,
     });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Capture first, score later.");

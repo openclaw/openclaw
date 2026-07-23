@@ -5,8 +5,10 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
+import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { resolvePendingSkillProposal } from "./service.js";
+import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { computeSkillChangeSummary, resolvePendingSkillProposal } from "./service.js";
 
 const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set(["apply", "reject", "quarantine"]);
 // Codex dynamic tools have a 90s watchdog. Approval RPCs reserve another 10s
@@ -76,6 +78,7 @@ function buildLifecycleApprovalDescription(params: {
   description: string;
   supportFileCount: number;
   bodySizeKb: string;
+  changeSummary?: string;
 }): string {
   const description = formatApprovalField(params.description);
   const requestedSkillName = formatApprovalField(params.skillName);
@@ -85,6 +88,9 @@ function buildLifecycleApprovalDescription(params: {
     `Support files: ${params.supportFileCount}`,
     `Body size: ${params.bodySizeKb} KB`,
   ];
+  if (params.changeSummary) {
+    fixedLines.push(`Changes: ${params.changeSummary}`);
+  }
   const skillPrefix = "Target skill: ";
   const fixedLength = fixedLines.join("\n").length + skillPrefix.length + fixedLines.length;
   const availableSkillNameLength = Math.max(
@@ -105,6 +111,7 @@ async function resolveLifecycleApprovalDescription(params: {
 }): Promise<{
   description: string;
   proposalId?: string;
+  lowContinuity?: boolean;
 }> {
   if (!params.workspaceDir) {
     return { description: params.fallback };
@@ -117,6 +124,14 @@ async function resolveLifecycleApprovalDescription(params: {
       workspaceDir: params.workspaceDir,
     });
     const record = proposal.record;
+    let changeSummary: string | undefined;
+    let lowContinuity = false;
+    if (record.kind === "update" && toolParams?.action === "apply" && record.target.skillFile) {
+      const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+      const proposedSkillContent = stripProposalFrontmatterForSkill(proposal.content);
+      changeSummary = computeSkillChangeSummary(proposedSkillContent, currentContent);
+      lowContinuity = isLowContinuityUpdate(proposedSkillContent, currentContent);
+    }
     return {
       description: buildLifecycleApprovalDescription({
         proposalId: record.id,
@@ -124,8 +139,10 @@ async function resolveLifecycleApprovalDescription(params: {
         description: record.description,
         supportFileCount: record.supportFiles?.length ?? 0,
         bodySizeKb: formatBodySizeKb(proposal.content),
+        changeSummary,
       }),
       proposalId: record.id,
+      lowContinuity,
     };
   } catch {
     return { description: params.fallback };
@@ -140,6 +157,43 @@ function lifecycleApprovalTimeoutReason(proposalId?: string): string {
     "Decide in the Skill Workshop UI or run `openclaw skills workshop apply|reject|quarantine <id>`.",
     "Do not retry this tool call in a loop.",
   ].join(" ");
+}
+
+function extractBodyLines(content: string): string[] {
+  const frontmatterEnd = content.indexOf("---", content.indexOf("---") + 3);
+  const body = frontmatterEnd >= 0 ? content.slice(frontmatterEnd + 3) : content;
+  return body.split("\n").filter((line) => line.trim().length > 0);
+}
+
+function isLowContinuityUpdate(
+  proposedSkillContent: string,
+  currentContent: string | null,
+): boolean {
+  if (currentContent === null) {
+    return false;
+  }
+  const proposedBody = extractBodyLines(proposedSkillContent);
+  const currentBody = extractBodyLines(currentContent);
+  if (proposedBody.length === 0 || currentBody.length === 0) {
+    return false;
+  }
+  const proposedNonHeading = proposedBody.filter((line) => !/^#{1,6}\s+\S/u.test(line));
+  const currentNonHeading = currentBody.filter((line) => !/^#{1,6}\s+\S/u.test(line));
+  if (currentNonHeading.length === 0) {
+    return proposedNonHeading.length === 0;
+  }
+  if (proposedNonHeading.length === 0) {
+    return true;
+  }
+  const proposedSet = new Set(proposedNonHeading);
+  let overlapCount = 0;
+  for (const line of currentNonHeading) {
+    if (proposedSet.has(line)) {
+      overlapCount += 1;
+    }
+  }
+  const ratio = overlapCount / currentNonHeading.length;
+  return overlapCount < 3 || ratio < 0.5;
 }
 
 function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
@@ -170,15 +224,15 @@ export async function resolveSkillWorkshopToolApproval(params: {
     return undefined;
   }
   const config = resolveSkillWorkshopConfig(resolveApprovalConfig(params.config));
-  if (config.approvalPolicy === "auto") {
-    return undefined;
-  }
-  const text = lifecycleApprovalText(action);
   const approvalDescription = await resolveLifecycleApprovalDescription({
     toolParams: params.toolParams,
     workspaceDir: params.workspaceDir,
-    fallback: text.description,
+    fallback: lifecycleApprovalText(action).description,
   });
+  if (config.approvalPolicy === "auto" && !approvalDescription.lowContinuity) {
+    return undefined;
+  }
+  const text = lifecycleApprovalText(action);
   return {
     requireApproval: {
       ...text,
