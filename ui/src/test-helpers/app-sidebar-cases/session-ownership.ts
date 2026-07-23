@@ -15,7 +15,7 @@ describe("AppSidebar session ownership", () => {
     if (!ada) {
       throw new Error("expected creator row");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
       { id: "profile-bob", label: "Bob" },
@@ -55,7 +55,7 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected session list");
     }
     for (const row of result.sessions) {
-      row.createdBy = { id: "profile-ada", label: "Ada" };
+      row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     }
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({ result, agentId: "main" });
@@ -81,9 +81,9 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob) {
       throw new Error("expected creator rows");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     ada.category = "Research";
-    bob.createdBy = { id: "profile-bob", label: "Bob" };
+    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     bob.category = "Operations";
     harness.publish({ groups: ["Research", "Operations"] });
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -123,8 +123,8 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !adopted) {
       throw new Error("expected ownership rows");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
-    adopted.createdBy = { id: "profile-bob", label: "Bob" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    adopted.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
       { id: "profile-bob", label: "Bob" },
@@ -149,7 +149,7 @@ describe("AppSidebar session ownership", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: backingSessionKey,
-                createdBy: { id: "profile-bob", label: "Bob" },
+                createdActor: { type: "human", id: "profile-bob", label: "Bob" },
                 canContinue: true,
                 canArchive: false,
               },
@@ -207,8 +207,8 @@ describe("AppSidebar session ownership", () => {
     if (!ada || !bob) {
       throw new Error("expected creator rows");
     }
-    ada.createdBy = { id: "profile-ada", label: "Ada" };
-    bob.createdBy = { id: "profile-bob", label: "Bob" };
+    ada.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    bob.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
     result.creators = [
       { id: "profile-ada", label: "Ada" },
       { id: "profile-bob", label: "Bob" },
@@ -234,7 +234,7 @@ describe("AppSidebar session ownership", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: unloadedSessionKey,
-                createdBy: { id: "profile-ada", label: "Ada" },
+                createdActor: { type: "human", id: "profile-ada", label: "Ada" },
                 canContinue: true,
                 canArchive: false,
               },

@@ -13,6 +13,7 @@ const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 export const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 const storedChatOutboxChangeListeners = new Set<() => void>();
+let storageChangeListenerInstalled = false;
 
 export type ChatComposerScope = {
   settings?: { gatewayUrl?: string | null };
@@ -57,7 +58,21 @@ const storedMainAliasByStorage = new WeakMap<
 
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
-  return () => storedChatOutboxChangeListeners.delete(listener);
+  if (!storageChangeListenerInstalled && typeof window !== "undefined") {
+    storageChangeListenerInstalled = true;
+    window.addEventListener("storage", handleStoredChatOutboxStorageChange);
+  }
+  return () => {
+    storedChatOutboxChangeListeners.delete(listener);
+    if (
+      storageChangeListenerInstalled &&
+      storedChatOutboxChangeListeners.size === 0 &&
+      typeof window !== "undefined"
+    ) {
+      storageChangeListenerInstalled = false;
+      window.removeEventListener("storage", handleStoredChatOutboxStorageChange);
+    }
+  };
 }
 
 export function notifyStoredChatOutboxChanges(): void {
@@ -67,6 +82,15 @@ export function notifyStoredChatOutboxChanges(): void {
     } catch (error) {
       console.error("[openclaw] stored chat outbox listener failed", error);
     }
+  }
+}
+
+function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
+  if (
+    event.key?.startsWith(STORAGE_KEY_PREFIX) ||
+    event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX)
+  ) {
+    notifyStoredChatOutboxChanges();
   }
 }
 

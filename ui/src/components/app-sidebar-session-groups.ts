@@ -21,7 +21,6 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarSessionMutationsElement } from "./app-sidebar-session-mutations.ts";
 import {
   loadStoredCollapsedSessionSections,
-  SIDEBAR_SESSION_PAGE_SIZE,
   storeSidebarSessionStatusFilter,
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
@@ -35,17 +34,17 @@ import {
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMutationsElement {
-  @state() protected collapsedSessionSections = loadStoredCollapsedSessionSections();
-  @state() protected draggingSessionKey: string | null = null;
-  @state() protected draggingSessionGroup: string | null = null;
-  @state() protected sessionDropTarget: string | null = null;
-  @state() protected sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
+  @state() collapsedSessionSections = loadStoredCollapsedSessionSections();
+  @state() draggingSessionKey: string | null = null;
+  @state() draggingSessionGroup: string | null = null;
+  @state() sessionDropTarget: string | null = null;
+  @state() sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
   @state() protected draggingSidebarEntry: string | null = null;
   @state() protected sidebarZoneDropTarget: {
     entry: string;
     position: "before" | "after";
   } | null = null;
-  @state() protected sessionListRemovalDrop = false;
+  @state() sessionListRemovalDrop = false;
 
   protected startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
     if (!event.dataTransfer) {
@@ -167,7 +166,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.onUpdateSidebarEntries?.(next);
   }
 
-  protected handleSessionListDragOver(event: DragEvent) {
+  handleSessionListDragOver(event: DragEvent) {
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
@@ -181,14 +180,14 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.sessionListRemovalDrop = true;
   }
 
-  protected handleSessionListDragLeave(event: DragEvent) {
+  handleSessionListDragLeave(event: DragEvent) {
     const current = event.currentTarget as HTMLElement;
     if (!(event.relatedTarget instanceof Node && current.contains(event.relatedTarget))) {
       this.sessionListRemovalDrop = false;
     }
   }
 
-  protected handleSessionListDrop(event: DragEvent) {
+  handleSessionListDrop(event: DragEvent) {
     const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
     const dynamicEntry = parseSidebarEntry(draggedNavigation);
     const entry =
@@ -223,12 +222,12 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
     try {
       await scope.sessions.groupsPut([...groups, name]);
-      return this.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
+      return this.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
     } catch (error) {
-      if (!this.isSessionMutationScopeCurrent(scope)) {
+      if (!this.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
-      this.publishSessionMutationError(scope, error);
+      this.sessionData.publishSessionMutationError(scope, error);
       return "failed";
     }
   }
@@ -246,7 +245,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     if (!name) {
       return;
     }
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -256,7 +255,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
       }
       if (sessions.length > 0) {
         await this.patchSessions(sessions, { category: name }, scope);
-      } else if (this.isSessionMutationScopeCurrent(scope)) {
+      } else if (this.sessionData.isSessionMutationScopeCurrent(scope)) {
         // Header-created groups start empty; re-render so the section shows up.
         this.requestUpdate();
       }
@@ -268,7 +267,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     if (!next || next === group) {
       return;
     }
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -277,7 +276,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     void (async () => {
       try {
         const outcome = await scope.sessions.groupsRename(group, next);
-        if (outcome !== "completed" || !this.isSessionMutationScopeCurrent(scope)) {
+        if (outcome !== "completed" || !this.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
         const from = `category:${group}`;
@@ -289,7 +288,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
         }
         this.requestUpdate();
       } catch (error) {
-        this.publishSessionMutationError(scope, error);
+        this.sessionData.publishSessionMutationError(scope, error);
       }
     })();
   }
@@ -298,14 +297,14 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     void (async () => {
       try {
         const outcome = await scope.sessions.groupsDelete(group);
-        if (outcome !== "completed" || !this.isSessionMutationScopeCurrent(scope)) {
+        if (outcome !== "completed" || !this.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
         const collapsed = new Set(this.collapsedSessionSections);
@@ -313,7 +312,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
         this.saveCollapsedSessionSections(collapsed);
         this.requestUpdate();
       } catch (error) {
-        this.publishSessionMutationError(scope, error);
+        this.sessionData.publishSessionMutationError(scope, error);
       }
     })();
   }
@@ -327,7 +326,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
   }
 
-  protected toggleSessionSection(sectionId: string) {
+  toggleSection(sectionId: string) {
     const collapsed = new Set(this.collapsedSessionSections);
     if (collapsed.has(sectionId)) {
       collapsed.delete(sectionId);
@@ -339,18 +338,18 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
 
   private reorderSessionGroup(source: string, target: string, position: "before" | "after") {
     const groups = reorderSessionCustomGroups(this.knownSessionGroups(), source, target, position);
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
     void (async () => {
       try {
         await scope.sessions.groupsPut(groups);
-        if (this.isSessionMutationScopeCurrent(scope)) {
+        if (this.sessionData.isSessionMutationScopeCurrent(scope)) {
           this.requestUpdate();
         }
       } catch (error) {
-        this.publishSessionMutationError(scope, error);
+        this.sessionData.publishSessionMutationError(scope, error);
       }
     })();
   }
@@ -360,7 +359,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     category: string | null,
     patch: { pinned?: boolean } = {},
   ) {
-    const scope = this.beginSessionMutation();
+    const scope = this.sessionData.beginSessionMutation();
     if (!scope) {
       return;
     }
@@ -372,7 +371,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     })();
   }
 
-  protected handleSessionSectionDragOver(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
     const dataTransfer = event.dataTransfer;
     if (
       category &&
@@ -401,7 +400,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.sessionGroupDropTarget = null;
   }
 
-  protected handleSessionSectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
     const current = event.currentTarget as HTMLElement;
     if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
       return;
@@ -422,7 +421,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     if (active) {
       return active;
     }
-    for (const rows of Object.values(this.sessionRowsByAgent)) {
+    for (const rows of Object.values(this.sessionData.sessionRowsByAgent)) {
       const row = rows.find((candidate) => candidate.key === sessionKey);
       if (row) {
         return navigationState.toSidebarSession(row);
@@ -431,7 +430,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     return undefined;
   }
 
-  protected handleSessionSectionDrop(event: DragEvent, sectionId: string, category?: string) {
+  sectionDrop(event: DragEvent, sectionId: string, category?: string) {
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
     if (!sourceGroup && !sessionKey) {
@@ -494,21 +493,12 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
     this.sessionsStatusFilter = statusFilter;
     this.clearSessionSelection();
-    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
-    this.childSessionRowsByParent = {};
-    this.loadedChildSessionKeys = new Set();
-    this.failedChildSessionKeys = new Set();
-    this.loadingChildSessionKeys = new Set();
-    this.sessionRowsByAgent = {};
-    if (statusFilter === "active" && this.context) {
-      this.sessionsResult = this.context.sessions.state.result;
-      this.sessionsAgentId = this.context.sessions.state.agentId;
-    }
+    this.sessionData.resetForStatusFilter(statusFilter);
     try {
       storeSidebarSessionStatusFilter(statusFilter);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }
-    void this.refreshSidebarSessions();
+    void this.sessionData.refreshSidebarSessions();
   }
 }

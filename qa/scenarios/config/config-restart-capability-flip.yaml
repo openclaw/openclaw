@@ -3,6 +3,7 @@ title: "Config restart capability flip"
 scenario:
   id: config-restart-capability-flip
   surface: config
+  runtimePairLane: core
   coverage:
     primary:
       - gateway.restart-and-stop-restart-apply

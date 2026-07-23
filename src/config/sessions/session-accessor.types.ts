@@ -665,6 +665,10 @@ export type SessionMessageCutMutationResult =
 
 export type SessionMessageCutMutationParams = {
   agentId?: string;
+  creation?: {
+    via: import("./session-entry-provenance.js").SessionCreatedVia;
+    actor?: import("./session-entry-provenance.js").SessionCreatedActor;
+  };
   entryId: string;
   env?: NodeJS.ProcessEnv;
   sessionKey: string;

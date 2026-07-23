@@ -1102,6 +1102,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   );
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
+  const hasUserFooterActions =
+    normalizedRole === "user" &&
+    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onDelete || opts.onRewind);
 
   // Attributed (logged-in) senders tint their bubbles with the same stable
   // identity hue as their avatar initials; CSS owns per-theme lightness so
@@ -1160,11 +1163,21 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : ""}"
       >
         <div class="chat-group-footer__meta">
-          ${opts.onRewind && normalizedRole === "user"
-            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
-            : nothing}
-          ${opts.onDelete && normalizedRole === "user"
-            ? renderDeleteButton(opts.onDelete, "left")
+          ${hasUserFooterActions
+            ? html`
+                <div
+                  class="chat-group-footer-actions"
+                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                >
+                  ${footerActionDetails?.replyTarget && opts.onReply
+                    ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+                    : nothing}
+                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
+                  ${opts.onRewind
+                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+                    : nothing}
+                </div>
+              `
             : nothing}
           ${normalizedRole === "user" && !showAvatarGutter
             ? renderChatAuthorAvatar(group.sender)
@@ -1172,7 +1185,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           <span class="chat-sender-name">${who}</span>
           ${renderMessageMeta(group.timestamp, meta)}
         </div>
-        ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
+        ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
           ? html`
               <div
                 class="chat-group-footer-actions"
@@ -1185,7 +1198,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                       opts.onOpenSidebar,
                       normalizedRole !== "user" ? opts.onDelete : undefined,
                     )
-                  : opts.onDelete && normalizedRole !== "user"
+                  : opts.onDelete
                     ? renderDeleteButton(opts.onDelete, "right")
                     : nothing}
               </div>

@@ -51,6 +51,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import "../lib/toast.ts";
@@ -144,8 +145,6 @@ type OutboxStoreRuntime = {
   storedChatOutboxScopeKey: (scope: { sessionKey: string; agentId?: string }) => string;
   subscribeStoredChatOutboxChanges: (listener: () => void) => () => void;
 };
-
-let outboxStoreModuleLoad: Promise<OutboxStoreRuntime> | null = null;
 
 function diffAgentRoster(
   previous: readonly GatewayAgentRow[],
@@ -532,7 +531,10 @@ class OpenClawShell extends OpenClawLightDomElement {
   private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private outboxStoreRuntime: OutboxStoreRuntime | null = null;
   private outboxStoreUnsubscribe: (() => void) | null = null;
-  private outboxStoreRetryAttempted = false;
+  private readonly outboxStoreImport = createIdleImport(
+    () => import("../lib/chat/outbox-store.ts").then((module): OutboxStoreRuntime => module),
+    (runtime) => this.installOutboxStoreRuntime(runtime),
+  );
   private lastNativeNavState: NativeNavState | undefined;
   private didConsiderNativeRouteRestore = false;
   private pendingNativeNewSession = false;
@@ -657,7 +659,10 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.scheduleOutboxStoreLoad();
+    if (this.outboxStoreRuntime) {
+      this.installOutboxStoreRuntime(this.outboxStoreRuntime);
+    }
+    this.outboxStoreImport.schedule();
     this.nativeHistoryState = readNativeHistoryState();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
     window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
@@ -705,56 +710,25 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
-    window.removeEventListener("online", this.loadOutboxStore);
+    this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
-    this.outboxStoreRuntime = null;
-    this.outboxStoreRetryAttempted = false;
     setSettingsChangeListener(null);
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
 
-  private scheduleOutboxStoreLoad() {
-    if ("requestIdleCallback" in window) {
-      requestIdleCallback(this.loadOutboxStore, { timeout: 3000 });
-    } else {
-      setTimeout(this.loadOutboxStore, 1500);
+  private installOutboxStoreRuntime(runtime: OutboxStoreRuntime) {
+    this.outboxStoreRuntime = runtime;
+    if (!this.isConnected) {
+      return;
     }
+    this.outboxStoreUnsubscribe?.();
+    this.outboxStoreUnsubscribe = runtime.subscribeStoredChatOutboxChanges(() =>
+      this.requestUpdate(),
+    );
+    this.requestUpdate();
   }
-
-  private readonly loadOutboxStore = () => {
-    outboxStoreModuleLoad ??= import("../lib/chat/outbox-store.ts")
-      .then((module): OutboxStoreRuntime => module)
-      .catch((error: unknown) => {
-        outboxStoreModuleLoad = null;
-        throw error;
-      });
-    void outboxStoreModuleLoad
-      .then((runtime) => {
-        if (!this.isConnected) {
-          return;
-        }
-        window.removeEventListener("online", this.loadOutboxStore);
-        this.outboxStoreRetryAttempted = false;
-        this.outboxStoreRuntime = runtime;
-        this.outboxStoreUnsubscribe?.();
-        this.outboxStoreUnsubscribe = runtime.subscribeStoredChatOutboxChanges(() =>
-          this.requestUpdate(),
-        );
-        this.requestUpdate();
-      })
-      .catch(() => {
-        if (!this.isConnected) {
-          return;
-        }
-        window.addEventListener("online", this.loadOutboxStore, { once: true });
-        if (navigator.onLine && !this.outboxStoreRetryAttempted) {
-          this.outboxStoreRetryAttempted = true;
-          this.scheduleOutboxStoreLoad();
-        }
-      });
-  };
 
   private resetShellEpochState() {
     this.navDrawerOpen = false;
@@ -1332,9 +1306,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.syncSidebarWorkboard();
     // Chunks are usually served by the gateway, so a failed idle load of the
     // outbox module recovers on reconnect, not only on a browser online event.
-    if (snapshot.connected && !this.outboxStoreRuntime && outboxStoreModuleLoad === null) {
-      this.outboxStoreRetryAttempted = false;
-      this.loadOutboxStore();
+    if (snapshot.connected) {
+      void this.outboxStoreImport.load().catch(() => undefined);
     }
   }
 
@@ -1793,19 +1766,37 @@ class OpenClawShell extends OpenClawLightDomElement {
             : ""}"
           .tabIndex=${-1}
         >
-          <openclaw-update-banner
-            .props=${{
-              statusBanner: overlaySnapshot.controlUiRefreshRequired
-                ? {
-                    tone: "info",
-                    text: "Server updated — refresh for full capabilities",
-                  }
-                : null,
-              action: overlaySnapshot.controlUiRefreshRequired
-                ? { label: t("common.refresh"), onClick: this.refreshControlUi }
-                : undefined,
-            }}
-          ></openclaw-update-banner>
+          ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
+            ? customElements.get("openclaw-device-auth-migration-banner")
+              ? html`<openclaw-device-auth-migration-banner
+                  .props=${{
+                    state: overlaySnapshot.deviceAuthMigration,
+                    onSecure: () => void context.overlays.secureThisBrowser(),
+                  }}
+                ></openclaw-device-auth-migration-banner>`
+              : html`<openclaw-update-banner
+                  .props=${{
+                    statusBanner: {
+                      tone: overlaySnapshot.deviceAuthMigration.error ? "danger" : "warn",
+                      text:
+                        overlaySnapshot.deviceAuthMigration.error ??
+                        t("login.deviceAuthMigration.banner"),
+                    },
+                  }}
+                ></openclaw-update-banner>`
+            : html`<openclaw-update-banner
+                .props=${{
+                  statusBanner: overlaySnapshot.controlUiRefreshRequired
+                    ? {
+                        tone: "info",
+                        text: "Server updated — refresh for full capabilities",
+                      }
+                    : null,
+                  action: overlaySnapshot.controlUiRefreshRequired
+                    ? { label: t("common.refresh"), onClick: this.refreshControlUi }
+                    : undefined,
+                }}
+              ></openclaw-update-banner>`}
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.updateStatusBanner,

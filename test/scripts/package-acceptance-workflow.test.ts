@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -43,6 +44,11 @@ const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const REPO_ROOT = process.env.GITHUB_WORKSPACE ?? process.cwd();
+const RELEASE_MAINTAINER_SKILL = resolve(
+  REPO_ROOT,
+  ".agents/skills/release-openclaw-maintainer/SKILL.md",
+);
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
@@ -99,8 +105,8 @@ type WorkflowJob = {
     "fail-fast"?: boolean;
     matrix?: {
       include?: WorkflowMatrixEntry[];
+      lane?: string;
       profile?: string[];
-      tier?: string;
     };
   };
   secrets?: string | Record<string, string>;
@@ -2717,7 +2723,7 @@ describe("package artifact reuse", () => {
 
   it("preserves the primary runtime token-efficiency failure", () => {
     const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
-    const runStep = workflowStep(job, "Run live runtime parity lane");
+    const runStep = workflowStep(job, "Run live core runtime-pair lane");
     const reportStep = workflowStep(job, "Generate live runtime token-efficiency report");
 
     expect(runStep.run).toContain('mkdir -p "${output_dir}"');
@@ -2765,36 +2771,35 @@ describe("package artifact reuse", () => {
     expect(runtimeCoverageUpload.with?.["if-no-files-found"]).toBe("error");
   });
 
-  it("runs runtime parity tiers in parallel and preserves one canonical gate", () => {
-    const tierJob = workflowJob(
-      RELEASE_CHECKS_WORKFLOW,
-      "qa_lab_runtime_parity_tier_release_checks",
-    );
+  it("runs canonical runtime-pair lanes in parallel and preserves one gate", () => {
+    const laneJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_lab_runtime_pair_lane_release_checks");
     const collectorJob = workflowJob(
       RELEASE_CHECKS_WORKFLOW,
       "qa_lab_runtime_parity_release_checks",
     );
 
-    expect(tierJob.strategy?.["fail-fast"]).toBe(false);
-    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard","soak"]');
-    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard"]');
-    expect(workflowStep(tierJob, "Run runtime parity tier").run).toContain('"${tier_args[@]}"');
-    expect(workflowStep(tierJob, "Upload runtime parity tier artifacts").with?.name).toContain(
-      "${{ matrix.tier }}",
+    expect(laneJob.strategy?.["fail-fast"]).toBe(false);
+    expect(laneJob.strategy?.matrix?.lane).toContain('["core","soak"]');
+    expect(laneJob.strategy?.matrix?.lane).toContain('["core"]');
+    const runtimePairRun = workflowStep(laneJob, "Run runtime-pair lane").run;
+    expect(runtimePairRun).toContain('--runtime-pair-lane "$RUNTIME_PAIR_LANE"');
+    expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
+    expect(runtimePairRun).toContain("--runtime-parity-tier soak");
+    expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
+    expect(workflowStep(laneJob, "Upload runtime-pair lane artifacts").with?.name).toContain(
+      "${{ matrix.lane }}",
     );
     expect(collectorJob.needs).toEqual([
       "resolve_target",
-      "qa_lab_runtime_parity_tier_release_checks",
+      "qa_lab_runtime_pair_lane_release_checks",
     ]);
-    expect(collectorJob.name).toBe("Run QA Lab runtime parity lane");
-    expect(workflowStep(collectorJob, "Download runtime parity tier artifacts").with).toMatchObject(
-      {
-        pattern: "release-qa-runtime-parity-tier-*-${{ needs.resolve_target.outputs.revision }}",
-        "merge-multiple": true,
-      },
-    );
-    expect(workflowStep(collectorJob, "Verify runtime parity tier statuses").run).toContain(
-      "tiers=(agentic standard)",
+    expect(collectorJob.name).toBe("Verify QA Lab runtime-pair lanes");
+    expect(workflowStep(collectorJob, "Download runtime-pair lane artifacts").with).toMatchObject({
+      pattern: "release-qa-runtime-pair-lane-*-${{ needs.resolve_target.outputs.revision }}",
+      "merge-multiple": true,
+    });
+    expect(workflowStep(collectorJob, "Verify runtime-pair lane statuses").run).toContain(
+      "lanes=(core)",
     );
     expect(workflowStep(collectorJob, "Upload runtime parity artifacts").with?.name).toBe(
       "release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}",
@@ -3073,7 +3078,7 @@ describe("package artifact reuse", () => {
       "release_checks_advisory_only",
       "release_check_blocking_job",
       'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
-      'or (.name | startswith("Run QA Lab runtime parity tier ("))',
+      'or (.name | startswith("Run QA Lab runtime-pair lane ("))',
       'or .name == "Run QA Lab live Discord lane"',
       'or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))',
       "is a package-safety Tideclaw alpha release-check lane",
@@ -3187,6 +3192,8 @@ describe("package artifact reuse", () => {
       'candidate_manifest="${package_dir}/package-candidate.json"',
       'find "${package_dir}" -type f -name "*.tgz"',
       "package artifact manifest contains duplicate package metadata",
+      "Array.isArray(manifest.corePackageTarballs)",
+      "manifest.corePackageTarballs === undefined",
       "package artifact tarball set does not match preflight manifest",
       "package candidate manifest does not match the OpenClaw tarball",
       "Package Telegram artifact SHA-256 differs from package_sha256.",
@@ -3548,10 +3555,7 @@ describe("package artifact reuse", () => {
   it("keeps release publish creation compatible with gh api and prerelease notes", () => {
     const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
-    const maintainerSkill = readFileSync(
-      ".agents/skills/release-openclaw-maintainer/SKILL.md",
-      "utf8",
-    );
+    const maintainerSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
     const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -3761,10 +3765,7 @@ describe("package artifact reuse", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
     const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
-    const releaseSkill = readFileSync(
-      ".agents/skills/release-openclaw-maintainer/SKILL.md",
-      "utf8",
-    );
+    const releaseSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
 
     expect(releaseWorkflow).toContain(
       "Stable OpenClaw publish requires an explicit windows_node_tag.",

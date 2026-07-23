@@ -2232,7 +2232,7 @@ jobs:
             trap 'printf "::%s::\n" "$workflow_command_token"' EXIT
             set +e
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              pnpm --dir "$CANDIDATE_ROOT" openclaw qa telegram \
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
@@ -2260,7 +2260,7 @@ jobs:
             fi
           done < <(
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              pnpm --dir "$CANDIDATE_ROOT" openclaw qa telegram \
                 --repo-root "$CANDIDATE_ROOT" \
                 --provider-mode mock-openai \
                 --list-scenarios
