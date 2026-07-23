@@ -2752,7 +2752,7 @@ describe("TelegramPollingSession", () => {
         topicUpdate(43, 11, "topic 11 turn"),
         topicUpdate(44, 10, "second topic 10 turn"),
       ],
-      labels: ["topic10:start", "topic11", "topic10:end", "topic10:second"],
+      labels: ["topic10:start", "topic11", "topic10:end", "topic10:second"] as const,
     },
     {
       name: "lets isolated ingress drain interleave different Telegram chats",
@@ -2761,7 +2761,7 @@ describe("TelegramPollingSession", () => {
         directUpdate(43, 854067528, "second chat turn"),
         directUpdate(44, -100, "second first chat turn"),
       ],
-      labels: ["chatA:start", "chatB", "chatA:end", "chatA:second"],
+      labels: ["chatA:start", "chatB", "chatA:end", "chatA:second"] as const,
     },
   ])("$name", async ({ updates, labels }) => {
     await withTempSpool(async (tempDir) => {
