@@ -80,7 +80,7 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
 
       // Pairing lives with the account-level controls in the footer identity menu.
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.getByRole("button", { name: "Identity menu" }).click();
+      await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
       const sidebarPairingButton = sidebar
         .locator("wa-dropdown.sidebar-identity-menu")
         .locator(".sidebar-pair-mobile");
