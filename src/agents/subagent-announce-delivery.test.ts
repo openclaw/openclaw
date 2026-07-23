@@ -3012,6 +3012,52 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("keeps the generic caption when the message-tool record lacks a destination", async () => {
+    // Fail-closed guard: a sent-target record without `to` cannot prove the
+    // caption reached the fallback destination, so suppression must not fire.
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            text: "The first image is ready.",
+            mediaUrls: ["/tmp/generated-robot-1.png"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      directIdempotencyKey: "announce-channel-media-toless-message-tool",
+      sourceTool: "image_generate",
+      internalEvents: imageCompletionEvents({
+        taskLabel: "two proof images",
+        result:
+          "Generated 2 images.\nMEDIA:/tmp/generated-robot-1.png\nMEDIA:/tmp/generated-robot-2.png",
+        mediaUrls: ["/tmp/generated-robot-1.png", "/tmp/generated-robot-2.png"],
+        replyInstruction:
+          "Tell the user the images are ready and send them through the message tool.",
+      }),
+    });
+
+    expectDeliveryPath(result, "direct");
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-robot-2.png"],
+        idempotencyKey: "announce-channel-media-toless-message-tool:generated-media-direct",
+      }),
+    );
+  });
+
   it("reports only missing media when direct partial-delivery repair fails before send", async () => {
     const callGateway = createGatewayMock({
       result: {

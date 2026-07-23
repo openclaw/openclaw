@@ -1512,6 +1512,11 @@ function hasMessagingToolDeliveredCaptionForTarget(
     threadId?: string | number;
   },
 ): boolean {
+  // messagingToolSentTargets is success-only evidence by construction: both
+  // population sites (commitMessagingToolResult in cli-runner/execute.ts and
+  // the embedded tool handler in embedded-agent-subscribe.handlers.tools.ts)
+  // gate the push on isDeliveredMessagingToolResult, so a recorded target
+  // implies the send succeeded.
   const targets = Array.isArray(result.messagingToolSentTargets)
     ? result.messagingToolSentTargets
     : [];
@@ -1523,11 +1528,13 @@ function hasMessagingToolDeliveredCaptionForTarget(
     if (typeof targetRecord.text !== "string" || targetRecord.text.trim() === "") {
       return false;
     }
-    const targetTo = typeof targetRecord.to === "string" ? targetRecord.to.trim() : "";
-    return sourceDeliveryTargetsMatch(
-      targetTo || !deliveryTarget.to ? targetRecord : { ...targetRecord, to: deliveryTarget.to },
-      deliveryTarget,
-    );
+    // Fail closed: a record without its own `to` cannot prove the caption
+    // reached this delivery target (sourceDeliveryTargetsMatch rejects a
+    // missing target.to), so suppression is skipped and the generic notice
+    // survives — one redundant caption is cheaper than a context-free bare
+    // attachment. sourceDeliveryTargetsMatch intentionally lets provider
+    // "message" (the generic message tool) pass its channel check.
+    return sourceDeliveryTargetsMatch(targetRecord, deliveryTarget);
   });
 }
 
@@ -1804,8 +1811,11 @@ async function sendSubagentAnnounceDirectly(params: {
       // missing attachment without adding a second generic readiness message.
       // Keep the default caption for true direct fallbacks where the agent did
       // not produce any externally visible delivery side effect.
+      // `||` (not `??`) preserves the pre-change truthiness semantics: an
+      // empty-string completionNotice never previously produced a content
+      // override and must keep falling through to the delivered-caption check.
       const fallbackContent =
-        completionNotice ??
+        completionNotice ||
         (automaticCaptionDelivered || messageToolCaptionDelivered ? "" : undefined);
       return await deliverGeneratedMediaCompletionDirect({
         cfg,
