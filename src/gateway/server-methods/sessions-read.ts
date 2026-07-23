@@ -352,15 +352,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         // The pre-await draft filter used a stale store snapshot; re-drop rows
         // whose freshly resolved sharing state is a draft this caller cannot see
         // (a session flipped to draft mid-list, or an older shared alias hiding
-        // a now-draft canonical entry). Admins and identity-less solo callers
-        // keep everything, mirroring filterDraftSessionsForClient.
+        // a now-draft canonical entry). Drafts are owner+admin only — members
+        // lose access, matching filterDraftSessionsForClient — so keep a draft
+        // row only for the owner role. Admins and identity-less solo callers
+        // keep everything.
         const canSeeDrafts = !identityId || isGatewayAdmin(client);
         const visibleSessions = canSeeDrafts
           ? sessions
           : sessions.filter(
-              (session) =>
-                session.visibility !== "draft" ||
-                (session.sharingRole !== undefined && session.sharingRole !== "viewer"),
+              (session) => session.visibility !== "draft" || session.sharingRole === "owner",
             );
         return {
           ...result,

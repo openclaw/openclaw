@@ -259,6 +259,14 @@ describe("session sharing handlers", () => {
           visibility: "shared",
         },
       );
+      // A member of the (soon-draft) session must also lose it: drafts are
+      // owner+admin only.
+      expect(
+        addSessionMember(
+          { agentId: "main", sessionKey },
+          { identityId: "member@example.com", addedBy: "owner@example.com", addedAt: 1 },
+        ).inserted,
+      ).toBe(true);
       const outsider = identifiedClient("outsider@example.com");
       // The awaited model-catalog step flips the session to draft after the
       // pre-await draft filter ran, exercising the final fresh-target filter.
@@ -286,6 +294,12 @@ describe("session sharing handlers", () => {
 
       // Non-owner must not receive the now-draft row (no preview/metadata leak).
       expect((await listWith(outsider))?.some((session) => session.key === sessionKey)).toBe(false);
+      // A member also loses a draft (owner+admin only).
+      expect(
+        (await listWith(identifiedClient("member@example.com")))?.some(
+          (session) => session.key === sessionKey,
+        ),
+      ).toBe(false);
       // The owner still sees their own draft.
       expect(
         (await listWith(identifiedClient("owner@example.com")))?.some(
