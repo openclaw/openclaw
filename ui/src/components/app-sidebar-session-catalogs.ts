@@ -330,7 +330,7 @@ function renderCatalogHostGroup(
                 ${collapsed
                   ? nothing
                   : group.sessions.map((session) =>
-                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, true),
                     )}
               `;
             })}
@@ -351,6 +351,7 @@ function renderCatalogSessionRow(
   session: SessionCatalogSession,
   liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
   params: SessionCatalogGroupsParams,
+  projectChild = false,
 ) {
   const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
   const timestamp =
@@ -391,7 +392,7 @@ function renderCatalogSessionRow(
     <div
       class="sidebar-recent-session session-row-host ${active
         ? "sidebar-recent-session--active"
-        : ""}"
+        : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""}"
       data-session-key=${key}
       role="listitem"
       @contextmenu=${(event: MouseEvent) => {
