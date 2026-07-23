@@ -1,4 +1,5 @@
 // OpenClaw agent database stores agent-scoped persisted runtime state.
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
@@ -82,6 +83,18 @@ export {
  * OpenClaw state database for discovery and maintenance.
  */
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
+
+export class IncognitoAgentDatabasePathCollisionError extends Error {
+  readonly path: string;
+
+  constructor(pathname: string) {
+    super(
+      `Incognito agent database sentinel path already exists: ${pathname}. This filename is reserved for in-memory incognito state; move or rename the file and retry.`,
+    );
+    this.name = "IncognitoAgentDatabasePathCollisionError";
+    this.path = pathname;
+  }
+}
 // Each WAL database consumes roughly three file descriptors, so the fixed cap
 // satisfies the bounded-cache policy within a predictable FD budget, without config.
 export const OPENCLAW_AGENT_DB_OPEN_HANDLE_CAP = 64;
@@ -187,14 +200,19 @@ export function openOpenClawAgentDatabase(
     return cached;
   }
   if (incognito) {
+    // The sentinel has no reachable durable owner, so doctor cannot safely migrate a collision.
+    // Refuse operator-created state instead of silently shadowing it with volatile writes.
+    if (existsSync(pathname)) {
+      throw new IncognitoAgentDatabasePathCollisionError(pathname);
+    }
     if (cached) {
       closeCachedOpenClawAgentDatabase(cached);
       cachedDatabases.delete(pathname);
       cachedDatabaseOpenFailures.delete(pathname);
     }
     const sqlite = requireNodeSqlite();
-    // This sentinel is only a cache key: SQLite opens :memory:, and no path probe,
-    // directory creation, lease, registry row, WAL sidecar, or file write may occur.
+    // After the collision probe, this sentinel is only a cache key: SQLite opens :memory:,
+    // and no directory, lease, registry row, WAL sidecar, or file write may be created.
     const db = new sqlite.DatabaseSync(":memory:");
     configureSqlitePreSchemaPragmas(db, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,

@@ -42,7 +42,7 @@ describe("Codex incognito thread persistence", () => {
     const persistent = createAttemptParams({ provider: "openai" });
     persistent.sessionKey = "agent:main:dashboard:persistent-thread";
     const incognito = createAttemptParams({ provider: "openai" });
-    incognito.sessionKey = "agent:main:dashboard:incognito-private-thread";
+    incognito.sessionKey = "agent:main:internal-session-effects:incognito-private-thread";
 
     const build = (params: EmbeddedRunAttemptParams) =>
       buildThreadStartParams(params, {

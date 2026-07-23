@@ -28,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord as asRecord,
@@ -77,12 +77,6 @@ const loadMemoryEmbeddingProviderModule = createLazyRuntimeModule(
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-host-core"),
 );
-
-function isIncognitoSessionKey(sessionKey: string | undefined): boolean {
-  return /^(?:dashboard|subagent):incognito-[^:]+$/u.test(
-    parseAgentSessionKey(sessionKey)?.rest ?? "",
-  );
-}
 
 function extractUserTextContent(message: unknown): string[] {
   const msgObj = asRecord(message);

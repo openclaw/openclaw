@@ -2018,7 +2018,10 @@ describe("memory plugin e2e", () => {
           success: true,
           messages: [{ role: "user", content: "I prefer Helix for editing code every day." }],
         },
-        { agentId: "main", sessionKey: "agent:main:dashboard:incognito-auto-capture" },
+        {
+          agentId: "main",
+          sessionKey: "agent:main:internal-session-effects:incognito-auto-capture",
+        },
       );
       expect(embeddingsCreate).not.toHaveBeenCalled();
       expect(loadLanceDbModule).not.toHaveBeenCalled();
@@ -3274,7 +3277,7 @@ describe("memory plugin e2e", () => {
 
         const incognitoStoreTool = materializeRegisteredTool(
           registeredTools.find((t) => t.opts?.name === "memory_store")?.tool,
-          { sessionKey: "agent:main:dashboard:incognito-memory-test" },
+          { sessionKey: "agent:main:internal-session-effects:incognito-memory-test" },
         );
         const incognitoRejected = await incognitoStoreTool.execute("test-call-incognito", {
           text: "The user prefers concise replies",
