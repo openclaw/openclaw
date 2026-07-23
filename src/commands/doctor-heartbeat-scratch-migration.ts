@@ -136,7 +136,79 @@ function archivePathForSource(agentId: string, sha256: string, env: NodeJS.Proce
   );
 }
 
-async function archiveAndRemoveSource(params: {
+type HeartbeatSourceClaim = {
+  claimPath: string;
+  restore(cause: unknown): Promise<void>;
+  release(): Promise<void>;
+};
+
+/**
+ * Restore a claim without clobbering: `link` fails with EEXIST when another
+ * process recreated the destination while we held the claim, so both files
+ * survive (the recreation in place, the claimed original at a conflict path).
+ */
+async function restoreClaimNoClobber(claimPath: string, destinationPath: string): Promise<void> {
+  try {
+    await fs.link(claimPath, destinationPath);
+    await fs.unlink(claimPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw error;
+    }
+    const conflictPath = `${claimPath}.conflict-${Date.now()}`;
+    await fs.rename(claimPath, conflictPath);
+    throw new Error(
+      `HEARTBEAT.md was recreated during migration; the claimed original is preserved at ${conflictPath}`,
+      { cause: error },
+    );
+  }
+}
+
+/**
+ * Move the source aside and prove the claimed bytes still match what was read.
+ * The claim happens before any scratch write so a concurrent edit can never
+ * leave stale content committed while the replacement file is restored.
+ */
+async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatSourceClaim> {
+  const claimPath = `${source.path}.doctor-importing-${process.pid}-${source.sha256.slice(0, 12)}`;
+  await fs.rename(source.path, claimPath);
+  const restore = async (cause: unknown) => {
+    await restoreClaimNoClobber(claimPath, source.path).catch((restoreError) => {
+      throw restoreError instanceof Error && restoreError.message.includes("preserved at")
+        ? restoreError
+        : new Error(`HEARTBEAT.md migration claim could not be restored from ${claimPath}`, {
+            cause: cause ?? restoreError,
+          });
+    });
+  };
+  try {
+    const workspaceRealPath = await fs.realpath(path.dirname(source.path));
+    const claimRealPath = await fs.realpath(claimPath);
+    if (claimRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, claimRealPath)) {
+      throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
+    }
+    const claimed = await readRegularFile({
+      filePath: claimRealPath,
+      maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+    });
+    const claimedContent = utf8Decoder.decode(claimed.buffer);
+    if (hashCronScratchSource(claimedContent) !== source.sha256) {
+      throw new Error("HEARTBEAT.md changed before the migration claim was acquired");
+    }
+  } catch (error) {
+    await restore(error);
+    throw error;
+  }
+  return {
+    claimPath,
+    restore,
+    release: async () => {
+      await fs.unlink(claimPath);
+    },
+  };
+}
+
+async function archiveSource(params: {
   agentId: string;
   source: HeartbeatSource;
   env: NodeJS.ProcessEnv;
@@ -153,38 +225,6 @@ async function archiveAndRemoveSource(params: {
     if (hashCronScratchSource(existing) !== params.source.sha256) {
       throw new Error(`heartbeat migration archive collision at ${archivePath}`, { cause: error });
     }
-  }
-  const claimPath = `${params.source.path}.doctor-importing-${process.pid}-${params.source.sha256.slice(0, 12)}`;
-  await fs.rename(params.source.path, claimPath);
-  try {
-    const workspaceRealPath = await fs.realpath(path.dirname(params.source.path));
-    const claimRealPath = await fs.realpath(claimPath);
-    if (claimRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, claimRealPath)) {
-      throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
-    }
-    const claimed = await readRegularFile({
-      filePath: claimRealPath,
-      maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-    });
-    const claimedContent = utf8Decoder.decode(claimed.buffer);
-    if (hashCronScratchSource(claimedContent) !== params.source.sha256) {
-      throw new Error("HEARTBEAT.md changed before the migration claim was acquired");
-    }
-    await fs.unlink(claimPath);
-  } catch (error) {
-    try {
-      await fs.rename(claimPath, params.source.path);
-    } catch (restoreError) {
-      if ((restoreError as NodeJS.ErrnoException).code !== "ENOENT") {
-        const conflictPath = `${claimPath}.conflict-${Date.now()}`;
-        await fs.rename(claimPath, conflictPath).catch(() => undefined);
-        throw new Error(
-          `HEARTBEAT.md migration claim could not be restored; preserved at ${conflictPath}`,
-          { cause: error },
-        );
-      }
-    }
-    throw error;
   }
 }
 
@@ -307,7 +347,10 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   }
 
   for (const { source, agents } of groups.values()) {
-    let importedAll = true;
+    // Precondition pass first: operator-owned scratch (different content or an
+    // explicit unset tombstone) blocks the whole group before the file is
+    // touched, so nothing is claimed or committed for a source that must stay.
+    let blocked = false;
     for (const [agentId, monitor] of agents) {
       const state = readCronJobScratchState(storePath, monitor.id, { env });
       const current = state.scratch;
@@ -315,18 +358,41 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         warnings.push(
           `Agent "${agentId}" scratch was explicitly unset; ${shortenHomePath(source.path)} was left unchanged.`,
         );
-        importedAll = false;
-        continue;
-      }
-      if (current && current.content !== source.content && current.sourceSha256 !== source.sha256) {
+        blocked = true;
+      } else if (
+        current &&
+        current.content !== source.content &&
+        current.sourceSha256 !== source.sha256
+      ) {
         warnings.push(
           `Agent "${agentId}" already has different cron scratch; ${shortenHomePath(source.path)} was left unchanged.`,
         );
-        importedAll = false;
-        continue;
+        blocked = true;
       }
+    }
+    if (blocked) {
+      continue;
+    }
+
+    // Claim before committing: once the file is renamed aside and hash-verified,
+    // no concurrent editor can change the bytes that reach scratch, and a claim
+    // failure restores the file with nothing committed.
+    let claim: HeartbeatSourceClaim;
+    try {
+      claim = await claimHeartbeatSource(source);
+    } catch (error) {
+      warnings.push(
+        `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+      );
+      continue;
+    }
+
+    let importedAll = true;
+    const groupChanges: string[] = [];
+    for (const [agentId, monitor] of agents) {
       try {
-        if (current?.sourceSha256 !== source.sha256) {
+        const state = readCronJobScratchState(storePath, monitor.id, { env });
+        if (state.scratch?.sourceSha256 !== source.sha256) {
           const write = writeCronJobScratch({
             storePath,
             jobId: monitor.id,
@@ -347,7 +413,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         ) {
           throw new Error("scratch verification failed after write");
         }
-        changes.push(
+        groupChanges.push(
           `Migrated ${shortenHomePath(source.path)} into cron scratch for ${monitor.displayName ?? monitor.name}.`,
         );
       } catch (error) {
@@ -358,14 +424,27 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       }
     }
     if (!importedAll) {
+      try {
+        await claim.restore(undefined);
+      } catch (error) {
+        warnings.push(errorMessage(error));
+      }
       continue;
     }
     try {
-      await archiveAndRemoveSource({ agentId: agents[0]![0], source, env });
+      await archiveSource({ agentId: agents[0]![0], source, env });
+      await claim.release();
+      changes.push(...groupChanges);
     } catch (error) {
+      changes.push(...groupChanges);
       warnings.push(
         `${shortenHomePath(source.path)} was migrated but not removed: ${errorMessage(error)}. Rerun doctor to retry safely.`,
       );
+      try {
+        await claim.restore(error);
+      } catch (restoreError) {
+        warnings.push(errorMessage(restoreError));
+      }
     }
   }
 

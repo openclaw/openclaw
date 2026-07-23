@@ -235,6 +235,40 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
       "concurrent replacement\n",
     );
+    // Nothing may be committed for a failed claim: scratch would otherwise
+    // shadow the restored replacement file on the next heartbeat.
+    expect(result.changes).toEqual([]);
+    const { monitor, storePath } = await loadMonitor();
+    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
+  });
+
+  it("never clobbers a recreated file when restoring a failed claim", async () => {
+    const fixture = await createFixture();
+    await fs.writeFile(fixture.heartbeatPath, "claimed original\n", "utf8");
+    const realpath = fs.realpath.bind(fs);
+    // Fail the claim after the rename, and recreate the destination before the
+    // restore runs — the classic editor atomic-save race.
+    vi.spyOn(fs, "realpath").mockImplementation(async (target) => {
+      if (String(target).includes(".doctor-importing-")) {
+        await fs.writeFile(fixture.heartbeatPath, "editor rewrite\n", "utf8");
+        throw new Error("simulated claim verification failure");
+      }
+      return await realpath(target);
+    });
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.changes).toEqual([]);
+    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe("editor rewrite\n");
+    const workspaceEntries = await fs.readdir(fixture.workspace);
+    const conflict = workspaceEntries.find((entry) => entry.includes(".conflict-"));
+    expect(conflict, workspaceEntries.join(",")).toBeDefined();
+    await expect(fs.readFile(path.join(fixture.workspace, conflict!), "utf8")).resolves.toBe(
+      "claimed original\n",
+    );
   });
 
   it("rejects external symlink targets without importing or removing them", async () => {
