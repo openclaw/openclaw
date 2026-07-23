@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  ErrorCodes,
+  errorShape,
   validateUpdateRunParams,
   validateUpdateStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -54,6 +56,10 @@ import { assertValidParams } from "./validation.js";
 
 const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
 const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-running";
+
+// Single-flight protection: prevents concurrent update.run executions that can
+// cause state migration conflicts, database locks, and gateway startup failures.
+let updateInProgress = false;
 
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -149,6 +155,20 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
+    // Single-flight protection: reject concurrent update.run requests to prevent
+    // state migration conflicts, database locks, and gateway startup failures.
+    if (updateInProgress) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.CONFLICT,
+          "An update is already in progress. Please wait for the current update to complete before starting another.",
+        ),
+      );
+      return;
+    }
+    updateInProgress = true;
     const actor = resolveControlPlaneActor(client);
     const {
       sessionKey,
@@ -407,6 +427,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       };
+    } finally {
+      updateInProgress = false;
     }
 
     const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
