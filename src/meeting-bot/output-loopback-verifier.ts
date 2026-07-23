@@ -12,7 +12,7 @@ const OUTPUT_LOOPBACK_SHORT_CORRELATION_THRESHOLD = 0.98;
 const OUTPUT_LOOPBACK_RMS_THRESHOLD = 8;
 const OUTPUT_LOOPBACK_PEAK_THRESHOLD = 32;
 
-export type MeetingOutputLoopbackHealth = {
+type MeetingOutputLoopbackHealth = {
   lastOutputLoopbackAt?: string;
   lastOutputLoopbackCorrelation?: number;
   lastOutputLoopbackPeak?: number;
