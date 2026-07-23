@@ -1178,13 +1178,53 @@ describe("diagnostics-otel service", () => {
     expect(logEmit).not.toHaveBeenCalled();
   });
 
-  test("starts stdout-only logs when OTLP protocol is unsupported", async () => {
+  test("rejects unsupported protocol env override before exporter startup", async () => {
+    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "telemetry.exporter") {
+        events.push(event);
+      }
+    });
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
+    const { ctx } = await startOtelService({
+      traces: true,
+      metrics: true,
+      logs: true,
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
+    });
+
+    expect(
+      events.map((event) => ({
+        signal: event.signal,
+        status: event.status,
+        reason: event.reason,
+      })),
+    ).toEqual([
+      { signal: "traces", status: "failure", reason: "unsupported_protocol" },
+      { signal: "metrics", status: "failure", reason: "unsupported_protocol" },
+      { signal: "logs", status: "failure", reason: "unsupported_protocol" },
+    ]);
+    expect(ctx.logger.warn).toHaveBeenCalledWith("diagnostics-otel: unsupported protocol grpc");
+    expect(traceExporterCtor).not.toHaveBeenCalled();
+    expect(metricExporterCtor).not.toHaveBeenCalled();
+    expect(logExporterCtor).not.toHaveBeenCalled();
+    expect(sdkStart).not.toHaveBeenCalled();
+
+    unsubscribe();
+  });
+
+  test("starts stdout-only logs when OTLP protocol env override is unsupported", async () => {
+    process.env.OTEL_EXPORTER_OTLP_PROTOCOL = "grpc";
     const { ctx } = await startOtelService({
       traces: false,
       metrics: false,
       logs: true,
-      protocol: "grpc",
       logsExporter: "stdout",
+      configure: (context) => {
+        delete context.config.diagnostics?.otel?.protocol;
+      },
     });
     const capture = captureStdoutWrites();
     try {
