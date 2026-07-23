@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
@@ -857,6 +857,87 @@ describe("handleCommands reset hooks", () => {
     const result = await maybeHandleResetCommand(params);
 
     expect(result).toBeNull();
+  });
+
+  it("keeps native alias /new tails with a trailing prompt available for model fallthrough", async () => {
+    // Regression: the whole tail was matched against the alias index, so a leading
+    // alias plus a prompt (`/new opus summarize this`) was captured verbatim as a
+    // session name. Classification must key off the FIRST token so it falls through
+    // to the reset-model resolver (opus directive + "summarize this" prompt).
+    const params = buildResetParams(
+      "/new opus summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-20250514": { alias: "opus" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "opus summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("names a fresh session from a non-active agent's model override tail", async () => {
+    // Only the active agent's model keys gate classification. A model override that
+    // lives solely on ANOTHER agent must not be treated as a model directive, so the
+    // tail is a legitimate multi-word session name instead of being dropped.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new custom/private-model notes",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "other", model: { primary: "custom/private-model" } },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "custom/private-model notes" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “custom/private-model notes”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "custom/private-model notes",
+    );
   });
 
   it("allows slashes in native structured /new title args", async () => {

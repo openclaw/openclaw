@@ -189,7 +189,7 @@ describe("chat pane board shell", () => {
     pane.state.client = client;
     pane.context = {
       ...pane.context,
-      gateway: { snapshot: { client, connected: true } },
+      gateway: { snapshot: { client, phase: "connected" } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
     pane.boardProvider = mockBoardProvider("agent:main:current");
@@ -227,7 +227,7 @@ describe("chat pane board shell", () => {
     pane.state.client = client;
     pane.context = {
       ...pane.context,
-      gateway: { snapshot: { client, connected: true } },
+      gateway: { snapshot: { client, phase: "connected" } },
     } as unknown as ApplicationContext;
     pane.connectedClient = client;
     pane.boardProvider = mockBoardProvider("agent:main:current");
@@ -240,6 +240,43 @@ describe("chat pane board shell", () => {
     expect(reset).toHaveBeenCalledWith("agent:main:current", {});
     expect(patch).toHaveBeenCalledTimes(1);
     expect(pane.state.chatError).toContain("could not apply the name");
+  });
+
+  it("does not patch a label onto a board session when the reset is only uncertain", async () => {
+    // An "uncertain" reset may not have landed a fresh incarnation, so patching the
+    // requested /new --name label could rename the wrong (stale) conversation. The
+    // label patch must be skipped for anything other than a confirmed-completed reset.
+    const reset = vi.fn(async () => "uncertain" as const);
+    const patch = vi.fn(async () => ({ key: "agent:main:current" }));
+    const sessions = {
+      create: vi.fn(async () => "agent:main:new"),
+      reset,
+      patch,
+    } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    pane.state.client = client;
+    pane.context = {
+      ...pane.context,
+      gateway: { snapshot: { client, phase: "connected" } },
+    } as unknown as ApplicationContext;
+    pane.connectedClient = client;
+    pane.boardProvider = mockBoardProvider("agent:main:current");
+
+    const pending = pane.createSession({ label: "Planning notes" });
+    await Promise.resolve();
+    pane.settleResetConfirmation(true);
+
+    await expect(pending).resolves.toBe(true);
+    expect(reset).toHaveBeenCalledWith("agent:main:current", {});
+    expect(sessions.create).not.toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
   });
 
   it("does not reset when a run starts during confirmation", async () => {

@@ -2240,8 +2240,11 @@ class ChatPane extends OpenClawLightDomElement {
         this.refreshBuiltinBoardSnapshot();
         // A board-preserving reset reuses the session key instead of calling
         // sessions.create, so a requested /new --name label must be applied to
-        // the reset session explicitly or it would be silently dropped.
-        if (options?.label && isCurrent()) {
+        // the reset session explicitly or it would be silently dropped. Only
+        // patch on a confirmed-completed reset: an "uncertain" reset may not have
+        // landed a fresh incarnation, so patching the label could rename the wrong
+        // (stale) conversation.
+        if (options?.label && isCurrent() && resetResult === "completed") {
           const labelAgentId =
             scopedAgentParamsForSession(state, previousSessionKey).agentId ??
             resolveAgentIdFromSessionKey(previousSessionKey);

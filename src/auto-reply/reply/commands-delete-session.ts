@@ -2,7 +2,10 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store-entry.js";
 import { callGateway } from "../../gateway/call.js";
 import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import {
+  createSessionWorkAdmissionHandoffForCurrent,
+  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+} from "../../sessions/session-lifecycle-admission.js";
 import { rejectUnauthorizedCommand, requireGatewayClientScope } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -78,9 +81,22 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   const store = params.sessionStore ?? {};
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
   const targetEntry = resolved.existing ?? params.sessionEntry;
+  // A chat /close runs under the current turn's retained session-work admission.
+  // Deleting the same session through the gateway RPC leaves this async context,
+  // so without a handoff the server would treat the initiator's own admission as
+  // competing work and block until it drains (which cannot happen until this RPC
+  // returns). Hand the retained lease to the server so it adopts and exempts the
+  // initiating admission. When no covering admission is active this is undefined
+  // and the server falls back to the normal drain-and-retry contract.
+  const admissionHandoffId = params.storePath
+    ? createSessionWorkAdmissionHandoffForCurrent({
+        scope: params.storePath,
+        identities: [params.sessionKey],
+      })
+    : undefined;
   const deletion = await callGateway<{ deleted?: boolean }>({
     method: "sessions.delete",
-    // The gateway may drain competing admitted work for up to
+    // The gateway may still drain OTHER competing admitted work for up to
     // SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS before returning success or its
     // canonical "still active" response. Allow more than that full contract so the
     // client does not time out (default 10s) before the lifecycle mutation reports back.
@@ -94,6 +110,7 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
       expectedSessionId: targetEntry?.sessionId,
       expectedLifecycleRevision: targetEntry?.lifecycleRevision,
       expectedSessionUpdatedAt: targetEntry?.updatedAt,
+      ...(admissionHandoffId ? { admissionHandoffId } : {}),
     },
   });
   if (!deletion?.deleted) {

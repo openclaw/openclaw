@@ -1,7 +1,7 @@
-import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
+  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 /** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
@@ -88,14 +88,17 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
   for (const fallback of resolveAgentModelFallbackValues(defaultsModel)) {
     addModelRefValue(fallback);
   }
-  // Per-agent overrides (agents.entries.*.model / agents.list[].model) are honored by the
-  // canonical reset-model resolver but are absent from models.providers and the defaults
-  // model, so a native `/new custom/private-model ...` tail would otherwise be misread as a
-  // session name and drop the prompt. Fold every configured agent's explicit primary and
-  // fallback overrides into the ref set so they classify as model directives too.
-  for (const agentId of listAgentIds(params.cfg)) {
-    addModelRefValue(resolveAgentExplicitModelPrimary(params.cfg, agentId));
-    for (const fallback of resolveAgentModelFallbacksOverride(params.cfg, agentId) ?? []) {
+  // Per-agent overrides are honored by the canonical reset-model resolver but are
+  // absent from models.providers and the defaults model. Only the ACTIVE agent's
+  // override matters here: the reset-model resolver scopes allowed model keys to the
+  // active agent, so folding in every agent's overrides would misclassify another
+  // agent's private model as a directive and drop a legitimate session name. The
+  // active agent falls back to the default agent when the turn has no explicit id,
+  // matching resolveDefaultModel's own agent scoping.
+  const activeAgentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  if (activeAgentId) {
+    addModelRefValue(resolveAgentExplicitModelPrimary(params.cfg, activeAgentId));
+    for (const fallback of resolveAgentModelFallbacksOverride(params.cfg, activeAgentId) ?? []) {
       addModelRefValue(fallback);
     }
   }
@@ -124,19 +127,25 @@ function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
       return refs.has(`${provider}/${model}`) || refs.has(model) || MODEL_REF_PREFIX_RE.test(model);
     }
   }
+  // Classify by the FIRST token, not the whole tail: `/new opus summarize this` leads with a
+  // model alias and must fall through to the reset-model resolver (opus + prompt), not be
+  // captured verbatim as a multi-word session name.
   if (
-    !normalized.includes("/") &&
+    !firstToken.includes("/") &&
     buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: params.provider || DEFAULT_PROVIDER,
-    }).byAlias.has(normalized)
+    }).byAlias.has(firstToken)
   ) {
     return true;
   }
-  if (refs.has(normalized)) {
+  if (refs.has(firstToken)) {
     return true;
   }
-  return MODEL_REF_PREFIX_RE.test(normalized);
+  // MODEL_REF_PREFIX_RE is anchored at the start, so this classifies the leading token: a
+  // single well-formed model ref (`/new gpt-5.6-sol`) or a leading ref plus prompt
+  // (`/new gpt-5.6-sol summarize this`) both fall through to the reset-model resolver.
+  return MODEL_REF_PREFIX_RE.test(firstToken);
 }
 
 function getNativeCommandTitleTail(params: HandleCommandsParams): string | undefined {
