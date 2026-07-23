@@ -78,17 +78,17 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       proc.stderr.write(Buffer.from(unterminatedDiagnostic, "utf8"));
       expect(debug).toHaveBeenCalledTimes(callsBeforeLine + 1);
 
-      proc.stderr.end();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      proc.emit("exit", 0, null);
       expect(debug).toHaveBeenNthCalledWith(
         callsBeforeLine + 2,
         `[meeting] ${label}: ${unterminatedDiagnostic}`,
       );
     }
 
-    expect(debug).toHaveBeenCalledTimes(cases.length * 2);
+    // The barge-in process also reports its normal exit through the existing
+    // lifecycle logger, in addition to its two stderr diagnostics.
+    expect(debug).toHaveBeenCalledTimes(cases.length * 2 + 1);
+    expect(debug).toHaveBeenLastCalledWith("[meeting] human barge-in input exited (0)");
   });
 
   it("bounds diagnostics and drains stderr without a debug logger", async () => {
@@ -157,10 +157,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     expect(completedMessage).not.toContain("�");
 
     outputProcess.stderr.write(oversizedDiagnostic);
-    outputProcess.stderr.end();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    outputProcess.emit("exit", 0, null);
 
     const trailingMessage = debug.mock.calls.at(-1)?.[0];
     expect(trailingMessage).toEqual(

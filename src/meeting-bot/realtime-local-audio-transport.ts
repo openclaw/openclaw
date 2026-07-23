@@ -29,7 +29,6 @@ type BridgeProcess = {
   stderr?: {
     on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
     on(event: "error", listener: (error: Error) => void): unknown;
-    on(event: "end" | "close", listener: () => void): unknown;
   } | null;
   kill(signal?: NodeJS.Signals): boolean;
   on(
@@ -62,6 +61,7 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
 }
 
 function attachStderrLineLogger(params: {
+  proc: Pick<BridgeProcess, "on">;
   stderr: BridgeProcess["stderr"];
   debug: RuntimeLogger["debug"];
   prefix: string;
@@ -92,8 +92,9 @@ function attachStderrLineLogger(params: {
       splitOnCarriageReturn: true,
     }).forEach(logLine);
   };
-  // Natural end covers normal/crash exit; close handles abrupt teardown.
-  // Both events share one finalizer so the final diagnostic tail logs once.
+  // The process exit lifecycle is part of the existing injected-spawn contract.
+  // It flushes a final unterminated diagnostic without requiring stream lifecycle
+  // methods from third-party spawn adapters.
   const flush = () => {
     if (flushed) {
       return;
@@ -109,8 +110,7 @@ function attachStderrLineLogger(params: {
       append(chunk);
     }
   });
-  params.stderr.on("end", flush);
-  params.stderr.on("close", flush);
+  params.proc.on("exit", flush);
 }
 
 export function createLocalMeetingRealtimeAudioTransport(params: {
@@ -173,6 +173,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
     });
     attachStderrLineLogger({
+      proc,
       stderr: proc.stderr,
       debug: params.logger.debug,
       prefix: `${params.logScope} audio output`,
@@ -194,6 +195,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     }
   });
   attachStderrLineLogger({
+    proc: inputProcess,
     stderr: inputProcess.stderr,
     debug: params.logger.debug,
     prefix: `${params.logScope} audio input`,
@@ -311,6 +313,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
         );
       });
       attachStderrLineLogger({
+        proc: bargeInInputProcess,
         stderr: bargeInInputProcess.stderr,
         debug: params.logger.debug,
         prefix: `${params.logScope} barge-in input`,
