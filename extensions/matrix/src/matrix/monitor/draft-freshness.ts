@@ -273,6 +273,7 @@ export async function chooseMatrixFinalFreshnessAction(params: {
   mode: MatrixFreshnessMode;
   state: MatrixDraftFreshnessState;
   agentId: string;
+  signal?: AbortSignal;
   log?: (message: string) => void;
 }): Promise<MatrixFreshnessFinalAction> {
   const allowedActions = sanitizeMatrixFinalFreshnessActions(params.allowedActions);
@@ -298,6 +299,7 @@ export async function chooseMatrixFinalFreshnessAction(params: {
       params.log?.(`matrix freshness ai action selector unavailable: ${prepared.error}`);
       return pickAllowed("send-as-is");
     }
+    params.signal?.throwIfAborted();
     const completion = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
@@ -319,7 +321,7 @@ export async function chooseMatrixFinalFreshnessAction(params: {
           }),
         },
       ] as never,
-      options: { maxTokens: 180 } as never,
+      options: { maxTokens: 180, signal: params.signal } as never,
     });
     const selected = resolveMatrixFinalFreshnessActionFromAiResult({
       decision: extractMatrixFinalFreshnessJsonObject((completion as { text?: string }).text ?? ""),
@@ -340,6 +342,7 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
   draftText?: string;
   fallbackPayload: ReplyPayload;
   latestPendingHistory?: readonly HistoryEntry[];
+  signal?: AbortSignal;
   log?: (message: string) => void;
 }): Promise<ReplyPayload | undefined> {
   const freshCtxPayload = {
@@ -366,6 +369,7 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
     params.log?.(`matrix freshness revision model unavailable: ${prepared.error}`);
     return params.fallbackPayload;
   }
+  params.signal?.throwIfAborted();
   let text: string | undefined;
   try {
     const completion = await completeWithPreparedSimpleCompletionModel({
@@ -378,6 +382,7 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
         },
       ] as never,
       cfg: params.cfg as never,
+      options: { signal: params.signal },
     });
     text = (completion as { text?: string }).text;
   } catch (err) {

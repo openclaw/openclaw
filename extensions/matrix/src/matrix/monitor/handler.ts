@@ -106,6 +106,7 @@ import {
   parseParticipationDirectiveWithStrategy,
   resolveParticipationDecision,
   type ParticipationAgentIdentity,
+  type ParticipationDirective,
 } from "./participation-policy.js";
 import {
   formatMatrixAudioTranscript,
@@ -146,7 +147,7 @@ const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS = 2;
 const MATRIX_FRESHNESS_BEFORE_DELIVER_TIMEOUT_MS = 14_000;
-const MATRIX_FRESHNESS_MODEL_FAIL_OPEN_TIMEOUT_MS = 12_000;
+const MATRIX_MODEL_FAIL_OPEN_TIMEOUT_MS = 12_000;
 
 const loadMatrixSendModule = createLazyRuntimeModule(() => import("../send.js"));
 
@@ -161,6 +162,45 @@ const loadSessionBindingRuntime = createLazyRuntimeModule(
 const loadMatrixReactionEvents = createLazyRuntimeModule(() => import("./reaction-events.js"));
 
 const loadMatrixDraftStream = createLazyRuntimeModule(() => import("../draft-stream.js"));
+
+async function runMatrixModelStageWithDeadline<T>(params: {
+  deadlineAtMs: number;
+  fallback: T;
+  label: string;
+  log?: (message: string) => void;
+  task: (signal: AbortSignal) => Promise<T>;
+}): Promise<{ failedOpen: boolean; value: T }> {
+  const remainingMs = params.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    params.log?.(`matrix ${params.label} skipped after fail-open deadline elapsed`);
+    return { failedOpen: true, value: params.fallback };
+  }
+
+  const abortController = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      params.task(abortController.signal).then((value) => ({ failedOpen: false, value })),
+      new Promise<{ failedOpen: boolean; value: T }>((resolve) => {
+        timer = setTimeout(() => {
+          // The provider request must settle before its delivery owner. Abort it so a
+          // timed-out classifier/revision cannot keep consuming work after fail-open.
+          abortController.abort(new Error(`matrix ${params.label} fail-open deadline exceeded`));
+          params.log?.(`matrix ${params.label} exceeded fail-open deadline`);
+          resolve({ failedOpen: true, value: params.fallback });
+        }, remainingMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (err) {
+    params.log?.(`matrix ${params.label} failed open: ${String(err)}`);
+    return { failedOpen: true, value: params.fallback };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 async function matrixTextWouldActivateMentions(
   client: MatrixClient,
@@ -1378,16 +1418,27 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   availableAgents: availableParticipationAgents,
                 })
               : [];
-          const directive = await parseParticipationDirectiveWithStrategy({
-            text: mentionPrecheckText,
-            availableAgents: availableParticipationAgents,
-            strategy: participationConfig?.strategy,
-            cfg: cfg as never,
-            agentId: _route.agentId,
-            modelRef: participationConfig?.model?.trim() || undefined,
-            explicitMentionOnly: explicitlyMentionedParticipationAgents.length > 0,
+          const directiveResult = await runMatrixModelStageWithDeadline<
+            ParticipationDirective | undefined
+          >({
+            deadlineAtMs: Date.now() + MATRIX_MODEL_FAIL_OPEN_TIMEOUT_MS,
+            fallback: undefined,
+            label: "participation classification",
             log: logVerboseMessage,
+            task: async (signal) =>
+              await parseParticipationDirectiveWithStrategy({
+                text: mentionPrecheckText,
+                availableAgents: availableParticipationAgents,
+                strategy: participationConfig?.strategy,
+                cfg: cfg as never,
+                agentId: _route.agentId,
+                modelRef: participationConfig?.model?.trim() || undefined,
+                explicitMentionOnly: explicitlyMentionedParticipationAgents.length > 0,
+                signal,
+                log: logVerboseMessage,
+              }),
           });
+          const directive = directiveResult.value;
           const participationDecision = resolveParticipationDecision({
             agentId: _route.agentId,
             directive,
@@ -2371,44 +2422,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         before: ReturnType<typeof refreshDraftFreshnessState>,
         after: ReturnType<typeof refreshDraftFreshnessState>,
       ) => freshnessStateSignature(before) !== freshnessStateSignature(after);
-      const runMatrixFreshnessModelStage = async <T>(stage: {
-        deadlineAtMs: number;
-        fallback: T;
-        label: string;
-        task: () => Promise<T>;
-      }): Promise<{ failedOpen: boolean; value: T }> => {
-        const remainingMs = stage.deadlineAtMs - Date.now();
-        if (remainingMs <= 0) {
-          logVerboseMessage(
-            `matrix freshness ${stage.label} skipped after fail-open deadline elapsed`,
-          );
-          return { failedOpen: true, value: stage.fallback };
-        }
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          return await Promise.race([
-            stage.task().then((value) => ({ failedOpen: false, value })),
-            new Promise<{ failedOpen: boolean; value: T }>((resolve) => {
-              timer = setTimeout(() => {
-                logVerboseMessage(
-                  `matrix freshness ${stage.label} exceeded fail-open deadline; sending original draft`,
-                );
-                resolve({ failedOpen: true, value: stage.fallback });
-              }, remainingMs);
-              timer.unref?.();
-            }),
-          ]);
-        } catch (err) {
-          logVerboseMessage(
-            `matrix freshness ${stage.label} failed before delivery; sending original draft: ${String(err)}`,
-          );
-          return { failedOpen: true, value: stage.fallback };
-        } finally {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        }
-      };
       const resolveFreshnessFinalPayload = async (
         payload: ReplyPayload,
       ): Promise<ReplyPayload | null> => {
@@ -2422,17 +2435,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         const draftEventId = draftStream?.eventId();
         let state = refreshDraftFreshnessState(draftEventId);
-        const freshnessDeadlineAtMs = Date.now() + MATRIX_FRESHNESS_MODEL_FAIL_OPEN_TIMEOUT_MS;
+        const freshnessDeadlineAtMs = Date.now() + MATRIX_MODEL_FAIL_OPEN_TIMEOUT_MS;
         for (let attempt = 0; attempt <= MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS; attempt += 1) {
           if (!state.roomChangedSinceDraftStart) {
             return payload;
           }
           const selectedActionResult =
-            await runMatrixFreshnessModelStage<MatrixFreshnessFinalAction>({
+            await runMatrixModelStageWithDeadline<MatrixFreshnessFinalAction>({
               deadlineAtMs: freshnessDeadlineAtMs,
               fallback: "send-as-is",
-              label: "action selection",
-              task: async () =>
+              label: "freshness action selection",
+              log: logVerboseMessage,
+              task: async (signal) =>
                 await chooseMatrixFinalFreshnessAction({
                   allowedActions: freshnessAllowedFinalActions,
                   cfg,
@@ -2442,6 +2456,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   mode: freshnessMode,
                   state,
                   agentId: _route.agentId,
+                  signal,
                   log: logVerboseMessage,
                 }),
             });
@@ -2479,11 +2494,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           if (finalAction === "suppress") {
             return null;
           }
-          const revisionResult = await runMatrixFreshnessModelStage<ReplyPayload | undefined>({
+          const revisionResult = await runMatrixModelStageWithDeadline<ReplyPayload | undefined>({
             deadlineAtMs: freshnessDeadlineAtMs,
             fallback: payload,
-            label: "revision",
-            task: async () =>
+            label: "freshness revision",
+            log: logVerboseMessage,
+            task: async (signal) =>
               await reviseMatrixFinalReplyWithFreshness({
                 cfg,
                 config: freshnessConfig,
@@ -2492,6 +2508,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftText: payload.text,
                 fallbackPayload: payload,
                 latestPendingHistory: state.latestPendingHistory,
+                signal,
                 log: logVerboseMessage,
               }),
           });

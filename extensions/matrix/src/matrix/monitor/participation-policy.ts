@@ -223,6 +223,7 @@ async function parseParticipationDirectiveWithAi(params: {
   agentId: string;
   modelRef?: string;
   recentHistory?: readonly { sender?: string; body?: string }[];
+  signal?: AbortSignal;
   log?: (message: string) => void;
 }): Promise<ParticipationDirective | undefined> {
   try {
@@ -235,6 +236,7 @@ async function parseParticipationDirectiveWithAi(params: {
       params.log?.(`matrix participation ai parser unavailable: ${prepared.error}`);
       return undefined;
     }
+    params.signal?.throwIfAborted();
     const completion = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
@@ -256,7 +258,7 @@ async function parseParticipationDirectiveWithAi(params: {
           }),
         },
       ] as never,
-      options: { maxTokens: 220 } as never,
+      options: { maxTokens: 220, signal: params.signal } as never,
     });
     return resolveParticipationDirectiveFromAiResult({
       text: params.text,
@@ -278,6 +280,7 @@ export async function parseParticipationDirectiveWithStrategy(params: {
   modelRef?: string;
   explicitMentionOnly?: boolean;
   recentHistory?: readonly { sender?: string; body?: string }[];
+  signal?: AbortSignal;
   log?: (message: string) => void;
 }): Promise<ParticipationDirective | undefined> {
   const strategy = params.strategy ?? "ai-first";
@@ -298,6 +301,7 @@ export async function parseParticipationDirectiveWithStrategy(params: {
     agentId: params.agentId,
     modelRef: params.modelRef,
     recentHistory: params.recentHistory,
+    signal: params.signal,
     log: params.log,
   });
 }

@@ -51,7 +51,7 @@ const prepareSimpleCompletionModelForAgentMock = vi.hoisted(() =>
   vi.fn(async () => ({ model: {}, auth: {} })),
 );
 const completeWithPreparedSimpleCompletionModelMock = vi.hoisted(() =>
-  vi.fn(async () => ({ text: "revised final reply" })),
+  vi.fn(async (..._args: unknown[]) => ({ text: "revised final reply" })),
 );
 
 vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
@@ -964,6 +964,77 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it("fails open and aborts slow AI participation classification", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveCompletionStarted: (() => void) | undefined;
+      const completionStarted = new Promise<void>((resolve) => {
+        resolveCompletionStarted = resolve;
+      });
+      let completionSignal: AbortSignal | undefined;
+      completeWithPreparedSimpleCompletionModelMock.mockImplementationOnce(
+        async (...args: unknown[]) => {
+          const [params] = args as [{ options?: { signal?: AbortSignal } }];
+          completionSignal = params.options?.signal;
+          resolveCompletionStarted?.();
+          return await new Promise<never>(() => {
+            // Never resolves; the Matrix participation deadline should allow normal dispatch.
+          });
+        },
+      );
+      const resolveAgentRoute = vi.fn((params: { accountId?: string }) =>
+        params.accountId === "sentinel"
+          ? {
+              agentId: "sentinel",
+              channel: "matrix",
+              accountId: "sentinel",
+              sessionKey: "agent:sentinel:main",
+              mainSessionKey: "agent:sentinel:main",
+              matchedBy: "binding.account" as const,
+            }
+          : {
+              agentId: "ops",
+              channel: "matrix",
+              accountId: "ops",
+              sessionKey: "agent:ops:main",
+              mainSessionKey: "agent:ops:main",
+              matchedBy: "binding.account" as const,
+            },
+      );
+      const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+        isDirectMessage: false,
+        accountConfig: { participation: { enabled: true, strategy: "ai-first" } },
+        cfg: {
+          channels: { matrix: { accounts: { ops: {}, sentinel: {} } } },
+          agents: {
+            list: [{ id: "ops" }, { id: "sentinel" }],
+          },
+        },
+        roomsConfig: {
+          "!room:example.org": { requireMention: false },
+        },
+        resolveAgentRoute: resolveAgentRoute as never,
+      });
+
+      const handling = handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: "$participation-timeout",
+          body: "sentinel, handle this",
+        }),
+      );
+      await completionStarted;
+      expect(completionSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(12_001);
+      await handling;
+
+      expect(completionSignal?.aborted).toBe(true);
+      expect(recordInboundSession).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   async function runMatrixFreshnessScenario(params: {
     mode: "revise" | "send-as-is" | "suppress";
     finalText?: string;
@@ -1389,7 +1460,24 @@ describe("matrix monitor handler pairing account scope", () => {
       finalPayload: {
         text: "old draft",
         mediaUrl: "file:///tmp/proof.png",
+        mediaUrls: ["file:///tmp/proof-a.png", "file:///tmp/proof-b.png"],
+        sensitiveMedia: true,
+        presentation: {
+          title: "Freshness proof",
+          blocks: [{ type: "text", text: "preserve this card" }],
+        },
+        presentationTextMode: "fallback",
+        delivery: { pin: { enabled: true, required: true } },
         replyToId: "$reply-target",
+        replyToCurrent: true,
+        audioAsVoice: true,
+        videoAsNote: true,
+        location: { latitude: 1, longitude: 2 },
+        spokenText: "spoken fallback",
+        ttsSupplement: {
+          spokenText: "spoken supplement",
+          visibleTextAlreadyDelivered: true,
+        },
         channelData: { matrix: { formatted: true } },
       },
     });
@@ -1402,7 +1490,24 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(requireRecord(replies[0], "delivered reply")).toMatchObject({
       text: "revised final reply",
       mediaUrl: "file:///tmp/proof.png",
+      mediaUrls: ["file:///tmp/proof-a.png", "file:///tmp/proof-b.png"],
+      sensitiveMedia: true,
+      presentation: {
+        title: "Freshness proof",
+        blocks: [{ type: "text", text: "preserve this card" }],
+      },
+      presentationTextMode: "fallback",
+      delivery: { pin: { enabled: true, required: true } },
       replyToId: "$reply-target",
+      replyToCurrent: true,
+      audioAsVoice: true,
+      videoAsNote: true,
+      location: { latitude: 1, longitude: 2 },
+      spokenText: "spoken fallback",
+      ttsSupplement: {
+        spokenText: "spoken supplement",
+        visibleTextAlreadyDelivered: true,
+      },
       channelData: { matrix: { formatted: true } },
     });
   });
@@ -1467,17 +1572,24 @@ describe("matrix monitor handler pairing account scope", () => {
       const completionStarted = new Promise<void>((resolve) => {
         resolveCompletionStarted = resolve;
       });
-      completeWithPreparedSimpleCompletionModelMock.mockImplementationOnce(async () => {
-        resolveCompletionStarted?.();
-        return await new Promise<never>(() => {
-          // Never resolves; the Matrix freshness fail-open deadline should release delivery.
-        });
-      });
+      let completionSignal: AbortSignal | undefined;
+      completeWithPreparedSimpleCompletionModelMock.mockImplementationOnce(
+        async (...args: unknown[]) => {
+          const [params] = args as [{ options?: { signal?: AbortSignal } }];
+          completionSignal = params.options?.signal;
+          resolveCompletionStarted?.();
+          return await new Promise<never>(() => {
+            // Never resolves; the Matrix freshness fail-open deadline should release delivery.
+          });
+        },
+      );
 
       const scenario = runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
       await completionStarted;
+      expect(completionSignal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(12_001);
       await scenario;
+      expect(completionSignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
