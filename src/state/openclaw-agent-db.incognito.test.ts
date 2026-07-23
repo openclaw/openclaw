@@ -21,6 +21,26 @@ afterEach(() => {
 });
 
 describe("incognito agent database", () => {
+  it("does not allocate an in-memory database for a read-only miss", () => {
+    const stateDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-read-miss-")),
+    );
+    tempDirs.push(stateDir);
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sentinel = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+    const before = listOpenIncognitoAgentDatabases();
+
+    expect(
+      withOpenClawAgentDatabaseReadOnly(() => "unreachable", {
+        agentId: "main",
+        env,
+        path: sentinel,
+      }),
+    ).toEqual({ found: false, reason: "database-missing" });
+    expect(listOpenIncognitoAgentDatabases()).toEqual(before);
+    expect(fs.existsSync(sentinel)).toBe(false);
+  });
+
   it("refuses a file at the reserved sentinel path before opening in memory", () => {
     const stateDir = fs.realpathSync(
       fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-incognito-collision-")),

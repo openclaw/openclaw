@@ -1550,8 +1550,10 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   if (isIncognitoSessionKey(canonicalKey)) {
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+    // Session resolution may receive arbitrary stale keys; only creation/write
+    // owners may materialize the process-lifetime incognito database.
     const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
-      readOnly: false,
+      readOnly: true,
     });
     return {
       agentId,

@@ -9,7 +9,7 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
-import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
@@ -42,9 +42,12 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
-    // Read-only incognito callers must share the process-held handle; opening the
-    // lexical sentinel as a file would miss live rows and violate the no-disk contract.
-    return { found: true, value: operation(openOpenClawAgentDatabase({ ...options, agentId })) };
+    // Read-only misses must not create process-lifetime handles; only creation and
+    // write paths may materialize the process-held incognito database.
+    const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
+    return database
+      ? { found: true, value: operation(database) }
+      : { found: false, reason: "database-missing" };
   }
   if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };

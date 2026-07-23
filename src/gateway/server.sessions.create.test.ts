@@ -28,6 +28,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  listOpenIncognitoAgentDatabases,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
@@ -61,15 +62,23 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
   const { storePath } = await createSessionStoreDir();
   try {
+    const durableParentKey = "main";
+    await writeSessionStore({ entries: { main: sessionStoreEntry("durable-parent") } });
     const created = await directSessionReq<{
       key: string;
-      entry: { incognito?: true; sessionFile?: string; sessionId: string };
+      entry: {
+        incognito?: true;
+        parentSessionKey?: string;
+        sessionFile?: string;
+        sessionId: string;
+      };
     }>("sessions.create", { agentId: "main", incognito: true });
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "incognito session key");
     expect(key).toMatch(/^agent:main:dashboard:incognito-/u);
     const entry = created.payload?.entry;
     expect(entry?.incognito).toBe(true);
+    expect(entry?.parentSessionKey).toBeUndefined();
     expect(parseSqliteSessionFileMarker(entry?.sessionFile)?.storePath).toBe(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     );
@@ -94,6 +103,19 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
         .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
         .get(key),
     ).toBeUndefined();
+
+    const rejectedDurableParent = await directSessionReq("sessions.create", {
+      agentId: "main",
+      incognito: true,
+      parentSessionKey: durableParentKey,
+    });
+    expect(rejectedDurableParent).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "incognito sessions cannot have durable parents",
+      },
+    });
 
     const listed = await directSessionReq<{ sessions: Array<{ key: string; incognito?: true }> }>(
       "sessions.list",
@@ -120,11 +142,12 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
     const child = await directSessionReq<{
       key: string;
-      entry: { incognito?: true; sessionFile?: string };
+      entry: { incognito?: true; parentSessionKey?: string; sessionFile?: string };
     }>("sessions.create", { agentId: "main", parentSessionKey: key });
     expect(child.ok).toBe(true);
     const childKey = requireNonEmptyString(child.payload?.key, "incognito child key");
     expect(child.payload?.entry.incognito).toBe(true);
+    expect(child.payload?.entry.parentSessionKey).toBe(key);
     expect(parseSqliteSessionFileMarker(child.payload?.entry.sessionFile)?.storePath).toBe(
       resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     );
@@ -354,6 +377,7 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
       message: `Incognito session "${sessionKey}" was not found.`,
     });
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(listOpenIncognitoAgentDatabases()).toEqual([]);
 
     const persistentDatabase = openOpenClawAgentDatabase({
       agentId: "work",

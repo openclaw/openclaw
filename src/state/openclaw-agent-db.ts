@@ -515,6 +515,27 @@ export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
   return database?.db.isOpen === true;
 }
 
+/** Return the matching live cache entry without materializing a database. */
+export function getOpenClawAgentDatabaseIfOpen(
+  options: OpenClawAgentDatabaseOptions,
+): OpenClawAgentDatabase | undefined {
+  const agentId = normalizeAgentId(options.agentId);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  const database = cachedDatabases.get(pathname);
+  if (!database?.db.isOpen) {
+    return undefined;
+  }
+  if (cachedDatabaseOpenFailures.has(pathname)) {
+    throw cachedDatabaseOpenFailures.get(pathname);
+  }
+  if (database.agentId !== agentId) {
+    throw new Error(
+      `OpenClaw agent database ${pathname} is already open for agent ${database.agentId}; requested agent ${agentId}.`,
+    );
+  }
+  return database;
+}
+
 /** Lists process-held incognito databases without opening new sentinel handles. */
 export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; storePath: string }> {
   return [...cachedDatabases.values()]

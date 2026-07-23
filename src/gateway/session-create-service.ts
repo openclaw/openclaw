@@ -535,6 +535,16 @@ export async function createGatewaySession(params: {
   }
   const parentIncognito =
     parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
+  const incognito = params.incognito === true || parentIncognito;
+  if (incognito && canonicalParentSessionKey && !parentIncognito) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "incognito sessions cannot have durable parents",
+      ),
+    };
+  }
   if (parentIncognito && explicitTargetKey) {
     return {
       ok: false,
@@ -557,13 +567,13 @@ export async function createGatewaySession(params: {
     };
   }
 
-  const incognito = params.incognito === true || parentIncognito;
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
   const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
-  // Dashboard sessions parent to main for flow-up notices and sidebar threads.
-  // Isolated DM scopes lack the shared watcher; global scope lacks a per-agent main.
+  // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
+  // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
   const dashboardParentSessionKey =
     !parentSessionKey &&
+    !incognito &&
     params.fork !== true &&
     (params.cfg.session?.dmScope ?? "main") === "main" &&
     params.cfg.session?.scope !== "global" &&
