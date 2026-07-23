@@ -2106,6 +2106,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("does not send no-visible-reply fallback when NO_REPLY arrives as a block reply (kind: block, reason: silent)", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    // NO_REPLY emitted via emitSplitResultAsBlockReply produces kind: "block",
+    // not kind: "final". The onSkip handler must still track the silent skip
+    // so the fallback message is not sent.
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
   it("sends no-visible-reply fallback when a final fails after an earlier silent skip", async () => {
     useNonStreamingAutoAccount();
     const runtime = createRuntimeLogger();

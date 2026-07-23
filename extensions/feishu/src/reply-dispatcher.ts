@@ -671,7 +671,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       conversationType: chatId.startsWith("oc_") ? "group" : "direct",
     },
     onSkip: (_payload, info) => {
-      if (info.kind === "final") {
+      // A block-level silent skip (e.g. NO_REPLY emitted as a block via
+      // emitSplitResultAsBlockReply) is terminal: the model returned a clean
+      // stop with no visible content. Track it the same as a final skip so
+      // the no-visible-reply fallback is not sent for intentional silence.
+      if (info.kind === "final" || (info.kind === "block" && info.reason === "silent")) {
         skippedFinalReason = info.reason;
       }
     },
