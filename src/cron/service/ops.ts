@@ -1257,7 +1257,10 @@ async function skipInvalidPersistedManualRun(params: {
 
   recomputeNextRunsForMaintenance(params.state, {
     recomputeExpired: true,
-    ...(params.mode === "force"
+    // Operator runs never consume the paced slot (see applyJobResult), so an
+    // invalid-spec skip on an operator run must keep the pending expired slot
+    // rather than let maintenance advance past it.
+    ...(params.origin === "operator"
       ? {
           preserveExpiredPacedNextRunJobId: params.job.id,
         }
@@ -1387,6 +1390,7 @@ async function prepareManualRun(
         runId: opts?.runId,
         terminalTracker: opts?.terminalTracker,
         error,
+        origin: opts?.origin ?? "operator",
       });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
@@ -1520,6 +1524,7 @@ async function activatePreparedManualRun(
         runId: prepared.runId,
         terminalTracker: prepared.terminalTracker,
         error,
+        origin: prepared.origin,
       });
       releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
       return { ok: true, ran: false, reason: "invalid-spec" } as const;
