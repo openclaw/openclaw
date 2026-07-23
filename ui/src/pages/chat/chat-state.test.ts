@@ -705,11 +705,13 @@ describe("route composer fallback", () => {
     state.chatMessages = [{ role: "assistant", content: "first session" }];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 400, totalMessages: 718 };
     state.currentSessionId = "session-first";
+    state.chatDisplayedLeafEntryId = "leaf-first";
 
     resetChatStateForRouteSession(state, "agent:main:second");
     state.chatMessages = [{ role: "assistant", content: "second session" }];
     state.chatHistoryPagination = { hasMore: false, totalMessages: 1 };
     state.currentSessionId = "session-second";
+    state.chatDisplayedLeafEntryId = "leaf-second";
 
     resetChatStateForRouteSession(state, "agent:main:first");
 
@@ -720,6 +722,7 @@ describe("route composer fallback", () => {
       totalMessages: 718,
     });
     expect(state.currentSessionId).toBe("session-first");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-first");
   });
 
   it("reapplies a live send projection when a subscribed pane switches into its scope", () => {

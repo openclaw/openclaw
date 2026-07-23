@@ -163,7 +163,7 @@ describe("conversation registry", () => {
     );
     executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("session_entries").where("session_key", "=", staleSessionKey),
+      db.deleteFrom("session_nodes").where("session_key", "=", staleSessionKey),
     );
 
     expect(
@@ -172,7 +172,7 @@ describe("conversation registry", () => {
       target: "reef:peer-a",
       sessionId: "live-session",
       sessionKey: liveSessionKey,
-      lastSeenAt: 200,
+      lastSeenAt: 100,
     });
   });
 

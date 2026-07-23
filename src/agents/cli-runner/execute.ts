@@ -69,6 +69,10 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
 import {
+  detectImageReferences,
+  hasHydratableMediaImages,
+} from "../embedded-agent-runner/run/images.js";
+import {
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
   sanitizeToolArgs,
@@ -458,7 +462,12 @@ export async function executePreparedCliRun(
     }),
     context.backendResolved.textTransforms?.input,
   );
-  if (nodePlacement && ((params.images?.length ?? 0) > 0 || Boolean(params.imagePrompt?.trim()))) {
+  if (
+    nodePlacement &&
+    ((params.images?.length ?? 0) > 0 ||
+      hasHydratableMediaImages(params.media) ||
+      (params.imagePrompt ? detectImageReferences(params.imagePrompt).length > 0 : false))
+  ) {
     throw new Error("paired-node Claude CLI sessions do not support attachments or images");
   }
   const {
@@ -474,6 +483,7 @@ export async function executePreparedCliRun(
         workspaceDir: context.workspaceDir,
         images: params.images,
         imageOrder: params.imageOrder,
+        media: params.media,
       });
   prompt = promptWithImages;
 

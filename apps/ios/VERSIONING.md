@@ -1,216 +1,192 @@
 # OpenClaw iOS Versioning
 
-OpenClaw iOS release uploads use an explicit CalVer release version. The
-committed repo no longer has an iOS-only version manifest; release commands must
-name the App Store train they are uploading to.
+OpenClaw iOS releases retain their gateway association while allowing multiple
+public App Store releases for one gateway version. Release commands name the
+gateway version and the App Store revision explicitly.
 
 ## Goals
 
-- make App Store release intent explicit at upload time
-- avoid stale committed iOS pins
+- keep the associated gateway version recognizable
+- support multiple public iOS releases per gateway version
+- support multiple candidate builds per App Store version
+- make every release identity explicit and deterministic
 - keep Apple bundle fields valid for App Store Connect
-- keep normal local builds aligned with the current gateway release version
-- generate App Store release notes from an iOS-owned changelog
+- generate version-specific App Store release notes from the iOS changelog
 
 ## Version model
 
-Release uploads require a version argument:
+An iOS release has three independent identifiers:
 
-```bash
-pnpm ios:release:upload -- --version 2026.6.11
+- gateway version `G = YYYY.M.P`, for example `2026.7.2`
+- App Store revision `R`, an integer from `0` through `99`
+- build number `B`, a positive integer scoped to the exact App Store version
+
+The App Store version packs the revision into the third numeric component:
+
+```text
+AppStoreVersion(G, R) = YYYY.M.(P * 100 + R)
 ```
 
-Use `--build-number` when the build number is known or has been verified from
-App Store Connect:
+Examples:
+
+| Gateway | Revision | App Store version | Candidate builds |
+| --- | ---: | --- | --- |
+| `2026.7.2` | legacy `0` | `2026.7.2` | closed history |
+| `2026.7.2` | `1` | `2026.7.201` | `1`, `2`, `3` |
+| `2026.7.2` | `2` | `2026.7.202` | `1`, `2`, ... |
+| `2026.7.3` | `0` | `2026.7.300` | `1`, `2`, ... |
+
+Historical exact versions are grandfathered as read-only release history. The
+release tooling does not target them again. All future uploads use the packed
+format, including revision zero.
+
+## Release commands
+
+Release uploads require the gateway version and App Store revision:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1
 ```
 
-The release version must use `YYYY.M.D` CalVer, for example `2026.4.6` or
-`2026.6.11`.
+Use `--build-number` only when the exact next remote build number has already
+been verified:
 
-When no explicit release version is supplied to the version helper, iOS derives
-its default version from root `package.json.version` after stripping supported
-release suffixes:
+```bash
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1 --build-number 3
+```
 
-- gateway `2026.4.10` -> iOS default `2026.4.10`
-- gateway `2026.4.10-beta.3` -> iOS default `2026.4.10`
-- gateway `2026.4.10-2` -> iOS default `2026.4.10`
+During upload, an explicit build number must equal the next App Store Connect
+build for the derived App Store version. Offline archive validation can accept
+an explicit build number without remote validation:
+
+```bash
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
+```
 
 ## Apple bundle mapping
 
-Release version `2026.6.11` maps to:
+Gateway `2026.7.2`, revision `1`, build `3` maps to:
 
-- `CFBundleShortVersionString = 2026.6.11`
-- `CFBundleVersion = numeric build number only`
+- `OpenClawCanonicalVersion = 2026.7.2`
+- `CFBundleShortVersionString = 2026.7.201`
+- `CFBundleVersion = 3`
 
-Fastlane can resolve the next build number by querying App Store Connect for the
-explicit short version. Maintainers may still pass `--build-number` to make the
-upload fully deterministic.
+Local development builds continue using the normalized gateway version as the
+marketing version. Release preparation supplies the explicit revision and
+therefore the packed App Store version.
+
+## Revision and build lifecycle
+
+- A revision is reserved once its App Store version record is created and is
+  never reused.
+- Rejected or replaced candidate builds stay on the same App Store version and
+  increment only the build number.
+- After an App Store version is distributed, another public release for the
+  same gateway uses the next revision and resets its build number to `1`.
+- Build numbers are derived from the highest uploaded build for the exact App
+  Store version plus one. Failed local archives do not consume build numbers;
+  accepted App Store Connect uploads do.
+- App Review submission remains manual.
+
+Before screenshot or archive work, the upload lane checks App Store Connect:
+
+- an absent version may be created during metadata staging
+- an editable version is reused
+- a locked or in-review version fails the run
+- a distributed version requires the next revision
+- a missing revision below an existing higher version fails because revisions
+  are never reused
+
+## Release notes
+
+Production release notes require an exact App Store version heading:
+
+```markdown
+## 2026.7.201
+
+- Fixed an iOS issue.
+```
+
+The generated App Store text automatically starts with:
+
+```text
+Gateway version: 2026.7.2
+```
+
+Production revision builds do not fall back to the gateway heading or
+`## Unreleased`. Local version checks without `--revision` retain the existing
+gateway/`Unreleased` fallback for development.
+
+Validate exact release notes with:
+
+```bash
+pnpm ios:version:check -- --version 2026.7.2 --revision 1
+```
 
 ## Source of truth and generated files
 
-### Source files
+Source files:
 
-- `package.json`
-  - default iOS version source for local builds
-- explicit `--version`
-  - release upload source of truth
-- `apps/ios/CHANGELOG.md`
-  - iOS-only changelog and release-note source
-- `apps/ios/VERSIONING.md`
-  - workflow and constraints
+- root `package.json`: default gateway version for local builds
+- explicit `--version`: gateway version for release commands
+- explicit `--revision`: App Store revision for release commands
+- `apps/ios/CHANGELOG.md`: exact App Store release notes
+- `apps/ios/VERSIONING.md`: versioning contract
 
-### Generated or derived files
+Generated or derived files:
 
 - `apps/ios/build/Version.xcconfig`
-  - local gitignored build override generated per build or release prep
+- `apps/ios/build/AppStoreRelease.xcconfig`
 - `apps/ios/SwiftSources.input.xcfilelist`
-  - local gitignored Swift lint input file generated before Xcode project generation
-- temporary Fastlane metadata
-  - release notes generated from `apps/ios/CHANGELOG.md` during metadata upload
+- temporary Fastlane metadata rendered from `apps/ios/CHANGELOG.md`
 
-## Tooling surfaces
+The canonical implementation is split across:
 
-- `scripts/lib/ios-version.ts`
-  - validates iOS CalVer
-  - normalizes gateway version -> iOS CalVer
-  - renders release notes from the iOS changelog
-- `scripts/ios-version.ts`
-  - CLI for JSON, shell, or single-field version reads
-  - accepts `--version YYYY.M.D` for explicit release queries
-- `scripts/ios-sync-versioning.ts`
-  - validates that release notes can be rendered from the default or explicit iOS version
-- `scripts/ios-write-version-xcconfig.sh`
-  - writes the local numeric build override file in `apps/ios/build/Version.xcconfig`
-- `scripts/ios-write-swift-filelist.mjs`
-  - writes the local Swift file list consumed by Xcode pre-build lint phases
-- `scripts/ios-release-prepare.sh`
-  - requires `--version` and prepares App Store distribution signing and bundle settings
-- `apps/ios/fastlane/Fastfile`
-  - resolves version metadata from the explicit release version
-  - creates or verifies Developer Portal bundle IDs/services through Fastlane `produce`
-  - syncs encrypted App Store signing assets with Fastlane `match`
-  - resolves App Store Connect build numbers for the explicit short version when needed
-  - uploads screenshots, release notes, and the rendered App Review PDF attachment before archiving
-
-Agent-driven App Store uploads must use `pnpm ios:release:upload` as the only
-release path. If that command fails, stop at the failing screenshot, metadata,
-archive, validation, or upload step. Do not continue by archiving and uploading
-manually with `pnpm ios:release:archive`, `asc builds upload`,
-`asc release stage`, `asc publish appstore`, direct Fastlane lanes, or other App
-Store Connect mutation commands.
-
-## Release-note resolution order
-
-When generating the temporary Fastlane release notes metadata, the tooling reads
-the first available changelog section in this order:
-
-1. exact release version, for example `## 2026.6.11`
-2. `## Unreleased`
-
-Before production upload, prefer a final `## <release version>` section and
-validate with the same version:
-
-```bash
-pnpm ios:version:check -- --version 2026.6.11
-```
-
-## Common commands
-
-```bash
-pnpm ios:version
-pnpm ios:version -- --version 2026.6.11
-pnpm ios:version:check
-pnpm ios:filelist:gen
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
-```
-
-## Normal App Store Connect build iteration workflow
-
-1. choose the App Store release train explicitly, for example `2026.6.11`
-2. update `apps/ios/CHANGELOG.md` under `## <release version>` or `## Unreleased`
-3. run `pnpm ios:version:check -- --version <release version>`
-4. check App Store Connect for the latest build number when needed
-5. upload another build with `pnpm ios:release:upload -- --version <release version> --build-number <next>`
-
-This keeps the version decision at the release command instead of in a committed
-state file.
+- `scripts/lib/ios-version.ts`: validation, encoding, and release-note rendering
+- `scripts/ios-version.ts`: JSON, shell, and single-field queries
+- `scripts/ios-sync-versioning.ts`: release-note validation
+- `scripts/ios-release-upload.sh`: guarded upload entry point
+- `apps/ios/fastlane/Fastfile`: remote preflight, build allocation, metadata,
+  archive, validation, and upload
 
 ## Release SHA tracking
 
-Successful App Store Connect uploads create a non-tag Git ref that records the
-source commit for the uploaded store build:
+Successful uploads record the exact App Store version and build:
 
 ```text
 refs/openclaw/mobile-releases/ios/<CFBundleShortVersionString>-<CFBundleVersion>
 ```
 
-Example:
+For example:
 
 ```text
-refs/openclaw/mobile-releases/ios/2026.6.11-3
+refs/openclaw/mobile-releases/ios/2026.7.201-3
 ```
 
-These refs are intentionally outside `refs/tags/*` and `refs/heads/*`. They do
-not appear on GitHub release or tag pages, and they do not participate in the
-core OpenClaw release machinery.
+The ref is checked before archive/upload work and created only after App Store
+Connect accepts the upload. Existing refs are immutable.
 
-`pnpm ios:release:upload` checks the ref before archive/upload work and records
-it only after the App Store Connect upload succeeds. Existing refs are
-immutable: the same ref at the same SHA is accepted, while the same ref at a
-different SHA fails.
+## Normal workflow
 
-Do not create this ref after a manual fallback upload. The ref is release-lane
-evidence, not a repair mechanism for a failed `pnpm ios:release:upload` run.
-
-Useful direct commands:
+1. Choose the gateway version and App Store revision explicitly.
+2. Add an exact encoded-version section to `apps/ios/CHANGELOG.md`.
+3. Validate it:
 
 ```bash
-pnpm mobile:release:preflight -- --platform ios --version 2026.6.11 --build 3
-pnpm mobile:release:resolve -- --platform ios --version 2026.6.11 --build 3
+pnpm ios:version:check -- --version 2026.7.2 --revision 1
 ```
 
-## New release workflow
-
-When you want the next production iOS release to align with the current gateway
-release:
-
-1. confirm the root gateway version:
+4. Upload build `1`, or let Fastlane resolve the next build:
 
 ```bash
-node -e "console.log(require('./package.json').version)"
+pnpm ios:release:upload -- --version 2026.7.2 --revision 1
 ```
 
-2. update `apps/ios/CHANGELOG.md` for that release
-3. validate iOS release notes:
+5. Iterate on the same version for builds `2`, `3`, and so on.
+6. Select one processed build and submit it manually in App Store Connect.
+7. If another public release is needed after distribution, increment the App
+   Store revision and start its build count at `1`.
 
-```bash
-pnpm ios:version:check -- --version 2026.6.11
-```
-
-4. verify live App Store Connect state and choose the next build number
-5. upload with explicit release intent:
-
-```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
-```
-
-6. manually submit the reviewed build for App Review in App Store Connect
-7. release the approved build to production
-
-## Important invariant
-
-App Store uploads must carry explicit version intent. Do not infer a release
-train from generated local files.
-
-App Review submission remains manual. Automation may create/update the editable
-App Store version, upload screenshots, upload release notes, upload the App
-Review PDF attachment, and upload builds, but it should not upload the App
-Store Connect `Notes` field or submit a build for review.
-
-For agent-driven releases, a failed `pnpm ios:release:upload` is terminal for
-that attempt. Agents must report the failed step and wait for maintainer
-direction instead of switching to lower-level App Store Connect upload or
-submission commands.
+Agent-driven uploads must use `pnpm ios:release:upload`. A failed upload is
+terminal for that attempt: report the failing step rather than switching to a
+lower-level archive, upload, staging, or submission command.

@@ -5,7 +5,6 @@ import {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
@@ -105,8 +104,6 @@ export {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
-  resolveChannelInboundSupplementalContext,
 };
 export type {
   BuildChannelInboundEventContextAsyncParams,

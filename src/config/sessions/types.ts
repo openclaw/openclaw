@@ -26,6 +26,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 
 export type SessionScope = "per-sender" | "global";
 export type SessionChatType = ChatType;
+type SessionVisibility = "shared" | "read-only" | "suggest" | "draft";
 
 export type SessionOrigin = {
   label?: string;
@@ -231,6 +232,8 @@ export type RestartRecoveryRun = {
 
 export type SessionEntry = SessionRestartRecoveryState &
   SessionEntryProvenance & {
+    /** Collaboration mode. Missing legacy values are equivalent to "shared". */
+    visibility?: SessionVisibility;
     /**
      * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
      * Stored on the main session entry.
@@ -256,6 +259,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
     updatedAt: number;
+    /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
+    incognito?: true;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
     // archivedAt/pinnedAt mirror the Codex thread-management shape (state DB
@@ -265,6 +270,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     // codex plugin seam when exchanging thread metadata.
     /** Timestamp (ms) when the session was archived from active session lists. */
     archivedAt?: number;
+    /** Actor that archived the session; cleared when the session is restored. */
+    archivedBy?: SessionCreatedActor;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Custom sidebar icon in the format accepted by the gateway protocol session-icon helper. */
@@ -787,10 +794,9 @@ export type SessionSkillSnapshot = {
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Stripped from sessions.json on every read and write
-   * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/skills/runtime/embedded-run-entries.ts
-   * rebuilds it by reloading skill entries from disk.
+   * scan within a turn. Persistence projections strip it before committing
+   * session state. On a cold session resume this is undefined and
+   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
   version?: number;

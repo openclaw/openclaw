@@ -2,6 +2,7 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkTextForOutbound,
+  type FormatCapabilityProfile,
   markdownToIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
@@ -105,6 +106,30 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
 type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
+
+const SLACK_FORMAT_PROFILE = {
+  mechanism: "markdown",
+  constructs: {
+    bold: "native",
+    italic: "native",
+    underline: "strip",
+    strikethrough: "native",
+    spoiler: "fallback",
+    codeInline: "native",
+    codeBlock: "native",
+    codeLanguage: "fallback",
+    linkLabel: "native",
+    heading: "fallback",
+    bulletList: "fallback",
+    orderedList: "fallback",
+    taskList: "fallback",
+    table: "fallback",
+    blockquote: "native",
+    image: "fallback",
+    mention: "native",
+  },
+  chunk: { limit: 4000, unit: "chars", hardCap: 40_000 },
+} satisfies FormatCapabilityProfile;
 
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
@@ -356,11 +381,11 @@ function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions =
     assistantTranscriptRoleHeaders: true,
     linkify: false,
     autolink: false,
-    headingStyle: "bold",
+    headingStyle: "rich",
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
-  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
+  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE);
 }
 
 export function normalizeSlackOutboundText(markdown: string): string {
@@ -443,7 +468,7 @@ export function markdownToSlackMrkdwnChunks(
     assistantTranscriptRoleHeaders: true,
     linkify: false,
     autolink: false,
-    headingStyle: "bold",
+    headingStyle: "rich",
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
@@ -452,7 +477,9 @@ export function markdownToSlackMrkdwnChunks(
     ir,
     limit,
     renderChunk: (chunk) =>
-      protectSlackAssistantTranscriptRoleHeaders(renderMarkdownWithMarkers(chunk, renderOptions)),
+      protectSlackAssistantTranscriptRoleHeaders(
+        renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE),
+      ),
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) => rendered);
 }

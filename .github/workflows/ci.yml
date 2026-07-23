@@ -1674,7 +1674,7 @@ jobs:
 
       - name: Set up Blacksmith Docker layer cache
         if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
         with:
           max-cache-size-mb: 800000
 
@@ -3130,7 +3130,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -3226,6 +3226,21 @@ jobs:
 
       - name: Build iOS app
         run: pnpm ios:build
+
+      - name: Capture iOS release screenshots
+        if: ${{ github.event_name == 'workflow_dispatch' && env.HISTORICAL_TARGET != 'true' }}
+        run: pnpm ios:screenshots
+
+      - name: Upload iOS release screenshot evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && env.HISTORICAL_TARGET != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/SnapshotTestResults/*.xcresult
+          if-no-files-found: error
+          retention-days: 14
 
   android:
     permissions:

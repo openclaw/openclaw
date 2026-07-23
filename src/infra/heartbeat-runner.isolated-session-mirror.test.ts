@@ -1,6 +1,4 @@
 // Covers isolated heartbeat outbound session routing and base-session bookkeeping.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -8,6 +6,7 @@ import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -69,15 +68,13 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       const baseSessionKey = resolveMainSessionKey(cfg);
       const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
       const nowMs = Date.now();
-      await fs.writeFile(
-        path.join(tmpDir, "HEARTBEAT.md"),
-        `tasks:
+      await seedHeartbeatScratchForTest({
+        content: `tasks:
   - name: check-in
     interval: 5m
     prompt: "Check whether the user needs a status update."
 `,
-        "utf-8",
-      );
+      });
       await seedSessionStore(storePath, baseSessionKey, {
         sessionId: "base-session",
         updatedAt: nowMs - 1_000,
