@@ -157,13 +157,13 @@ export async function buildSessionResetBoundaryPlan(params: {
   legacySessionFile?: string;
   reason: SessionResetBoundaryReason;
 }): Promise<SessionResetBoundaryPlan> {
-  const hasConversationEvents = params.events.some(
-    (event) =>
-      event !== null &&
-      typeof event === "object" &&
-      !Array.isArray(event) &&
-      (event as { type?: unknown }).type !== "session",
-  );
+  const hasConversationEvents = params.events.some((event) => {
+    const type =
+      event !== null && typeof event === "object" && !Array.isArray(event)
+        ? (event as { type?: unknown }).type
+        : undefined;
+    return type === "message" || type === "compaction" || type === "reset";
+  });
   const legacyEvents = hasConversationEvents
     ? []
     : await readLegacyTranscriptEvents(params.legacySessionFile);

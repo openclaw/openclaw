@@ -144,6 +144,14 @@ describe("reset boundary planning", () => {
         records.slice(-6).map((entry) => entry.id),
       );
       expect(plan.event.firstKeptEntryId).toBe("message-14");
+
+      const metadataOnlyPlan = await buildSessionResetBoundaryPlan({
+        events: [{ type: "model_change", id: "metadata-only", parentId: null }],
+        legacySessionFile: sessionFile,
+        reason: "new",
+      });
+      expect(metadataOnlyPlan.seedEvents).toHaveLength(6);
+      expect(metadataOnlyPlan.event.firstKeptEntryId).toBe("message-14");
     });
   });
 

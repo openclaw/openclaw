@@ -257,12 +257,6 @@ export function resolveVisibleMessagePositions(
   };
 }
 
-function rawPositionForVisibleIndex(visible: VisibleMessagePositions, index: number): number {
-  return index < visible.kept.length
-    ? (visible.kept[index] ?? visible.postStart)
-    : visible.postStart + index - visible.kept.length;
-}
-
 export function readVisibleMessageRange(
   projection: ResetWindowProjection,
   start: number,
@@ -277,11 +271,16 @@ export function readVisibleMessageRange(
   if (boundedEnd <= boundedStart) {
     return [];
   }
-  const rawStart = rawPositionForVisibleIndex(visible, boundedStart);
-  const rawEnd = rawPositionForVisibleIndex(visible, boundedEnd - 1) + 1;
-  const kept = new Set(visible.kept);
-  return readMessageRange(projection, rawStart, rawEnd).filter((entry) => {
-    const position = entry.seq - 1;
-    return position >= visible.postStart || kept.has(position);
-  });
+  const keptEnd = Math.min(boundedEnd, visible.kept.length);
+  const keptEvents = visible.kept
+    .slice(boundedStart, keptEnd)
+    .flatMap((position) => readMessageRange(projection, position, position + 1));
+  const postVisibleStart = Math.max(boundedStart, visible.kept.length);
+  const postVisibleEnd = Math.max(postVisibleStart, boundedEnd);
+  const postEvents = readMessageRange(
+    projection,
+    visible.postStart + postVisibleStart - visible.kept.length,
+    visible.postStart + postVisibleEnd - visible.kept.length,
+  );
+  return [...keptEvents, ...postEvents];
 }
