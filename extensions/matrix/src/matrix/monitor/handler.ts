@@ -49,11 +49,13 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   CoreConfig,
   MatrixConfig,
+  MatrixFreshnessFinalAction,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
 import {
+  listNormalizedMatrixAccountIds,
   resolveMatrixAccountAllowlistConfig,
   resolveMatrixAccountConfig,
 } from "../account-config.js";
@@ -87,10 +89,25 @@ import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
+import {
+  chooseMatrixFinalFreshnessAction,
+  computeMatrixDraftFreshnessState,
+  resolveMatrixFreshnessMode,
+  sanitizeMatrixFinalFreshnessActions,
+  reviseMatrixFinalReplyWithFreshness,
+} from "./draft-freshness.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { createMatrixLatestVisibleTracker } from "./latest-visible.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
+import {
+  findParticipationMentionedAgents,
+  parseParticipationDirectiveWithStrategy,
+  resolveParticipationDecision,
+  type ParticipationAgentIdentity,
+  type ParticipationDirective,
+} from "./participation-policy.js";
 import {
   formatMatrixAudioTranscript,
   isMatrixAudioContent,
@@ -128,6 +145,9 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
+const MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS = 2;
+const MATRIX_FRESHNESS_BEFORE_DELIVER_TIMEOUT_MS = 14_000;
+const MATRIX_MODEL_FAIL_OPEN_TIMEOUT_MS = 12_000;
 
 const loadMatrixSendModule = createLazyRuntimeModule(() => import("../send.js"));
 
@@ -142,6 +162,45 @@ const loadSessionBindingRuntime = createLazyRuntimeModule(
 const loadMatrixReactionEvents = createLazyRuntimeModule(() => import("./reaction-events.js"));
 
 const loadMatrixDraftStream = createLazyRuntimeModule(() => import("../draft-stream.js"));
+
+async function runMatrixModelStageWithDeadline<T>(params: {
+  deadlineAtMs: number;
+  fallback: T;
+  label: string;
+  log?: (message: string) => void;
+  task: (signal: AbortSignal) => Promise<T>;
+}): Promise<{ failedOpen: boolean; value: T }> {
+  const remainingMs = params.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    params.log?.(`matrix ${params.label} skipped after fail-open deadline elapsed`);
+    return { failedOpen: true, value: params.fallback };
+  }
+
+  const abortController = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      params.task(abortController.signal).then((value) => ({ failedOpen: false, value })),
+      new Promise<{ failedOpen: boolean; value: T }>((resolve) => {
+        timer = setTimeout(() => {
+          // The provider request must settle before its delivery owner. Abort it so a
+          // timed-out classifier/revision cannot keep consuming work after fail-open.
+          abortController.abort(new Error(`matrix ${params.label} fail-open deadline exceeded`));
+          params.log?.(`matrix ${params.label} exceeded fail-open deadline`);
+          resolve({ failedOpen: true, value: params.fallback });
+        }, remainingMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (err) {
+    params.log?.(`matrix ${params.label} failed open: ${String(err)}`);
+    return { failedOpen: true, value: params.fallback };
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 async function matrixTextWouldActivateMentions(
   client: MatrixClient,
@@ -429,6 +488,96 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
   return "off";
 }
 
+function resolveMatrixParticipationAgents(params: {
+  cfg: CoreConfig;
+  core: PluginRuntime;
+  currentAccountId: string;
+  currentAgentId: string;
+  dmSessionScope?: "per-user" | "per-room";
+  eventTs?: number;
+  roomId: string;
+  senderId: string;
+  threadId?: string;
+  log?: (message: string) => void;
+}): ParticipationAgentIdentity[] {
+  const cfg = params.cfg;
+  const rawAgents = (
+    cfg as {
+      agents?: {
+        list?: Array<{
+          id?: unknown;
+          groupChat?: { mentionPatterns?: unknown };
+          name?: unknown;
+        }>;
+      };
+    }
+  ).agents?.list;
+  if (!Array.isArray(rawAgents)) {
+    return [];
+  }
+  const routeAccountIds = new Set<string>(
+    listNormalizedMatrixAccountIds(cfg).filter(
+      (accountId) => resolveMatrixAccountConfig({ cfg, accountId }).enabled !== false,
+    ),
+  );
+  routeAccountIds.add(params.currentAccountId);
+  const routedAgentAccountIds = new Map<string, string>();
+  routedAgentAccountIds.set(params.currentAgentId, params.currentAccountId);
+  for (const accountId of routeAccountIds) {
+    try {
+      const { route } = resolveMatrixInboundRoute({
+        cfg,
+        accountId,
+        roomId: params.roomId,
+        senderId: params.senderId,
+        isDirectMessage: false,
+        dmSessionScope: params.dmSessionScope,
+        threadId: params.threadId,
+        eventTs: params.eventTs,
+        resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
+      });
+      if (route.agentId?.trim()) {
+        routedAgentAccountIds.set(route.agentId.trim(), accountId);
+      }
+    } catch (err) {
+      params.log?.(
+        `matrix participation route sampling failed account=${accountId}: ${String(err)}`,
+      );
+    }
+  }
+  const rawAgentById = new Map(
+    rawAgents
+      .map((entry) => [typeof entry.id === "string" ? entry.id.trim() : "", entry] as const)
+      .filter(([agentId]) => agentId),
+  );
+  return Array.from(routedAgentAccountIds)
+    .map(([agentIdValue, accountId]) => {
+      const entry = rawAgentById.get(agentIdValue);
+      const aliases = typeof entry?.name === "string" ? [entry.name] : [];
+      let mentionRegexes: RegExp[] = [];
+      try {
+        mentionRegexes = params.core.channel.mentions.buildMentionRegexes(cfg, agentIdValue, {
+          provider: "matrix",
+          conversationId: params.roomId,
+          providerPolicy: resolveMatrixAccountConfig({ cfg, accountId }).mentionPatterns,
+        });
+      } catch (err) {
+        params.log?.(
+          `matrix participation mention regex build failed agent=${agentIdValue}: ${String(err)}`,
+        );
+      }
+      const identity: ParticipationAgentIdentity = { agentId: agentIdValue };
+      if (aliases.length > 0) {
+        identity.aliases = aliases;
+      }
+      if (mentionRegexes.length > 0) {
+        identity.mentionRegexes = mentionRegexes;
+      }
+      return identity;
+    })
+    .filter((entry) => entry.agentId);
+}
+
 function formatMatrixToolProgressMarkdownCode(text: string): string {
   const clipped =
     text.length <= MATRIX_TOOL_PROGRESS_MAX_CHARS
@@ -534,6 +683,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logVerboseMessage,
   });
   const roomHistoryTracker = createRoomHistoryTracker();
+  const latestVisibleTracker = createMatrixLatestVisibleTracker();
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
 
@@ -598,6 +748,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const recordLatestVisibleNoiseIfFreshnessEnabled = async () => {
+        if (accountConfig?.freshness?.enabled !== true) {
+          return;
+        }
+        latestVisibleTracker.recordPending(roomId, event);
+      };
+      const recordSerializedLatestVisibleNoiseIfFreshnessEnabled = async () => {
+        if (accountConfig?.freshness?.enabled !== true) {
+          return;
+        }
+        await runRoomIngress(roomId, recordLatestVisibleNoiseIfFreshnessEnabled);
+      };
+      if (eventType === EventType.RoomRedaction) {
+        await recordSerializedLatestVisibleNoiseIfFreshnessEnabled();
+        return;
+      }
+
       const isPollEvent = isPollEventType(eventType);
       const isReactionEvent = eventType === EventType.Reaction;
       const locationContent = event.content as LocationMessageEventContent;
@@ -616,6 +783,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         `matrix: inbound event room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
       if (event.unsigned?.redacted_because) {
+        await recordSerializedLatestVisibleNoiseIfFreshnessEnabled();
         return;
       }
       const senderId = event.sender;
@@ -706,6 +874,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const { audioPreflightMode, locationPayload, reservedHistorySlot, selfUserId } =
           paramsLocal;
         const messageId = event.event_id ?? "";
+        const latestVisibleIngressSnapshot =
+          isRoom && accountConfig?.freshness?.enabled === true && messageId
+            ? latestVisibleTracker.prepareTrigger("_matrix_ingress", roomId, event)
+            : undefined;
         const threadRootId = resolveMatrixThreadRootId({ event, content });
         const thread = resolveMatrixThreadRouting({
           isDirectMessage,
@@ -1183,29 +1355,120 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         });
         const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-        if (mentionDecision.shouldSkip) {
+        const freshnessConfig = accountConfig?.freshness;
+        const participationConfig = accountConfig?.participation;
+        const policyParticipationAgents =
+          isRoom && participationConfig?.enabled === true
+            ? resolveMatrixParticipationAgents({
+                cfg: liveCfg,
+                core,
+                currentAccountId: _route.accountId,
+                currentAgentId: _route.agentId,
+                dmSessionScope,
+                eventTs: eventTs ?? undefined,
+                roomId,
+                senderId,
+                threadId: thread.threadId,
+                log: logVerboseMessage,
+              })
+            : [];
+        const freshnessEnabled =
+          isRoom &&
+          freshnessConfig?.enabled === true &&
+          !hasControlCommandInMessage &&
+          !shouldBypassMention;
+        const recordSkippedRoomHistory = () => {
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
             : pendingHistoryText || pendingHistoryPollText;
-          if (historyLimit > 0 && pendingHistoryBody) {
-            const pendingEntry: HistoryEntry = {
-              sender: senderId,
-              body: pendingHistoryBody,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            };
-            if (reservedHistorySlot) {
-              roomHistoryTracker.finalizePending(
-                roomId,
-                reservedHistorySlot,
-                pendingEntry,
-                historyThreadId,
-              );
-              reservedHistorySlotConsumed = true;
-            } else {
-              roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
-            }
+          if (!(historyLimit > 0 && pendingHistoryBody)) {
+            return;
           }
+          const pendingEntry: HistoryEntry = {
+            sender: senderId,
+            body: pendingHistoryBody,
+            timestamp: eventTs ?? undefined,
+            messageId,
+          };
+          if (reservedHistorySlot) {
+            roomHistoryTracker.finalizePending(
+              roomId,
+              reservedHistorySlot,
+              pendingEntry,
+              historyThreadId,
+            );
+            reservedHistorySlotConsumed = true;
+          } else {
+            roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
+          }
+        };
+        const availableParticipationAgents =
+          isRoom && participationConfig?.enabled === true ? policyParticipationAgents : [];
+        const participationEnabled =
+          isRoom &&
+          participationConfig?.enabled === true &&
+          availableParticipationAgents.length > 0 &&
+          !hasControlCommandInMessage &&
+          !shouldBypassMention;
+        if (participationEnabled) {
+          const explicitlyMentionedParticipationAgents =
+            hasExplicitMention && !/@room/i.test(mentionPrecheckText)
+              ? findParticipationMentionedAgents({
+                  text: mentionPrecheckText,
+                  availableAgents: availableParticipationAgents,
+                })
+              : [];
+          const directiveResult = await runMatrixModelStageWithDeadline<
+            ParticipationDirective | undefined
+          >({
+            deadlineAtMs: Date.now() + MATRIX_MODEL_FAIL_OPEN_TIMEOUT_MS,
+            fallback: undefined,
+            label: "participation classification",
+            log: logVerboseMessage,
+            task: async (signal) =>
+              await parseParticipationDirectiveWithStrategy({
+                text: mentionPrecheckText,
+                availableAgents: availableParticipationAgents,
+                strategy: participationConfig?.strategy,
+                cfg: cfg as never,
+                agentId: _route.agentId,
+                modelRef: participationConfig?.model?.trim() || undefined,
+                explicitMentionOnly: explicitlyMentionedParticipationAgents.length > 0,
+                signal,
+                log: logVerboseMessage,
+              }),
+          });
+          const directive = directiveResult.value;
+          const participationDecision = resolveParticipationDecision({
+            agentId: _route.agentId,
+            directive,
+          });
+          if (participationDecision.directive) {
+            logger.info("matrix participation decision", {
+              roomId,
+              eventId: messageId,
+              agentId: _route.agentId,
+              strategy: participationConfig?.strategy ?? "ai-first",
+              allowed: !participationDecision.shouldSuppress,
+              suppressed: participationDecision.shouldSuppress,
+              reason: participationDecision.reason,
+              matchedAgentIds: participationDecision.matchedAgentIds,
+            });
+          }
+          if (participationDecision.shouldSuppress) {
+            recordSkippedRoomHistory();
+            logger.info("skipping room message", {
+              roomId,
+              reason: "participation-policy",
+              agentId: _route.agentId,
+              participationReason: participationDecision.reason,
+            });
+            await commitInboundEventIfClaimed();
+            return undefined;
+          }
+        }
+        if (mentionDecision.shouldSkip) {
+          recordSkippedRoomHistory();
           logger.info("skipping room message", { roomId, reason: "no-mention" });
           await commitInboundEventIfClaimed();
           return undefined;
@@ -1370,6 +1633,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (reservedHistorySlot && preparedTrigger) {
           reservedHistorySlotConsumed = true;
         }
+        const latestVisibleTriggerSnapshot =
+          freshnessEnabled && messageId ? latestVisibleIngressSnapshot : undefined;
         const inboundHistory = preparedTrigger
           ? buildInboundHistoryFromEntries({
               entries: preparedTrigger.history,
@@ -1394,11 +1659,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           senderName,
           bodyText,
           commandBodyText,
+          selfUserId,
           media,
           preflightAudioTranscript,
           locationPayload,
           messageId,
           triggerSnapshot,
+          latestVisibleTriggerSnapshot,
+          freshnessConfig,
+          freshnessEnabled,
           threadRootId,
           thread,
           botLoopProtection,
@@ -1406,42 +1675,43 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           effectiveRoomUsers,
         };
       };
-      const ingressResult =
-        historyLimit > 0
-          ? await runRoomIngress(roomId, async () => {
-              const prefix = await readIngressPrefix();
-              if (!prefix) {
-                return undefined;
-              }
-              if (prefix.isDirectMessage) {
-                return { deferredPrefix: prefix } as const;
-              }
-              const result = await continueIngress({
-                ...prefix,
-                audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
-                  content: prefix.content,
-                  cfg,
-                })
-                  ? "defer"
-                  : "run",
-              });
-              return result && "deferredPrefix" in result
-                ? { deferredPrefix: result.deferredPrefix }
-                : { ingressResult: result };
-            })
-          : undefined;
-      const resolvedIngressResult =
-        historyLimit > 0
-          ? ingressResult?.deferredPrefix
-            ? await continueIngress(ingressResult.deferredPrefix)
-            : ingressResult?.ingressResult
-          : await (async () => {
-              const prefix = await readIngressPrefix();
-              if (!prefix) {
-                return undefined;
-              }
-              return await continueIngress(prefix);
-            })();
+      const shouldSerializeIngress =
+        // Freshness snapshots must be ordered before later room events can overtake async prefix work.
+        historyLimit > 0 || accountConfig?.freshness?.enabled === true;
+      const ingressResult = shouldSerializeIngress
+        ? await runRoomIngress(roomId, async () => {
+            const prefix = await readIngressPrefix();
+            if (!prefix) {
+              return undefined;
+            }
+            if (prefix.isDirectMessage) {
+              return { deferredPrefix: prefix } as const;
+            }
+            const result = await continueIngress({
+              ...prefix,
+              audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
+                content: prefix.content,
+                cfg,
+              })
+                ? "defer"
+                : "run",
+            });
+            return result && "deferredPrefix" in result
+              ? { deferredPrefix: result.deferredPrefix }
+              : { ingressResult: result };
+          })
+        : undefined;
+      const resolvedIngressResult = shouldSerializeIngress
+        ? ingressResult?.deferredPrefix
+          ? await continueIngress(ingressResult.deferredPrefix)
+          : ingressResult?.ingressResult
+        : await (async () => {
+            const prefix = await readIngressPrefix();
+            if (!prefix) {
+              return undefined;
+            }
+            return await continueIngress(prefix);
+          })();
       if (!resolvedIngressResult) {
         return;
       }
@@ -1465,11 +1735,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderName,
         bodyText,
         commandBodyText,
+        selfUserId,
         media,
         preflightAudioTranscript,
         locationPayload,
         messageId,
         triggerSnapshot,
+        latestVisibleTriggerSnapshot,
+        freshnessConfig,
+        freshnessEnabled,
         threadRootId,
         thread,
         botLoopProtection,
@@ -2102,19 +2376,187 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         resetPreviewToolProgress();
       };
 
+      const freshnessMode = resolveMatrixFreshnessMode(freshnessConfig);
+      const freshnessAllowedFinalActions = sanitizeMatrixFinalFreshnessActions(
+        freshnessConfig?.allowedFinalActions,
+      );
+      const freshnessHoldbackMs = Math.max(0, freshnessConfig?.draftHoldbackMs ?? 0);
+      let visibleReplyOutputStarted = false;
+      const readFreshnessHistoryAfterTrigger = () =>
+        isRoom && freshnessEnabled && triggerSnapshot
+          ? roomHistoryTracker.getHistoryAfterSnapshot(
+              roomId,
+              triggerSnapshot,
+              historyLimit,
+              threadRootId ? thread.threadId : undefined,
+            )
+          : [];
+      const readLatestVisibleEventsAfterTrigger = () =>
+        isRoom && freshnessEnabled && latestVisibleTriggerSnapshot
+          ? latestVisibleTracker.getEventsAfterSnapshot(roomId, latestVisibleTriggerSnapshot)
+          : [];
+      const refreshDraftFreshnessState = (draftEventId?: string) =>
+        computeMatrixDraftFreshnessState({
+          config: freshnessConfig,
+          draftEventId,
+          historyAfterSnapshot: readFreshnessHistoryAfterTrigger(),
+          latestVisibleEvents: readLatestVisibleEventsAfterTrigger(),
+          messageId,
+          replyToEventId,
+          selfUserId,
+          threadId: threadTarget,
+        });
+      const freshnessStateSignature = (state: ReturnType<typeof refreshDraftFreshnessState>) =>
+        JSON.stringify({
+          invalidatingEventIds: state.invalidatingEventIds,
+          recheckEventIds: state.recheckEventIds,
+          latestVisibleEventIds: state.latestVisibleEventIds,
+          latestPendingHistory: (state.latestPendingHistory ?? []).map((entry) => ({
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+            messageId: entry.messageId,
+          })),
+        });
+      const freshnessStateAdvanced = (
+        before: ReturnType<typeof refreshDraftFreshnessState>,
+        after: ReturnType<typeof refreshDraftFreshnessState>,
+      ) => freshnessStateSignature(before) !== freshnessStateSignature(after);
+      const resolveFreshnessFinalPayload = async (
+        payload: ReplyPayload,
+      ): Promise<ReplyPayload | null> => {
+        if (!freshnessEnabled || payload.isError || payload.isCompactionNotice) {
+          return payload;
+        }
+        if (freshnessHoldbackMs > 0) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, freshnessHoldbackMs);
+          });
+        }
+        const draftEventId = draftStream?.eventId();
+        let state = refreshDraftFreshnessState(draftEventId);
+        const freshnessDeadlineAtMs = Date.now() + MATRIX_MODEL_FAIL_OPEN_TIMEOUT_MS;
+        for (let attempt = 0; attempt <= MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS; attempt += 1) {
+          if (!state.roomChangedSinceDraftStart) {
+            return payload;
+          }
+          const selectedActionResult =
+            await runMatrixModelStageWithDeadline<MatrixFreshnessFinalAction>({
+              deadlineAtMs: freshnessDeadlineAtMs,
+              fallback: "send-as-is",
+              label: "freshness action selection",
+              log: logVerboseMessage,
+              task: async (signal) =>
+                await chooseMatrixFinalFreshnessAction({
+                  allowedActions: freshnessAllowedFinalActions,
+                  cfg,
+                  config: freshnessConfig,
+                  ctxPayload: ctxPayload as Record<string, unknown>,
+                  draftText: payload.text,
+                  mode: freshnessMode,
+                  state,
+                  agentId: _route.agentId,
+                  signal,
+                  log: logVerboseMessage,
+                }),
+            });
+          if (selectedActionResult.failedOpen) {
+            return payload;
+          }
+          const selectedAction = selectedActionResult.value;
+          const finalAction =
+            visibleReplyOutputStarted && selectedAction !== "send-as-is"
+              ? "send-as-is"
+              : selectedAction;
+          if (finalAction !== "send-as-is") {
+            const stateAfterActionSelection = refreshDraftFreshnessState(draftEventId);
+            if (freshnessStateAdvanced(state, stateAfterActionSelection)) {
+              state = stateAfterActionSelection;
+              continue;
+            }
+          }
+          logger.info("matrix freshness decision", {
+            roomId,
+            eventId: messageId,
+            agentId: _route.agentId,
+            mode: freshnessMode,
+            action: finalAction,
+            requestedAction: selectedAction,
+            changed: true,
+            reason: state.reason,
+            invalidatingEventIds: state.invalidatingEventIds,
+            recheckEventIds: state.recheckEventIds,
+            latestVisibleEventIds: state.latestVisibleEventIds,
+            visibleReplyOutputStarted,
+            attempt,
+          });
+          if (finalAction === "send-as-is") {
+            return payload;
+          }
+          if (finalAction === "suppress") {
+            return null;
+          }
+          const revisionResult = await runMatrixModelStageWithDeadline<ReplyPayload | undefined>({
+            deadlineAtMs: freshnessDeadlineAtMs,
+            fallback: payload,
+            label: "freshness revision",
+            log: logVerboseMessage,
+            task: async (signal) =>
+              await reviseMatrixFinalReplyWithFreshness({
+                cfg,
+                config: freshnessConfig,
+                agentId: _route.agentId,
+                ctxPayload: ctxPayload as Record<string, unknown>,
+                draftText: payload.text,
+                fallbackPayload: payload,
+                latestPendingHistory: state.latestPendingHistory,
+                signal,
+                log: logVerboseMessage,
+              }),
+          });
+          if (revisionResult.failedOpen) {
+            return payload;
+          }
+          const revised = revisionResult.value;
+          const stateAfterRevision = refreshDraftFreshnessState(draftEventId);
+          if (freshnessStateAdvanced(state, stateAfterRevision)) {
+            state = stateAfterRevision;
+            continue;
+          }
+          return revised ?? null;
+        }
+        logger.info("matrix freshness suppress unstable final after async rechecks", {
+          roomId,
+          eventId: messageId,
+          agentId: _route.agentId,
+          mode: freshnessMode,
+          invalidatingEventIds: state.invalidatingEventIds,
+          recheckEventIds: state.recheckEventIds,
+          latestVisibleEventIds: state.latestVisibleEventIds,
+        });
+        return null;
+      };
+
       const dispatcherOptions = {
         ...prefixOptions,
         humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
+        beforeDeliver: async (payload: ReplyPayload, info: { kind: string }) =>
+          info.kind === "final" ? await resolveFreshnessFinalPayload(payload) : payload,
+        beforeDeliverOptions: {
+          timeoutMs: freshnessHoldbackMs + MATRIX_FRESHNESS_BEFORE_DELIVER_TIMEOUT_MS,
+        },
         deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-          if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
-            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-            const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+          const deliveryPayload = payload;
+          if (draftStream && info.kind !== "tool" && !deliveryPayload.isCompactionNotice) {
+            const hasMedia =
+              Boolean(deliveryPayload.mediaUrl) || (deliveryPayload.mediaUrls?.length ?? 0) > 0;
+            const ttsSupplement = getReplyPayloadTtsSupplement(deliveryPayload);
             const fallbackPayload =
               ttsSupplement &&
               ttsSupplement.visibleTextAlreadyDelivered !== true &&
-              !payload.text?.trim()
-                ? { ...payload, text: ttsSupplement.spokenText }
-                : payload;
+              !deliveryPayload.text?.trim()
+                ? { ...deliveryPayload, text: ttsSupplement.spokenText }
+                : deliveryPayload;
 
             if (draftConsumed) {
               await draftStream.discardPending();
@@ -2135,13 +2577,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return;
             }
 
-            const payloadReplyToId = normalizeOptionalString(payload.replyToId);
+            const payloadReplyToId = normalizeOptionalString(deliveryPayload.replyToId);
             const payloadReplyMismatch =
               replyToMode !== "off" && !threadTarget && payloadReplyToId !== currentDraftReplyToId;
             let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
             const canPotentiallyFinalizeDraft =
-              Boolean(payload.text?.trim()) &&
-              !payload.isError &&
+              Boolean(deliveryPayload.text?.trim()) &&
+              !deliveryPayload.isError &&
               !payloadReplyMismatch &&
               !mustDeliverFinalNormally;
 
@@ -2154,23 +2596,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             const draftEventId = draftStream.eventId();
             const draftFinalTextNeedsNormalMentionDelivery =
               Boolean(draftEventId) &&
-              typeof payload.text === "string" &&
-              Boolean(payload.text.trim()) &&
-              !payload.isError &&
+              typeof deliveryPayload.text === "string" &&
+              Boolean(deliveryPayload.text.trim()) &&
+              !deliveryPayload.isError &&
               !payloadReplyMismatch &&
               !mustDeliverFinalNormally &&
-              (await matrixTextWouldActivateMentions(client, payload.text));
+              (await matrixTextWouldActivateMentions(client, deliveryPayload.text));
 
             if (
               draftEventId &&
-              payload.text &&
-              !payload.isError &&
+              deliveryPayload.text &&
+              !deliveryPayload.isError &&
               !hasMedia &&
               !payloadReplyMismatch &&
               !mustDeliverFinalNormally &&
               !draftFinalTextNeedsNormalMentionDelivery
             ) {
-              const finalPreviewText = payload.text;
+              const finalPreviewText = deliveryPayload.text;
               await deliverWithFinalizableLivePreviewAdapter<
                 ReplyPayload,
                 string,
@@ -2181,7 +2623,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 }
               >({
                 kind: "final",
-                payload,
+                payload: deliveryPayload,
                 adapter: defineFinalizableLivePreviewAdapter({
                   draft: {
                     flush: async () => {},
@@ -2245,7 +2687,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               draftConsumed = true;
             } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
               let textEditOk = !mustDeliverFinalNormally;
-              const payloadText = payload.text ?? ttsSupplement?.spokenText;
+              const payloadText = deliveryPayload.text ?? ttsSupplement?.spokenText;
               const payloadTextMatchesDraft =
                 typeof payloadText === "string" && draftStream.matchesPreparedText(payloadText);
               const reusesDraftTextUnchanged =
@@ -2284,12 +2726,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               }
               const mediaPayload =
                 ttsSupplement && reusesDraftAsFinalText
-                  ? buildTtsSupplementMediaPayload(payload)
+                  ? buildTtsSupplementMediaPayload(deliveryPayload)
                   : {
-                      ...payload,
+                      ...deliveryPayload,
                       text: reusesDraftAsFinalText
                         ? undefined
-                        : (payload.text ??
+                        : (deliveryPayload.text ??
                           (ttsSupplement?.visibleTextAlreadyDelivered === true
                             ? undefined
                             : ttsSupplement?.spokenText)),
@@ -2312,7 +2754,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             } else {
               const draftRedacted =
                 Boolean(draftEventId) &&
-                (payload.isError ||
+                (deliveryPayload.isError ||
                   payloadReplyMismatch ||
                   mustDeliverFinalNormally ||
                   draftFinalTextNeedsNormalMentionDelivery);
@@ -2353,7 +2795,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           } else {
             await deliverMatrixReplies({
               cfg,
-              replies: [payload],
+              replies: [deliveryPayload],
               roomId,
               client,
               runtime,
@@ -2365,6 +2807,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               mediaLocalRoots,
               tableMode,
             });
+          }
+          if (info.kind === "block" || info.kind === "tool") {
+            visibleReplyOutputStarted = true;
           }
         },
         onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
@@ -2569,6 +3014,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           messageId,
           threadRootId ? thread.threadId : undefined,
         );
+      }
+      if (isRoom && latestVisibleTriggerSnapshot) {
+        latestVisibleTracker.consume(_route.agentId, roomId, latestVisibleTriggerSnapshot);
       }
       if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
         await commitInboundEventIfClaimed();

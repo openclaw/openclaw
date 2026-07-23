@@ -156,4 +156,86 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts opt-in Matrix participation control config", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      participation: {
+        enabled: true,
+        strategy: "deterministic",
+        model: "openai/gpt-5.1-mini",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown Matrix participation control fields", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      participation: {
+        enabled: true,
+        surprise: true,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts opt-in Matrix draft freshness config", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      freshness: {
+        enabled: true,
+        mode: "auto",
+        scope: "thread-aware",
+        draftHoldbackMs: 250,
+        model: "openai/gpt-5.1-mini",
+        allowedFinalActions: ["revise", "suppress", "send-as-is"],
+        aiDeterminesFinalAction: true,
+        finalAction: "revise",
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown Matrix draft freshness fields", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      freshness: {
+        enabled: true,
+        surprise: true,
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it.each(["minRoomMembers", "minAgentMembers"])(
+    "rejects retired Matrix draft freshness field %s",
+    (field) => {
+      const result = MatrixConfigSchema.safeParse({
+        homeserver: "https://matrix.example.org",
+        accessToken: "token",
+        freshness: {
+          enabled: true,
+          [field]: 2,
+        },
+      });
+      expect(result.success).toBe(false);
+    },
+  );
+
+  it("rejects invalid Matrix draft freshness final actions", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      freshness: {
+        enabled: true,
+        allowedFinalActions: ["revise", "delete"],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
 });

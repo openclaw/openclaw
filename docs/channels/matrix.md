@@ -889,6 +889,17 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `textChunkLimit`: outbound chunk size in characters when `streaming.chunkMode: "length"`. Default: `4000`.
 - `streaming.chunkMode`: `"length"` (default, splits by character count) or `"newline"` (splits at line boundaries).
 - `historyLimit`: number of recent room messages included as `InboundHistory` when a room message triggers the agent. Falls back to `messages.groupChat.historyLimit`; effective default `0` (disabled).
+- `participation`: opt-in group turn classification for multi-agent Matrix rooms. When `enabled: true`, OpenClaw classifies the recent room turn before dispatch and can suppress this account's agent when another routable Matrix agent is clearly addressed. Candidate agents are derived from Matrix account/room routing, not from every configured agent. Commands and normal mention-bypass cases are exempt.
+- `participation.strategy`: `"ai-first"` (default) asks the configured model for `must/should/could/must-not` participation classes; `"deterministic"` only uses local directive parsing.
+- `participation.model`: optional model override for AI participation classification.
+- `freshness`: opt-in final-publish check for Matrix room drafts. When `enabled: true`, OpenClaw snapshots visible room activity when drafting starts, then rechecks before the final reply posts. If newer relevant room/thread activity or a protected-event redaction appears, the final reply can be revised, suppressed, or sent unchanged.
+- `freshness.mode`: `"auto"` (default), `"revise"`, `"suppress"`, or `"send-as-is"`. Explicit modes are honored directly.
+- `freshness.scope`: `"thread-aware"` (default) checks the active Matrix thread separately from root-room chatter; `"room"` treats any root-room activity as relevant.
+- `freshness.draftHoldbackMs`: optional delay before final publish to catch near-simultaneous Matrix messages.
+- `freshness.model`: optional model override for AI final-action selection or revision.
+- `freshness.aiDeterminesFinalAction`: in `"auto"` mode, let AI choose the final action. Default: `false`.
+- `freshness.allowedFinalActions`: optional allowlist for AI-selected final actions only. It does not override explicit `mode` or `finalAction`.
+- `freshness.finalAction`: deterministic final action used by `"auto"` mode when set.
 - `mediaMaxMb`: media size cap in MB for outbound sends and inbound processing. Default: `20`.
 
 ### Reaction settings

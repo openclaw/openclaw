@@ -99,6 +99,22 @@ type RoomHistoryTracker = {
     threadRootId?: string,
   ) => PreparedTriggerResult;
 
+  /** Read currently pending history without mutating any agent watermark. */
+  getPendingHistory: (
+    agentId: string,
+    roomId: string,
+    limit: number,
+    threadRootId?: string,
+  ) => HistoryEntry[];
+
+  /** Read non-reserved history appended after a prepared trigger snapshot. */
+  getHistoryAfterSnapshot: (
+    roomId: string,
+    snapshot: HistorySnapshotToken,
+    limit: number,
+    threadRootId?: string,
+  ) => HistoryEntry[];
+
   /**
    * Advance the agent's watermark to the snapshot index returned by prepareTrigger
    * Only messages appended after that snapshot remain visible on the next trigger.
@@ -449,6 +465,35 @@ function createRoomHistoryTrackerInternal(
       return prepared;
     },
 
+    getPendingHistory(agentId, roomId, limit, threadRootId) {
+      const queue = findScopedQueue(roomId, threadRootId);
+      if (!queue) {
+        return [];
+      }
+      return computePendingHistory(
+        queue,
+        agentId,
+        roomId,
+        limit,
+        undefined,
+        undefined,
+        threadRootId,
+      );
+    },
+
+    getHistoryAfterSnapshot(roomId, snapshot, limit, threadRootId) {
+      const queue = findScopedQueue(roomId, threadRootId);
+      if (!queue || queue.generation !== snapshot.queueGeneration || limit <= 0) {
+        return [];
+      }
+      const startAbs = Math.max(snapshot.snapshotIdx, queue.baseIndex);
+      const startRel = startAbs - queue.baseIndex;
+      const available = queue.entries
+        .slice(startRel)
+        .filter((entry) => !entry.discarded && !entry.reserved);
+      return available.length > limit ? available.slice(-limit) : available;
+    },
+
     consumeHistory(agentId, roomId, snapshot, messageId, threadRootId) {
       const key = wmKey(agentId, roomId, threadRootId);
       const queue = findScopedQueue(roomId, threadRootId);
@@ -502,6 +547,8 @@ export function createRoomHistoryTracker(
     discardPending: tracker.discardPending,
     prepareTrigger: tracker.prepareTrigger,
     prepareReservedTrigger: tracker.prepareReservedTrigger,
+    getPendingHistory: tracker.getPendingHistory,
+    getHistoryAfterSnapshot: tracker.getHistoryAfterSnapshot,
     consumeHistory: tracker.consumeHistory,
   };
 }

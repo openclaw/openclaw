@@ -392,7 +392,7 @@ export function registerMatrixMonitorEvents(params: {
     }
     if (eventType === EventType.Reaction) {
       void runMonitorTask(
-        `reaction handler room=${roomId} id=${event.event_id ?? "unknown"}`,
+        `room event handler room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
         async () => {
           await onRoomMessage(roomId, event);
         },

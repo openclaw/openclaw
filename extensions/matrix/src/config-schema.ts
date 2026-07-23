@@ -46,6 +46,31 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
+const matrixParticipationSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    strategy: z.enum(["ai-first", "deterministic"]).optional(),
+    model: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const matrixFreshnessFinalActionSchema = z.enum(["revise", "suppress", "send-as-is"]);
+
+const matrixFreshnessSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(["auto", "revise", "suppress", "send-as-is"]).optional(),
+    scope: z.enum(["room", "thread-aware"]).optional(),
+    draftHoldbackMs: z.number().int().min(0).optional(),
+    model: z.string().optional(),
+    allowedFinalActions: z.array(matrixFreshnessFinalActionSchema).optional(),
+    aiDeterminesFinalAction: z.boolean().optional(),
+    finalAction: matrixFreshnessFinalActionSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const botLoopProtectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -140,6 +165,8 @@ const MatrixConfigSchema = z.object({
     .optional(),
   reactionNotifications: z.enum(["off", "own"]).optional(),
   threadBindings: matrixThreadBindingsSchema,
+  participation: matrixParticipationSchema,
+  freshness: matrixFreshnessSchema,
   startupVerification: z.enum(["off", "if-unverified"]).optional(),
   startupVerificationCooldownHours: z.number().optional(),
   mediaMaxMb: z.number().optional(),

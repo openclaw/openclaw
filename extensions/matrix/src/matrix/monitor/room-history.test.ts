@@ -61,6 +61,38 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     expect(retried.snapshotIdx).toBe(first.snapshotIdx);
   });
 
+  it("reads history after a trigger snapshot without advancing watermarks", () => {
+    const tracker = createRoomHistoryTracker();
+
+    tracker.recordPending(ROOM, { sender: "user", body: "before", messageId: "$before" });
+    const snapshot = tracker.prepareTrigger(AGENT, ROOM, 100, {
+      sender: "user",
+      body: "trigger",
+      messageId: "$trigger",
+    });
+    tracker.recordPending(ROOM, { sender: "user", body: "after", messageId: "$after" });
+
+    expect(
+      tracker.getHistoryAfterSnapshot(ROOM, snapshot, 100).map((entryValue) => entryValue.body),
+    ).toEqual(["after"]);
+
+    tracker.consumeHistory(AGENT, ROOM, snapshot, "$trigger");
+    const followUp = tracker.prepareTrigger(AGENT, ROOM, 100, entry("follow up"));
+    expect(followUp.history.map((entryValue) => entryValue.body)).toEqual(["after"]);
+  });
+
+  it("reads pending history without advancing watermarks", () => {
+    const tracker = createRoomHistoryTracker();
+
+    tracker.recordPending(ROOM, { sender: "user", body: "pending", messageId: "$pending" });
+
+    expect(
+      tracker.getPendingHistory(AGENT, ROOM, 100).map((entryValue) => entryValue.body),
+    ).toEqual(["pending"]);
+    const prepared = tracker.prepareTrigger(AGENT, ROOM, 100, entry("trigger"));
+    expect(prepared.history.map((entryValue) => entryValue.body)).toEqual(["pending"]);
+  });
+
   it("reserved triggers keep their arrival-order history window", () => {
     const tracker = createRoomHistoryTracker();
 

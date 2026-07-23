@@ -89,6 +89,56 @@ type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
+export type MatrixParticipationStrategy = "ai-first" | "deterministic";
+
+export type MatrixParticipationConfig = {
+  /**
+   * Opt in to Matrix group participation control. Default: false.
+   *
+   * When enabled, the Matrix monitor classifies a room turn before dispatch and
+   * can suppress agents that clearly should not answer that turn.
+   */
+  enabled?: boolean;
+  /** Parser strategy. ai-first never silently falls back to deterministic parsing. */
+  strategy?: MatrixParticipationStrategy;
+  /** Optional model override for ai-first participation parsing. */
+  model?: string;
+};
+
+export type MatrixFreshnessMode = "auto" | "revise" | "suppress" | "send-as-is";
+export type MatrixFreshnessScope = "room" | "thread-aware";
+export type MatrixFreshnessFinalAction = "revise" | "suppress" | "send-as-is";
+
+export type MatrixFreshnessConfig = {
+  /**
+   * Opt in to publish-time Matrix freshness checks. Default: false.
+   *
+   * When enabled for a Matrix room, the monitor rechecks for newer visible
+   * room/thread messages before final delivery and can suppress or revise stale drafts.
+   */
+  enabled?: boolean;
+  /**
+   * Final handling when newer relevant activity arrives.
+   * - auto: optionally ask the model, otherwise fall back to send-as-is.
+   * - revise: redraft the final answer against the newer context.
+   * - suppress: drop the draft before posting.
+   * - send-as-is: observe/log freshness without changing delivery.
+   */
+  mode?: MatrixFreshnessMode;
+  /** Freshness matching scope. Default: thread-aware. */
+  scope?: MatrixFreshnessScope;
+  /** Optional holdback before final publish to catch near-simultaneous messages. */
+  draftHoldbackMs?: number;
+  /** Optional model override for AI final-action selection. */
+  model?: string;
+  /** Allowed AI-selected final actions. Defaults to all final actions. */
+  allowedFinalActions?: MatrixFreshnessFinalAction[];
+  /** Let AI choose suppress/revise/send-as-is in auto mode. Default: false. */
+  aiDeterminesFinalAction?: boolean;
+  /** Deterministic final action override for auto mode. */
+  finalAction?: MatrixFreshnessFinalAction;
+};
+
 export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 
 export type MatrixStreamingConfig = {
@@ -179,6 +229,10 @@ export type MatrixConfig = {
   reactionNotifications?: "off" | "own";
   /** Thread/session binding behavior for Matrix room threads. */
   threadBindings?: MatrixThreadBindingsConfig;
+  /** Opt-in participation control for multi-agent Matrix rooms. */
+  participation?: MatrixParticipationConfig;
+  /** Opt-in publish-time freshness control for multi-agent Matrix rooms. */
+  freshness?: MatrixFreshnessConfig;
   /** Whether Matrix should auto-request self verification on startup when unverified. */
   startupVerification?: "off" | "if-unverified";
   /** Cooldown window for automatic startup verification requests. Default: 24 hours. */

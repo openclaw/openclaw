@@ -318,6 +318,36 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("routes raw redactions once across SDK room.event plus room.message emission", async () => {
+    const { onRoomMessage, sendMessage, roomEventListener, roomMessageListener, flushTasks } =
+      createHarness();
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+    const redactionEvent = {
+      event_id: "$redaction1",
+      sender: "@moderator:example.org",
+      type: EventType.RoomRedaction,
+      origin_server_ts: Date.now(),
+      content: {},
+      redacts: "$msg1",
+    };
+
+    roomEventListener("!room:example.org", redactionEvent);
+    roomMessageListener("!room:example.org", redactionEvent);
+
+    await flushTasks();
+    const roomMessageCalls = onRoomMessage.mock.calls as unknown[][];
+    expect(roomMessageCalls).toHaveLength(1);
+    expect(roomMessageCalls[0]?.[0]).toBe("!room:example.org");
+    expectRecordFields(requireRecord(roomMessageCalls[0]?.[1], "redaction event"), {
+      event_id: "$redaction1",
+      type: EventType.RoomRedaction,
+      redacts: "$msg1",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("invalidates direct-room membership cache on room member events", () => {
     const { invalidateRoom, roomEventListener } = createHarness();
 

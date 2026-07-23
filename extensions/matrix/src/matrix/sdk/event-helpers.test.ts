@@ -80,6 +80,28 @@ describe("event-helpers", () => {
     });
   });
 
+  it("serializes native Matrix redaction targets", () => {
+    const event = new MatrixEvent({
+      event_id: "$redaction",
+      sender: "@alice:example.org",
+      type: "m.room.redaction",
+      origin_server_ts: 1000,
+      redacts: "$target",
+      content: { reason: "outdated" },
+      unsigned: { age: 1 },
+    });
+
+    expect(matrixEventToRaw(event)).toEqual({
+      event_id: "$redaction",
+      sender: "@alice:example.org",
+      type: "m.room.redaction",
+      origin_server_ts: 1000,
+      redacts: "$target",
+      content: { reason: "outdated" },
+      unsigned: { age: 1 },
+    });
+  });
+
   it("serializes current content by default for read APIs", () => {
     expect(matrixEventToRaw(makeEditedMessageEvent())).toEqual({
       event_id: "$root",
