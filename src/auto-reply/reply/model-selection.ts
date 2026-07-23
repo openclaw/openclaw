@@ -123,15 +123,27 @@ const modelCatalogRuntimeLoader = createLazyImportLoader(
 const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
-function normalizeRuntimeModelRef(provider: string, model: string, cfg?: OpenClawConfig) {
+function normalizeRuntimeModelRef(
+  provider: string,
+  model: string,
+  cfg?: OpenClawConfig,
+  sessionEntry?: SessionEntry,
+) {
   const normalized = normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
-  const canonicalProvider = cfg
-    ? resolveCliRuntimeCanonicalProvider({
-        runtime: normalized.provider,
-        config: cfg,
-        includeSetupRegistry: true,
-      })
-    : undefined;
+  // Only CLI-bound sessions can persist a runtime id in providerOverride. Keep
+  // ordinary provider overrides on the static model-selection path instead of
+  // loading the CLI setup registry for every reply.
+  const hasCliSessionBinding = Object.keys(sessionEntry?.cliSessionBindings ?? {}).some(
+    (runtime) => normalizeProviderId(runtime) === normalized.provider,
+  );
+  const canonicalProvider =
+    cfg && hasCliSessionBinding
+      ? resolveCliRuntimeCanonicalProvider({
+          runtime: normalized.provider,
+          config: cfg,
+          includeSetupRegistry: true,
+        })
+      : undefined;
   return canonicalProvider ? { ...normalized, provider: canonicalProvider } : normalized;
 }
 
@@ -353,6 +365,7 @@ export async function createModelSelectionState(params: {
       directStoredOverride.provider,
       directStoredOverride.model,
       cfg,
+      sessionEntry,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     const overrideAllowed = visibilityPolicy.allowsKey(key);
@@ -443,6 +456,7 @@ export async function createModelSelectionState(params: {
       storedOverride.provider || defaultProvider,
       storedOverride.model,
       cfg,
+      sessionEntry,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
     if (visibilityPolicy.allowsKey(key)) {

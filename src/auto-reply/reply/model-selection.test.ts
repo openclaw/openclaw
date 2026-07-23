@@ -1288,6 +1288,42 @@ describe("createModelSelectionState respects session model override", () => {
     });
   });
 
+  it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
+    const resolvePluginSetupCliBackend = vi.fn(() => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "custom-provider/custom-model": {} },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:custom-provider";
+    const sessionEntry = makeEntry({
+      providerOverride: "custom-provider",
+      modelOverride: "custom-model",
+    });
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-model",
+      provider: "custom-provider",
+      model: "custom-model",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({ provider: "custom-provider", model: "custom-model" });
+    expect(resolvePluginSetupCliBackend).not.toHaveBeenCalled();
+  });
+
   it("adopts a concurrent valid model while repairing a stale override", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-repair-race-"));
     const storePath = path.join(tempRoot, "sessions.json");
