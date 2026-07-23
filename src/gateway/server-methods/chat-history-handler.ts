@@ -176,9 +176,10 @@ async function buildChatStartupMetadataResult(params: {
   }
   try {
     const { buildModelsListResult } = await import("./models-list-result.js");
+    const currentConfig = params.context.getRuntimeConfig();
     if (
       params.modelCatalog.agentId !== params.agentId ||
-      !runtimeConfigsMatch(params.context.getRuntimeConfig(), params.cfg)
+      !runtimeConfigsMatch(currentConfig, params.cfg)
     ) {
       return undefined;
     }
@@ -188,7 +189,7 @@ async function buildChatStartupMetadataResult(params: {
       params: { view: "configured" },
       preloadedCatalog: {
         agentId: params.agentId,
-        config: params.cfg,
+        config: currentConfig,
         snapshot: params.modelCatalog,
       },
       preloadedOnly: true,

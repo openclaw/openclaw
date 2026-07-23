@@ -906,14 +906,6 @@ describe("gateway server chat", () => {
         defaults: { models: { "test/initial": {} } },
         list: [{ id: "main", default: true }],
       },
-      models: {
-        providers: {
-          test: {
-            baseUrl: "https://test.example.com/v1",
-            models: [{ id: "initial", name: "Initial" }],
-          },
-        },
-      },
     } as OpenClawConfig;
     const equivalentConfig = structuredClone(initialConfig);
     let currentConfig = initialConfig;
@@ -925,7 +917,14 @@ describe("gateway server chat", () => {
           agentId: "main",
           agentDir: "/tmp/chat-main-agent",
           config: initialConfig,
-          entries: [{ id: "initial", name: "Initial", provider: "test" }],
+          entries: [
+            {
+              id: "initial",
+              name: "Catalog Initial",
+              provider: "test",
+              contextWindow: 123_456,
+            },
+          ],
           routeVariants: [],
         };
       }),
@@ -963,7 +962,14 @@ describe("gateway server chat", () => {
       expect(
         (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
       ).toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: "initial", provider: "test" })]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "initial",
+            provider: "test",
+            name: "Catalog Initial",
+            contextWindow: 123_456,
+          }),
+        ]),
       );
       expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
     } finally {
