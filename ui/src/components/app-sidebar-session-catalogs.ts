@@ -119,14 +119,18 @@ type SessionCatalogGroupsParams = {
   ) => void;
 };
 
+function renderSessionRunSpinner() {
+  return html`<span
+    class="session-run-spinner"
+    role="img"
+    aria-label=${t("sessionsView.activeRun")}
+    title=${t("sessionsView.activeRun")}
+  ></span>`;
+}
+
 function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
   if (hasActiveRun) {
-    return html`<span
-      class="session-run-spinner"
-      role="img"
-      aria-label=${t("sessionsView.activeRun")}
-      title=${t("sessionsView.activeRun")}
-    ></span>`;
+    return renderSessionRunSpinner();
   }
   return hasUnread
     ? html`<span
@@ -379,6 +383,7 @@ function renderCatalogSessionRow(
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
+  const running = session.status === "active" || session.status === "running";
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -392,7 +397,9 @@ function renderCatalogSessionRow(
     <div
       class="sidebar-recent-session session-row-host ${active
         ? "sidebar-recent-session--active"
-        : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""}"
+        : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running
+        ? "session-row-host--running"
+        : ""}"
       data-session-key=${key}
       role="listitem"
       @contextmenu=${(event: MouseEvent) => {
@@ -417,6 +424,11 @@ function renderCatalogSessionRow(
           }
         }}
       >
+        <span class="sidebar-session-indicator"
+          >${running
+            ? renderSessionRunSpinner()
+            : html`<span class="sidebar-session-indicator__dot" aria-hidden="true"></span>`}</span
+        >
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
