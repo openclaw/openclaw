@@ -169,6 +169,29 @@ describe("Beam receiver", () => {
     });
   });
 
+  it("returns a catalog URL beneath the configured Control UI base path", async () => {
+    const store = memoryStore();
+    const endpoint = await serve(
+      createBeamRequestHandler({
+        store,
+        resolveClient: writeClient,
+        resolveControlUiBasePath: () => "/openclaw/",
+      }),
+    );
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sampleUpload()),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      beamId: "0123456789abcdef0123456789abcdef",
+      url: "/openclaw/chat?session=catalog%3Abeam%3Agateway%3A0123456789abcdef0123456789abcdef",
+    });
+  });
+
   it("requires operator.write before reading the upload body", async () => {
     const store = memoryStore();
     const endpoint = await serve(

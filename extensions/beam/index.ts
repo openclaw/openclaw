@@ -14,7 +14,10 @@ export default definePluginEntry({
       path: "/api/v1/beam/sessions",
       auth: "gateway",
       match: "exact",
-      handler: createBeamRequestHandler({ store }),
+      handler: createBeamRequestHandler({
+        store,
+        resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
+      }),
     });
   },
 });
