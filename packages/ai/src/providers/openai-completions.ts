@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // OpenAI completions provider adapts chat completions to the agent runtime.
 import OpenAI from "openai";
 import type {
@@ -1068,7 +1069,7 @@ export function convertMessages(
     }
 
     if (model.provider === "openai") {
-      return id.length > 40 ? id.slice(0, 40) : id;
+      return id.length > 40 ? truncateUtf16Safe(id, 40) : id;
     }
     return id;
   };

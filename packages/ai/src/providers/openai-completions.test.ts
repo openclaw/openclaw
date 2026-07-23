@@ -1700,5 +1700,90 @@ describe("openai-completions stop-reason tool-call guard", () => {
       ]),
     );
   });
+
+  it("truncates an oversized tool call id without cutting a surrogate pair", async () => {
+    // 39 ASCII chars + 🐱 (2 code units at positions 39-40) = 41 code units.
+    // slice(0, 40) would split the pair → unpaired high surrogate.
+    const prefix = "a".repeat(39);
+    const cat = "\uD83D\uDC31"; // 🐱
+    const oversizeId = prefix + cat;
+    expect(oversizeId.length).toBe(41);
+
+    // Provide a mock response so the stream flows through
+    // client.chat.completions.create — proving the normalized
+    // tool-call ID reaches the actual API-call boundary.
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: "gpt-4", // different model to trigger !isSameModel → normalizeToolCallId
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: oversizeId, name: "search", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: oversizeId,
+            toolName: "search",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as unknown as Context,
+      { apiKey: "sk-test" },
+    );
+
+    const result = await stream.result();
+    // Stream must reach client.chat.completions.create, not bail out
+    // via an onPayload throw.
+    expect(result.stopReason).toBe("stop");
+
+    // Inspect the actual params passed to client.chat.completions.create.
+    const payload = mockOpenAIOptionsRef.payloads[0] as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    expect(payload).toBeDefined();
+
+    const messages = payload.messages;
+    expect(messages).toBeDefined();
+    if (!messages) {
+      throw new Error("expected messages in payload");
+    }
+
+    const toolMessage = messages.find((m) => m.role === "tool") as
+      | { tool_call_id?: string }
+      | undefined;
+    expect(toolMessage).toBeDefined();
+    if (!toolMessage) {
+      throw new Error("expected tool message");
+    }
+
+    const normalizedId = toolMessage.tool_call_id;
+    expect(normalizedId).toBeDefined();
+    if (normalizedId == null) {
+      throw new Error("expected tool call id");
+    }
+
+    // Must not contain an unpaired surrogate at the tail.
+    expect(normalizedId.length).toBeLessThanOrEqual(40);
+    expect(/[\uD800-\uDBFF]$/.test(normalizedId)).toBe(false);
+    // The prefix must be preserved.
+    expect(normalizedId.startsWith(prefix.slice(0, 39))).toBe(true);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
