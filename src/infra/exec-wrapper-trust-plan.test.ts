@@ -84,6 +84,32 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
+      name: "recognizes additional shell wrappers before evaluating allowlist policy",
+      enabled: true,
+      argv: ["tcsh", "-c", "echo hi"],
+      expected: {
+        argv: ["tcsh", "-c", "echo hi"],
+        policyArgv: ["tcsh", "-c", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
+      name: "recognizes nushell command flags before evaluating allowlist policy",
+      enabled: true,
+      argv: ["nu", "--commands", "echo hi"],
+      expected: {
+        argv: ["nu", "--commands", "echo hi"],
+        policyArgv: ["nu", "--commands", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
       name: "fails closed for non-executing command argv carrier queries",
       enabled: process.platform !== "win32",
       argv: ["command", "-v", "curl"],

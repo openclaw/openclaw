@@ -835,6 +835,38 @@ $0 \\"$1\\"" touch {marker}`,
     });
   });
 
+  it.each(["csh", "tcsh", "mksh", "yash", "nu", "xonsh", "elvish", "osh"])(
+    "prevents allowlist bypass for %s inline shell payloads",
+    async (shellName) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      const shell = makeExecutable(dir, shellName);
+      makeExecutable(dir, "id");
+      const env = makePathEnv(dir);
+      const commandFlag = shellName === "nu" ? "--commands" : "-c";
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: `${shell} ${commandFlag} 'id > marker'`,
+        allowlist: [{ pattern: shell, source: "allow-always" }],
+        safeBins: resolveSafeBins(undefined),
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: result.analysisOk,
+          allowlistSatisfied: result.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("prevents allow-always bypass for caffeinate wrapper chains", async () => {
     if (process.platform === "win32") {
       return;

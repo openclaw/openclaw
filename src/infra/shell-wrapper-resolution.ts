@@ -18,7 +18,37 @@ import {
 
 // Shell wrapper resolution unwraps dispatch wrappers and shell multiplexers so
 // approval policy can reason about the actual inline command being run.
-const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
+const POSIX_SHELL_WRAPPER_NAMES = [
+  "ash",
+  "bash",
+  "csh",
+  "dash",
+  "elvish",
+  "fish",
+  "ksh",
+  "mksh",
+  "nu",
+  "osh",
+  "sh",
+  "tcsh",
+  "xonsh",
+  "yash",
+  "zsh",
+] as const;
+// Some shells only share the inline-command flag shape. Keep them wrapper-gated
+// without sending non-POSIX grammar through reusable Bash-parser paths.
+const POSIX_PARSEABLE_SHELL_WRAPPER_NAMES = [
+  "ash",
+  "bash",
+  "dash",
+  "fish",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+] as const;
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
 const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
@@ -33,6 +63,7 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
+export const POSIX_PARSEABLE_SHELL_WRAPPERS = new Set(POSIX_PARSEABLE_SHELL_WRAPPER_NAMES);
 export const POWERSHELL_WRAPPERS = new Set(withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES));
 
 const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);

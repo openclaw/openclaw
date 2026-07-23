@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 // Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command
 // flags so approval surfaces can distinguish wrapper argv from executed text.
-export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
+export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command", "--commands"]);
 
 function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
   const forms: string[] = [];

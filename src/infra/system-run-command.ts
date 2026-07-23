@@ -12,6 +12,7 @@ import {
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
+import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
 // System-run command helpers keep argv authoritative while still exposing a
 // human-readable shell preview when the wrapper shape is unambiguous.
@@ -70,15 +71,9 @@ type SystemRunCommandDisplay = {
 };
 
 const POSIX_OR_POWERSHELL_INLINE_WRAPPER_NAMES = new Set([
-  "ash",
-  "bash",
-  "dash",
-  "fish",
-  "ksh",
+  ...POSIX_PARSEABLE_SHELL_WRAPPERS,
   "powershell",
   "pwsh",
-  "sh",
-  "zsh",
 ]);
 
 function unwrapShellWrapperArgv(argv: string[]): string[] {
