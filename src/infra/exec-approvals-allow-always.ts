@@ -9,8 +9,8 @@ import {
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
+import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import { replaceExecApprovalsSnapshot, updateExecApprovalsSync } from "./exec-approvals-store.js";
-import { resolveExecApprovalsFromFile } from "./exec-approvals.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
@@ -142,7 +142,7 @@ export function createExecApprovalPolicySnapshot(params: {
 }): ExecApprovalPolicySnapshot {
   // Runtime overrides are deliberately absent: the snapshot protects the
   // persisted policy that may change while a human approval is pending.
-  const resolved = resolveExecApprovalsFromFile({
+  const resolved = resolveExecApprovalsFromFileInternal({
     file: params.file,
     agentId: params.agentId,
   });

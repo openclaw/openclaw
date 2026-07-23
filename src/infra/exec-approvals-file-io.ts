@@ -2,9 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
-import { parsePersistedExecApprovals } from "./exec-approvals-config.js";
+import {
+  normalizeExecApprovalsInternal,
+  parsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
-import { normalizeExecApprovals } from "./exec-approvals.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 
@@ -201,7 +203,7 @@ export function readExecApprovalsSnapshotFromPath(filePath: string): ExecApprova
       path: filePath,
       exists: false,
       raw: null,
-      file: normalizeExecApprovals({ version: 1, agents: {} }),
+      file: normalizeExecApprovalsInternal({ version: 1, agents: {} }),
       hash: hashExecApprovalsRaw(null),
     };
   }

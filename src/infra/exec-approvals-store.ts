@@ -10,6 +10,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import {
   createFailClosedExecApprovalsFallback,
   generateToken,
+  normalizeExecApprovalsInternal,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
@@ -27,7 +28,6 @@ import {
   withExecApprovalsReadLock,
   withExecApprovalsReadLockSync,
 } from "./exec-approvals-lock.js";
-import { normalizeExecApprovals } from "./exec-approvals.js";
 
 function readExecApprovalsSnapshotUnlocked(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
@@ -243,7 +243,7 @@ export async function restoreExecApprovalsSnapshotLocked(
 }
 
 function ensureExecApprovalsSocket(file: ExecApprovalsFile): ExecApprovalsFile {
-  const next = normalizeExecApprovals(file);
+  const next = normalizeExecApprovalsInternal(file);
   const socketPath = next.socket?.path?.trim();
   const token = next.socket?.token?.trim();
   return {

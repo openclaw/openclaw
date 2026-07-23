@@ -11,12 +11,12 @@ import {
 } from "./exec-approvals-allow-always.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
+import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import {
   replaceExecApprovalsSnapshot,
   updateExecApprovals,
   updateExecApprovalsSync,
 } from "./exec-approvals-store.js";
-import { resolveExecApprovalsFromFile } from "./exec-approvals.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecApprovalUsageAuthorization = {
@@ -37,7 +37,7 @@ function assertCurrentUsageAuthorization(params: {
   matchKeys: ReadonlySet<string>;
   authorization: ExecApprovalUsageAuthorization;
 }): void {
-  const current = resolveExecApprovalsFromFile({
+  const current = resolveExecApprovalsFromFileInternal({
     file: params.file,
     agentId: params.agentId,
     overrides: {
