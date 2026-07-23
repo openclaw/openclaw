@@ -17,7 +17,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   defaultSpeechMessage: "Say exactly: Microsoft Teams speech test complete.",
   invalidRequest: (message) => new Error(message),
   resolveTimeoutMs: MeetingPlatformAdapter.resolveProbeTimeoutMs,
-  shouldWaitForListening: (session) => Boolean(session.chrome?.launched),
+  shouldWaitForListening: (session) => Boolean(session.chrome?.browserTab?.targetId),
   talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });
 
