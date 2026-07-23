@@ -20,6 +20,7 @@ import {
   updateSqliteSessionLastRoute,
   patchSqliteSessionEntry,
   resolveSqliteSessionParentForkDecision,
+  writeSqliteCompactionSuccessorTranscript,
 } from "./session-accessor.sqlite.js";
 import type {
   SessionAccessScope,
@@ -73,6 +74,38 @@ export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
 ): Promise<ForkSessionFromParentTranscriptResult> {
   return await forkSqliteSessionTranscriptFromParent(params);
+}
+
+export type RotateCompactionTranscriptResult =
+  | { status: "created"; sessionId: string; sessionFile: string; entriesWritten: number }
+  | { status: "failed"; reason?: string };
+
+export type RotateCompactionTranscriptParams = {
+  agentId: string;
+  storePath: string;
+  sessionId: string;
+  header: unknown;
+  entries: readonly unknown[];
+  /** When provided, atomically repoints this session key's registry entry to the new session. */
+  sessionKey?: string;
+  /**
+   * The session id being rotated (the archive source). Required alongside
+   * `sessionKey` so the repoint target can be verified as the same session
+   * instead of any registry row the key happens to resolve to; a desynced or
+   * stale key must not silently repoint an unrelated session's identity.
+   */
+  sourceSessionId?: string;
+};
+
+/**
+ * Creates a compacted successor transcript as a new SQLite session, atomically.
+ * The source session is left untouched as an archive; callers adopt the
+ * returned session id/marker as the new active identity.
+ */
+export async function rotateCompactionTranscript(
+  params: RotateCompactionTranscriptParams,
+): Promise<RotateCompactionTranscriptResult> {
+  return await writeSqliteCompactionSuccessorTranscript(params);
 }
 
 /**

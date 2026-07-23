@@ -4,6 +4,8 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { rotateCompactionTranscript } from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/index.js";
@@ -38,6 +40,13 @@ export async function rotateTranscriptAfterCompaction(params: {
   sessionManager: ReadonlySessionManagerForRotation;
   sessionFile: string;
   now?: () => Date;
+  /**
+   * Registry key for the session being rotated. Required to keep SQLite-backed
+   * rotation usable across turns: without repointing this key's registry entry,
+   * the next turn's session lookup would keep resolving the archived (oversized)
+   * transcript instead of the newly created successor.
+   */
+  sessionKey?: string;
 }): Promise<CompactionTranscriptRotation> {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
@@ -53,11 +62,6 @@ export async function rotateTranscriptAfterCompaction(params: {
   const compaction = branch[latestCompactionIndex] as CompactionEntry;
   const timestamp = resolveTimestampMsToIsoString(params.now?.().getTime());
   const sessionId = randomUUID();
-  const successorFile = resolveSuccessorSessionFile({
-    sessionFile,
-    sessionId,
-    timestamp,
-  });
   const successorEntries = buildSuccessorEntries({
     allEntries: params.sessionManager.getEntries(),
     branch,
@@ -73,6 +77,41 @@ export async function rotateTranscriptAfterCompaction(params: {
     timestamp,
     cwd: params.sessionManager.getCwd(),
     parentSession: sessionFile,
+  });
+
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (sqliteMarker) {
+    // SQLite-backed sessions have no filesystem directory to rotate a `.jsonl`
+    // successor into; the marker's agentId/storePath instead identify a new
+    // session row created atomically by the storage owner. The source session
+    // is left untouched as an archive, matching the file-backed contract below.
+    const written = await rotateCompactionTranscript({
+      agentId: sqliteMarker.agentId,
+      storePath: sqliteMarker.storePath,
+      sessionId,
+      header,
+      entries: successorEntries,
+      ...(params.sessionKey
+        ? { sessionKey: params.sessionKey, sourceSessionId: sqliteMarker.sessionId }
+        : {}),
+    });
+    if (written.status !== "created") {
+      return { rotated: false, reason: written.reason ?? "sqlite successor write failed" };
+    }
+    return {
+      rotated: true,
+      sessionId,
+      sessionFile: written.sessionFile,
+      compactionEntryId: compaction.id,
+      leafId: successorEntries[successorEntries.length - 1]?.id,
+      entriesWritten: successorEntries.length,
+    };
+  }
+
+  const successorFile = resolveSuccessorSessionFile({
+    sessionFile,
+    sessionId,
+    timestamp,
   });
   await writeTranscriptFileAtomic(successorFile, [header, ...successorEntries]);
   new TranscriptFileState({ header, entries: successorEntries }).buildSessionContext();
@@ -91,6 +130,12 @@ export async function rotateTranscriptFileAfterCompaction(params: {
   sessionFile: string;
   now?: () => Date;
 }): Promise<CompactionTranscriptRotation> {
+  // Check before reading: `readTranscriptFileState` does a raw `fs.readFile`,
+  // which throws on a `sqlite:` marker instead of returning the same
+  // `{ rotated: false }` signal `rotateTranscriptAfterCompaction` gives below.
+  if (parseSqliteSessionFileMarker(params.sessionFile)) {
+    return { rotated: false, reason: "sqlite-backed session" };
+  }
   const state = await readTranscriptFileState(params.sessionFile);
   return rotateTranscriptAfterCompaction({
     sessionManager: state,

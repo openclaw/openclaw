@@ -18,6 +18,7 @@ import {
   getSessionKysely,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
+  resolveSqliteStoreScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
@@ -138,6 +139,143 @@ export async function restoreSqliteCompactionCheckpointSession(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return result ?? { status: "failed" };
+  });
+}
+
+/** Result from writing a compacted successor transcript directly into SQLite. */
+type SqliteCompactionSuccessorTranscriptResult =
+  | { status: "created"; sessionId: string; sessionFile: string; entriesWritten: number }
+  | { status: "failed"; reason?: string };
+
+/**
+ * Thrown inside the write transaction when a `sessionKey` was provided but the
+ * repoint target can't be verified safe. Rotation is a contract that includes
+ * moving the active identity to the successor; if that repoint target doesn't
+ * exist, or resolves to a *different* session than the one being rotated
+ * (a desynced/stale key), abort before any successor rows are written instead
+ * of committing rows nothing will ever resolve to, or worse, silently
+ * repointing an unrelated session's identity to this successor.
+ */
+class SqliteCompactionSuccessorRepointUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SqliteCompactionSuccessorRepointUnavailableError";
+  }
+}
+
+/** Parameters for creating a new SQLite session that holds a compacted successor transcript. */
+type SqliteCompactionSuccessorTranscriptParams = {
+  agentId: string;
+  storePath: string;
+  sessionId: string;
+  header: TranscriptEvent;
+  entries: readonly TranscriptEvent[];
+  /** When provided, atomically repoints this session key's registry entry to the new session. */
+  sessionKey?: string;
+  /**
+   * The session id being rotated (the archive source). When `sessionKey` is
+   * also provided, the resolved registry entry's `sessionId` must match this
+   * value before any repoint happens, so a stale/desynced key that now
+   * resolves to a *different* session can't have its active identity
+   * clobbered by this rotation.
+   */
+  sourceSessionId?: string;
+};
+
+/**
+ * Writes a compacted successor transcript as a brand-new SQLite session, atomically.
+ * Mirrors file-backed compaction rotation: the source session/transcript is left
+ * completely untouched (kept as archive under its original id). When `sessionKey`
+ * is provided, the session registry entry for that key is repointed to the new
+ * session id/file in the same transaction, so the next turn's `SessionManager.open`
+ * (and any other key-based lookup) resolves the rotated session instead of the
+ * archived one. Without this, callers adopting `rotated: true` would keep the
+ * old key pointed at the oversized transcript, immediately re-triggering the
+ * byte-size guard on the very next preflight.
+ */
+export async function writeSqliteCompactionSuccessorTranscript(
+  params: SqliteCompactionSuccessorTranscriptParams,
+): Promise<SqliteCompactionSuccessorTranscriptResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const targetScope = { ...resolved, sessionId: params.sessionId };
+    const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+    let entriesWritten = 0;
+    let previousIdentity = new Map<string, SessionEntry>();
+    let currentIdentity = new Map<string, SessionEntry>();
+    try {
+      runOpenClawAgentWriteTransaction((database) => {
+        const normalizedSessionKey = params.sessionKey
+          ? normalizeSqliteSessionKey(params.sessionKey)
+          : undefined;
+        // Resolve (and validate) the repoint target before writing any successor
+        // rows. A provided sessionKey with no resolvable session_entries row, or
+        // one that resolves to a session other than the one being rotated
+        // (stale/desynced key), means the active identity can't be safely moved
+        // to the successor, so abort the whole transaction rather than commit
+        // orphaned rows or repoint an unrelated session's identity.
+        const currentEntry = normalizedSessionKey
+          ? readSessionEntryRow(database, normalizedSessionKey)?.entry
+          : undefined;
+        if (normalizedSessionKey && !currentEntry) {
+          throw new SqliteCompactionSuccessorRepointUnavailableError(
+            `no session_entries row resolves sessionKey "${normalizedSessionKey}" for compaction rotation`,
+          );
+        }
+        // sourceSessionId is required alongside sessionKey: without it there's
+        // no way to verify the resolved entry belongs to the session actually
+        // being rotated, so a stale/desynced key could otherwise repoint an
+        // unrelated session's identity. Fail closed rather than skip the check.
+        if (normalizedSessionKey && !params.sourceSessionId) {
+          throw new SqliteCompactionSuccessorRepointUnavailableError(
+            `sourceSessionId is required to verify sessionKey "${normalizedSessionKey}" before compaction rotation repoint`,
+          );
+        }
+        if (
+          normalizedSessionKey &&
+          currentEntry &&
+          params.sourceSessionId &&
+          currentEntry.sessionId !== params.sourceSessionId
+        ) {
+          throw new SqliteCompactionSuccessorRepointUnavailableError(
+            `sessionKey "${normalizedSessionKey}" resolves to session "${currentEntry.sessionId}", ` +
+              `not the source session "${params.sourceSessionId}" being rotated`,
+          );
+        }
+        const identityKeys = normalizedSessionKey
+          ? collectSessionEntryLookupKeys(database, normalizedSessionKey)
+          : [];
+        previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+        entriesWritten = appendTranscriptEventsInTransaction(database, targetScope, [
+          params.header,
+          ...params.entries,
+        ]);
+        if (entriesWritten > 0 && normalizedSessionKey && currentEntry) {
+          const nextEntry = cloneSqliteCheckpointSessionEntry({
+            currentEntry,
+            nextSessionId: params.sessionId,
+            nextSessionFile: sessionFile,
+          });
+          writeSessionEntry(database, normalizedSessionKey, nextEntry);
+        }
+        currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      }, toDatabaseOptions(resolved));
+    } catch (error) {
+      if (error instanceof SqliteCompactionSuccessorRepointUnavailableError) {
+        return { status: "failed", reason: error.message };
+      }
+      throw error;
+    }
+    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    if (entriesWritten === 0) {
+      return { status: "failed", reason: "sqlite successor transcript write produced no rows" };
+    }
+    return {
+      status: "created",
+      sessionId: params.sessionId,
+      sessionFile,
+      entriesWritten,
+    };
   });
 }
 
