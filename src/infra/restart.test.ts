@@ -1,5 +1,5 @@
 // Covers gateway restart process and supervisor paths.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -260,5 +260,55 @@ describe("triggerOpenClawRestart", () => {
         });
       },
     );
+  });
+});
+
+describe("restart hook error logging", () => {
+  let hookApi: {
+    rejectHookForTest(hooks: unknown): Promise<void>;
+    rejectHooksListForTest(hooksList: unknown): Promise<void>;
+  };
+
+  beforeAll(async () => {
+    await import("./restart.js");
+    hookApi = (globalThis as Record<PropertyKey, unknown>)[
+      Symbol.for("openclaw.restartHookTestApi")
+    ] as typeof hookApi;
+    expect(hookApi).toBeDefined();
+  });
+
+  it("catches and does not propagate errors from afterEmitRejected", async () => {
+    const hooks = {
+      afterEmitRejected: () => {
+        throw new Error("rejection hook failed");
+      },
+    };
+    await expect(hookApi.rejectHookForTest(hooks)).resolves.toBeUndefined();
+  });
+
+  it("processes all hooks in a list even when individual hooks throw", async () => {
+    let hook2Called = false;
+    const hooksList = [
+      {
+        afterEmitRejected: () => {
+          throw new Error("hook-1 failed");
+        },
+      },
+      {
+        afterEmitRejected: () => {
+          hook2Called = true;
+        },
+      },
+    ];
+    await expect(hookApi.rejectHooksListForTest(hooksList)).resolves.toBeUndefined();
+    expect(hook2Called).toBe(true);
+  });
+
+  it("handles undefined hooks gracefully", async () => {
+    await expect(hookApi.rejectHookForTest(undefined)).resolves.toBeUndefined();
+  });
+
+  it("handles hooks with no callbacks gracefully", async () => {
+    await expect(hookApi.rejectHookForTest({})).resolves.toBeUndefined();
   });
 });
