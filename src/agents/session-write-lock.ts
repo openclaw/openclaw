@@ -1090,7 +1090,13 @@ function resetSessionWriteLockStateForTest(): void {
   resolveProcessStartTimeForLock = getProcessStartTime;
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
+if (
+  process.env.VITEST ||
+  process.env.VITEST_MODE ||
+  process.env.VITEST_POOL_ID ||
+  process.env.VITEST_WORKER_ID ||
+  process.env.NODE_ENV === "test"
+) {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionWriteLockTestApi")] = {
     resetSessionWriteLockStateForTest,
     testing,
