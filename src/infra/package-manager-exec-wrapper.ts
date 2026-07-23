@@ -251,8 +251,11 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
       return subcommandIdx !== null && NPM_EXEC_SUBCOMMANDS.has(argv[subcommandIdx] ?? "")
         ? hasLeadingContextOption(argv, subcommandIdx + 1, {
             optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
+            caseSensitiveOptionsWithValue: new Set(["-C"]),
             flagOptions: NPM_EXEC_FLAG_OPTIONS,
-            contextOptionsWithValue: new Set(["--package", "-p"]),
+            contextOptionsWithValue: new Set(["--package", "--prefix", "--workspace", "-p", "-w"]),
+            contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
+            contextFlagOptions: new Set(["--ws", "--workspaces"]),
           })
         : false;
     }
@@ -260,8 +263,11 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
     case "bunx":
       return hasLeadingContextOption(argv, 1, {
         optionsWithValue: NPM_EXEC_OPTIONS_WITH_VALUE,
+        caseSensitiveOptionsWithValue: new Set(["-C"]),
         flagOptions: NPM_EXEC_FLAG_OPTIONS,
-        contextOptionsWithValue: new Set(["--package", "-p"]),
+        contextOptionsWithValue: new Set(["--package", "--prefix", "--workspace", "-p", "-w"]),
+        contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
+        contextFlagOptions: new Set(["--ws", "--workspaces"]),
       });
     case "pnpm": {
       const leadingOptions = {

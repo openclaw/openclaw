@@ -162,6 +162,34 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it.each([
+    "exec --workspace=a --",
+    "exec --prefix ./package --",
+    "exec -C ./package --",
+    "x --workspaces --",
+  ])("keeps npm post-subcommand context approvals one-shot: %s", async (npmExec) => {
+    const dir = makeTempDir();
+    makeExecutable(dir, "npm");
+    makeExecutable(dir, "tsx");
+    const env = makePathEnv(dir);
+    const command = `npm ${npmExec} tsx ./run.ts`;
+    const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: plannedSegments(plan),
+      commandText: command,
+      cwd: dir,
+      env,
+      platform: process.platform,
+      authorizationPlan: plan,
+    });
+
+    expect(decision).toEqual({
+      kind: "one-shot",
+      reasons: expect.arrayContaining(["no-reusable-pattern"]),
+    });
+  });
+
   it("keeps pnpm dlx allow-build approvals one-shot", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "pnpm");
