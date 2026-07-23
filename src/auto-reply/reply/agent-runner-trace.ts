@@ -5,7 +5,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { formatTokenCount } from "../../utils/usage-format.js";
 import type { ReplyPayload } from "../types.js";
-export function formatRawTraceBlock(title: string, value: string | undefined): string {
+function formatRawTraceBlock(title: string, value: string | undefined): string {
   const body = value?.trim() ? escapeTraceFence(value) : "<empty>";
   return `🔎 ${title}:\n~~~text\n${body}\n~~~`;
 }
@@ -38,7 +38,7 @@ function formatTraceUsageLine(label: string, value: number | undefined): string 
   return `${label}=${typeof value === "number" && Number.isFinite(value) ? `${value.toLocaleString()} tok (${formatTokenCount(value)})` : "n/a"}`;
 }
 
-export function formatUsageTraceBlock(
+function formatUsageTraceBlock(
   title: string,
   usage:
     | {
@@ -116,7 +116,7 @@ function formatTraceScalar(value: string | number | boolean | undefined): string
   return trimmed ?? undefined;
 }
 
-export function formatKeyValueTraceBlock(
+function formatKeyValueTraceBlock(
   title: string,
   fields: Array<[string, string | number | boolean | undefined]>,
 ): string | undefined {
@@ -212,7 +212,7 @@ export function mergeExecutionTrace(params: {
   };
 }
 
-export function formatExecutionResultTraceBlock(
+function formatExecutionResultTraceBlock(
   executionTrace: TraceExecutionView | undefined,
 ): string | undefined {
   if (!executionTrace?.winnerProvider && !executionTrace?.winnerModel) {
@@ -231,7 +231,7 @@ export function formatExecutionResultTraceBlock(
   ]);
 }
 
-export function formatFallbackChainTraceBlock(
+function formatFallbackChainTraceBlock(
   executionTrace: TraceExecutionView | undefined,
 ): string | undefined {
   const attempts = executionTrace?.attempts ?? [];

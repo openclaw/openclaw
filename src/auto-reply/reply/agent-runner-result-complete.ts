@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
@@ -16,7 +17,6 @@ import {
   resolveSourceReplyPolicy,
 } from "./agent-runner-core.js";
 import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
-import type { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { accountReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.js";
 import {
@@ -46,10 +46,13 @@ import {
   buildStrandedReplyRetryFollowupRun,
 } from "./stranded-reply-recovery.js";
 type ReplyAgentAccounting = Awaited<ReturnType<typeof accountReplyAgentRun>>;
-type PreparedReplyAgentPayloads = Extract<
-  Awaited<ReturnType<typeof prepareReplyAgentPayloads>>,
-  { kind: "continue" }
->;
+type PreparedReplyAgentPayloads = {
+  kind: "continue";
+  activeSessionEntry: SessionEntry | undefined;
+  completedSourceReplyDelivery: boolean;
+  guardedReplyPayloads: ReplyPayload[];
+  responseUsageLine: string | undefined;
+};
 
 export async function completeReplyAgentRun(input: {
   context: FinalizeReplyAgentRunInput;
