@@ -139,6 +139,53 @@ describe("CDP screenshot params", () => {
     requireSentMessage("Page.captureScreenshot");
   });
 
+  it("managed headed profile skips activation (headless=false, #105357)", async () => {
+    // The only case that skips activation: a confirmed-headed managed profile.
+    // No UA round-trip — the launch flag is authoritative.
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless: false,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).not.toContain("Page.bringToFront");
+    expect(methods).not.toContain("Browser.getVersion");
+    expect(methods).toContain("Page.captureScreenshot");
+  });
+
+  it("managed headless profile activates (headless=true, #105357)", async () => {
+    // Managed headless keeps activating to avoid the #100857 background stall,
+    // even if launched with a custom non-headless --user-agent (via extraArgs).
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless: true,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
+    expect(methods).not.toContain("Browser.getVersion");
+  });
+
+  it("attached/external session activates when headless is unknown (#105357)", async () => {
+    // headless=undefined (attached/external): the real state cannot be detected
+    // — a custom --user-agent erases every headless marker — so we activate. This
+    // is the case that would otherwise stall (a headless attached tab with a
+    // spoofed UA). No Browser.getVersion sniff is attempted.
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
+    expect(methods).not.toContain("Browser.getVersion");
+  });
+
   it("uses the requested timeout as the raw CDP command timeout", async () => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",

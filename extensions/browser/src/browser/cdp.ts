@@ -79,15 +79,33 @@ export async function captureScreenshot(opts: {
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
   timeoutMs?: number;
+  // Authoritative headed/headless launch mode. Only set for managed browsers
+  // (OpenClaw launched them, so the flag matches reality). Left undefined for
+  // attached/external sessions, whose real state cannot be detected: a custom
+  // `--user-agent` erases every headless marker (verified — `--headless=new`
+  // then reports product `Chrome/…`, a spoofed userAgent, and
+  // `navigator.webdriver === false`), so a UA sniff would misclassify them.
+  headless?: boolean;
 }): Promise<Buffer> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
       await send("Page.enable");
 
-      // Background surface captures can stall until CDP times out; activate to force a frame.
-      // Ignore protocol rejection so browsers that already capture correctly still proceed.
-      await send("Page.bringToFront").catch(() => {});
+      // Background surface captures stall until CDP times out under headless
+      // Chrome, so activating the tab forces a frame there (#100857). On a HEADED
+      // browser the same activation steals the user's visible tab on every
+      // screenshot — the highest-frequency agent operation (#105357). Skip
+      // activation ONLY for a confirmed-headed managed profile. Managed headless,
+      // and every attached/external session (headless unknowable, see above),
+      // keep activating so the #100857 stall is never risked — the stall is a hard
+      // timeout, strictly worse than an activation on a browser that did not need
+      // one.
+      const shouldActivateTab = opts.headless !== false;
+      if (shouldActivateTab) {
+        // Ignore protocol rejection so browsers that already capture correctly still proceed.
+        await send("Page.bringToFront").catch(() => {});
+      }
 
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the
