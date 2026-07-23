@@ -1,5 +1,6 @@
 // Setup finalize tests cover writing final onboarding config and artifacts.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -734,9 +735,23 @@ describe("finalizeSetupWizard", () => {
       routeVariants: catalog,
     });
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(nextConfig, {
-      agentDir: "/tmp/custom-agent",
+      agentDir: path.resolve("/tmp/custom-agent"),
       observedRoutes,
     });
+  });
+
+  it("does not load the model catalog for a headless gateway wizard", async () => {
+    const nextConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.6" },
+      },
+    } satisfies OpenClawConfig;
+
+    await finalizeSetupWizard(createAdvancedFinalizeArgs({ nextConfig }));
+
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
+    expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
   });
 
   it("skips the doomed hatch seed message and warns when model auth is missing", async () => {
@@ -769,7 +784,7 @@ describe("finalizeSetupWizard", () => {
           list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
         },
       }),
-      { agentDir: "/tmp/custom-agent" },
+      { agentDir: path.resolve("/tmp/custom-agent") },
     );
     expectNoteContains(
       prompter,

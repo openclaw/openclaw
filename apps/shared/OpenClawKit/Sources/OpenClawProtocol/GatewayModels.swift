@@ -9123,17 +9123,20 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
 public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
+    public let installdaemon: Bool?
     public let flow: AnyCodable?
     public let channel: String?
 
     public init(
         mode: AnyCodable? = nil,
         workspace: String? = nil,
+        installdaemon: Bool? = nil,
         flow: AnyCodable? = nil,
         channel: String? = nil)
     {
         self.mode = mode
         self.workspace = workspace
+        self.installdaemon = installdaemon
         self.flow = flow
         self.channel = channel
     }
@@ -9141,6 +9144,7 @@ public struct WizardStartParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case mode
         case workspace
+        case installdaemon = "installDaemon"
         case flow
         case channel
     }

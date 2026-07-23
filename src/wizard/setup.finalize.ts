@@ -606,35 +606,44 @@ export async function finalizeSetupWizard(
       resolveUserPath(options.workspaceDir),
       DEFAULT_BOOTSTRAP_FILENAME,
     );
-    const hasBootstrap = await fs
-      .access(bootstrapPath)
-      .then(() => true)
-      .catch(() => false);
+    const shouldLaunchTui = !opts.skipUi;
+    const hasBootstrap =
+      shouldLaunchTui &&
+      (await fs
+        .access(bootstrapPath)
+        .then(() => true)
+        .catch(() => false));
     const agentDir = resolveDefaultAgentDir(nextConfig);
-    // Seed only when the selected route is proven ready. Unknown or incompatible
-    // route facts must not turn the onboarding greeting into a guaranteed failure.
-    const [
-      { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
-      { loadPreparedModelCatalogSnapshot },
-    ] = await Promise.all([
-      import("../commands/auth-choice.js"),
-      import("../agents/prepared-model-catalog.js"),
-    ]);
-    const modelCatalog = await loadPreparedModelCatalogSnapshot({
-      config: nextConfig,
-      readOnly: true,
-    });
-    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
-      routeVariants: modelCatalog.routeVariants,
-    });
-    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
-      agentDir,
-      ...(modelCatalogFacts.observedRoutes
-        ? { observedRoutes: modelCatalogFacts.observedRoutes }
-        : {}),
-    });
-    const shouldSeedBootstrapHatch =
-      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
+    let shouldSeedBootstrapHatch = false;
+    let missingModelAuthProvider: string | undefined;
+    if (shouldLaunchTui) {
+      // Seed only when the selected route is proven ready. Headless Gateway wizards do not hatch
+      // an agent, so they must not read a catalog for config that is still being committed.
+      const [
+        { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
+        { loadPreparedModelCatalogSnapshot },
+      ] = await Promise.all([
+        import("../commands/auth-choice.js"),
+        import("../agents/prepared-model-catalog.js"),
+      ]);
+      const modelCatalog = await loadPreparedModelCatalogSnapshot({
+        config: nextConfig,
+        readOnly: true,
+      });
+      const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+        routeVariants: modelCatalog.routeVariants,
+      });
+      const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
+        agentDir,
+        ...(modelCatalogFacts.observedRoutes
+          ? { observedRoutes: modelCatalogFacts.observedRoutes }
+          : {}),
+      });
+      shouldSeedBootstrapHatch =
+        hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
+      missingModelAuthProvider =
+        modelAuthStatus.status === "missing" ? modelAuthStatus.provider : undefined;
+    }
 
     await prompter.note(
       [
@@ -655,7 +664,6 @@ export async function finalizeSetupWizard(
     let controlUiOpened = false;
     const seededInBackground = false;
     let launchedTui = false;
-    const shouldLaunchTui = !opts.skipUi;
 
     if (shouldLaunchTui) {
       if (hasBootstrap) {
@@ -668,10 +676,10 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.hatchYourAgent"),
         );
       }
-      if (modelAuthStatus.status === "missing") {
+      if (missingModelAuthProvider) {
         await prompter.note(
           [
-            t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),
+            t("wizard.finalize.noModelAuth", { provider: missingModelAuthProvider }),
             t("wizard.finalize.noModelAuthNext", {
               command: formatCliCommand("openclaw configure --section model"),
             }),
