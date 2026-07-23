@@ -410,6 +410,42 @@ describe("Feishu app registration", () => {
       },
     );
   });
+
+  // Locks #105549's guard-owned timeoutMs at the beginAppRegistration entry point.
+  // Shared SSRF tests cover stalled DNS; this asserts Feishu still forwards timeoutMs
+  // into that owner so preflight abort happens before HTTP dispatch. Do not rewrite
+  // this to AbortSignal.timeout() — that would regress the guard-owned contract.
+  it("rejects with timeout when preflight lookup stalls (DNS/proxy stall protection)", async () => {
+    const stalledLookup: LookupFn = (() => new Promise<never>(() => {})) as LookupFn;
+    const fetchSpy = vi.fn() as unknown as FeishuAppRegistrationFetch;
+
+    const started = Date.now();
+    const outcome = await beginAppRegistration("feishu", {
+      fetchImpl: fetchSpy,
+      lookupFn: stalledLookup,
+      timeoutMs: 80,
+    }).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    const elapsedMs = Date.now() - started;
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toMatchObject({
+        name: "TimeoutError",
+        message: "request timed out",
+      });
+    }
+    expect(elapsedMs).toBeGreaterThanOrEqual(60);
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    console.log(
+      `[feishu preflight stall proof] timed_out=${!outcome.ok} name=${
+        outcome.ok ? "n/a" : (outcome.error as Error).name
+      } message=${outcome.ok ? "n/a" : (outcome.error as Error).message} elapsed_ms=${elapsedMs} fetch_called=${vi.mocked(fetchSpy).mock.calls.length}`,
+    );
+  });
 });
 
 describe("feishu bound reads — local HTTP server", () => {
