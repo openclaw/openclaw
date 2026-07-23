@@ -722,6 +722,7 @@ describe("diagnostic support export", () => {
       ["notify @support_bot now", "notify <redacted-handle> now"],
       ["phone 15555551212", "phone <redacted-id>"],
       ["config password = support-password-1234567890", "config password = suppor…7890"],
+      ["config db_password = support-password-1234567890", "config db_password = suppor…7890"],
       ["config jdbc.password=support-password-1234567890", "config jdbc.password=suppor…7890"],
     ] as const;
 
