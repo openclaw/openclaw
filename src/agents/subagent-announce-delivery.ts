@@ -1822,9 +1822,7 @@ async function sendSubagentAnnounceDirectly(params: {
       }
       activeRequesterWakeFailed = true;
       const logPrefix =
-        wakeOutcome.queued === false && wakeOutcome.reason === "no_active_run"
-          ? "[subagent]"
-          : "[warn]";
+        !wakeOutcome.queued && wakeOutcome.reason === "no_active_run" ? "[subagent]" : "[warn]";
       defaultRuntime.log(
         `${logPrefix} Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
           "active requester session could not be woken",

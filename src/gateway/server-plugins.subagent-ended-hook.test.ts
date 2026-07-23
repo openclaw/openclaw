@@ -130,6 +130,7 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     const scope = {
       context: createTestContext("plugin-scope", createTestCfg()),
       pluginId: "loop-guard",
+      pluginTrustedOfficialInstall: true,
       isWebchatConnect: () => false,
     } satisfies PluginRuntimeGatewayRequestScope;
 
@@ -154,6 +155,32 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     });
     expect(request.client?.internal?.agentRunTracking).toBe("plugin_subagent");
     expect(request.client?.internal?.pluginRuntimeOwnerId).toBe("loop-guard");
+  });
+
+  test("rejects untrusted plugin completion and approval params", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const gatewayScope = await loadGatewayScope();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+
+    const scope = {
+      context: createTestContext("plugin-scope", createTestCfg()),
+      pluginId: "unknown-plugin",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await expect(
+      gatewayScope.withPluginRuntimeGatewayRequestScope(scope, () =>
+        runtime.run({
+          sessionKey: "agent:main:subagent:unknown-worker",
+          requesterSessionKey: "agent:main:feishu:direct:user",
+          expectsCompletionMessage: true,
+          message: "attempt completion binding",
+          deliver: false,
+        }),
+      ),
+    ).rejects.toThrow(/trusted official plugins/);
+
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
   test("does not dispatch when no runtime config is available", async () => {

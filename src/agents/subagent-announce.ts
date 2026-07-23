@@ -91,8 +91,7 @@ function resolveSubagentCompletionLabel(params: {
     params.childSessionKey
       .trim()
       .split(":")
-      .filter(Boolean)
-      .at(-1)
+      .findLast(Boolean)
       ?.replace(/[^a-zA-Z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 24) || "subagent";

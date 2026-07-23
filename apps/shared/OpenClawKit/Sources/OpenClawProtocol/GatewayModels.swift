@@ -2537,6 +2537,9 @@ public struct AgentParams: Codable, Sendable {
     public let replyto: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let requestersessionkey: String?
+    public let expectscompletionmessage: Bool?
+    public let approvalgrant: AnyCodable?
     public let expectedexistingsessionid: String?
     public let thinking: String?
     public let deliver: Bool?
@@ -2584,6 +2587,9 @@ public struct AgentParams: Codable, Sendable {
         replyto: String? = nil,
         sessionid: String? = nil,
         sessionkey: String? = nil,
+        requestersessionkey: String? = nil,
+        expectscompletionmessage: Bool? = nil,
+        approvalgrant: AnyCodable? = nil,
         expectedexistingsessionid: String? = nil,
         thinking: String? = nil,
         deliver: Bool? = nil,
@@ -2630,6 +2636,9 @@ public struct AgentParams: Codable, Sendable {
         self.replyto = replyto
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.requestersessionkey = requestersessionkey
+        self.expectscompletionmessage = expectscompletionmessage
+        self.approvalgrant = approvalgrant
         self.expectedexistingsessionid = expectedexistingsessionid
         self.thinking = thinking
         self.deliver = deliver
@@ -2678,6 +2687,9 @@ public struct AgentParams: Codable, Sendable {
         case replyto = "replyTo"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case requestersessionkey = "requesterSessionKey"
+        case expectscompletionmessage = "expectsCompletionMessage"
+        case approvalgrant = "approvalGrant"
         case expectedexistingsessionid = "expectedExistingSessionId"
         case thinking
         case deliver
