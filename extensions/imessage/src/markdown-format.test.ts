@@ -1,6 +1,41 @@
 // Imessage tests cover markdown format plugin behavior.
+import { downgradeApprovalMarkdownToPlaintext } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { describe, expect, it } from "vitest";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+
+const APPROVAL_ID = "a7a8b519-2311-4dcd-bccf-d6ca1d737969";
+// The canonical exec approval prompt core emits, verbatim (RFC 0002 worked example).
+const APPROVAL_PROMPT = [
+  "Approval required.",
+  "Run:",
+  "```txt\n/approve " + APPROVAL_ID + " allow-once\n```",
+  "Pending command:",
+  '```sh\ncurl -sS -o /dev/null -w "%{http_code}" https://example.com\n```',
+  `Host: gateway\nFull id: \`${APPROVAL_ID}\``,
+].join("\n\n");
+
+// RFC 0002 step 1: iMessage stays at the plaintext default, so the forwarder
+// downgrades before send and the typed-run formatter then sees clean text.
+// This proves the two step-1 criteria on the real prompt: no stray markers and
+// no bold. Step 2 (#85954) flips iMessage to markdown and adds bold labels.
+describe("iMessage approval prompt at the step-1 plaintext default", () => {
+  const downgraded = downgradeApprovalMarkdownToPlaintext(APPROVAL_PROMPT);
+  const { text, ranges } = extractMarkdownFormatRuns(downgraded);
+
+  it("strips every code marker before the prompt reaches the send path", () => {
+    expect(text).not.toContain("`");
+  });
+
+  it("produces no typed-run formatting, so nothing renders bold", () => {
+    expect(ranges).toStrictEqual([]);
+  });
+
+  it("keeps the command, id, and approve instruction intact and copyable", () => {
+    expect(text).toContain('curl -sS -o /dev/null -w "%{http_code}" https://example.com');
+    expect(text).toContain(`/approve ${APPROVAL_ID} allow-once`);
+    expect(text).toContain(APPROVAL_ID);
+  });
+});
 
 describe("extractMarkdownFormatRuns", () => {
   it("returns the text unchanged when there is no markdown", () => {
