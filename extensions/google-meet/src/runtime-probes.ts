@@ -1,7 +1,3 @@
-import {
-  isMeetingSpeechOutputVerified,
-  readMeetingSpeechOutputBaseline,
-} from "openclaw/plugin-sdk/meeting-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
@@ -68,18 +64,22 @@ export async function testGoogleMeetSpeech(
   const beforeSessions = context.list();
   const before = new Set(beforeSessions.map((session) => session.id));
   const existing = beforeSessions.find((session) => context.isReusable(session, resolved));
-  const existingBaseline = readMeetingSpeechOutputBaseline(existing?.chrome?.health);
+  const existingBaseline = {
+    outputBytes: existing?.chrome?.health?.lastOutputBytes ?? 0,
+    outputGeneration: existing?.chrome?.health?.outputGeneration ?? 0,
+  };
   const result = await context.join({
     ...request,
     ...resolved,
     message: request.message ?? "Say exactly: Google Meet speech test complete.",
   });
   const baseline =
-    existing?.id === result.session.id
-      ? existingBaseline
-      : readMeetingSpeechOutputBaseline(undefined);
+    existing?.id === result.session.id ? existingBaseline : { outputBytes: 0, outputGeneration: 0 };
   let health = result.session.chrome?.health;
-  const verified = () => isMeetingSpeechOutputVerified(health, baseline);
+  const verified = () =>
+    (health?.lastOutputBytes ?? 0) > baseline.outputBytes &&
+    (health?.outputGeneration ?? 0) > baseline.outputGeneration &&
+    health?.verifiedOutputGeneration === health?.outputGeneration;
   const shouldWait =
     result.spoken === true &&
     health?.manualActionRequired !== true &&

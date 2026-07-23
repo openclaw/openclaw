@@ -18,12 +18,6 @@ export {
 export { createLocalMeetingRealtimeAudioTransport } from "../meeting-bot/realtime-local-audio-transport.js";
 export { createNodeMeetingRealtimeAudioTransport } from "../meeting-bot/realtime-node-audio-transport.js";
 export {
-  isMeetingSpeechOutputVerified,
-  readMeetingSpeechOutputBaseline,
-  type MeetingSpeechOutputBaseline,
-  type MeetingSpeechOutputHealth,
-} from "../meeting-bot/speech-output-verification.js";
-export {
   convertMeetingBridgeAudioForStt,
   convertMeetingTtsAudioForBridge,
   resolveMeetingRealtimeAudioFormat,
