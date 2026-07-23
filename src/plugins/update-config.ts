@@ -18,8 +18,11 @@ import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
-import { resetPluginSlotsToDefaults } from "./slots.js";
-import { setPluginEnabledInConfig } from "./toggle-config.js";
+import {
+  mutateAgentMemoryPluginSlotReferences,
+  mutatePluginSlotReferences,
+  resetPluginSlotReferences,
+} from "./slots.js";
 import type { PluginUpdateLogger } from "./update-source.js";
 
 export async function hasRunnableInstalledNpmPayload(params: {
@@ -348,16 +351,28 @@ export function migratePluginConfigId(
     ensureNextPlugins().deny = deny;
   }
 
-  const slots = plugins.slots;
-  if (slots?.memory === fromId || slots?.contextEngine === fromId) {
-    ensureNextPlugins().slots = {
-      ...slots,
-      ...(slots.memory === fromId ? { memory: toId } : {}),
-      ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
-    };
+  const slots = mutatePluginSlotReferences(plugins.slots, {
+    mode: "replace",
+    fromPluginId: fromId,
+    toPluginId: toId,
+  });
+  if (slots.changed) {
+    ensureNextPlugins().slots = slots.slots;
   }
 
-  return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
+  const agentSlotMutation = mutateAgentMemoryPluginSlotReferences(cfg.agents, {
+    mode: "replace",
+    fromPluginId: fromId,
+    toPluginId: toId,
+  });
+
+  const nextConfig = nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
+  return agentSlotMutation.changed
+    ? {
+        ...nextConfig,
+        agents: agentSlotMutation.agents,
+      }
+    : nextConfig;
 }
 
 export function withoutPluginInstallRecord(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
@@ -375,20 +390,43 @@ export function withoutPluginInstallRecord(cfg: OpenClawConfig, pluginId: string
   };
 }
 
+function removeDisabledPluginIdFromList(
+  list: string[] | undefined,
+  pluginId: string,
+): string[] | undefined {
+  if (!Array.isArray(list) || !list.includes(pluginId)) {
+    return list;
+  }
+  const next = list.filter((id) => id !== pluginId);
+  return next.length > 0 ? next : undefined;
+}
+
 export function disablePluginAfterUpdateFailure(
   config: OpenClawConfig,
   pluginId: string,
 ): OpenClawConfig {
-  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
-    updateChannelConfig: false,
+  const pluginsConfig = config.plugins ?? {};
+  const existingEntry = pluginsConfig.entries?.[pluginId];
+  const agentSlots = mutateAgentMemoryPluginSlotReferences(config.agents, {
+    mode: "reset-to-default",
+    pluginId,
   });
-  const pluginsConfig = disabled.plugins ?? {};
   return {
-    ...disabled,
+    ...config,
+    agents: agentSlots.agents,
     plugins: {
       ...pluginsConfig,
+      allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),
+      deny: removeDisabledPluginIdFromList(pluginsConfig.deny, pluginId),
       // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
+      slots: resetPluginSlotReferences(pluginsConfig.slots, pluginId).slots,
+      entries: {
+        ...pluginsConfig.entries,
+        [pluginId]: {
+          ...existingEntry,
+          enabled: false,
+        },
+      },
     },
   };
 }

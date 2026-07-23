@@ -26,9 +26,11 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   getMemoryCapabilityRegistration,
+  listMemoryCapabilityRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
   listMemoryPromptSupplements,
+  listMemoryRuntimeRegistrations,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -45,10 +47,12 @@ export type PluginProcessGlobalState = {
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   interactiveHandlers: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
+  memoryCapabilities: ReturnType<typeof listMemoryCapabilityRegistrations>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptPreparations: ReturnType<typeof listMemoryPromptPreparations>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  memoryRuntimes: ReturnType<typeof listMemoryRuntimeRegistrations>;
   sessionDiscussionProvider: ReturnType<typeof getSessionDiscussionProvider>;
 };
 
@@ -61,10 +65,12 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     embeddingProviders: listRegisteredEmbeddingProviders(),
     interactiveHandlers: listPluginInteractiveHandlers(),
     memoryCapability: getMemoryCapabilityRegistration(),
+    memoryCapabilities: listMemoryCapabilityRegistrations(),
     memoryCorpusSupplements: listMemoryCorpusSupplements(),
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
     memoryPromptPreparations: listMemoryPromptPreparations(),
     memoryPromptSupplements: listMemoryPromptSupplements(),
+    memoryRuntimes: listMemoryRuntimeRegistrations(),
     sessionDiscussionProvider: getSessionDiscussionProvider(),
   };
 }
@@ -79,8 +85,10 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreRegisteredMemoryEmbeddingProviders(state.memoryEmbeddingProviders);
   restoreMemoryPluginState({
     capability: state.memoryCapability,
+    capabilities: state.memoryCapabilities,
     corpusSupplements: state.memoryCorpusSupplements,
     promptPreparations: state.memoryPromptPreparations,
+    runtimes: state.memoryRuntimes,
     promptSupplements: state.memoryPromptSupplements,
   });
   restoreSessionDiscussionProvider(state.sessionDiscussionProvider);

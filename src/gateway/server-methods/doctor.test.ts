@@ -35,6 +35,9 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+    cfg.agents?.list?.find((agent) => agent.id === agentId),
+  listAgentEntries: (cfg: OpenClawConfig) => cfg.agents?.list ?? [],
 }));
 
 vi.mock("../../agents/memory-search.js", () => ({
@@ -303,6 +306,7 @@ describe("doctor.memory.status", () => {
       embedding: { ok: true },
     });
     const dreaming = expectRecordFields(payload.dreaming, {
+      pluginId: "memory-core",
       enabled: false,
       shortTermCount: 0,
       totalSignalCount: 0,
@@ -344,6 +348,88 @@ describe("doctor.memory.status", () => {
       agentId: "research-analyst",
       provider: "gemini",
       embedding: { ok: true },
+    });
+  });
+
+  it("resolves selected-agent dreaming config on the host", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        slots: {
+          "memory.dreaming": "global-dreamer",
+        },
+        entries: {
+          "global-dreamer": {
+            config: { dreaming: { enabled: false, frequency: "0 1 * * *" } },
+          },
+          "agent-dreamer": {
+            config: { dreaming: { enabled: true, frequency: "0 2 * * *" } },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "alpha",
+            plugins: {
+              slots: {
+                "memory.dreaming": "agent-dreamer",
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: "/tmp/alpha" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond, { params: { agentId: "alpha" } });
+
+    const payload = respondPayload(respond);
+    const dreaming = expectRecordFields(payload.dreaming, {
+      pluginId: "agent-dreamer",
+      enabled: true,
+    });
+    expectRecordFields(expectRecordFields(dreaming.phases, {}).deep, {
+      cron: "0 2 * * *",
+    });
+  });
+
+  it("reports explicit none dreaming selection as disabled", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        slots: {
+          "memory.dreaming": "none",
+          "memory.recall": "memory-recall",
+        },
+        entries: {
+          "memory-recall": {
+            config: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", workspaceDir: "/tmp/main" }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expectRecordFields(respondPayload(respond).dreaming, {
+      pluginId: "none",
+      enabled: false,
     });
   });
 
@@ -1040,11 +1126,12 @@ describe("doctor.memory.status", () => {
     }
   });
 
-  it("reads dreaming config from the selected memory slot plugin", async () => {
+  it("reads dreaming config from the selected memory.dreaming slot plugin", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
         slots: {
-          memory: "memos-local-openclaw-plugin",
+          "memory.dreaming": "memos-local-openclaw-plugin",
+          "memory.recall": "memory-core",
         },
         entries: {
           "memos-local-openclaw-plugin": {

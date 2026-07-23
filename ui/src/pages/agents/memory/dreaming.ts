@@ -7,7 +7,6 @@ import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
-const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
 type DreamingPhaseStatusBase = {
@@ -59,6 +58,7 @@ type DreamingStatus = {
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
+  pluginId?: string;
   storageMode: "inline" | "separate" | "both";
   separateReports: boolean;
   shortTermCount: number;
@@ -167,6 +167,11 @@ export type WikiMemoryPalace = {
 
 type DoctorMemoryStatusPayload = {
   dreaming?: unknown;
+};
+
+type DreamingConfigResolution = {
+  pluginId: string;
+  enabled: boolean;
 };
 
 type DoctorMemoryDreamDiaryPayload = {
@@ -428,32 +433,6 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
     ...(normalizeNextRun(record?.nextRunAtMs) !== undefined
       ? { nextRunAtMs: normalizeNextRun(record?.nextRunAtMs) }
       : {}),
-  };
-}
-
-function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const plugins = asRecord(configValue?.plugins);
-  const slots = asRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
-    return configuredSlot;
-  }
-  return DEFAULT_DREAMING_PLUGIN_ID;
-}
-
-export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
-  pluginId: string;
-  enabled: boolean;
-} {
-  const pluginId = resolveDreamingPluginId(configValue);
-  const plugins = asRecord(configValue?.plugins);
-  const entries = asRecord(plugins?.entries);
-  const pluginEntry = asRecord(entries?.[pluginId]);
-  const config = asRecord(pluginEntry?.config);
-  const dreaming = asRecord(config?.dreaming);
-  return {
-    pluginId,
-    enabled: normalizeBoolean(dreaming?.enabled, false),
   };
 }
 
@@ -811,7 +790,10 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
   const storeError = normalizeTrimmedString(record.storeError);
   const phaseSignalError = normalizeTrimmedString(record.phaseSignalError);
 
+  const pluginId = normalizeTrimmedString(record.pluginId);
+
   return {
+    ...(pluginId ? { pluginId } : {}),
     enabled: normalizeBoolean(record.enabled, false),
     ...(timezone ? { timezone } : {}),
     verboseLogging: normalizeBoolean(record.verboseLogging, false),
@@ -836,6 +818,31 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
     promotedEntries: normalizeDreamingEntries(record.promotedEntries),
     ...(phases ? { phases } : {}),
   };
+}
+
+function normalizeDreamingConfigResolution(raw: unknown): DreamingConfigResolution | null {
+  const record = asRecord(raw);
+  const pluginId = normalizeTrimmedString(record?.pluginId);
+  if (!pluginId) {
+    return null;
+  }
+  return {
+    pluginId,
+    enabled: normalizeBoolean(record?.enabled, false),
+  };
+}
+
+function resolveConfiguredDreamingFromStatus(
+  state: DreamingState,
+): DreamingConfigResolution | null {
+  if (state.dreamingStatusAgentId !== resolveSelectedAgentId(state)) {
+    return null;
+  }
+  return normalizeDreamingConfigResolution(state.dreamingStatus);
+}
+
+export function resolveConfiguredDreaming(state: DreamingState): DreamingConfigResolution {
+  return resolveConfiguredDreamingFromStatus(state) ?? { pluginId: "memory-core", enabled: false };
 }
 
 export async function loadDreamingStatus(state: DreamingState): Promise<void> {
@@ -1245,9 +1252,21 @@ export async function updateDreamingEnabled(
     state.dreamingStatusError = "Config hash missing; refresh and retry.";
     return false;
   }
-  const { pluginId } = resolveConfiguredDreaming(
-    asRecord(config.state.configSnapshot?.config) ?? null,
-  );
+  let dreamingConfig = resolveConfiguredDreamingFromStatus(state);
+  if (!dreamingConfig) {
+    await loadDreamingStatus(state);
+    dreamingConfig = resolveConfiguredDreamingFromStatus(state);
+  }
+  if (!dreamingConfig) {
+    state.dreamingStatusError = "Dreaming status unavailable; refresh and retry.";
+    return false;
+  }
+  const { pluginId } = dreamingConfig;
+  if (pluginId.toLowerCase() === "none") {
+    state.dreamingStatusError =
+      "Dreaming is disabled by memory.dreaming=none; choose a dreaming memory plugin before enabling.";
+    return false;
+  }
   if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
     return false;
   }

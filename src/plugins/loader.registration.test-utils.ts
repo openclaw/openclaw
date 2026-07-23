@@ -564,7 +564,7 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["snapshot-memory"],
-          slots: { memory: "snapshot-memory" },
+          slots: { "memory.recall": "snapshot-memory" },
         },
       },
       onlyPluginIds: ["snapshot-memory"],
@@ -766,7 +766,7 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["failing-memory"],
-          slots: { memory: "failing-memory" },
+          slots: { "memory.recall": "failing-memory" },
         },
       },
       onlyPluginIds: ["failing-memory"],
@@ -1041,7 +1041,7 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["cached-memory-capability"],
-          slots: { memory: "cached-memory-capability" },
+          slots: { "memory.recall": "cached-memory-capability" },
         },
       },
       onlyPluginIds: ["cached-memory-capability"],
@@ -1114,7 +1114,7 @@ describe("loadOpenClawPlugins", () => {
       plugins: {
         load: { paths: [memoryPlugin.file, sidecarPlugin.file] },
         allow: ["capability-survives-memory", "capability-survives-sidecar"],
-        slots: { memory: "capability-survives-memory" },
+        slots: { "memory.recall": "capability-survives-memory" },
       },
     };
     loadOpenClawPlugins({

@@ -6,6 +6,7 @@ import path from "node:path";
 import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  resolveMemoryCorePluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -194,9 +195,11 @@ function emitMemorySecretResolveDiagnostics(
   }
 }
 
-function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asRecord(entry?.config) ?? {};
+function resolveMemoryPluginConfig(
+  cfg: OpenClawConfig,
+  options: { agentId?: string } = {},
+): Record<string, unknown> {
+  return resolveMemoryCorePluginConfig(cfg, options) ?? {};
 }
 
 const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
@@ -1337,7 +1340,7 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
-  const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+  const memoryPluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
   const dreamingEnabled = resolveMemoryDreamingConfig({
     pluginConfig: memoryPluginConfig,
     cfg,
@@ -1429,7 +1432,7 @@ export async function runMemoryPromote(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, { agentId }),
         cfg,
       });
       if (!workspaceDir) {
@@ -1598,7 +1601,7 @@ export async function runMemoryPromoteExplain(
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: resolveMemoryPluginConfig(cfg),
+        pluginConfig: resolveMemoryPluginConfig(cfg, { agentId }),
         cfg,
       });
       if (!workspaceDir) {
@@ -1697,7 +1700,7 @@ export async function runMemoryRemHarness(
     run: async (manager) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
       if (!managerWorkspaceDir && !opts.path) {
         defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
         process.exitCode = 1;
@@ -1869,7 +1872,7 @@ export async function runMemoryRemBackfill(
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryPluginConfig(cfg, { agentId });
       const remConfig = resolveMemoryRemDreamingConfig({
         pluginConfig,
         cfg,

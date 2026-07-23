@@ -25,6 +25,7 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   type MemoryProviderStatus,
 } from "../memory-host-sdk/engine-storage.js";
+import { resolveMemoryRoleSlot } from "../plugins/slot-resolution.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -264,11 +265,17 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   if (!pluginsEnabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
   }
-  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
+  const resolvedRecall = resolveMemoryRoleSlot({ cfg, role: "recall" });
+  const rawRecall = normalizeOptionalString(cfg.plugins?.slots?.["memory.recall"]);
+  const raw = normalizeOptionalString(resolvedRecall) ?? rawRecall ?? "";
   if (normalizeOptionalLowercaseString(raw) === "none") {
-    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
+    return {
+      enabled: false,
+      slot: null,
+      reason: 'plugins.slots.memory.recall="none"',
+    };
   }
-  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
+  return { enabled: true, slot: raw || defaultSlotIdForKey("memory.recall") };
 }
 
 /** Resolves gateway connection details, probe result, auth warnings, and call overrides. */
@@ -395,7 +402,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   }
   const agentId = agentStatus.defaultId ?? "main";
 
-  if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
+  if (memoryPlugin.slot !== defaultSlotIdForKey("memory.recall")) {
     // Non-default memory slots are plugin-owned; ask the manager directly instead of checking built-in files.
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }

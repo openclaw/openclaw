@@ -5,6 +5,9 @@ import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  getMemoryRuntimeForPlugin,
+  listMemoryCapabilityRegistrations,
+  listMemoryRuntimeRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptPreparations,
   listMemoryPromptSupplements,
@@ -14,11 +17,10 @@ import {
   registerMemoryCorpusSupplement,
   registerMemoryPromptPreparation,
   registerMemoryPromptSupplement,
-  registerTestMemoryPromptBuilder,
   resolveMemoryFlushPlan,
   restoreMemoryPluginState,
   type MemoryPluginPublicArtifact,
-} from "./memory-state.test-fixtures.js";
+} from "./memory-state.js";
 
 function createMemoryRuntime() {
   return {
@@ -48,14 +50,17 @@ function expectClearedMemoryState() {
     [],
   );
   expect(listMemoryCorpusSupplements()).toStrictEqual([]);
+  expect(listMemoryRuntimeRegistrations()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
 function createMemoryStateSnapshot() {
   return {
     capability: getMemoryCapabilityRegistration(),
+    capabilities: listMemoryCapabilityRegistrations(),
     corpusSupplements: listMemoryCorpusSupplements(),
     promptPreparations: listMemoryPromptPreparations(),
+    runtimes: listMemoryRuntimeRegistrations(),
     promptSupplements: listMemoryPromptSupplements(),
   };
 }
@@ -74,6 +79,55 @@ function registerMemoryState(params: {
   });
 }
 
+function registerSelectableMemoryCapability(params: {
+  pluginId: string;
+  label: string;
+  agentIds: string[];
+}) {
+  registerMemoryCapability(params.pluginId, {
+    promptBuilder: () => [`${params.label} prompt`],
+    flushPlanResolver: () => createMemoryFlushPlan(`memory/${params.label}.md`),
+    publicArtifacts: {
+      async listArtifacts() {
+        return [
+          {
+            kind: params.label,
+            workspaceDir: `/tmp/${params.label}`,
+            relativePath: "MEMORY.md",
+            absolutePath: `/tmp/${params.label}/MEMORY.md`,
+            agentIds: params.agentIds,
+            contentType: "markdown" as const,
+          },
+        ];
+      },
+    },
+  });
+}
+
+async function expectSelectedRecallCapability(params: {
+  cfg: unknown;
+  agentId: string;
+  label: string;
+  pluginId: string;
+}) {
+  const context = { cfg: params.cfg as never, agentId: params.agentId };
+  expect(buildMemoryPromptSection({ ...context, availableTools: new Set() })).toEqual([
+    `${params.label} prompt`,
+  ]);
+  expect(resolveMemoryFlushPlan(context)?.relativePath).toBe(`memory/${params.label}.md`);
+  await expect(listActiveMemoryPublicArtifacts(context)).resolves.toEqual([
+    {
+      kind: params.label,
+      workspaceDir: `/tmp/${params.label}`,
+      relativePath: "MEMORY.md",
+      absolutePath: `/tmp/${params.label}/MEMORY.md`,
+      agentIds: [params.agentId],
+      contentType: "markdown",
+    },
+  ]);
+  expect(getMemoryCapabilityRegistration(context)?.pluginId).toBe(params.pluginId);
+}
+
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
@@ -84,11 +138,13 @@ describe("memory plugin state", () => {
   });
 
   it("delegates prompt building to the registered memory plugin", () => {
-    registerTestMemoryPromptBuilder(({ availableTools }) => {
-      if (!availableTools.has("memory_search")) {
-        return [];
-      }
-      return ["## Custom Memory", "Use custom memory tools.", ""];
+    registerMemoryCapability("memory-core", {
+      promptBuilder: ({ availableTools }) => {
+        if (!availableTools.has("memory_search")) {
+          return [];
+        }
+        return ["## Custom Memory", "Use custom memory tools.", ""];
+      },
     });
 
     expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([
@@ -124,7 +180,11 @@ describe("memory plugin state", () => {
       },
     });
 
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: {} as never,
+      }),
+    ).resolves.toEqual([
       {
         kind: "memory-root",
         workspaceDir: "/tmp/workspace-a",
@@ -252,8 +312,14 @@ describe("memory plugin state", () => {
 
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/sidecar.md");
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-lancedb")).toBeUndefined();
     expect(getMemoryCapabilityRegistration()?.pluginId).toBe("memory-lancedb");
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: { plugins: { slots: { "memory.recall": "memory-lancedb" } } } as never,
+      }),
+    ).resolves.toEqual([
       {
         kind: "memory-root",
         workspaceDir: "/tmp/workspace",
@@ -265,10 +331,71 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("routes prompt, flush, and public artifacts through the selected recall plugin", async () => {
+    registerSelectableMemoryCapability({
+      pluginId: "memory-core",
+      label: "core",
+      agentIds: ["main"],
+    });
+    registerSelectableMemoryCapability({
+      pluginId: "openclaw-honcho",
+      label: "honcho",
+      agentIds: ["honcho-agent"],
+    });
+    const cfg = {
+      plugins: { slots: { "memory.recall": "memory-core" } },
+      agents: {
+        list: [
+          {
+            id: "honcho-agent",
+            plugins: { slots: { "memory.recall": "openclaw-honcho" } },
+          },
+        ],
+      },
+    };
+
+    await expectSelectedRecallCapability({
+      cfg,
+      agentId: "main",
+      label: "core",
+      pluginId: "memory-core",
+    });
+    await expectSelectedRecallCapability({
+      cfg,
+      agentId: "honcho-agent",
+      label: "honcho",
+      pluginId: "openclaw-honcho",
+    });
+  });
+
+  it("returns no selected capability when the recall slot is disabled", () => {
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["core prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/core.md"),
+    });
+
+    const cfg = {
+      plugins: {
+        slots: {
+          "memory.recall": "none",
+        },
+      },
+    };
+
+    expect(
+      buildMemoryPromptSection({
+        cfg: cfg as never,
+        availableTools: new Set(),
+      }),
+    ).toEqual([]);
+    expect(resolveMemoryFlushPlan({ cfg: cfg as never })).toBeNull();
+    expect(getMemoryCapabilityRegistration({ cfg: cfg as never })).toBeUndefined();
+  });
+
   it("passes citations mode through to the prompt builder", () => {
-    registerTestMemoryPromptBuilder(({ citationsMode }) => [
-      `citations: ${citationsMode ?? "default"}`,
-    ]);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: ({ citationsMode }) => [`citations: ${citationsMode ?? "default"}`],
+    });
 
     expect(
       buildMemoryPromptSection({
@@ -281,7 +408,7 @@ describe("memory plugin state", () => {
   it("passes agent context through the primary and supplemental prompt builders", () => {
     const primary = vi.fn(() => ["primary"]);
     const supplemental = vi.fn(() => ["supplemental"]);
-    registerTestMemoryPromptBuilder(primary);
+    registerMemoryCapability("memory-core", { promptBuilder: primary });
     registerMemoryPromptSupplement("memory-wiki", supplemental);
 
     const availableTools = new Set(["memory_search", "memory_get"]);
@@ -306,7 +433,7 @@ describe("memory plugin state", () => {
   });
 
   it("appends prompt supplements in plugin-id order", () => {
-    registerTestMemoryPromptBuilder(() => ["primary"]);
+    registerMemoryCapability("memory-core", { promptBuilder: () => ["primary"] });
     registerMemoryPromptSupplement("memory-wiki", () => ["wiki"]);
     registerMemoryPromptSupplement("alpha-helper", () => ["alpha"]);
 
@@ -318,7 +445,9 @@ describe("memory plugin state", () => {
   });
 
   it("ignores malformed prompt builder output", () => {
-    registerTestMemoryPromptBuilder(() => ["primary", 1, undefined] as never);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["primary", 1, undefined] as never,
+    });
     registerMemoryPromptSupplement("async-helper", () => Promise.resolve(["async"]) as never);
     registerMemoryPromptSupplement("valid-helper", () => ["valid", false] as never);
 
@@ -398,6 +527,36 @@ describe("memory plugin state", () => {
     ).resolves.toEqual([{ corpus: "wiki", path: "sources/alpha.md", score: 1, snippet: "x" }]);
   });
 
+  it("uses the registered flush plan resolver", () => {
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "prompt",
+        systemPrompt: "system",
+        relativePath: "memory/test.md",
+      }),
+    });
+
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/test.md");
+  });
+
+  it("stores the registered memory runtime", async () => {
+    const runtime = createMemoryRuntime();
+
+    registerMemoryCapability("memory-core", { runtime });
+
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+    await expect(
+      getMemoryRuntime()?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+  });
+
   it("restoreMemoryPluginState swaps both prompt and flush state", () => {
     const runtime = createMemoryRuntime();
     registerMemoryState({
@@ -423,6 +582,30 @@ describe("memory plugin state", () => {
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/first.md");
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(runtime);
+  });
+
+  it("keeps plugin-id keyed runtimes for multiple recall-capable plugins", async () => {
+    const coreRuntime = createMemoryRuntime();
+    const lancedbRuntime = createMemoryRuntime();
+
+    registerMemoryCapability("memory-core", {
+      runtime: coreRuntime,
+    });
+    registerMemoryCapability("memory-lancedb", {
+      runtime: lancedbRuntime,
+    });
+
+    expect(getMemoryRuntime()).toBe(lancedbRuntime);
+    expect(getMemoryRuntimeForPlugin("memory-core")).toBe(coreRuntime);
+    expect(getMemoryRuntimeForPlugin("memory-lancedb")).toBe(lancedbRuntime);
+    expect(listMemoryRuntimeRegistrations()).toEqual([
+      { pluginId: "memory-core", runtime: coreRuntime },
+      { pluginId: "memory-lancedb", runtime: lancedbRuntime },
+    ]);
+    expect(
+      listMemoryCapabilityRegistrations().map((registration) => registration.pluginId),
+    ).toEqual(["memory-core", "memory-lancedb"]);
   });
 
   it("clearMemoryPluginState resets both registries", () => {

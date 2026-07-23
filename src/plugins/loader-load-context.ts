@@ -28,6 +28,7 @@ import {
   serializePluginIdScope,
 } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
+import { MEMORY_PLUGIN_SLOT_KEYS } from "./slots.js";
 
 function safeRealpathOrResolve(value: string): string {
   try {
@@ -114,6 +115,7 @@ function resolveBundledPackageCacheIdentity(
 }
 
 function buildActivationMetadataHash(params: {
+  config: OpenClawConfig;
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
 }): string {
@@ -141,13 +143,53 @@ function buildActivationMetadataHash(params: {
         enabled: params.activationSource.plugins.enabled,
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
-        memorySlot: params.activationSource.plugins.slots.memory,
+        memorySlots: {
+          "memory.recall": params.activationSource.plugins.slots["memory.recall"],
+          "memory.compaction": params.activationSource.plugins.slots["memory.compaction"],
+          "memory.capture": params.activationSource.plugins.slots["memory.capture"],
+          "memory.dreaming": params.activationSource.plugins.slots["memory.dreaming"],
+          "memory.userModel": params.activationSource.plugins.slots["memory.userModel"],
+        },
+        agentMemorySlots: collectAgentMemorySlotCacheEntries(params.config),
+        activationAgentMemorySlots: collectAgentMemorySlotCacheEntries(
+          params.activationSource.rootConfig,
+        ),
         entries: pluginEntryStates,
         enabledChannels: enabledSourceChannels,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
     .digest("hex");
+}
+
+function collectAgentMemorySlotCacheEntries(config?: OpenClawConfig) {
+  return (config?.agents?.list ?? [])
+    .map((agent, index) => {
+      const rawSlots = agent.plugins?.slots;
+      if (!rawSlots || typeof rawSlots !== "object" || Array.isArray(rawSlots)) {
+        return null;
+      }
+      const normalizedSlots = normalizePluginsConfig({ slots: rawSlots }).slots;
+      const slots: Partial<Record<(typeof MEMORY_PLUGIN_SLOT_KEYS)[number], string | null>> = {};
+      for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+        if (Object.hasOwn(rawSlots, slotKey)) {
+          slots[slotKey] = normalizedSlots[slotKey] ?? null;
+        }
+      }
+      if (Object.keys(slots).length === 0) {
+        return null;
+      }
+      return {
+        agentId: agent.id?.trim() ?? "",
+        index,
+        slots,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .toSorted((left, right) => {
+      const agentOrder = left.agentId.localeCompare(right.agentId);
+      return agentOrder === 0 ? left.index - right.index : agentOrder;
+    });
 }
 
 function redactPluginConfigForCacheKey(plugins: NormalizedPluginsConfig): NormalizedPluginsConfig {
@@ -356,6 +398,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       ? redactPluginConfigForCacheKey(trustNormalized)
       : trustNormalized,
     activationMetadataKey: buildActivationMetadataHash({
+      config: cfg,
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),

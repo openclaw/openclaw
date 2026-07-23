@@ -92,6 +92,8 @@ import type {
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
 } from "./hook-types.js";
+import type { MemoryPluginRole } from "./memory-role.contract.js";
+import type { MemoryRoleSlotSelection } from "./slot-resolution.js";
 
 // Re-export types for consumers
 
@@ -495,6 +497,64 @@ export function createHookRunner(
     normalizePositiveTimeoutMs(hook.timeoutMs) ??
     normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
+  const getStringProperty = (value: unknown, key: string): string | undefined => {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    const candidate = (value as Record<string, unknown>)[key];
+    return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
+  };
+
+  const getHookAgentId = (event: unknown, ctx: unknown): string | undefined =>
+    getStringProperty(ctx, "agentId") ?? getStringProperty(event, "agentId");
+
+  const getConfiguredMemorySelections = (role: MemoryPluginRole): MemoryRoleSlotSelection[] =>
+    registry.plugins.flatMap((plugin) =>
+      (plugin.memoryRoleSelections ?? []).filter((selection) => selection.role === role),
+    );
+
+  const isMemoryRoleSelectedForHook = (params: {
+    hook: PluginHookRegistration;
+    role: MemoryPluginRole;
+    agentId?: string;
+  }): boolean => {
+    const selections = getConfiguredMemorySelections(params.role);
+    if (selections.length > 0) {
+      if (params.agentId) {
+        const agentScoped = selections.find((selection) => selection.agentId === params.agentId);
+        if (agentScoped) {
+          return !agentScoped.disabled && agentScoped.pluginId === params.hook.pluginId;
+        }
+      }
+      const global = selections.find((selection) => !selection.agentId);
+      return global?.pluginId === params.hook.pluginId;
+    }
+
+    const plugin = registry.plugins.find((candidate) => candidate.id === params.hook.pluginId);
+    if (plugin?.memoryRoleSelections && plugin.memoryRoleSelections.length > 0) {
+      return plugin.memoryRoleSelections.some(
+        (selection) => selection.role === params.role && !selection.disabled,
+      );
+    }
+    return true;
+  };
+
+  const shouldRunHookForMemoryRole = (params: {
+    hook: PluginHookRegistration;
+    event: unknown;
+    ctx: unknown;
+  }): boolean => {
+    const role = params.hook.memoryRole;
+    if (!role) {
+      return true;
+    }
+    return isMemoryRoleSelectedForHook({
+      hook: params.hook,
+      role,
+      agentId: getHookAgentId(params.event, params.ctx),
+    });
+  };
+
   const withHookTimeout = async <T>(
     promise: Promise<T>,
     timeoutMs: number,
@@ -546,6 +606,9 @@ export function createHookRunner(
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
     const promises = hooks.map(async (hook) => {
+      if (!shouldRunHookForMemoryRole({ hook, event, ctx })) {
+        return;
+      }
       try {
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(event, ctx),
@@ -584,6 +647,9 @@ export function createHookRunner(
     let result: TResult | undefined;
 
     for (const hook of hooks) {
+      if (!shouldRunHookForMemoryRole({ hook, event, ctx })) {
+        continue;
+      }
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
         const promise = Promise.resolve(handler(event, ctx));
@@ -665,6 +731,9 @@ export function createHookRunner(
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
   ): Promise<TResult | undefined> {
     for (const hook of hooks) {
+      if (!shouldRunHookForMemoryRole({ hook, event, ctx })) {
+        continue;
+      }
       try {
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
@@ -716,6 +785,9 @@ export function createHookRunner(
 
     let firstError: string | null = null;
     for (const hook of hooks) {
+      if (!shouldRunHookForMemoryRole({ hook, event, ctx })) {
+        continue;
+      }
       try {
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),

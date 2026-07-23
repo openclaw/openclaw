@@ -20,6 +20,7 @@ import {
   pluginInstallPathMatchesRoot,
   type PluginVerificationFailureReason,
 } from "../../plugins/runtime-degraded-state.js";
+import { listSelectedMemoryRolePluginIds } from "../../plugins/slot-resolution.js";
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
@@ -46,6 +47,7 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
 
 function resolveSelectedMemoryPluginIds(params: {
   config: OpenClawConfig | undefined;
+  agentId?: string;
   workspaceDir: string;
 }): string[] {
   const registry = loadPluginRegistrySnapshot({
@@ -53,26 +55,35 @@ function resolveSelectedMemoryPluginIds(params: {
     workspaceDir: params.workspaceDir,
   });
   const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const memorySlot = plugins.slots.memory;
-  if (
-    typeof memorySlot !== "string" ||
-    memorySlot.trim().length === 0 ||
-    restrictiveAllowlistOmitsPlugin(params.config, memorySlot)
-  ) {
-    return [];
-  }
-  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
-  if (!plugin?.startup.memory) {
-    return [];
-  }
-  const activationState = resolveEffectivePluginActivationState({
-    id: plugin.pluginId,
-    origin: plugin.origin,
-    config: plugins,
-    rootConfig: params.config,
-    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+  const selectedMemoryPluginIds = params.config
+    ? listSelectedMemoryRolePluginIds({ cfg: params.config, agentId: params.agentId })
+    : [plugins.slots["memory.recall"]];
+
+  return dedupePluginIds(
+    selectedMemoryPluginIds
+      .filter((pluginId): pluginId is string => typeof pluginId === "string")
+      .map((pluginId) => pluginId.trim())
+      .filter((pluginId) => pluginId.length > 0 && pluginId.toLowerCase() !== "none"),
+  ).filter((pluginId) => {
+    if (restrictiveAllowlistOmitsPlugin(params.config, pluginId)) {
+      return false;
+    }
+    if (pluginId === "memory-core") {
+      return true;
+    }
+    const plugin = registry.plugins.find((entry) => entry.pluginId === pluginId);
+    if (!plugin?.startup.memory) {
+      return false;
+    }
+    const activationState = resolveEffectivePluginActivationState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      config: plugins,
+      rootConfig: params.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    });
+    return activationState.activated;
   });
-  return activationState.activated ? [plugin.pluginId] : [];
 }
 
 /** Resolve manifest owners required by one selected non-core harness runtime. */
@@ -283,6 +294,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   }
   const memoryPluginIds = resolveSelectedMemoryPluginIds({
     config: params.config,
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   });
   const scopedPluginIds = dedupePluginIds([...pluginIds, ...memoryPluginIds]);

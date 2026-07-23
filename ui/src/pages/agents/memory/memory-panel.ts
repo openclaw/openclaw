@@ -8,7 +8,6 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
 import { t } from "../../../i18n/index.ts";
-import { currentConfigObject } from "../../../lib/config/index.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -407,12 +406,10 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   override render() {
     const dreaming = this.dreaming;
     const configState = this.context.runtimeConfig.state;
-    const dreamingOn =
-      dreaming.dreamingStatus?.enabled ??
-      resolveConfiguredDreaming(currentConfigObject(configState)).enabled;
+    const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
+    const dreamingOn = resolveConfiguredDreaming(dreaming).enabled;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
-    const selectedAgentId = dreaming.selectedAgentId ?? this.agentId;
 
     return html`
       <section class="content-header content-header--page agent-memory-panel__header">

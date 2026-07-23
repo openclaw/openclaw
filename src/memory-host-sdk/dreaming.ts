@@ -1,10 +1,6 @@
 // Memory host dreaming helpers record and load memory dreaming artifacts.
 import path from "node:path";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   lowercasePreservingWhitespace,
@@ -14,12 +10,17 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  hasConfiguredPluginSlot,
+  resolveMemoryRoleSlot,
+  resolvePluginSlot,
+} from "../plugins/slot-resolution.js";
 
-const DEFAULT_MEMORY_DREAMING_ENABLED = false;
-const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
-const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
-const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
+export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
+export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
+export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
+export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
+export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
@@ -32,41 +33,47 @@ export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_l
 export const LEGACY_MEMORY_REM_DREAMING_CRON_NAME = "Memory REM Dreaming";
 export const LEGACY_MEMORY_REM_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 export const LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
-const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
-const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
-const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
+
+export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
+export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
+export const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
+export const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
+
+export const DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR = "0 3 * * *";
 export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.8;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
-const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
 
-const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
-const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
-const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS = 30;
-const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES = 20;
-const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE = 0.9;
-const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_AUTO_WRITE_MIN_CONFIDENCE = 0.97;
-const DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS = 7;
-const DEFAULT_MEMORY_REM_DREAMING_LIMIT = 10;
-const DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH = 0.75;
+export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
+export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
+export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS = 30;
+export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES = 20;
+export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE = 0.9;
+export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_AUTO_WRITE_MIN_CONFIDENCE = 0.97;
 
-const DEFAULT_MEMORY_DREAMING_SPEED = "balanced";
-const DEFAULT_MEMORY_DREAMING_THINKING = "medium";
-const DEFAULT_MEMORY_DREAMING_BUDGET = "medium";
+export const DEFAULT_MEMORY_REM_DREAMING_CRON_EXPR = "0 5 * * 0";
+export const DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS = 7;
+export const DEFAULT_MEMORY_REM_DREAMING_LIMIT = 10;
+export const DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH = 0.75;
 
-type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
-type MemoryDreamingThinking = "low" | "medium" | "high";
-type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
-type MemoryDreamingStorageMode = "inline" | "separate" | "both";
+export const DEFAULT_MEMORY_DREAMING_SPEED = "balanced";
+export const DEFAULT_MEMORY_DREAMING_THINKING = "medium";
+export const DEFAULT_MEMORY_DREAMING_BUDGET = "medium";
 
-type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
-type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
-type MemoryRemDreamingSource = "memory" | "daily" | "deep";
+export type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
+export type MemoryDreamingThinking = "low" | "medium" | "high";
+export type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
+export type MemoryDreamingStorageMode = "inline" | "separate" | "both";
 
-type MemoryDreamingExecutionConfig = {
+export type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
+export type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
+export type MemoryRemDreamingSource = "memory" | "daily" | "deep";
+
+export type MemoryDreamingExecutionConfig = {
   speed: MemoryDreamingSpeed;
   thinking: MemoryDreamingThinking;
   budget: MemoryDreamingBudget;
@@ -81,7 +88,7 @@ export type MemoryDreamingStorageConfig = {
   separateReports: boolean;
 };
 
-type MemoryLightDreamingConfig = {
+export type MemoryLightDreamingConfig = {
   enabled: boolean;
   cron: string;
   lookbackDays: number;
@@ -91,7 +98,7 @@ type MemoryLightDreamingConfig = {
   execution: MemoryDreamingExecutionConfig;
 };
 
-type MemoryDeepDreamingRecoveryConfig = {
+export type MemoryDeepDreamingRecoveryConfig = {
   enabled: boolean;
   triggerBelowHealth: number;
   lookbackDays: number;
@@ -100,7 +107,7 @@ type MemoryDeepDreamingRecoveryConfig = {
   autoWriteMinConfidence: number;
 };
 
-type MemoryDeepDreamingConfig = {
+export type MemoryDeepDreamingConfig = {
   enabled: boolean;
   cron: string;
   limit: number;
@@ -115,7 +122,7 @@ type MemoryDeepDreamingConfig = {
   execution: MemoryDreamingExecutionConfig;
 };
 
-type MemoryRemDreamingConfig = {
+export type MemoryRemDreamingConfig = {
   enabled: boolean;
   cron: string;
   lookbackDays: number;
@@ -127,7 +134,7 @@ type MemoryRemDreamingConfig = {
 
 export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
-type MemoryDreamingConfig = {
+export type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
   timezone?: string;
@@ -143,12 +150,12 @@ type MemoryDreamingConfig = {
   };
 };
 
-type MemoryDreamingWorkspace = {
+export type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
 };
 
-type MemoryDreamingWorkspaceOptions = {
+export type MemoryDreamingWorkspaceOptions = {
   primaryWorkspaceDir?: string | null;
   primaryAgentId?: string | null;
   env?: NodeJS.ProcessEnv;
@@ -177,16 +184,38 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  // Config integers are decimal-only; Number() would accept hex/exponent forms.
-  return parseStrictNonNegativeInteger(value) ?? fallback;
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
+    return fallback;
+  }
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  const floored = Math.floor(num);
+  if (floored < 0) {
+    return fallback;
+  }
+  return floored;
 }
 
 function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  // Same strict decimal contract as normalizeNonNegativeInt for optional fields.
-  return parseStrictPositiveInteger(value);
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
+    return undefined;
+  }
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
+  if (!Number.isFinite(num)) {
+    return undefined;
+  }
+  const floored = Math.floor(num);
+  if (floored <= 0) {
+    return undefined;
+  }
+  return floored;
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
@@ -293,6 +322,14 @@ function normalizePathForComparison(input: string): string {
   return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
+function normalizeConfiguredPluginSlot(value: unknown): string | null | undefined {
+  const configuredSlot = normalizeTrimmedString(value);
+  if (!configuredSlot) {
+    return undefined;
+  }
+  return normalizeLowercaseStringOrEmpty(configuredSlot) === "none" ? null : configuredSlot;
+}
+
 function formatLocalIsoDay(epochMs: number): string {
   const date = new Date(epochMs);
   const year = date.getFullYear();
@@ -303,24 +340,63 @@ function formatLocalIsoDay(epochMs: number): string {
 
 export function resolveMemoryDreamingPluginId(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
-): string {
-  const root = asNullableRecord(cfg);
-  const plugins = asNullableRecord(root?.plugins);
-  const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
-    return configuredSlot;
+  options: { agentId?: string } = {},
+): string | null {
+  if (!cfg) {
+    return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
   }
+
+  if (
+    hasConfiguredPluginSlot({
+      cfg: cfg as OpenClawConfig,
+      slotKey: "memory.dreaming",
+      agentId: options.agentId,
+    })
+  ) {
+    return (
+      normalizeConfiguredPluginSlot(
+        resolveMemoryRoleSlot({
+          cfg: cfg as OpenClawConfig,
+          role: "dreaming",
+          agentId: options.agentId,
+        }),
+      ) ?? null
+    );
+  }
+
+  if (
+    hasConfiguredPluginSlot({
+      cfg: cfg as OpenClawConfig,
+      slotKey: "memory.recall",
+      agentId: options.agentId,
+    })
+  ) {
+    const recallSlot = normalizeConfiguredPluginSlot(
+      resolvePluginSlot({
+        cfg: cfg as OpenClawConfig,
+        slotKey: "memory.recall",
+        agentId: options.agentId,
+      }),
+    );
+    if (recallSlot) {
+      return recallSlot;
+    }
+  }
+
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
 }
 
 export function resolveMemoryDreamingPluginConfig(
   cfg: OpenClawConfig | Record<string, unknown> | undefined,
+  options: { agentId?: string } = {},
 ): Record<string, unknown> | undefined {
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const entries = asNullableRecord(plugins?.entries);
-  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  const pluginId = resolveMemoryDreamingPluginId(cfg, options);
+  if (!pluginId) {
+    return undefined;
+  }
   const memoryPlugin = asNullableRecord(entries?.[pluginId]);
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }

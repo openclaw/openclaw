@@ -577,7 +577,7 @@ export function createMemorySearchTool(options: {
               mode: citationsMode,
               sessionKey: options.agentSessionKey,
             });
-            const pluginConfig = resolveMemoryDreamingPluginConfig(cfg);
+            const pluginConfig = resolveMemoryDreamingPluginConfig(cfg, { agentId });
             const dreamingEnabled = resolveMemoryDreamingConfig({
               pluginConfig,
               cfg,
