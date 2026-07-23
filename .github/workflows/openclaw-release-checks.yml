@@ -1246,15 +1246,29 @@ jobs:
           set -euo pipefail
 
           output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
-
-          pnpm openclaw qa suite \
-            --provider-mode mock-openai \
-            --runtime-pair-lane "$RUNTIME_PAIR_LANE" \
-            --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.6-luna-alt" \
-            --runtime-pair openclaw,codex \
+          runtime_pair_args=(
+            --provider-mode mock-openai
+            --concurrency "${QA_PARITY_CONCURRENCY}"
+            --model "${OPENCLAW_CI_OPENAI_MODEL}"
+            --alt-model "openai/gpt-5.6-luna-alt"
+            --runtime-pair openclaw,codex
             --output-dir ".artifacts/qa-e2e/${output_dir}"
+          )
+
+          if pnpm openclaw qa suite --help | grep -Fq -- "--runtime-pair-lane"; then
+            runtime_pair_args+=(--runtime-pair-lane "$RUNTIME_PAIR_LANE")
+          elif [[ "$RUNTIME_PAIR_LANE" == "core" ]]; then
+            # Before runtime-pair lanes, the frozen candidate's standard and
+            # live-only tiers together defined the current core lane.
+            runtime_pair_args+=(--runtime-parity-tier standard,live-only)
+          elif [[ "$RUNTIME_PAIR_LANE" == "soak" ]]; then
+            runtime_pair_args+=(--runtime-parity-tier soak)
+          else
+            echo "Frozen candidate cannot select runtime-pair lane: $RUNTIME_PAIR_LANE" >&2
+            exit 1
+          fi
+
+          pnpm openclaw qa suite "${runtime_pair_args[@]}"
 
       - name: Generate runtime-pair lane report
         id: generate_runtime_parity_report

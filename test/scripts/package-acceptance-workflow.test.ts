@@ -2775,9 +2775,11 @@ describe("package artifact reuse", () => {
     expect(laneJob.strategy?.["fail-fast"]).toBe(false);
     expect(laneJob.strategy?.matrix?.lane).toContain('["core","soak"]');
     expect(laneJob.strategy?.matrix?.lane).toContain('["core"]');
-    expect(workflowStep(laneJob, "Run runtime-pair lane").run).toContain(
-      '--runtime-pair-lane "$RUNTIME_PAIR_LANE"',
-    );
+    const runtimePairRun = workflowStep(laneJob, "Run runtime-pair lane").run;
+    expect(runtimePairRun).toContain('--runtime-pair-lane "$RUNTIME_PAIR_LANE"');
+    expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
+    expect(runtimePairRun).toContain("--runtime-parity-tier soak");
+    expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
     expect(workflowStep(laneJob, "Upload runtime-pair lane artifacts").with?.name).toContain(
       "${{ matrix.lane }}",
     );

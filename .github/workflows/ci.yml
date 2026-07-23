@@ -1112,7 +1112,22 @@ jobs:
       # packages/-only PRs cannot land stale committed plugin bundles; the
       # extension byte-equality suites do not run for those diffs.
       - name: Check bundled plugin generated assets
-        run: pnpm plugins:assets:check
+        run: |
+          set -euo pipefail
+
+          if node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          process.exit(packageJson.scripts?.["plugins:assets:check"] ? 0 : 1);
+          NODE
+          then
+            pnpm plugins:assets:check
+          else
+            # Frozen release candidates predate this generated-asset contract.
+            # Their own build remains the available asset validation surface.
+            echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
+          fi
 
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
