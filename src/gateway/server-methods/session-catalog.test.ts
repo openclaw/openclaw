@@ -247,6 +247,39 @@ describe("session catalog Gateway methods", () => {
     expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledTimes(2);
   });
 
+  it("coalesces simultaneous identical catalog requests", async () => {
+    let releaseList!: () => void;
+    const listGate = new Promise<void>((resolve) => {
+      releaseList = resolve;
+    });
+    const list = vi.fn(async () => {
+      await listGate;
+      return [];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", { list }),
+      },
+    ];
+
+    const first = call("sessions.catalog.list", { search: "same" });
+    const second = call("sessions.catalog.list", {
+      search: "same",
+      progressId: "follower-progress-does-not-change-the-load",
+    });
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+    releaseList();
+
+    const [firstRespond, secondRespond] = await Promise.all([first, second]);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(firstRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [] })],
+    });
+    expect(secondRespond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [] })],
+    });
+  });
+
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {
     const previousNodesRuntime = gatewaySubagentState.nodes;
     const listNodes = vi.fn(async () => ({ nodes: [] }));
