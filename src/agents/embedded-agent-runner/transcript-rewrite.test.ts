@@ -1,7 +1,6 @@
 // Transcript rewrite tests cover in-memory and persisted JSONL rewrites for
 // tool-result externalization, labels, compaction markers, and write locks.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
@@ -14,6 +13,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -320,124 +320,126 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 
 describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
   it("does not create session metadata for missing runtime transcripts", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
-    const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}\n", "utf8");
+    await withTempDir({ prefix: "openclaw-transcript-rewrite-runtime-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      await fs.writeFile(storePath, "{}\n", "utf8");
 
-    const result = await rewriteTranscriptEntriesInRuntimeTranscript({
-      scope: {
-        agentId: "main",
-        sessionId: "missing-session",
-        sessionKey: "agent:main:missing",
-        storePath,
-      },
-      request: { replacements: [] },
-    });
-
-    expect(result.changed).toBe(false);
-    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
-  });
-
-  it("rewrites runtime transcripts through scoped session identity", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "runtime-sqlite-rewrite";
-    const sessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:test",
-      storePath,
-    };
-    await replaceSessionEntry({ sessionKey: "agent:main:test", storePath }, {
-      sessionFile,
-      sessionId,
-      updatedAt: 10,
-    } as SessionEntry);
-    await appendTranscriptMessage(scope, {
-      message: {
-        role: "user",
-        content: "run tool",
-        timestamp: 1,
-      },
-    });
-    const toolResult = await appendTranscriptMessage(scope, {
-      message: {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "exec",
-        content: createTextContent("before rewrite"),
-        isError: false,
-        timestamp: 2,
-      },
-    });
-    await appendTranscriptMessage(scope, {
-      message: {
-        role: "assistant",
-        content: createTextContent("summarized"),
-        timestamp: 3,
-      },
-    });
-    const toolResultEntryId = toolResult.messageId;
-    const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
-
-    try {
       const result = await rewriteTranscriptEntriesInRuntimeTranscript({
         scope: {
           agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:test",
+          sessionId: "missing-session",
+          sessionKey: "agent:main:missing",
           storePath,
         },
-        request: {
-          replacements: [
-            {
-              entryId: toolResultEntryId,
-              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
-            },
-          ],
-        },
+        request: { replacements: [] },
       });
 
-      expect(result.changed).toBe(true);
-      expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
-      expect(acquireSessionWriteLockReleaseMock).not.toHaveBeenCalled();
-      expect(listener).toHaveBeenCalledWith({
+      expect(result.changed).toBe(false);
+      expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
+    });
+  });
+
+  it("rewrites runtime transcripts through scoped session identity", async () => {
+    await withTempDir({ prefix: "openclaw-transcript-rewrite-runtime-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionId = "runtime-sqlite-rewrite";
+      const sessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId,
+        storePath,
+      });
+      const scope = {
         agentId: "main",
         sessionId,
         sessionKey: "agent:main:test",
-        target: {
+        storePath,
+      };
+      await replaceSessionEntry({ sessionKey: "agent:main:test", storePath }, {
+        sessionFile,
+        sessionId,
+        updatedAt: 10,
+      } as SessionEntry);
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "user",
+          content: "run tool",
+          timestamp: 1,
+        },
+      });
+      const toolResult = await appendTranscriptMessage(scope, {
+        message: {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "exec",
+          content: createTextContent("before rewrite"),
+          isError: false,
+          timestamp: 2,
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "assistant",
+          content: createTextContent("summarized"),
+          timestamp: 3,
+        },
+      });
+      const toolResultEntryId = toolResult.messageId;
+      const listener = vi.fn();
+      const cleanup = onSessionTranscriptUpdate(listener);
+
+      try {
+        const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+          scope: {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:test",
+            storePath,
+          },
+          request: {
+            replacements: [
+              {
+                entryId: toolResultEntryId,
+                message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+              },
+            ],
+          },
+        });
+
+        expect(result.changed).toBe(true);
+        expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
+        expect(acquireSessionWriteLockReleaseMock).not.toHaveBeenCalled();
+        expect(listener).toHaveBeenCalledWith({
           agentId: "main",
           sessionId,
           sessionKey: "agent:main:test",
-        },
-      });
+          target: {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:test",
+          },
+        });
 
-      const branchMessages = (await loadTranscriptEvents(scope))
-        .filter(
-          (entry): entry is { message: AgentMessage; type: "message" } =>
-            typeof entry === "object" &&
-            entry !== null &&
-            "message" in entry &&
-            "type" in entry &&
-            entry.type === "message",
-        )
-        .map((entry) => entry.message);
-      expect(branchMessages.map((message) => message.role)).toEqual([
-        "user",
-        "toolResult",
-        "assistant",
-      ]);
-      expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
-        { type: "text", text: "[runtime rewrite]" },
-      ]);
-    } finally {
-      cleanup();
-    }
+        const branchMessages = (await loadTranscriptEvents(scope))
+          .filter(
+            (entry): entry is { message: AgentMessage; type: "message" } =>
+              typeof entry === "object" &&
+              entry !== null &&
+              "message" in entry &&
+              "type" in entry &&
+              entry.type === "message",
+          )
+          .map((entry) => entry.message);
+        expect(branchMessages.map((message) => message.role)).toEqual([
+          "user",
+          "toolResult",
+          "assistant",
+        ]);
+        expect(
+          (branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content,
+        ).toEqual([{ type: "text", text: "[runtime rewrite]" }]);
+      } finally {
+        cleanup();
+      }
+    });
   });
 });

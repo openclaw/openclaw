@@ -1,6 +1,5 @@
 // Coverage for context-engine bootstrap, assembly, and turn finalization.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +15,7 @@ import {
   registerTestMemoryPromptBuilder,
 } from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { withTempDir } from "../../../test-helpers/temp-dir.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -1203,54 +1203,54 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {
-    const sandboxWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
-    tempPaths.push(sandboxWorkspace);
-    hoisted.resolveSandboxContextMock.mockResolvedValue({
-      enabled: true,
-      workspaceAccess: "ro",
-      workspaceDir: sandboxWorkspace,
-    });
+    await withTempDir({ prefix: "openclaw-sandbox-skills-" }, async (sandboxWorkspace) => {
+      hoisted.resolveSandboxContextMock.mockResolvedValue({
+        enabled: true,
+        workspaceAccess: "ro",
+        workspaceDir: sandboxWorkspace,
+      });
 
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        skillsSnapshot: {
-          prompt:
-            "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
-          skills: [{ name: "smaug" }],
-          resolvedSkills: [
-            {
-              name: "smaug",
-              description: "Host copy",
-              disableModelInvocation: false,
-              filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-              baseDir: "/Users/alice/.openclaw/skills/smaug",
-              source: "openclaw-workspace",
-              sourceInfo: {
-                path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
-                source: "openclaw-workspace",
-                scope: "project",
-                origin: "top-level",
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          skillsSnapshot: {
+            prompt:
+              "<available_skills><skill><location>~/.openclaw/skills/smaug/SKILL.md</location></skill></available_skills>",
+            skills: [{ name: "smaug" }],
+            resolvedSkills: [
+              {
+                name: "smaug",
+                description: "Host copy",
+                disableModelInvocation: false,
+                filePath: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
                 baseDir: "/Users/alice/.openclaw/skills/smaug",
+                source: "openclaw-workspace",
+                sourceInfo: {
+                  path: "/Users/alice/.openclaw/skills/smaug/SKILL.md",
+                  source: "openclaw-workspace",
+                  scope: "project",
+                  origin: "top-level",
+                  baseDir: "/Users/alice/.openclaw/skills/smaug",
+                },
               },
-            },
-          ],
+            ],
+          },
         },
-      },
-    });
+      });
 
-    expectFields(
-      mockParams(hoisted.resolveEmbeddedRunSkillEntriesMock, 0, "skill entries params"),
-      {
+      expectFields(
+        mockParams(hoisted.resolveEmbeddedRunSkillEntriesMock, 0, "skill entries params"),
+        {
+          workspaceDir: sandboxWorkspace,
+          skillsSnapshot: undefined,
+        },
+      );
+      expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
         workspaceDir: sandboxWorkspace,
         skillsSnapshot: undefined,
-      },
-    );
-    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
+      });
     });
   });
 
@@ -2849,66 +2849,66 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("uses SQLite transcript messages for bootstrap without treating the marker as a file", async () => {
-    const storeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-sqlite-"));
-    tempPaths.push(storeDir);
-    const storePath = path.join(storeDir, "sessions.json");
-    const created = await createSessionEntryWithTranscript(
-      {
-        agentId: "main",
-        sessionKey,
-        storePath,
-      },
-      () => ({
-        ok: true,
-        entry: {
-          sessionId: embeddedSessionId,
-          updatedAt: Date.now(),
+    await withTempDir({ prefix: "openclaw-ctx-engine-sqlite-" }, async (storeDir) => {
+      const storePath = path.join(storeDir, "sessions.json");
+      const created = await createSessionEntryWithTranscript(
+        {
+          agentId: "main",
+          sessionKey,
+          storePath,
         },
-      }),
-    );
-    if (!created.ok) {
-      throw new Error(`failed to create SQLite session entry: ${created.error}`);
-    }
-    await appendTranscriptMessage(
-      {
-        agentId: "main",
-        sessionId: embeddedSessionId,
-        sessionKey,
-        storePath,
-      },
-      {
-        message: { role: "user", content: "persisted SQLite prompt" },
-        now: Date.now(),
-      },
-    );
-    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
-    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
-      messages,
-      estimatedTokens: 1,
-    }));
-
-    await createContextEngineAttemptRunner({
-      contextEngine: createTestContextEngine({ bootstrap, assemble }),
-      sessionKey,
-      tempPaths,
-      attemptOverrides: {
-        sessionFile: created.sessionFile,
-        sessionTarget: {
+        () => ({
+          ok: true,
+          entry: {
+            sessionId: embeddedSessionId,
+            updatedAt: Date.now(),
+          },
+        }),
+      );
+      if (!created.ok) {
+        throw new Error(`failed to create SQLite session entry: ${created.error}`);
+      }
+      await appendTranscriptMessage(
+        {
           agentId: "main",
           sessionId: embeddedSessionId,
           sessionKey,
           storePath,
         },
-      },
-    });
+        {
+          message: { role: "user", content: "persisted SQLite prompt" },
+          now: Date.now(),
+        },
+      );
+      const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+      const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+        messages,
+        estimatedTokens: 1,
+      }));
 
-    expect(bootstrap).toHaveBeenCalled();
-    expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile: created.sessionFile,
-        hadSessionFile: false,
-      }),
-    );
+      await createContextEngineAttemptRunner({
+        contextEngine: createTestContextEngine({ bootstrap, assemble }),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          sessionFile: created.sessionFile,
+          sessionTarget: {
+            agentId: "main",
+            sessionId: embeddedSessionId,
+            sessionKey,
+            storePath,
+          },
+        },
+      });
+
+      expect(bootstrap).toHaveBeenCalled();
+      expect(hoisted.prepareSessionManagerForRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionFile: created.sessionFile,
+          hadSessionFile: false,
+        }),
+      );
+    });
   });
 
   it("resolves bootstrap context before acquiring the session write lock", async () => {
