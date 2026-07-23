@@ -13,6 +13,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionUnreferencedArtifactSweepResult } from "./disk-budget.js";
+import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
@@ -231,6 +232,8 @@ export type SessionEntryLifecycleRemoval = {
 export type SessionEntryLifecycleUpsert = {
   /** Exact persisted key to create or replace. */
   sessionKey: string;
+  /** Atomically append this reset boundary with the entry replacement. */
+  resetBoundaryReason?: SessionResetBoundaryReason;
 } & (
   | {
       /** Entry to persist at the exact key. */

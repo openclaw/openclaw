@@ -62,6 +62,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./store.js";
@@ -333,10 +334,26 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey);
         removedSessionKeys.push(removal.sessionKey);
       }
-      for (const { sessionKey, entry, expectedEntry } of projected.upsertedEntries) {
+      for (const {
+        sessionKey,
+        entry,
+        expectedEntry,
+        resetBoundaryPlan,
+      } of projected.upsertedEntries) {
         const currentEntry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
         if (!sqliteSessionEntriesEqual(currentEntry, expectedEntry)) {
           throw new Error(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+        }
+        if (resetBoundaryPlan && expectedEntry?.sessionId) {
+          const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
+          const appended = appendTranscriptEventsInTransaction(
+            transactionDb,
+            { ...resolved, sessionId: expectedEntry.sessionId, sessionKey },
+            events,
+          );
+          if (appended !== events.length) {
+            throw new Error(`Failed to append reset boundary for ${sessionKey}`);
+          }
         }
         writeSessionEntry(transactionDb, sessionKey, entry);
       }
