@@ -121,6 +121,37 @@ describe("stream reconciliation", () => {
     ]);
   });
 
+  it("recomputes the unkeyed boundary after keyed insertions before a steer", () => {
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatStreamSegments: [
+        { text: "first keyed", ts: 2, itemId: "preamble-1" },
+        { text: "repeatable", ts: 3, itemId: "preamble-2" },
+        { text: "repeatable", ts: 5 },
+      ],
+    } satisfies StreamReconciliationState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId?: string }>;
+    };
+    const messages = [
+      { role: "user", content: "original ask", timestamp: 1 },
+      { role: "user", content: "steer this run", timestamp: 4 },
+    ];
+
+    const next = materializeVisibleStreamState(messages, state, {
+      ...visibleStreamOptions,
+      keyedStartIndex: 1,
+    });
+
+    expect(next.map(messageText)).toEqual([
+      "original ask",
+      "first keyed",
+      "repeatable",
+      "steer this run",
+      "repeatable",
+    ]);
+  });
+
   it("does not prune keyed preambles by live tool index", () => {
     const state = {
       chatStream: null,

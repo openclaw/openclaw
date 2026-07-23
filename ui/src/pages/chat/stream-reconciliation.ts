@@ -598,12 +598,12 @@ export function materializeVisibleStreamState(
 ): unknown[] {
   let nextMessages = messages;
   const persistCommentary = opts.persistCommentary === true;
-  const defaultStartIndex = streamReconciliationStartIndex(messages);
   for (const part of visibleAssistantStreamParts(state, opts)) {
     if (!persistCommentary && part.itemId) {
       continue;
     }
     const replacementMessages = opts.replacementMessages ?? [];
+    const defaultStartIndex = streamReconciliationStartIndex(nextMessages);
     const startIndex = part.itemId
       ? (opts.keyedStartIndex ?? defaultStartIndex)
       : defaultStartIndex;
