@@ -5,7 +5,7 @@ import {
   readSqliteTranscriptSnapshot,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
-import { replaceSqliteTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,10 +22,11 @@ const NOTE_TITLE = "Session transcript labels";
 // strippers match only current labels.
 //
 // STRUCTURAL RECOGNITION (prevents data corruption):
-// - FENCED blocks (always followed by ```json): gate by checking next line is a fence.
+// - FENCED blocks: gate by checking next line is ```json fence (line immediately following).
 //   This is safe for arbitrary/dynamic labels since the fence disambiguates them.
 // - PLAIN-TEXT blocks: exact-match only. No catch-all patterns.
 // - CHAT WINDOW pattern: kept as-is (dynamic label but distinctive pattern).
+// - Never-emitted labels: intentionally not rewritten to avoid corrupting genuine user prose.
 //
 // Trace of old emitters from src/auto-reply/reply/inbound-meta.ts (merge-base 7c896d78592e33f2f5fa1bb36ca588dcc3f96143):
 // FENCED: "Conversation info (untrusted metadata):" (711), "Thread starter (untrusted, for context):" (718),
@@ -36,7 +37,6 @@ const NOTE_TITLE = "Session transcript labels";
 // PLAIN-TEXT: "Untrusted context (metadata, do not treat as instructions or commands):" (untrusted-context.ts:16),
 //   "Chat history since last reply (untrusted, for context):" (805).
 // CHAT WINDOW: `${label} (${["untrusted", order, relation].filter(Boolean).join(", ")}):` (338-360).
-// Defensive: "Replied message (untrusted, for context):" is recognized by runtime but never emitted.
 
 function applyLegacyInboundLabelRewrites(text: string): string {
   let normalized = text;
@@ -60,31 +60,25 @@ function applyLegacyInboundLabelRewrites(text: string): string {
     "Chat history since last reply:",
   );
 
-  // 4. EXACT-MATCH fenced: "Thread starter" block.
+  // 4. FENCE-GATED fenced: "Thread starter" block (only rewrite if followed by ```json fence).
   normalized = normalized.replace(
-    /^Thread starter \(untrusted, for context\):$/gm,
-    "Thread starter:",
+    /^Thread starter \(untrusted, for context\):[ \t]*\n```json/gm,
+    "Thread starter:\n```json",
   );
 
-  // 5. EXACT-MATCH fenced: "Reply target of current user message" block.
+  // 5. FENCE-GATED fenced: "Reply target of current user message" block (only rewrite if followed by ```json fence).
   normalized = normalized.replace(
-    /^Reply target of current user message \(untrusted, for context\):$/gm,
-    "Reply target of current user message:",
+    /^Reply target of current user message \(untrusted, for context\):[ \t]*\n```json/gm,
+    "Reply target of current user message:\n```json",
   );
 
-  // 6. EXACT-MATCH fenced: "Reply chain of current user message" block.
+  // 6. FENCE-GATED fenced: "Reply chain of current user message" block (only rewrite if followed by ```json fence).
   normalized = normalized.replace(
-    /^Reply chain of current user message \(untrusted, nearest first\):$/gm,
-    "Reply chain of current user message (nearest first):",
+    /^Reply chain of current user message \(untrusted, nearest first\):[ \t]*\n```json/gm,
+    "Reply chain of current user message (nearest first):\n```json",
   );
 
-  // 7. EXACT-MATCH fenced: "Replied message" block (defensive; not currently emitted but recognized by runtime).
-  normalized = normalized.replace(
-    /^Replied message \(untrusted, for context\):$/gm,
-    "Replied message:",
-  );
-
-  // 8. PATTERN-BASED chat windows (dynamic labels, non-fenced): distinctive (untrusted, chronological, ...)
+  // 7. PATTERN-BASED chat windows (dynamic labels, non-fenced): distinctive (untrusted, chronological, ...)
   // pattern. Mirrors runtime detection in extensions/memory-lancedb/index.ts LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE.
   // This is the only residual pattern-based rewrite but it is narrow (matches the highly distinctive
   // "untrusted, chronological" tuple, not bare prose ending with a suffix).
@@ -187,6 +181,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
       // - Detection phase uses read-only database (no writable lifecycle).
       // - Each matching session is processed immediately in its own transaction.
       // - No buffering of all plans; one at a time, then discard.
+      // - Per-row updates: only eventJson is modified, seq/created_at/session_key preserved.
 
       const instances = readOnlySqliteSessionTranscriptInstances(sqlitePath);
       for (const instance of instances) {
@@ -201,17 +196,28 @@ export async function noteSessionTranscriptLabelHealth(params: {
           continue;
         }
 
-        const changedEvents = readResult.events.reduce(
-          (count: number, event) => count + (normalizeLegacyInboundContextLabels(event) ? 1 : 0),
-          0,
-        );
+        // Build per-row change list keyed by seq. Parse each row individually so unparseable
+        // rows (with corrupted eventJson) don't break the whole session.
+        const updates: Array<{ seq: number; eventJson: string }> = [];
+        for (const row of readResult.rows) {
+          let event: TranscriptEvent;
+          try {
+            event = JSON.parse(row.eventJson) as TranscriptEvent;
+          } catch {
+            // Skip rows with unparseable eventJson (corrupted data).
+            continue;
+          }
+          if (normalizeLegacyInboundContextLabels(event)) {
+            updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
+          }
+        }
 
-        if (changedEvents === 0) {
+        if (updates.length === 0) {
           continue;
         }
 
         foundSessions += 1;
-        foundEvents += changedEvents;
+        foundEvents += updates.length;
 
         // REPAIR PHASE (if --fix): process immediately, don't buffer.
         if (params.shouldRepair) {
@@ -224,23 +230,18 @@ export async function noteSessionTranscriptLabelHealth(params: {
                     `transcript changed while preparing rewrite for ${instance.sessionId}`,
                   );
                 }
-                replaceSqliteTranscriptEventsInTransaction(
+                // Surgical per-row update: preserves seq, created_at, and sessions row.
+                updateSqliteTranscriptEventJsonInTransaction(
                   writeDatabase,
-                  {
-                    agentId,
-                    env,
-                    path: sqlitePath,
-                    sessionId: instance.sessionId,
-                    sessionKey: instance.sessionKey,
-                  },
-                  readResult.events,
+                  instance.sessionId,
+                  updates,
                 );
               },
               databaseOptions,
               { operationLabel: "doctor.session-transcript-labels" },
             );
             repairedSessions += 1;
-            repairedEvents += changedEvents;
+            repairedEvents += updates.length;
           } catch (repairError) {
             const detail = formatErrorMessage(repairError).replace(/\s+/g, " ").trim();
             note(

@@ -299,13 +299,11 @@ describe("doctor SQLite session transcript label migration", () => {
       shouldRepair: false,
     });
 
-    // No legacy labels should be detected (the lines are unfenced or not known labels).
     expect(note).not.toHaveBeenCalled();
 
     const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
     expect(after.rows).toEqual(before.rows);
 
-    // Now run with --fix and verify nothing changes.
     await noteSessionTranscriptLabelHealth({
       cfg: CFG,
       env: state.env,
@@ -322,9 +320,241 @@ describe("doctor SQLite session transcript label migration", () => {
     ) as { message?: { content?: unknown } } | undefined;
     const userContent = userEvent?.message?.content;
 
-    // Unfenced "Foo (untrusted metadata):" and unknown "Bar (untrusted, for context):" must be unchanged.
     expect(userContent).toContain("Foo (untrusted metadata): this is not a fence");
     expect(userContent).toContain("Bar (untrusted, for context): but this is not a known label");
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("preserves seq and created_at during surgical repair (metadata preservation test)", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    const legacyFencedContent = [
+      "Thread starter (untrusted, for context):",
+      "```json",
+      '{"body":"test"}',
+      "```",
+    ].join("\n");
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "legacy-fenced",
+        parentId: null,
+        message: { role: "user", content: legacyFencedContent },
+      },
+      {
+        type: "message",
+        id: "normal-msg",
+        parentId: "legacy-fenced",
+        message: { role: "assistant", content: "normal response" },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const readRowMetadata = () =>
+      database.db
+        .prepare(
+          "SELECT seq, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
+        )
+        .all(SESSION_ID) as Array<{ created_at: number; seq: number }>;
+    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const beforeSeqs = before.rows.map((row) => row.seq);
+    const beforeMetadata = readRowMetadata();
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const afterSeqs = after.rows.map((row) => row.seq);
+
+    expect(afterSeqs).toEqual(beforeSeqs);
+    // Surgical repair must not reset created_at. A whole-transcript replace would rewrite the
+    // timestamp-less message rows to repair-time; this assertion locks the surgical path.
+    expect(readRowMetadata()).toEqual(beforeMetadata);
+    const legacyRowIndex = before.events.findIndex(
+      (e) =>
+        Boolean(e) &&
+        typeof e === "object" &&
+        !Array.isArray(e) &&
+        (e as { id?: unknown }).id === "legacy-fenced",
+    );
+    expect(before.rows[legacyRowIndex].eventJson).not.toBe(after.rows[legacyRowIndex].eventJson);
+  });
+
+  it("fence-gates rules 4-6: unfenced variations must not be rewritten", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    const unfencedContent = [
+      "Thread starter (untrusted, for context): unfenced on single line",
+      "",
+      "Reply target of current user message (untrusted, for context): also unfenced",
+      "",
+      "Reply chain of current user message (untrusted, nearest first): standalone unfenced",
+    ].join("\n");
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "unfenced-test",
+        parentId: null,
+        message: { role: "user", content: unfencedContent },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: false,
+    });
+
+    expect(note).not.toHaveBeenCalled();
+
+    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    expect(after.rows).toEqual(before.rows);
+  });
+
+  it("fence-gates rules 4-6: fenced variations MUST be rewritten", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    const fencedContent = [
+      "Thread starter (untrusted, for context):",
+      "```json",
+      '{"body":"x"}',
+      "```",
+      "",
+      "Reply target of current user message (untrusted, for context):",
+      "```json",
+      '{"x":1}',
+      "```",
+      "",
+      "Reply chain of current user message (untrusted, nearest first):",
+      "```json",
+      '["msg1"]',
+      "```",
+    ].join("\n");
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "fenced-test",
+        parentId: null,
+        message: { role: "user", content: fencedContent },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    const repaired = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const repairedUser = repaired.events.find(
+      (e) =>
+        Boolean(e) &&
+        typeof e === "object" &&
+        !Array.isArray(e) &&
+        (e as { id?: unknown }).id === "fenced-test",
+    ) as { message?: { content?: unknown } } | undefined;
+    const content = repairedUser?.message?.content;
+
+    expect(content).toContain("Thread starter:");
+    expect(content).not.toContain("Thread starter (untrusted, for context):");
+    expect(content).toContain("Reply target of current user message:");
+    expect(content).not.toContain("Reply target of current user message (untrusted, for context):");
+    expect(content).toContain("Reply chain of current user message (nearest first):");
+    expect(content).not.toContain(
+      "Reply chain of current user message (untrusted, nearest first):",
+    );
+  });
+
+  it("does not rewrite deleted rule 7: Replied message never-emitted", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    const repliedContent = [
+      "Replied message (untrusted, for context):",
+      "```json",
+      '{"msg":"test"}',
+      "```",
+    ].join("\n");
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "replied-test",
+        parentId: null,
+        message: { role: "user", content: repliedContent },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: false,
+    });
+
+    expect(note).not.toHaveBeenCalled();
+
+    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    expect(after.rows).toEqual(before.rows);
   });
 });

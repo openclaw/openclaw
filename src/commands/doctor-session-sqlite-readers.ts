@@ -397,8 +397,6 @@ export function readOnlySqliteSessionTranscriptInstances(
         sessionId: row.session_id,
         sessionKey: row.session_key,
       }));
-  } catch {
-    return [];
   } finally {
     database?.close();
   }
@@ -411,10 +409,10 @@ function isInternalSessionEffectsKey(sessionKey: string): boolean {
 
 // Read-only transcript snapshot reader for dry-run detection phase.
 // Avoids opening writable database lifecycle (lease/WAL/schema-ensure).
+// Returns rows only; migration parses per-row during repair.
 export type ReadOnlyTranscriptSnapshot =
   | {
       ok: true;
-      events: TranscriptEvent[];
       rows: Array<{ eventJson: string; seq: number }>;
     }
   | { ok: false; error: unknown };
@@ -435,22 +433,12 @@ export function readOnlySqliteTranscriptSnapshot(
         "SELECT event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
       )
       .all(sessionId) as Array<{ event_json?: string; seq?: number }>;
-    // Filter once, derive both events and rows from the valid rows.
     const validRows = rows.filter(
       (row): row is { event_json: string; seq: number } =>
         typeof row.event_json === "string" && typeof row.seq === "number",
     );
     return {
       ok: true,
-      events: validRows
-        .map((row) => {
-          try {
-            return JSON.parse(row.event_json) as TranscriptEvent;
-          } catch {
-            return undefined;
-          }
-        })
-        .filter((event): event is TranscriptEvent => event !== undefined),
       rows: validRows.map((row) => ({ eventJson: row.event_json, seq: row.seq })),
     };
   } catch (error) {

@@ -348,6 +348,33 @@ export function replaceSqliteTranscriptEventsInTransaction(
   }
 }
 
+// Text-only transcript repair: rewrites event_json for specific rows in place.
+// Preserves seq, created_at, and the sessions row (session_key/updated_at); only rotates the
+// transcript generation and reconciles the index so readers/search pick up the new text.
+export function updateSqliteTranscriptEventJsonInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  updates: ReadonlyArray<{ seq: number; eventJson: string }>,
+): void {
+  if (updates.length === 0) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  for (const { seq, eventJson } of updates) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("transcript_events")
+        .set({ event_json: eventJson })
+        .where("session_id", "=", sessionId)
+        .where("seq", "=", seq),
+    );
+  }
+  rotateTranscriptGenerationInTransaction(database, sessionId);
+  reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  touchTranscriptMutationInTransaction(database, sessionId);
+}
+
 export function readTranscriptIdentityByEventId(
   database: OpenClawAgentDatabase,
   sessionId: string,
