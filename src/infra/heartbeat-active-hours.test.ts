@@ -1,5 +1,5 @@
 // Covers heartbeat active-hours evaluation.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createActiveHoursPredicate, isWithinActiveHours } from "./heartbeat-active-hours.js";
 
@@ -93,5 +93,36 @@ describe("isWithinActiveHours", () => {
 
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 9, 0, 0))).toBe(true);
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 11, 0, 0))).toBe(false);
+  });
+
+  it("returns permissive predicate when time parsing fails (fail-open)", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const cfg = cfgWithUserTimezone("UTC");
+    // malformed time string that passes the Intl formatting but produces NaN
+    const heartbeat = heartbeatWindow("invalid", "17:00", "UTC");
+
+    const isActive = createActiveHoursPredicate(cfg, heartbeat);
+    // Should return a permissive predicate that always allows heartbeats
+    expect(isActive(Date.UTC(2025, 0, 1, 3, 0, 0))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it("warns when Intl formatting fails inside resolveMinutesInTimeZone", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
+    vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(() => {
+      throw new Error("timezone database unavailable");
+    });
+    try {
+      const cfg = cfgWithUserTimezone("UTC");
+      const heartbeat = heartbeatWindow("09:00", "17:00", "UTC");
+      const isActive = createActiveHoursPredicate(cfg, heartbeat);
+      // Should still be permissive despite the formatter error
+      expect(isActive(Date.now())).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      // Restore the original formatToParts
+      Intl.DateTimeFormat.prototype.formatToParts = originalFormatToParts;
+    }
   });
 });
