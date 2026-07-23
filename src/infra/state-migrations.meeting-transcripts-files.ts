@@ -12,6 +12,7 @@ import type {
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256Hex } from "./crypto-digest.js";
+import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
 
 const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
   "metadata.json",
@@ -542,6 +543,7 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   sourceRoot: string;
   snapshots: LegacyMeetingTranscriptSnapshot[];
   expectedRelativeDirs: string[];
+  canonicalRelativeDirs: string[];
   archiveRoot: string;
 }): Promise<string> {
   await validateMeetingTranscriptRoot(params.sourceRoot);
@@ -566,6 +568,7 @@ export async function archiveLegacyMeetingTranscriptSnapshots(params: {
       sourceRoot: params.sourceRoot,
       archiveRoot: params.archiveRoot,
       migratedSourcePaths: params.snapshots.map((snapshot) => snapshot.sourceDir),
+      canonicalRelativeDirs: params.canonicalRelativeDirs,
     });
   } catch (error) {
     throw new LegacyMeetingTranscriptArchiveMovedError(error);
@@ -586,20 +589,71 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
   sourceRoot: string;
   archiveRoot: string;
   migratedSourcePaths: string[];
+  canonicalRelativeDirs: string[];
 }): Promise<void> {
   await validateMeetingTranscriptRoot(params.archiveRoot);
+  if (!(await validateMeetingTranscriptRoot(params.sourceRoot, { allowMissing: true }))) {
+    await fs.mkdir(params.sourceRoot, { recursive: true });
+    await validateMeetingTranscriptRoot(params.sourceRoot);
+  }
   const migratedRelativeDirs = new Set(
     params.migratedSourcePaths.map(
       (sourcePath) => path.relative(params.sourceRoot, sourcePath) || ".",
     ),
   );
-  const archivedRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(params.archiveRoot);
-  for (const relativeDir of archivedRelativeDirs) {
+  for (const relativeDir of params.canonicalRelativeDirs) {
+    const archiveRelative = path.relative(
+      path.resolve(params.archiveRoot),
+      path.resolve(params.archiveRoot, relativeDir),
+    );
+    const sourceRelative = path.relative(
+      path.resolve(params.sourceRoot),
+      path.resolve(params.sourceRoot, relativeDir),
+    );
+    if (
+      !archiveRelative ||
+      archiveRelative.startsWith("..") ||
+      path.isAbsolute(archiveRelative) ||
+      !sourceRelative ||
+      sourceRelative.startsWith("..") ||
+      path.isAbsolute(sourceRelative)
+    ) {
+      throw new Error(`canonical transcript export path escaped its root: ${relativeDir}`);
+    }
     if (migratedRelativeDirs.has(relativeDir)) {
       continue;
     }
     const source = path.join(params.archiveRoot, relativeDir);
     const destination = path.join(params.sourceRoot, relativeDir);
+    try {
+      const sourceStat = await fs.lstat(source);
+      if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
+        throw new Error(`canonical transcript export source is not a directory: ${source}`);
+      }
+      await assertNoSymlinkParents({
+        rootDir: params.archiveRoot,
+        targetPath: source,
+        allowMissing: false,
+        messagePrefix: "Canonical transcript export source",
+      });
+    } catch (error) {
+      if (!(isRecord(error) && error.code === "ENOENT")) {
+        throw error;
+      }
+      const destinationStat = await fs.lstat(destination);
+      if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
+        throw new Error(
+          `canonical transcript export destination is not a directory: ${destination}`,
+        );
+      }
+      await assertNoSymlinkParents({
+        rootDir: params.sourceRoot,
+        targetPath: destination,
+        allowMissing: false,
+        messagePrefix: "Canonical transcript export destination",
+      });
+      continue;
+    }
     try {
       const destinationStat = await fs.lstat(destination);
       if (destinationStat.isSymbolicLink() || !destinationStat.isDirectory()) {
@@ -607,6 +661,12 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
           `canonical transcript export destination is not a directory: ${destination}`,
         );
       }
+      await assertNoSymlinkParents({
+        rootDir: params.sourceRoot,
+        targetPath: destination,
+        allowMissing: false,
+        messagePrefix: "Canonical transcript export destination",
+      });
       const readMetadata = async (directory: string) =>
         parseSession(
           JSON.parse(await fs.readFile(path.join(directory, "metadata.json"), "utf8")),
@@ -628,6 +688,12 @@ export async function restoreCanonicalMeetingTranscriptExports(params: {
         throw error;
       }
     }
+    await assertNoSymlinkParents({
+      rootDir: params.sourceRoot,
+      targetPath: destination,
+      allowMissing: true,
+      messagePrefix: "Canonical transcript export destination",
+    });
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.rename(source, destination);
   }

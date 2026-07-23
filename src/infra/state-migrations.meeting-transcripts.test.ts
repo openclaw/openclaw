@@ -519,11 +519,53 @@ describe("meeting transcript Doctor migration", () => {
         sourceRoot,
         archiveRoot,
         migratedSourcePaths: [],
+        canonicalRelativeDirs: [path.join("2026-07-01", "recreated-export")],
       }),
     ).resolves.toBeUndefined();
     await expect(fs.stat(path.join(destination, "metadata.json"))).resolves.toBeDefined();
     await expect(fs.stat(path.join(archivedSessionDir, "metadata.json"))).resolves.toBeDefined();
   });
+
+  it("rejects canonical restore paths that normalize outside their roots", async () => {
+    const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+    const sourceRoot = path.join(stateDir, "transcripts");
+    const archiveRoot = path.join(stateDir, "transcripts.migrated-test");
+    await fs.mkdir(archiveRoot, { recursive: true });
+
+    await expect(
+      restoreCanonicalMeetingTranscriptExports({
+        sourceRoot,
+        archiveRoot,
+        migratedSourcePaths: [],
+        canonicalRelativeDirs: [path.join("safe", "..", "..", "outside")],
+      }),
+    ).rejects.toThrow("escaped its root");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked ancestors during canonical export restore",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+      const archiveRoot = path.join(stateDir, "transcripts.migrated-test");
+      const externalRoot = tempDirs.make("openclaw-meeting-transcripts-external-");
+      await fs.mkdir(path.join(archiveRoot), { recursive: true });
+      await seedLegacySession({ stateDir: externalRoot, sessionId: "linked-export" });
+      await fs.symlink(
+        path.join(externalRoot, "transcripts", "2026-07-01"),
+        path.join(archiveRoot, "2026-07-01"),
+        "dir",
+      );
+
+      await expect(
+        restoreCanonicalMeetingTranscriptExports({
+          sourceRoot: path.join(stateDir, "transcripts"),
+          archiveRoot,
+          migratedSourcePaths: [],
+          canonicalRelativeDirs: [path.join("2026-07-01", "linked-export")],
+        }),
+      ).rejects.toThrow(/symlink/i);
+    },
+  );
 
   it("chunks large transcript imports while preserving exact order", async () => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
@@ -785,6 +827,8 @@ describe("meeting transcript Doctor migration", () => {
       "native-export",
       "metadata.json",
     );
+    const nativeTranscriptExport = path.join(path.dirname(nativeExport), "transcript.jsonl");
+    await fs.rm(nativeExport);
     expect(
       detectLegacyMeetingTranscripts({
         stateDir,
@@ -806,7 +850,8 @@ describe("meeting transcript Doctor migration", () => {
     });
 
     expect(result.warnings).toEqual([]);
-    await expect(fs.stat(nativeExport)).resolves.toBeDefined();
+    await expect(fs.stat(nativeExport)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(nativeTranscriptExport)).resolves.toBeDefined();
     await expect(store.readSession("native-export")).resolves.toMatchObject({
       sessionId: "native-export",
     });

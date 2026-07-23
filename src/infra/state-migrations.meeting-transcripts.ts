@@ -59,6 +59,7 @@ function insertSnapshots(params: {
   runId: string;
   now: number;
   archiveRoot: string;
+  canonicalRelativeDirs: string[];
   stageDatabase: DatabaseSync;
   env: NodeJS.ProcessEnv;
   stateDir: string;
@@ -66,6 +67,8 @@ function insertSnapshots(params: {
   runOpenClawStateWriteTransaction(
     ({ db: database }) => {
       const db = migrationDb(database);
+      // Run-wide metadata is stored once here; per-source receipts below keep
+      // only their selector so large migrations remain linear in session count.
       executeSqliteQuerySync(
         database,
         db.insertInto("migration_runs").values({
@@ -74,12 +77,14 @@ function insertSnapshots(params: {
           finished_at: null,
           status: "imported",
           report_json: JSON.stringify({
+            format: "meeting-transcripts-files-v1",
             sessions: params.snapshots.length,
             utterances: params.snapshots.reduce(
               (total, snapshot) => total + snapshot.utteranceCount,
               0,
             ),
             archiveRoot: params.archiveRoot,
+            canonicalRelativeDirs: params.canonicalRelativeDirs,
           }),
         }),
       );
@@ -265,8 +270,19 @@ function finishPendingMigration(params: {
 type PendingImportRun = {
   runId: string;
   archiveRoot: string;
+  canonicalRelativeDirs: string[];
   sources: Array<{ sourcePath: string; sourceHash: string }>;
 };
+
+function isStrictRelativePathWithinRoot(root: string, relativePath: string): boolean {
+  if (!relativePath || relativePath === "." || path.isAbsolute(relativePath)) {
+    return false;
+  }
+  const resolvedRoot = path.resolve(root);
+  const resolvedPath = path.resolve(resolvedRoot, relativePath);
+  const relative = path.relative(resolvedRoot, resolvedPath);
+  return Boolean(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
 
 async function snapshotPendingImportRun(params: {
   run: PendingImportRun;
@@ -320,22 +336,65 @@ function readPendingImportRuns(params: {
   const runs = new Map<string, PendingImportRun>();
   for (const row of rows) {
     const report = JSON.parse(row.run_report_json) as Record<string, unknown>;
+    const format = report.format;
     const archiveRoot = report.archiveRoot;
+    const canonicalRelativeDirs = report.canonicalRelativeDirs;
     if (
       typeof archiveRoot !== "string" ||
+      format !== "meeting-transcripts-files-v1" ||
       !archiveRoot.startsWith(`${params.sourceRoot}.migrated-`) ||
+      !Array.isArray(canonicalRelativeDirs) ||
+      !canonicalRelativeDirs.every(
+        (relativeDir) =>
+          typeof relativeDir === "string" &&
+          isStrictRelativePathWithinRoot(params.sourceRoot, relativeDir),
+      ) ||
       typeof row.source_sha256 !== "string"
     ) {
       throw new Error(`invalid pending meeting transcript migration receipt: ${row.run_id}`);
     }
-    const run = runs.get(row.run_id) ?? { runId: row.run_id, archiveRoot, sources: [] };
-    if (run.archiveRoot !== archiveRoot) {
+    const run: PendingImportRun = runs.get(row.run_id) ?? {
+      runId: row.run_id,
+      archiveRoot,
+      canonicalRelativeDirs,
+      sources: [],
+    };
+    if (
+      run.archiveRoot !== archiveRoot ||
+      JSON.stringify(run.canonicalRelativeDirs) !== JSON.stringify(canonicalRelativeDirs)
+    ) {
       throw new Error(`conflicting meeting transcript archive receipts: ${row.run_id}`);
     }
     run.sources.push({ sourcePath: row.source_path, sourceHash: row.source_sha256 });
     runs.set(row.run_id, run);
   }
   return [...runs.values()];
+}
+
+async function listCanonicalMeetingTranscriptExportDirs(params: {
+  rootDir: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  const state = readMeetingTranscriptMigrationDetectionState({ env: params.env });
+  const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(params.rootDir);
+  return relativeDirs.filter((relativeDir) => {
+    const selector = relativeDir.split(path.sep).join("/");
+    const sessionDir = path.join(params.rootDir, relativeDir);
+    const ownership = resolveMeetingTranscriptExportOwnership({
+      state,
+      selector,
+      sessionDir,
+      sourceRoot: params.rootDir,
+    });
+    return Boolean(
+      ownership &&
+      isRecordedCanonicalTranscriptExport({
+        sessionDir,
+        manifest: ownership.manifest,
+        pending: ownership.pending,
+      }),
+    );
+  });
 }
 
 async function resumePendingImports(params: {
@@ -376,6 +435,7 @@ async function resumePendingImports(params: {
           sourceRoot: params.sourceRoot,
           archiveRoot: run.archiveRoot,
           migratedSourcePaths: run.sources.map((source) => source.sourcePath),
+          canonicalRelativeDirs: run.canonicalRelativeDirs,
         });
         finishPendingMigration({
           runId: run.runId,
@@ -424,6 +484,15 @@ async function resumePendingImports(params: {
       sourceRoot: params.sourceRoot,
       snapshots: pending.snapshots,
       expectedRelativeDirs,
+      canonicalRelativeDirs: [
+        ...new Set([
+          ...run.canonicalRelativeDirs,
+          ...(await listCanonicalMeetingTranscriptExportDirs({
+            rootDir: params.sourceRoot,
+            env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+          })),
+        ]),
+      ],
       archiveRoot: run.archiveRoot,
     });
     finishPendingMigration({
@@ -606,11 +675,16 @@ export async function migrateLegacyMeetingTranscripts(params: {
 
     const runId = randomUUID();
     const archiveRoot = resolveArchiveRoot(detected.sourceDir, now);
+    const canonicalRelativeDirs = await listCanonicalMeetingTranscriptExportDirs({
+      rootDir: detected.sourceDir,
+      env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
+    });
     insertSnapshots({
       snapshots: plans,
       runId,
       now,
       archiveRoot,
+      canonicalRelativeDirs,
       stageDatabase: stage,
       env,
       stateDir: params.stateDir,
@@ -643,6 +717,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
         sourceRoot: detected.sourceDir,
         snapshots: plans,
         expectedRelativeDirs: expectedArchiveRelativeDirs,
+        canonicalRelativeDirs,
         archiveRoot,
       });
     } catch (error) {
