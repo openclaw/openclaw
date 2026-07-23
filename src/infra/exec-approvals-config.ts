@@ -287,9 +287,9 @@ function sanitizeExecApprovalPolicy(
 }
 
 export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApprovalsFile {
-  const { path: rawSocketPath, token: rawSocketToken } = file.socket ?? {};
+  const { path: rawSocketPath, token: rawValue } = file.socket ?? {};
   const socketPath = rawSocketPath?.trim();
-  const token = rawSocketToken?.trim();
+  const token = rawValue?.trim();
   const agents = { ...file.agents };
   const legacyDefault = agents.default;
   if (legacyDefault) {
