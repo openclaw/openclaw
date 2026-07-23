@@ -61,9 +61,7 @@ describe("structured prompt media replay", () => {
 
   it("does not fail a described remote-only fact with no local identity", async () => {
     const media = buildInboundMediaNoteProjection({
-      MediaPaths: [""],
-      MediaUrls: ["https://example.com/described.png"],
-      MediaTypes: ["image/png"],
+      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
       MediaUnderstanding: [
         {
           kind: "image.description",

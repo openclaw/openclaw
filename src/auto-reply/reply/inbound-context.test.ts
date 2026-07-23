@@ -1,8 +1,8 @@
 // Tests inbound context text built from sender and conversation metadata.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
 import type { MsgContext } from "../templating.js";
-import { finalizeInboundContext } from "./inbound-context.js";
+import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 describe("normalizeInboundTextNewlines", () => {
@@ -180,6 +180,107 @@ describe("inbound context contract (providers + extensions)", () => {
       expectInboundContextContract(ctx);
     });
   }
+});
+
+describe("finalizeInboundContext media cleanup", () => {
+  it("removes legacy media fields from both the value and its return type", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      MediaPath: "/tmp/photo.jpg",
+      MediaUrl: "file:///tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaPaths: ["/tmp/photo.jpg"],
+      MediaUrls: ["file:///tmp/photo.jpg"],
+      MediaTypes: ["image/jpeg"],
+      MediaDir: "/tmp/media",
+      MediaWorkspaceDir: "/tmp",
+      MediaTranscribedIndexes: [0],
+      MediaStaged: true,
+    });
+
+    expectTypeOf<Extract<keyof typeof ctx, "MediaPath">>().toEqualTypeOf<never>();
+    for (const key of [
+      "MediaPath",
+      "MediaUrl",
+      "MediaType",
+      "MediaPaths",
+      "MediaUrls",
+      "MediaTypes",
+      "MediaDir",
+      "MediaWorkspaceDir",
+      "MediaTranscribedIndexes",
+      "MediaStaged",
+    ] as const) {
+      expect(Object.hasOwn(ctx, key)).toBe(false);
+    }
+  });
+
+  it("restores legacy media projections only for the shipped SDK adapter", () => {
+    const ctx = finalizeInboundContextForSdk({
+      Body: "hello",
+      MediaPath: "/tmp/photo.jpg",
+      MediaUrl: "file:///tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaDir: "/tmp/media",
+      MediaWorkspaceDir: "/tmp/workspace",
+      MediaStaged: true,
+    });
+
+    expect(ctx).toMatchObject({
+      MediaPath: "/tmp/photo.jpg",
+      MediaUrl: "file:///tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaPaths: ["/tmp/photo.jpg"],
+      MediaUrls: ["file:///tmp/photo.jpg"],
+      MediaTypes: ["image/jpeg"],
+      MediaDir: "/tmp/media",
+      MediaWorkspaceDir: "/tmp/workspace",
+      MediaStaged: true,
+    });
+  });
+
+  it("adopts a singular SDK-staged path without losing canonical facts or metadata", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      media: [
+        {
+          path: "/remote/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          transcribed: true,
+          messageId: "photo",
+        },
+        {
+          path: "/remote/document.pdf",
+          contentType: "application/pdf",
+          kind: "document",
+          messageId: "document",
+          hydrationSuppressed: true,
+        },
+      ],
+      MediaPath: "/tmp/staged/photo.jpg",
+      MediaStaged: true,
+    });
+
+    expect(ctx.media).toHaveLength(2);
+    expect(ctx.media?.[0]).toMatchObject({
+      path: "/tmp/staged/photo.jpg",
+      contentType: "image/jpeg",
+      kind: "image",
+      transcribed: true,
+      messageId: "photo",
+      staged: true,
+    });
+    expect(ctx.media?.[1]).toMatchObject({
+      path: "/remote/document.pdf",
+      contentType: "application/pdf",
+      kind: "document",
+      messageId: "document",
+      hydrationSuppressed: true,
+    });
+    expect(Object.hasOwn(ctx, "MediaPath")).toBe(false);
+    expect(Object.hasOwn(ctx, "MediaStaged")).toBe(false);
+  });
 });
 
 describe("finalizeInboundContext supplemental projection", () => {

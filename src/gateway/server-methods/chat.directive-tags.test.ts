@@ -5211,8 +5211,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         "/tmp/chat-send-image-b.jpg",
       ]);
       expect(userTurnInput.MediaTypes).toEqual(["image/png", "image/jpeg"]);
-      expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
-      expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.media).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
     });
   });
@@ -5640,11 +5639,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/tmp/1.png",
+        contentType: "image/png",
+        workspaceDir: "/tmp",
+      },
+    ]);
     expect(mockState.savedMediaCalls).toEqual([
       {
         contentType: "image/png",
@@ -5816,11 +5817,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/tmp/1.png",
+        contentType: "image/png",
+        workspaceDir: "/tmp",
+      },
+    ]);
     expect(mockState.savedMediaCalls).toEqual([
       {
         contentType: "image/png",
@@ -5830,7 +5833,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
-  it("routes non-image offloaded refs into ctx.MediaPaths + MediaTypes for chat.send", async () => {
+  it("routes non-image offloaded refs into media facts for chat.send", async () => {
     await createTranscriptFixture("openclaw-chat-send-non-image-ctx-media-paths-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -5870,14 +5873,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/report.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/report.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
     // Non-image offloads retain their claim-check line while the staged path
     // also travels structurally for media tools and transcript persistence.
     expect(mockState.lastDispatchCtx?.Body).toContain(
@@ -5887,9 +5889,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "[media attached: media://inbound/saved-media]",
     );
     expect(mockState.lastDispatchImages).toBeUndefined();
-    // Marker replaces the implicit "relative-path no-op" coupling in
-    // get-reply.ts with an explicit skip contract.
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    // The fact workspace is the explicit skip contract for later staging.
   });
 
   it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {
@@ -5939,18 +5939,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         size: mockState.savedMediaCalls[0]?.size ?? 0,
       },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/fake.zip",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/fake.zip",
+        contentType: "application/zip",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchCtx?.Body).toContain(
       "[media attached: media://inbound/saved-media]",
     );
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
-  it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {
+  it("preserves sandbox-relative fact paths and workspace context for media-understanding", async () => {
     await createTranscriptFixture("openclaw-chat-send-non-image-absolutize-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -5992,10 +5994,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
   });
 
   it("preserves staged non-image paths when plugin-bound sessions also carry inline images", async () => {
@@ -6065,12 +6070,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(mockState.lastDispatchImages).toHaveLength(1);
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media/inbound/report.pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media/inbound/report.pdf");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/sandbox/workspace",
+      },
+    ]);
   });
 
   it("wraps stageSandboxMedia infrastructure errors as 5xx UNAVAILABLE for non-fallback refs and cleans up media-store files", async () => {
@@ -6323,16 +6329,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     // Reaches dispatch with the managed media path; not staged into the sandbox,
     // so no workspace dir, and the media-store entry is kept (not cleaned up).
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/huge.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/huge.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/huge.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
@@ -6384,15 +6387,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     // Falls back to the absolute managed path; nothing staged (so no workspace
     // dir) and the media-store entry is preserved for host-side extraction.
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/report.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/report.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/home/user/.openclaw/media/inbound",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 
@@ -6419,7 +6420,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    // No stagedRelativePaths → staged map is empty and ctx.MediaPaths keeps the
+    // No stagedRelativePaths → staged map is empty and the fact keeps the
     // absolute path, mirroring stageSandboxMedia silently skipping the file.
     const respond = vi.fn();
     const context = createChatContext();
@@ -6438,15 +6439,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    expect(mockState.lastDispatchCtx?.MediaPath).toBe(
-      "/home/user/.openclaw/media/inbound/report.pdf",
-    );
-    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
-      "/home/user/.openclaw/media/inbound/report.pdf",
+    expect(mockState.lastDispatchCtx?.media).toEqual([
+      {
+        path: "/home/user/.openclaw/media/inbound/report.pdf",
+        contentType: "application/pdf",
+        workspaceDir: "/sandbox/workspace",
+      },
     ]);
-    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBe("/sandbox/workspace");
-    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.deleteMediaBufferCalls).toEqual([]);
   });
 

@@ -183,9 +183,7 @@ describe("plugin harness prompt media", () => {
 
   it("retains an intentionally non-hydrating remote-only image as a type-only fact", async () => {
     const media = buildInboundMediaNoteProjection({
-      MediaPaths: [""],
-      MediaUrls: ["https://example.com/described.png"],
-      MediaTypes: ["image/png"],
+      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
       MediaUnderstanding: [
         {
           kind: "image.description",

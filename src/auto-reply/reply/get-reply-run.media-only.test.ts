@@ -735,7 +735,7 @@ describe("runPreparedReply media-only handling", () => {
   it("persists pure media turns without the model-facing placeholder", async () => {
     const params = baseParams();
     params.ctx.ThreadHistoryBody = undefined;
-    params.ctx.MediaPath = "/tmp/input.png";
+    params.ctx.media = [{ path: "/tmp/input.png" }];
     params.sessionCtx.ThreadHistoryBody = undefined;
 
     await runPreparedReply(params);
@@ -1155,7 +1155,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current image MediaPaths by extension when MediaTypes are missing", async () => {
+  it("hydrates current image facts by extension when content types are missing", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -1173,8 +1173,7 @@ describe("runPreparedReply media-only handling", () => {
           Body: "describe this",
           RawBody: "describe this",
           CommandBody: "describe this",
-          MediaPaths: [imagePath],
-          MediaWorkspaceDir: tmpDir,
+          media: [{ path: imagePath, workspaceDir: tmpDir }],
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
           ChatType: "group",
@@ -1186,8 +1185,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
           ChatType: "group",
-          MediaPaths: [imagePath],
-          MediaWorkspaceDir: tmpDir,
+          media: [{ path: imagePath, workspaceDir: tmpDir }],
         },
       }),
     );
@@ -1232,9 +1230,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "telegram",
           OriginatingTo: "42",
           ChatType: "direct",
-          MediaPath: "/tmp/previous-image.png",
-          MediaPaths: ["/tmp/previous-image.png"],
-          MediaTypes: ["image/png"],
+          media: [{ path: "/tmp/previous-image.png", contentType: "image/png" }],
         },
       }),
     );
@@ -1356,9 +1352,10 @@ describe("runPreparedReply media-only handling", () => {
           Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
           RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
           CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
           MediaUnderstanding: [
             {
               kind: "image.description",
@@ -1386,9 +1383,10 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
           ChatType: "direct",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
         },
       }),
     );
@@ -1408,7 +1406,7 @@ describe("runPreparedReply media-only handling", () => {
     });
   });
 
-  it("rehydrates only current MediaPaths missing image understanding", async () => {
+  it("rehydrates only current facts missing image understanding", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -1429,9 +1427,10 @@ describe("runPreparedReply media-only handling", () => {
           Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
           RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
           CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
           MediaUnderstanding: [
             {
               kind: "image.description",
@@ -1452,9 +1451,10 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "webchat",
           OriginatingTo: "webchat:local",
           ChatType: "direct",
-          MediaPaths: [imagePath, secondImagePath],
-          MediaTypes: ["image/png", "image/png"],
-          MediaWorkspaceDir: tmpDir,
+          media: [
+            { path: imagePath, contentType: "image/png", workspaceDir: tmpDir },
+            { path: secondImagePath, contentType: "image/png", workspaceDir: tmpDir },
+          ],
         },
       }),
     );
@@ -2408,7 +2408,7 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingTo: "-100123",
           ChatType: "group",
           InboundEventKind: "room_event",
-          MediaType: "audio/ogg",
+          media: [{ contentType: "audio/ogg" }],
           MessageSid: "35676",
           MessageSidFull: "  ",
           SenderName: "Keśava",
