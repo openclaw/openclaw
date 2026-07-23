@@ -40,25 +40,14 @@ import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
 } from "openclaw/plugin-sdk/reply-payload";
-import {
-  getReplyFromConfig,
-  isSilentReplyText,
-  type GetReplyOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { getReplyFromConfig, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "openclaw/plugin-sdk/simple-completion-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   CoreConfig,
-  MatrixFreshnessConfig,
-  MatrixFreshnessFinalAction,
-  MatrixFreshnessMode,
   MatrixConfig,
   MatrixRoomConfig,
   MatrixStreamingMode,
@@ -98,12 +87,15 @@ import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
-import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import {
-  createMatrixLatestVisibleTracker,
-  evaluateMatrixFreshnessObservation,
-  resolveMatrixDraftFreshnessScope,
-} from "./latest-visible.js";
+  chooseMatrixFinalFreshnessAction,
+  computeMatrixDraftFreshnessState,
+  resolveMatrixFreshnessMode,
+  sanitizeMatrixFinalFreshnessActions,
+  reviseMatrixFinalReplyWithFreshness,
+} from "./draft-freshness.js";
+import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { createMatrixLatestVisibleTracker } from "./latest-visible.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
@@ -479,297 +471,6 @@ function resolveMatrixParticipationAgents(cfg: CoreConfig): ParticipationAgentId
       ],
     }))
     .filter((entry) => entry.agentId);
-}
-
-const MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS: MatrixFreshnessFinalAction[] = [
-  "revise",
-  "send-as-is",
-  "suppress",
-];
-
-type MatrixDraftFreshnessState = {
-  roomChangedSinceDraftStart: boolean;
-  invalidatingEventIds: string[];
-  recheckEventIds: string[];
-  latestPendingHistory?: HistoryEntry[];
-  latestVisibleEventIds: string[];
-  reason?: string;
-};
-
-type MatrixFinalFreshnessAiDecision = {
-  finalAction?: string;
-  action?: string;
-  reason?: string;
-};
-
-type MatrixReplyResolver = typeof getReplyFromConfig;
-
-function sanitizeMatrixFinalFreshnessActions(
-  actions?: readonly MatrixFreshnessFinalAction[],
-): MatrixFreshnessFinalAction[] {
-  const validActions = new Set<MatrixFreshnessFinalAction>(
-    MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS,
-  );
-  const sanitized = Array.from(
-    new Set(
-      (actions ?? []).filter((action): action is MatrixFreshnessFinalAction =>
-        validActions.has(action),
-      ),
-    ),
-  );
-  return sanitized.length > 0 ? sanitized : [...MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS];
-}
-
-function resolveMatrixFreshnessMode(config?: MatrixFreshnessConfig): MatrixFreshnessMode {
-  return config?.mode ?? "auto";
-}
-
-function extractMatrixFinalFreshnessJsonObject(text: string): MatrixFinalFreshnessAiDecision {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return {};
-  }
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim();
-  const candidate = fenced ?? trimmed;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start < 0 || end <= start) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(candidate.slice(start, end + 1)) as MatrixFinalFreshnessAiDecision;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function resolveMatrixFinalFreshnessActionFromAiResult(params: {
-  decision: MatrixFinalFreshnessAiDecision;
-  allowedActions: readonly MatrixFreshnessFinalAction[];
-}): MatrixFreshnessFinalAction | undefined {
-  const action =
-    typeof params.decision.finalAction === "string"
-      ? params.decision.finalAction
-      : typeof params.decision.action === "string"
-        ? params.decision.action
-        : undefined;
-  if (!action) {
-    return undefined;
-  }
-  return params.allowedActions.find((allowed) => allowed === action);
-}
-
-function resolveMatrixBodyForAgentBase(ctxPayload: Record<string, unknown>): string {
-  const bodyForAgent = normalizeOptionalString(ctxPayload.BodyForAgent);
-  if (bodyForAgent) {
-    return bodyForAgent;
-  }
-  return normalizeOptionalString(ctxPayload.Body) ?? "";
-}
-
-function formatMatrixFreshnessHistoryEntry(entry: HistoryEntry): string {
-  const sender = normalizeOptionalString(entry.sender) ?? "unknown";
-  const body = normalizeOptionalString(entry.body) ?? "";
-  const timestamp =
-    typeof entry.timestamp === "number" && Number.isFinite(entry.timestamp)
-      ? ` timestamp=${entry.timestamp}`
-      : "";
-  const messageId = normalizeOptionalString(entry.messageId);
-  return `- ${sender}${messageId ? ` [${messageId}]` : ""}${timestamp}: ${body}`;
-}
-
-function buildMatrixFinalFreshnessReviseBodyForAgent(params: {
-  ctxPayload: Record<string, unknown>;
-  draftText?: string;
-  latestPendingHistory?: readonly HistoryEntry[];
-}): string {
-  const latestHistory = (params.latestPendingHistory ?? [])
-    .map(formatMatrixFreshnessHistoryEntry)
-    .join("\n");
-  return [
-    resolveMatrixBodyForAgentBase(params.ctxPayload),
-    "",
-    "System note: before this Matrix draft was published, newer relevant Matrix room messages arrived.",
-    "Re-evaluate the original turn in light of the newer messages below. If the reply is now unnecessary, reply exactly NO_REPLY. Otherwise send the updated reply only.",
-    "",
-    "Unpublished draft text:",
-    params.draftText?.trim() || "(empty)",
-    "",
-    "New Matrix messages since drafting began:",
-    latestHistory || "(none)",
-  ].join("\n");
-}
-
-function computeMatrixDraftFreshnessState(params: {
-  config?: MatrixFreshnessConfig;
-  draftEventId?: string;
-  historyAfterSnapshot?: readonly HistoryEntry[];
-  latestVisibleEvents?: readonly MatrixRawEvent[];
-  messageId?: string;
-  replyToEventId?: string;
-  selfUserId?: string;
-  threadId?: string;
-}): MatrixDraftFreshnessState {
-  const ignoredEventIds = [params.messageId, params.draftEventId].filter((value): value is string =>
-    Boolean(value?.trim()),
-  );
-  const draftScope = resolveMatrixDraftFreshnessScope({
-    threadId: params.config?.scope === "room" ? undefined : params.threadId,
-  });
-  const invalidatingEventIds: string[] = [];
-  const recheckEventIds: string[] = [];
-  for (const event of params.latestVisibleEvents ?? []) {
-    const decision = evaluateMatrixFreshnessObservation({
-      draftScope,
-      event,
-      selfUserId: params.selfUserId,
-      ignoredEventIds,
-      protectedEventIds: [params.messageId, params.replyToEventId].filter(
-        (value): value is string => Boolean(value?.trim()),
-      ),
-    });
-    if (
-      params.config?.scope === "room" &&
-      decision.action === "ignore" &&
-      (decision.reason === "different-thread" ||
-        decision.reason === "thread-irrelevant-root-message") &&
-      event.type === EventType.RoomMessage
-    ) {
-      invalidatingEventIds.push(normalizeOptionalString(event.event_id) ?? "");
-      continue;
-    }
-    if (decision.action === "invalidate") {
-      invalidatingEventIds.push(decision.eventId);
-    } else if (decision.action === "recheck") {
-      recheckEventIds.push(decision.eventId);
-    }
-  }
-  const latestPendingHistory = (params.historyAfterSnapshot ?? []).filter(
-    (entry) => entry.messageId !== params.messageId,
-  );
-  const historyChanged = latestPendingHistory.length > 0;
-  const roomChangedSinceDraftStart =
-    historyChanged || invalidatingEventIds.length > 0 || recheckEventIds.length > 0;
-  return {
-    roomChangedSinceDraftStart,
-    invalidatingEventIds: invalidatingEventIds.filter(Boolean),
-    recheckEventIds: recheckEventIds.filter(Boolean),
-    latestPendingHistory: latestPendingHistory.length > 0 ? latestPendingHistory : undefined,
-    latestVisibleEventIds: (params.latestVisibleEvents ?? [])
-      .map((event) => normalizeOptionalString(event.event_id) ?? "")
-      .filter(Boolean),
-    reason: historyChanged
-      ? "history-after-snapshot"
-      : invalidatingEventIds.length > 0
-        ? "latest-visible-event"
-        : recheckEventIds.length > 0
-          ? "protected-event-recheck"
-          : undefined,
-  };
-}
-
-async function chooseMatrixFinalFreshnessAction(params: {
-  allowedActions: readonly MatrixFreshnessFinalAction[];
-  cfg: CoreConfig;
-  config?: MatrixFreshnessConfig;
-  ctxPayload: Record<string, unknown>;
-  draftText?: string;
-  mode: MatrixFreshnessMode;
-  state: MatrixDraftFreshnessState;
-  agentId: string;
-  log?: (message: string) => void;
-}): Promise<MatrixFreshnessFinalAction> {
-  const allowedActions = sanitizeMatrixFinalFreshnessActions(params.allowedActions);
-  const pickAllowed = (preferred: MatrixFreshnessFinalAction): MatrixFreshnessFinalAction =>
-    allowedActions.includes(preferred) ? preferred : (allowedActions[0] ?? "send-as-is");
-
-  if (params.mode !== "auto") {
-    return pickAllowed(params.mode);
-  }
-  if (params.config?.finalAction) {
-    return pickAllowed(params.config.finalAction);
-  }
-  if (params.config?.aiDeterminesFinalAction !== true) {
-    return pickAllowed("send-as-is");
-  }
-  try {
-    const prepared = await prepareSimpleCompletionModelForAgent({
-      cfg: params.cfg as never,
-      agentId: params.agentId,
-      modelRef: params.config?.model?.trim() || undefined,
-    });
-    if ("error" in prepared) {
-      params.log?.(`matrix freshness ai action selector unavailable: ${prepared.error}`);
-      return pickAllowed("send-as-is");
-    }
-    const completion = await completeWithPreparedSimpleCompletionModel({
-      model: prepared.model,
-      auth: prepared.auth,
-      context: [
-        {
-          role: "system",
-          content:
-            'Decide what to do with an unpublished Matrix agent draft after newer relevant room messages arrived. Return JSON only with schema {"finalAction":"revise|suppress|send-as-is","reason":string}. Use only allowedActions. revise means rewrite before sending, suppress means send nothing, send-as-is means send the existing draft unchanged.',
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            allowedActions,
-            originalTurn: resolveMatrixBodyForAgentBase(params.ctxPayload),
-            draftText: params.draftText ?? "",
-            latestHistory: params.state.latestPendingHistory ?? [],
-            invalidatingEventIds: params.state.invalidatingEventIds,
-            recheckEventIds: params.state.recheckEventIds,
-          }),
-        },
-      ] as never,
-      options: { maxTokens: 180 } as never,
-    });
-    const selected = resolveMatrixFinalFreshnessActionFromAiResult({
-      decision: extractMatrixFinalFreshnessJsonObject((completion as { text?: string }).text ?? ""),
-      allowedActions,
-    });
-    return selected ?? pickAllowed("send-as-is");
-  } catch (err) {
-    params.log?.(`matrix freshness ai action selector failed: ${String(err)}`);
-    return pickAllowed("send-as-is");
-  }
-}
-
-async function reviseMatrixFinalReplyWithFreshness(params: {
-  cfg: CoreConfig;
-  ctxPayload: Record<string, unknown>;
-  draftText?: string;
-  latestPendingHistory?: readonly HistoryEntry[];
-  onModelSelected?: GetReplyOptions["onModelSelected"];
-  replyResolver: MatrixReplyResolver;
-}): Promise<ReplyPayload | undefined> {
-  const freshCtxPayload = {
-    ...params.ctxPayload,
-    BodyForAgent: buildMatrixFinalFreshnessReviseBodyForAgent({
-      ctxPayload: params.ctxPayload,
-      draftText: params.draftText,
-      latestPendingHistory: params.latestPendingHistory,
-    }),
-    InboundHistory: params.latestPendingHistory,
-  };
-  const result = await params.replyResolver(
-    freshCtxPayload as never,
-    {
-      disableBlockStreaming: true,
-      disableTools: true,
-      suppressNextUserMessagePersistence: true,
-      suppressDefaultToolProgressMessages: true,
-      onModelSelected: params.onModelSelected,
-    },
-    params.cfg as never,
-  );
-  const payload = Array.isArray(result) ? result.find((entry) => entry?.text?.trim()) : result;
-  if (!payload?.text?.trim() || isSilentReplyText(payload.text)) {
-    return undefined;
-  }
-  return payload as ReplyPayload;
 }
 
 function formatMatrixToolProgressMarkdownCode(text: string): string {
