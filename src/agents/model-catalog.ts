@@ -195,6 +195,7 @@ function overlayCatalogMetadata(
   options?: {
     catalogCompatRoute?: ModelCatalogEntry;
     preserveBaseCompat?: boolean;
+    preserveBaseContext?: boolean;
     preserveBaseName?: boolean;
   },
 ): ModelCatalogEntry {
@@ -209,8 +210,12 @@ function overlayCatalogMetadata(
     ...(routeChanged && !options?.preserveBaseName ? { name: overlay.name } : {}),
     ...(overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
-    ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
-    ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
+    ...((!options?.preserveBaseContext || routeChanged) && overlay.contextWindow !== undefined
+      ? { contextWindow: overlay.contextWindow }
+      : {}),
+    ...((!options?.preserveBaseContext || routeChanged) && overlay.contextTokens !== undefined
+      ? { contextTokens: overlay.contextTokens }
+      : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
@@ -245,6 +250,7 @@ function mergeCatalogEntries(
   options?: {
     catalogCompatRoutes?: readonly ModelCatalogEntry[];
     preserveBaseCompat?: boolean;
+    preserveBaseContext?: boolean;
     preserveBaseName?: boolean;
   },
 ): void {
@@ -439,6 +445,7 @@ export async function buildPreparedModelCatalogSnapshot(
 
     const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
     logStage("suppress-resolver-ready");
+    const discoveredEntries: ModelCatalogEntry[] = [];
 
     for (const entry of entries) {
       const rawId = normalizeOptionalString(entry?.id) ?? "";
@@ -485,6 +492,7 @@ export async function buildPreparedModelCatalogSnapshot(
         compat,
       } satisfies ModelCatalogEntry;
       models.push(model);
+      discoveredEntries.push(model);
       mergeCatalogRouteVariants(routeVariants, [model]);
     }
     const manifestModels = loadManifestModelCatalog({
@@ -549,6 +557,13 @@ export async function buildPreparedModelCatalogSnapshot(
         }
         mergeCatalogRouteVariants(routeVariants, normalizedSupplemental);
         mergeCatalogEntries(models, normalizedSupplemental);
+        // Provider hooks may add genuinely live rows, but some compatibility
+        // hooks clone their already manifest/config-overlaid input. Preserve
+        // registry-owned context metadata when the same provider/model exists,
+        // while still accepting new hook-discovered models.
+        mergeCatalogEntries(discoveredEntries, normalizedSupplemental, {
+          preserveBaseContext: true,
+        });
       }
     }
     logStage("plugin-models-merged", `entries=${models.length}`);
@@ -563,7 +578,10 @@ export async function buildPreparedModelCatalogSnapshot(
     }
     logStage("configured-models-finalized", `entries=${models.length}`);
 
-    const snapshot = createModelCatalogSnapshot(models, routeVariants);
+    const snapshot = {
+      ...createModelCatalogSnapshot(models, routeVariants),
+      discoveredEntries: sortModelCatalogEntries(discoveredEntries),
+    } satisfies ModelCatalogSnapshot;
     logStage("complete", `entries=${snapshot.entries.length}`);
     return snapshot;
   } catch (error) {

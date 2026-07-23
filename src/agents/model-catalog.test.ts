@@ -75,6 +75,7 @@ describe("prepared model catalog builder", () => {
       "alpha/a",
       "beta/z",
     ]);
+    expect(snapshot.discoveredEntries).toEqual(snapshot.entries);
     expect(snapshot.routeVariants).toEqual(snapshot.entries);
   });
 
@@ -108,6 +109,7 @@ describe("prepared model catalog builder", () => {
           id: "demo",
           name: "Discovered Demo",
           provider: "custom",
+          contextWindow: 96_000,
           input: ["text"],
         },
       ],
@@ -122,6 +124,15 @@ describe("prepared model catalog builder", () => {
       reasoning: true,
       input: ["text", "image"],
     });
+    expect(snapshot.discoveredEntries).toEqual([
+      expect.objectContaining({
+        provider: "custom",
+        id: "demo",
+        name: "Discovered Demo",
+        contextWindow: 96_000,
+        input: ["text"],
+      }),
+    ]);
     expect(snapshot.routeVariants).toHaveLength(2);
   });
 
@@ -288,6 +299,152 @@ describe("prepared model catalog builder", () => {
     expect(resolvedOAuth).toBe(resolveOAuthApiKeyMarker("subscription"));
     expect(mocks.augmentModelCatalogWithProviderPlugins).toHaveBeenCalledWith(
       expect.objectContaining({ metadataSnapshot }),
+    );
+  });
+
+  it("does not let hook-cloned overlays replace registry-discovered context", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockImplementationOnce(async ({ context }) => {
+      const entry = context.entries.find(
+        (candidate) => candidate.provider === "custom" && candidate.id === "demo",
+      );
+      return entry ? [structuredClone(entry)] : [];
+    });
+
+    const snapshot = await buildPreparedModelCatalogSnapshot({
+      agentDir: "/tmp/model-catalog-test",
+      authCredentials: {},
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.test/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "demo",
+                  name: "Configured demo",
+                  contextWindow: 32_000,
+                  maxTokens: 4_096,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      metadataSnapshot,
+      modelRegistry: registry([
+        {
+          provider: "custom",
+          id: "demo",
+          name: "Discovered demo",
+          contextWindow: 900_000,
+        },
+      ]),
+    });
+
+    expect(snapshot.entries).toContainEqual(
+      expect.objectContaining({ provider: "custom", id: "demo", contextWindow: 32_000 }),
+    );
+    expect(snapshot.discoveredEntries).toContainEqual(
+      expect.objectContaining({ provider: "custom", id: "demo", contextWindow: 900_000 }),
+    );
+  });
+
+  it("keeps live hook context when discovery changes the physical route", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      {
+        provider: "custom",
+        id: "demo",
+        name: "Live route B",
+        api: "openai-completions",
+        baseUrl: "https://route-b.example.test/v1",
+        contextWindow: 800_000,
+      },
+    ]);
+
+    const snapshot = await buildPreparedModelCatalogSnapshot({
+      agentDir: "/tmp/model-catalog-test",
+      authCredentials: {},
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://route-b.example.test/v1",
+              models: [
+                {
+                  id: "demo",
+                  name: "Configured route B",
+                  contextWindow: 32_000,
+                  maxTokens: 4_096,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      metadataSnapshot,
+      modelRegistry: registry([
+        {
+          provider: "custom",
+          id: "demo",
+          name: "Registry route A",
+          api: "openai-responses",
+          baseUrl: "https://route-a.example.test/v1",
+          contextWindow: 900_000,
+        },
+      ]),
+    });
+
+    expect(snapshot.entries).toContainEqual(
+      expect.objectContaining({
+        provider: "custom",
+        id: "demo",
+        baseUrl: "https://route-b.example.test/v1",
+        contextWindow: 32_000,
+      }),
+    );
+    expect(snapshot.discoveredEntries).toContainEqual(
+      expect.objectContaining({
+        provider: "custom",
+        id: "demo",
+        baseUrl: "https://route-b.example.test/v1",
+        contextWindow: 800_000,
+      }),
+    );
+  });
+
+  it("keeps provider-hook discovery separate from manifest overlays", async () => {
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      {
+        provider: "dynamic",
+        id: "live-model",
+        name: "Live model",
+        contextWindow: 900_000,
+      },
+    ]);
+
+    const snapshot = await buildPreparedModelCatalogSnapshot({
+      agentDir: "/tmp/model-catalog-test",
+      authCredentials: {},
+      config: { plugins: { enabled: false } },
+      metadataSnapshot,
+      modelRegistry: registry([]),
+    });
+
+    expect(snapshot.entries).toContainEqual(
+      expect.objectContaining({ provider: "dynamic", id: "live-model", contextWindow: 900_000 }),
+    );
+    expect(snapshot.discoveredEntries).toContainEqual(
+      expect.objectContaining({ provider: "dynamic", id: "live-model", contextWindow: 900_000 }),
     );
   });
 

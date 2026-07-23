@@ -30,6 +30,8 @@ export type ModelCatalogEntry = {
 export type ModelCatalogSnapshot = {
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
+  /** Provider-discovered rows captured before manifest/config/static overlays. */
+  discoveredEntries?: ModelCatalogEntry[];
   /** Static provider-hook rows captured alongside the full lifecycle generation. */
   staticEntries?: ModelCatalogEntry[];
   /**

@@ -54,9 +54,21 @@ const loadPreparedModelCatalogRuntime = () => import("./prepared-model-catalog.j
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
+  mode?: "minimum" | "fallback";
 }) {
+  const mode = params.mode ?? "minimum";
+  const fallbackProtectedKeys = mode === "fallback" ? new Set(params.cache.keys()) : undefined;
   const cacheMinimum = (key: string, contextTokens: number) => {
     const existing = params.cache.get(key);
+    if (mode === "fallback") {
+      if (fallbackProtectedKeys?.has(key)) {
+        return;
+      }
+      if (existing === undefined || contextTokens < existing) {
+        params.cache.set(key, contextTokens);
+      }
+      return;
+    }
     if (existing === undefined || contextTokens < existing) {
       params.cache.set(key, contextTokens);
     }
@@ -222,15 +234,20 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
         }
-        const models =
-          catalogResult.status === "fulfilled" ? catalogResult.value.modelCatalog.entries : [];
-        const providerStaticModels =
-          catalogResult.status === "fulfilled"
-            ? (catalogResult.value.modelCatalog.staticEntries ?? [])
-            : [];
+        const catalog =
+          catalogResult.status === "fulfilled" ? catalogResult.value.modelCatalog : undefined;
         applyDiscoveredContextWindows({
           cache: stagedTokenCache,
-          models: [...models, ...providerStaticModels],
+          models: catalog?.discoveredEntries ?? catalog?.entries ?? [],
+        });
+        // The final catalog includes manifest/config overlays, while staticEntries
+        // contains bundled provider fallbacks. Both may fill missing aliases and
+        // models, but neither may lower provider-discovered limits captured from
+        // this same prepared lifecycle generation.
+        applyDiscoveredContextWindows({
+          cache: stagedTokenCache,
+          models: [...(catalog?.entries ?? []), ...(catalog?.staticEntries ?? [])],
+          mode: "fallback",
         });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
