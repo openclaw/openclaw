@@ -1,4 +1,5 @@
 // Popup: pairing, connection status, and per-tab share toggle.
+import { relayStatusLabel } from "./modules/relay-core.js";
 
 const statusDot = document.getElementById("statusDot");
 const pairSection = document.getElementById("pairSection");
@@ -15,13 +16,6 @@ const sendPageButton = document.getElementById("sendPageButton");
 const pageShareStatus = document.getElementById("pageShareStatus");
 let sendingPage = false;
 
-const STATE_LABEL = {
-  on: "Connected to OpenClaw",
-  connecting: "Connecting…",
-  error: "Relay unreachable — is the OpenClaw gateway running?",
-  off: "Not connected",
-};
-
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   return tab ?? null;
@@ -35,7 +29,7 @@ async function refresh() {
   if (!status.paired) {
     return;
   }
-  const label = STATE_LABEL[status.state] ?? STATE_LABEL.off;
+  const label = relayStatusLabel(status);
   statusLine.textContent = `${label} · ${status.sharedTabCount} tab${status.sharedTabCount === 1 ? "" : "s"} shared`;
   const tab = await activeTab();
   if (tab?.id === undefined) {

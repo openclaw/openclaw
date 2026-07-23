@@ -48,6 +48,9 @@ const RELAY_OPENING_TIMEOUT_MS = 30_000;
 /** @type {WebSocket|null} */
 let relayWs = null;
 let relayState = "off"; // off | connecting | on | error
+// Last relay-socket failure, so the popup can name the real cause (auth rejected vs
+// unreachable vs dropped) instead of always blaming a down gateway.
+let lastRelayError = null; // { code, reason, wasOpen, at } | null
 let copilot = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
@@ -361,17 +364,24 @@ async function connectRelay() {
   try {
     ws = new WebSocket(relayUrl, buildRelayWsProtocols(token));
   } catch {
+    // Never surface the constructor's error message: a corrupted-paste token makes the
+    // WebSocket SyntaxError embed the raw token (a host-local secret) verbatim, and the
+    // popup renders `reason`. Leave it empty so the popup shows the generic re-pair line.
+    lastRelayError = { code: null, reason: "", wasOpen: false, at: Date.now() };
     setBadge("error");
     scheduleReconnect();
     return;
   }
   relayWs = ws;
+  let relayOpened = false;
   armRelayOpeningDeadline();
   ws.addEventListener("open", () => {
     if (relayWs !== ws) {
       ws.close();
       return;
     }
+    relayOpened = true;
+    lastRelayError = null;
     clearRelayOpeningDeadline();
     reconnectAttempt = 0;
     setBadge("on");
@@ -399,10 +409,19 @@ async function connectRelay() {
     }
     void handleRelayCommand(msg);
   });
-  ws.addEventListener("close", () => {
+  ws.addEventListener("close", (event) => {
     if (relayWs === ws) {
       clearRelayOpeningDeadline();
       relayWs = null;
+      // Record why it closed. A close BEFORE open is a handshake failure (gateway down,
+      // wrong URL, browser control off, or the token was rejected — the browser can't
+      // tell these apart); a close AFTER open with code 1008 is a policy/auth rejection.
+      lastRelayError = {
+        code: typeof event?.code === "number" ? event.code : null,
+        reason: event?.reason ?? "",
+        wasOpen: relayOpened,
+        at: Date.now(),
+      };
       setBadge("error");
       scheduleReconnect();
     }
@@ -531,6 +550,10 @@ function handleRelayOpeningDeadline() {
   } catch {
     // The socket may have changed state while the alarm event was queued.
   }
+  // Nulling relayWs above makes the close handler's `relayWs === ws` guard skip
+  // recording, so capture the timeout here — otherwise a prior in-session failure's
+  // cause would linger in the popup for this never-opened connect hang.
+  lastRelayError = { code: null, reason: "timed out connecting", wasOpen: false, at: Date.now() };
   setBadge("error");
   scheduleReconnect();
 }
@@ -557,10 +580,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       case "getStatus": {
         const { relayUrl } = await getConfig();
         const shared = await listSharedTabs();
+        let relayHost;
+        try {
+          relayHost = relayUrl ? new URL(relayUrl).host : "";
+        } catch {
+          relayHost = "";
+        }
         sendResponse({
           paired: Boolean(relayUrl),
           state: relayState,
           sharedTabCount: shared.length,
+          relayHost,
+          lastError: relayState === "error" ? lastRelayError : null,
         });
         return;
       }
