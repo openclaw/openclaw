@@ -53,13 +53,20 @@ import {
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+  resolveUiKnownSelectedGlobalAgentId,
+} from "../lib/sessions/session-key.ts";
 import "../lib/toast.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -570,6 +577,27 @@ class OpenClawShell extends OpenClawLightDomElement {
       agentsList: context.agents.state.agentsList,
       hello: gatewaySnapshot.hello,
     };
+  }
+
+  private chatTitleContext(
+    context: ApplicationContext<RouteId>,
+    outboxScopeHost: StoredOutboxScopeHost,
+  ): string {
+    const sessionKey = this.activeSessionKey;
+    const row = context.sessions.state.result?.sessions.find(
+      (session) => session.key === sessionKey,
+    );
+    // An agent's main chat is its identity, so use its roster label when available.
+    const parsed = parseAgentSessionKey(sessionKey);
+    const mainAgentId = isUiGlobalSessionKey(sessionKey)
+      ? resolveUiKnownSelectedGlobalAgentId(outboxScopeHost)
+      : parsed?.rest === resolveUiConfiguredMainKey(outboxScopeHost)
+        ? normalizeAgentId(parsed.agentId)
+        : undefined;
+    const agent = context.agents.state.agentsList?.agents.find(
+      (candidate) => normalizeAgentId(candidate.id) === mainAgentId,
+    );
+    return agent ? normalizeAgentLabel(agent) : resolveSessionDisplayName(sessionKey, row);
   }
 
   constructor() {
@@ -1301,12 +1329,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (!routeId || !context) {
       return;
     }
+    const outboxScopeHost = this.storedOutboxScopeHost(context);
     let primaryContext = titleForRoute(routeId);
     if (routeId === "chat" && this.activeSessionKey) {
-      const row = context.sessions.state.result?.sessions.find(
-        (session) => session.key === this.activeSessionKey,
-      );
-      primaryContext = resolveSessionDisplayName(this.activeSessionKey, row) || primaryContext;
+      primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     } else if (routeId === "custodian") {
       primaryContext = t("nav.askOpenClaw");
     }
@@ -1314,9 +1340,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
       offline: !context.gateway.snapshot.connected,
-      queuedCount:
-        this.outboxStoreRuntime?.summarizeStoredChatOutboxes(this.storedOutboxScopeHost(context))
-          .total ?? 0,
+      queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total ?? 0,
     });
     if (document.title !== title) {
       document.title = title;

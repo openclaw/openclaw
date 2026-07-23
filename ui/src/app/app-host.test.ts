@@ -372,14 +372,19 @@ describe("OpenClaw shell document title", () => {
   function createContext(options: {
     connected?: boolean;
     approvalCount?: number;
+    agentsList?: AgentsListResult | null;
+    assistantAgentId?: string;
     sessions?: GatewaySessionRow[] | null;
   }): ApplicationContext {
     return {
       gateway: {
-        snapshot: { connected: options.connected ?? true },
+        snapshot: {
+          connected: options.connected ?? true,
+          assistantAgentId: options.assistantAgentId ?? null,
+        },
         connection: { gatewayUrl: "ws://gateway.test" },
       },
-      agents: { state: { agentsList: null } },
+      agents: { state: { agentsList: options.agentsList ?? null } },
       overlays: {
         snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
       },
@@ -405,7 +410,7 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("Usage — OpenClaw");
   });
 
-  it("uses the active session's derived title for chat", () => {
+  it("uses the active session's derived title for a non-main chat", () => {
     const session: GatewaySessionRow = {
       key: "agent:main:dashboard:quarterly-launch",
       kind: "direct",
@@ -419,6 +424,51 @@ describe("OpenClaw shell document title", () => {
     shell.syncDocumentTitle();
 
     expect(document.title).toBe("Quarterly launch plan — OpenClaw");
+  });
+
+  it("uses the agent name for an agent main chat", () => {
+    const shell = createShell(
+      createContext({ agentsList: roster("main", [{ id: "main", name: "Molty" }]) }),
+    );
+    shell.routeState = { routeId: "chat" };
+    shell.activeSessionKey = "agent:main:main";
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Molty — OpenClaw");
+  });
+
+  it("uses the selected agent name for a global-scope main chat", () => {
+    const shell = createShell(
+      createContext({
+        assistantAgentId: "molty",
+        agentsList: roster("main", [{ id: "molty", name: "Molty" }]),
+      }),
+    );
+    shell.routeState = { routeId: "chat" };
+    shell.activeSessionKey = "global";
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Molty — OpenClaw");
+  });
+
+  it("falls back to the session display name when the main agent is missing", () => {
+    const session: GatewaySessionRow = {
+      key: "agent:missing:main",
+      kind: "direct",
+      updatedAt: 1,
+      label: "Fallback thread",
+    };
+    const shell = createShell(
+      createContext({ sessions: [session], agentsList: roster("main", []) }),
+    );
+    shell.routeState = { routeId: "chat" };
+    shell.activeSessionKey = session.key;
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Fallback thread — OpenClaw");
   });
 
   it("prefixes the pending approval count", () => {
