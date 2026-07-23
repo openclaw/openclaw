@@ -538,13 +538,15 @@ export function resolveExecApprovalsFromFile(params: {
 }
 
 export {
-  commandRequiresSecurityAuditSuppressionApproval,
   DEFAULT_EXEC_APPROVAL_DECISIONS,
+  OPTIONAL_EXEC_APPROVAL_DECISIONS,
+} from "./exec-approvals-policy.js";
+export {
+  commandRequiresSecurityAuditSuppressionApproval,
   isExecApprovalDecisionAllowed,
   maxAsk,
   minSecurity,
   normalizeExecApprovalUnavailableDecisions,
-  OPTIONAL_EXEC_APPROVAL_DECISIONS,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalRequestAllowedDecisions,
