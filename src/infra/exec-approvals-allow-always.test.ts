@@ -845,7 +845,12 @@ $0 \\"$1\\"" touch {marker}`,
       const shell = makeExecutable(dir, shellName);
       makeExecutable(dir, "id");
       const env = makePathEnv(dir);
-      const commandFlag = shellName === "nu" || shellName === "nu.exe" ? "--commands" : "-c";
+      const commandFlag =
+        shellName === "nu" || shellName === "nu.exe"
+          ? "--commands"
+          : shellName === "yash"
+            ? "--cmdline"
+            : "-c";
       const result = await evaluateShellAllowlistWithAuthorization({
         command: `${shell} ${commandFlag} 'id > marker'`,
         allowlist: [{ pattern: shell, source: "allow-always" }],

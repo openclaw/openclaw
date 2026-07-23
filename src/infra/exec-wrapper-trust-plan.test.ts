@@ -110,6 +110,32 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
+      name: "recognizes yash cmdline flags before evaluating allowlist policy",
+      enabled: true,
+      argv: ["yash", "--cmdline", "echo hi"],
+      expected: {
+        argv: ["yash", "--cmdline", "echo hi"],
+        policyArgv: ["yash", "--cmdline", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
+      name: "recognizes clustered yash command flags before evaluating allowlist policy",
+      enabled: true,
+      argv: ["yash", "-xc", "echo hi"],
+      expected: {
+        argv: ["yash", "-xc", "echo hi"],
+        policyArgv: ["yash", "-xc", "echo hi"],
+        wrapperChain: [],
+        policyBlocked: false,
+        shellWrapperExecutable: true,
+        shellInlineCommand: "echo hi",
+      },
+    },
+    {
       name: "fails closed for non-executing command argv carrier queries",
       enabled: process.platform !== "win32",
       argv: ["command", "-v", "curl"],
