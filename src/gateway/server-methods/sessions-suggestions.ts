@@ -602,6 +602,23 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       typing: effectiveTyping,
       now,
       emit: () => {
+        const current = resolveSessionSharingTarget({
+          cfg: context.getRuntimeConfig(),
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+        });
+        if (!current || current.entry.sessionId !== target.entry.sessionId) {
+          return false;
+        }
+        const currentRole = resolveSessionSharingRole({ client, target: current });
+        const currentVisibility = resolveSessionVisibility(current.entry);
+        if (
+          currentRole === "viewer" &&
+          currentVisibility !== "shared" &&
+          currentVisibility !== "suggest"
+        ) {
+          return false;
+        }
         const liveIdentities = liveViewerIdentities(sessionKeys);
         if (liveIdentities.size < 2 || !liveIdentities.has(actor.id)) {
           return false;

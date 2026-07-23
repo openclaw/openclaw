@@ -654,4 +654,63 @@ describe("session suggestion handlers", () => {
       ]);
     });
   });
+
+  it("drops a delayed typing refresh after the session is replaced", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(20_000);
+      const resetKey = "agent:main:typing-reset";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: resetKey },
+        {
+          sessionId: "session-before-reset",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "shared",
+        },
+      );
+      mocks.presence = [
+        { user: { id: "alice-reset" }, watchedSessions: [resetKey] },
+        { user: { id: "owner" }, watchedSessions: [resetKey] },
+      ];
+      const broadcast = vi.fn();
+      const requestContext = context(broadcast);
+      const alice = client("alice-reset", "Alice");
+
+      expect(
+        (
+          await call(
+            "session.typing",
+            { sessionKey: resetKey, typing: true },
+            alice,
+            requestContext,
+          )
+        ).responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: true });
+      await vi.advanceTimersByTimeAsync(100);
+      expect(
+        (
+          await call(
+            "session.typing",
+            { sessionKey: resetKey, typing: true },
+            alice,
+            requestContext,
+          )
+        ).responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: false });
+
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: resetKey },
+        {
+          sessionId: "session-after-reset",
+          updatedAt: 2,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "shared",
+        },
+      );
+      await vi.advanceTimersByTimeAsync(900);
+
+      expect(broadcast).toHaveBeenCalledTimes(1);
+    });
+  });
 });
