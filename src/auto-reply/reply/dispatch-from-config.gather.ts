@@ -510,7 +510,7 @@ export async function gatherDispatchRequest(
   return { status: "ready" as const, state: nextState };
 }
 
-export type GatherDispatchRequestResult = Awaited<ReturnType<typeof gatherDispatchRequest>>;
+type GatherDispatchRequestResult = Awaited<ReturnType<typeof gatherDispatchRequest>>;
 export type GatherDispatchRequestReadyState = Extract<
   GatherDispatchRequestResult,
   { status: "ready" }

@@ -297,5 +297,3 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     }),
   };
 }
-
-export type FinalizeDispatchAndAuditResult = Awaited<ReturnType<typeof finalizeDispatchAndAudit>>;

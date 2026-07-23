@@ -308,7 +308,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   return { status: "ready" as const, state: nextState };
 }
 
-export type PrepareDispatchOperationResult = Awaited<ReturnType<typeof prepareDispatchOperation>>;
+type PrepareDispatchOperationResult = Awaited<ReturnType<typeof prepareDispatchOperation>>;
 export type PrepareDispatchOperationReadyState = Extract<
   PrepareDispatchOperationResult,
   { status: "ready" }

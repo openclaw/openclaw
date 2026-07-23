@@ -527,7 +527,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   return { status: "ready" as const, state: nextState };
 }
 
-export type PrepareDispatchOperationContextResult = Awaited<
+type PrepareDispatchOperationContextResult = Awaited<
   ReturnType<typeof prepareDispatchOperationContext>
 >;
 export type PrepareDispatchOperationContextReadyState = Extract<

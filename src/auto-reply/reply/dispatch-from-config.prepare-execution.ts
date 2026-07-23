@@ -548,7 +548,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   return { status: "ready" as const, state: nextState };
 }
 
-export type PrepareDispatchExecutionResult = Awaited<ReturnType<typeof prepareDispatchExecution>>;
+type PrepareDispatchExecutionResult = Awaited<ReturnType<typeof prepareDispatchExecution>>;
 export type PrepareDispatchExecutionReadyState = Extract<
   PrepareDispatchExecutionResult,
   { status: "ready" }

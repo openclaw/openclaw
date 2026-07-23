@@ -285,7 +285,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   return { status: "ready" as const, state: nextState };
 }
 
-export type PrepareDispatchDeliveryResult = Awaited<ReturnType<typeof prepareDispatchDelivery>>;
+type PrepareDispatchDeliveryResult = Awaited<ReturnType<typeof prepareDispatchDelivery>>;
 export type PrepareDispatchDeliveryReadyState = Extract<
   PrepareDispatchDeliveryResult,
   { status: "ready" }

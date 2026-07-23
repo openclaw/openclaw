@@ -534,7 +534,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   return { status: "ready" as const, state: nextState };
 }
 
-export type ChooseDispatchRouteResult = Awaited<ReturnType<typeof chooseDispatchRoute>>;
+type ChooseDispatchRouteResult = Awaited<ReturnType<typeof chooseDispatchRoute>>;
 export type ChooseDispatchRouteReadyState = Extract<
   ChooseDispatchRouteResult,
   { status: "ready" }
