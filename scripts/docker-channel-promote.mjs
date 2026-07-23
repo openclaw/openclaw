@@ -5,7 +5,7 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
-import { compareReleaseVersions } from "./lib/release-version.mjs";
+import { compareReleaseVersions } from "./lib/npm-publish-plan.mjs";
 import { parsePlatform, verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const DOCKER_TIMEOUT_MS = 120_000;
