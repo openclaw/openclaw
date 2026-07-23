@@ -61,14 +61,16 @@ export function registerCommandsCli(program: Command): void {
       ) => {
         validateOutputOptions(opts, command);
         const runtimeCommands = collectRuntimeCommandTree(program);
-        const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : [];
+        const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : undefined;
         if (opts.json) {
           process.stdout.write(
-            `${JSON.stringify(buildCatalogList({ runtimeCommands, pluginCommands }), null, 2)}\n`,
+            `${JSON.stringify(buildCatalogList({ runtimeCommands, ...(pluginCommands ? { pluginCommands } : {}) }), null, 2)}\n`,
           );
           return;
         }
-        process.stdout.write(`${renderCatalogListMarkdown({ runtimeCommands, pluginCommands })}\n`);
+        process.stdout.write(
+          `${renderCatalogListMarkdown({ runtimeCommands, ...(pluginCommands ? { pluginCommands } : {}) })}\n`,
+        );
       },
     );
 
@@ -88,9 +90,12 @@ export function registerCommandsCli(program: Command): void {
         validateOutputOptions(opts, command);
         await loadInspectedCommandGroup(program, commandPath);
         const runtimeCommands = collectRuntimeCommandTree(program);
-        const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : [];
+        const pluginCommands = opts.pluginDescriptors ? await loadPluginCommands() : undefined;
         const inspection = inspectCommand(
-          buildCatalogList({ runtimeCommands, pluginCommands }),
+          buildCatalogList({
+            runtimeCommands,
+            ...(pluginCommands ? { pluginCommands } : {}),
+          }),
           commandPath,
         );
         if (opts.json) {

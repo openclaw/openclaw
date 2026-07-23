@@ -42,6 +42,14 @@ describe("command inventory list", () => {
     });
     expect(list.cli.runtimeCommandScope).toBe("current-invocation-registered-tree");
     expect(list.cli.nodeCommandScope).toBe("caller-supplied");
+    expect(list.collection).toEqual({
+      descriptors: "complete",
+      commandRoutes: "complete",
+      runtimeCommands: "not-requested",
+      pluginCommands: "not-requested",
+      nodeCommands: "not-requested",
+    });
+    expect(list.cli.descriptors.map((descriptor) => descriptor.name)).not.toContain("crestodian");
     expect(list.cli.descriptors.find((descriptor) => descriptor.name === "gateway")).toMatchObject({
       source: "subcli",
       hasSubcommands: true,
@@ -59,6 +67,17 @@ describe("command inventory list", () => {
     expect(list.counts.commandDescriptors).toBeGreaterThan(50);
     expect(list.counts.commandRoutes).toBeGreaterThan(90);
     expect(list.counts.routedOperations).toBeGreaterThan(10);
+  });
+
+  it("preserves unknown routed-operation effects", () => {
+    const operation = buildCatalogList().cli.routedOperations.find(
+      (entry) => entry.id === "agents-list",
+    );
+
+    expect(operation).toBeDefined();
+    expect(operation).not.toHaveProperty("risk");
+    expect(operation).not.toHaveProperty("confirmationRequired");
+    expect(operation).not.toHaveProperty("effectMode");
   });
 
   it("carries supplied node/operator commands through the list contract", () => {
@@ -83,7 +102,9 @@ describe("command inventory list", () => {
     expect(markdown).toContain("- Runtime command scope: current-invocation-registered-tree");
     expect(markdown).toContain("- Supplied node commands: 0");
     expect(markdown).toContain("- Node command scope: caller-supplied");
-    expect(markdown).toContain("| `gateway-status` | `low` | `read` | no | `gateway status` |");
+    expect(markdown).toContain(
+      "| `gateway-status` | `unknown` | `unknown` | unknown | `gateway status` |",
+    );
     expect(markdown).not.toContain("Agent/tool surfaces");
   });
 

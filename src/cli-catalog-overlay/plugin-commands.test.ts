@@ -52,6 +52,9 @@ describe("plugin command catalog", () => {
         visibility: ["audit", "operator", "policy"],
       }),
     ]);
+    expect(pluginCommands[0]).not.toHaveProperty("risk");
+    expect(pluginCommands[0]).not.toHaveProperty("effectMode");
+    expect(pluginCommands[0]).not.toHaveProperty("confirmationRequired");
     expect(pluginCommands.map((command) => command.name)).not.toContain("private-camera");
     expect(buildCatalogList({ pluginCommands }).counts.pluginCommands).toBe(2);
   });
@@ -97,7 +100,7 @@ describe("plugin command catalog", () => {
     ]);
 
     expect(renderCatalogListMarkdown({ pluginCommands })).toContain(
-      "| `camera` | None | 1 | `example-plugin` | `medium` | `mixed` | yes | `docs`, `audit`, `operator`, `policy` | Camera \\| controls for operators |",
+      "| `camera` | None | 1 | `example-plugin` | `unknown` | `unknown` | unknown | `docs`, `audit`, `operator`, `policy` | Camera \\| controls for operators |",
     );
   });
 });

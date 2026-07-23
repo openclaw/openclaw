@@ -49,9 +49,9 @@ type CliCatalogListCommandRoute = {
 type CliCatalogListRoutedOperation = {
   readonly id: string;
   readonly commandPaths: readonly (readonly string[])[];
-  readonly risk: string;
-  readonly confirmationRequired: boolean;
-  readonly effectMode: string;
+  readonly risk?: string;
+  readonly confirmationRequired?: boolean;
+  readonly effectMode?: string;
   readonly sourceKind: "route-policy";
   readonly discoveryMode: "route-policy";
   readonly visibility: readonly CliCatalogVisibility[];
@@ -73,6 +73,13 @@ export type CliCatalogList = {
     readonly runtimeCommands: number;
     readonly pluginCommands: number;
     readonly nodeCommands: number;
+  };
+  readonly collection: {
+    readonly descriptors: "complete";
+    readonly commandRoutes: "complete";
+    readonly runtimeCommands: "collected" | "not-requested";
+    readonly pluginCommands: "collected" | "not-requested";
+    readonly nodeCommands: "caller-supplied" | "not-requested";
   };
   readonly cli: {
     readonly descriptors: readonly CliCatalogListDescriptor[];
@@ -109,10 +116,12 @@ function mapDescriptor(
 }
 
 function buildDescriptors(): readonly CliCatalogListDescriptor[] {
-  const core = getCoreCliCommandDescriptors().map((descriptor) =>
-    mapDescriptor(descriptor, "core"),
-  );
-  const subcli = getSubCliEntries().map((descriptor) => mapDescriptor(descriptor, "subcli"));
+  const core = getCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.hidden !== true)
+    .map((descriptor) => mapDescriptor(descriptor, "core"));
+  const subcli = getSubCliEntries()
+    .filter((descriptor) => descriptor.hidden !== true)
+    .map((descriptor) => mapDescriptor(descriptor, "subcli"));
   return [...core, ...subcli];
 }
 
@@ -148,9 +157,11 @@ function buildRoutedOperations(
       const effectProfile = effectProfiles.get(id);
       return {
         id,
-        risk: effectProfile?.risk ?? "low",
-        confirmationRequired: effectProfile?.confirmationRequired ?? false,
-        effectMode: effectProfile?.effectMode ?? "read",
+        ...(effectProfile?.risk ? { risk: effectProfile.risk } : {}),
+        ...(effectProfile?.confirmationRequired !== undefined
+          ? { confirmationRequired: effectProfile.confirmationRequired }
+          : {}),
+        ...(effectProfile?.effectMode ? { effectMode: effectProfile.effectMode } : {}),
         sourceKind: "route-policy" as const,
         discoveryMode: "route-policy" as const,
         visibility: ["audit", "operator", "policy"] as const,
@@ -184,6 +195,13 @@ export function buildCatalogList(
       runtimeCommands: runtimeCommands.length,
       pluginCommands: pluginCommands.length,
       nodeCommands: nodeCommands.length,
+    },
+    collection: {
+      descriptors: "complete",
+      commandRoutes: "complete",
+      runtimeCommands: params.runtimeCommands === undefined ? "not-requested" : "collected",
+      pluginCommands: params.pluginCommands === undefined ? "not-requested" : "collected",
+      nodeCommands: params.nodeCommands === undefined ? "not-requested" : "caller-supplied",
     },
     cli: {
       descriptors,
@@ -230,7 +248,7 @@ export function renderCatalogListMarkdown(
   for (const operation of list.cli.routedOperations) {
     const paths = operation.commandPaths.map((path) => markdownCodeCell(path.join(" "))).join(", ");
     lines.push(
-      `| ${markdownCodeCell(operation.id)} | ${markdownCodeCell(operation.risk)} | ${markdownCodeCell(operation.effectMode)} | ${operation.confirmationRequired ? "yes" : "no"} | ${paths || "None"} |`,
+      `| ${markdownCodeCell(operation.id)} | ${markdownCodeCell(operation.risk ?? "unknown")} | ${markdownCodeCell(operation.effectMode ?? "unknown")} | ${operation.confirmationRequired === undefined ? "unknown" : operation.confirmationRequired ? "yes" : "no"} | ${paths || "None"} |`,
     );
   }
   if (list.cli.pluginCommands.length > 0) {
@@ -243,7 +261,7 @@ export function renderCatalogListMarkdown(
     );
     for (const command of list.cli.pluginCommands) {
       lines.push(
-        `| ${markdownCodeCell(command.commandPath.join(" "))} | ${command.parentPath.length > 0 ? markdownCodeCell(command.parentPath.join(" ")) : "None"} | ${command.depth} | ${markdownCodeCell(command.pluginId)} | ${markdownCodeCell(command.risk)} | ${markdownCodeCell(command.effectMode)} | ${command.confirmationRequired ? "yes" : "no"} | ${command.visibility.map(markdownCodeCell).join(", ")} | ${markdownTableCell(command.description || "None")} |`,
+        `| ${markdownCodeCell(command.commandPath.join(" "))} | ${command.parentPath.length > 0 ? markdownCodeCell(command.parentPath.join(" ")) : "None"} | ${command.depth} | ${markdownCodeCell(command.pluginId)} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${command.confirmationRequired === undefined ? "unknown" : command.confirmationRequired ? "yes" : "no"} | ${command.visibility.map(markdownCodeCell).join(", ")} | ${markdownTableCell(command.description || "None")} |`,
       );
     }
   }
@@ -273,7 +291,7 @@ export function renderCatalogListMarkdown(
     );
     for (const command of list.cli.nodeCommands) {
       lines.push(
-        `| ${markdownCodeCell(command.command)} | ${markdownTableCell(command.nodeName ?? command.nodeId ?? "Any")} | ${markdownCodeCell(command.availability)} | ${markdownCodeCell(command.approvalKind)} | ${markdownCodeCell(command.risk)} | ${markdownCodeCell(command.effectMode)} | ${markdownCodeCell(command.invocationHint)} |`,
+        `| ${markdownCodeCell(command.command)} | ${markdownTableCell(command.nodeName ?? command.nodeId ?? "Any")} | ${markdownCodeCell(command.availability ?? "unknown")} | ${markdownCodeCell(command.approvalKind ?? "unknown")} | ${markdownCodeCell(command.risk ?? "unknown")} | ${markdownCodeCell(command.effectMode ?? "unknown")} | ${command.invocationHint ? markdownCodeCell(command.invocationHint) : "None"} |`,
       );
     }
   }

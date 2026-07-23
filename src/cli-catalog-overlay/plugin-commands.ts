@@ -12,9 +12,9 @@ export type CliCatalogPluginCommand = {
   readonly description: string;
   readonly hasSubcommands: boolean;
   readonly hidden: false;
-  readonly risk: string;
-  readonly confirmationRequired: boolean;
-  readonly effectMode: string;
+  readonly risk?: string;
+  readonly confirmationRequired?: boolean;
+  readonly effectMode?: string;
   readonly commandHints: readonly string[];
   readonly sourceKind: "plugin";
   readonly sourceId: string;
@@ -53,9 +53,13 @@ export function buildPluginCatalogCommands(
           description: descriptor.description,
           hasSubcommands: descriptor.hasSubcommands,
           hidden: false as const,
-          risk: descriptor.effectProfile?.risk ?? "medium",
-          confirmationRequired: descriptor.effectProfile?.confirmationRequired ?? true,
-          effectMode: descriptor.effectProfile?.effectMode ?? "mixed",
+          ...(descriptor.effectProfile?.risk ? { risk: descriptor.effectProfile.risk } : {}),
+          ...(descriptor.effectProfile?.confirmationRequired !== undefined
+            ? { confirmationRequired: descriptor.effectProfile.confirmationRequired }
+            : {}),
+          ...(descriptor.effectProfile?.effectMode
+            ? { effectMode: descriptor.effectProfile.effectMode }
+            : {}),
           commandHints: [commandPath.join(" ")],
           sourceKind: "plugin" as const,
           sourceId: `${entry.pluginId}:${commandPath.join(" ")}`,
@@ -77,9 +81,6 @@ export function buildPluginCatalogCommands(
           description: "Plugin CLI command registered without descriptor metadata",
           hasSubcommands: false,
           hidden: false as const,
-          risk: "medium",
-          confirmationRequired: true,
-          effectMode: "mixed",
           commandHints: [commandPath.join(" ")],
           sourceKind: "plugin" as const,
           sourceId: `${entry.pluginId}:${commandPath.join(" ")}`,
