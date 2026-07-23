@@ -17,7 +17,7 @@ import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   normalizeExecutableToken,
-  POSIX_SHELL_WRAPPERS,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/exec-wrapper-resolution.js";
 import {
@@ -32,7 +32,7 @@ import type { RunResult } from "./invoke-types.js";
  * This module keeps command approval analysis separate from process execution,
  * and only rewrites shell transports when the rebuilt command still satisfies policy.
  */
-const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
