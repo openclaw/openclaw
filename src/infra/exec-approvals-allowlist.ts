@@ -50,6 +50,8 @@ import {
   extractBindableShellWrapperInlineCommand,
   isShellWrapperExecutable,
   normalizeExecutableToken,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
+  POSIX_SHELL_WRAPPERS,
   POWERSHELL_WRAPPERS,
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -979,6 +981,13 @@ function isShellWrapperSegment(segment: ExecCommandSegment): boolean {
   return hasSegmentExecutableMatch(segment, isShellWrapperExecutable);
 }
 
+function isOpaquePosixShellWrapperSegment(segment: ExecCommandSegment): boolean {
+  return hasSegmentExecutableMatch(segment, (token) => {
+    const wrapper = normalizeExecutableToken(token);
+    return POSIX_SHELL_WRAPPERS.has(wrapper) && !POSIX_PARSEABLE_SHELL_WRAPPERS.has(wrapper);
+  });
+}
+
 const SHELL_WRAPPER_OPTIONS_WITH_VALUE = new Set(["-c", "--command", "-o", "-O", "+O"]);
 
 const SHELL_WRAPPER_DISQUALIFYING_SCRIPT_OPTIONS = [
@@ -1001,6 +1010,9 @@ function resolveShellWrapperScriptCandidatePath(params: {
   cwd?: string;
 }): string | undefined {
   if (!isShellWrapperSegment(params.segment)) {
+    return undefined;
+  }
+  if (isOpaquePosixShellWrapperSegment(params.segment)) {
     return undefined;
   }
 

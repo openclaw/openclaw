@@ -933,6 +933,66 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it("prevents opaque shell option values from becoming script allowlist targets", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "xonsh");
+    const rcFile = path.join(dir, "allowed.xsh");
+    fs.writeFileSync(rcFile, "");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `${shell} --rc ${rcFile} -c 'id > marker'`,
+      allowlist: [{ pattern: rcFile, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
+  it("fails closed for unmodeled opaque shell value options before inline payloads", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "nu");
+    const pluginList = path.join(dir, "allowed-plugins.nuon");
+    fs.writeFileSync(pluginList, "");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `${shell} --plugins ${pluginList} --commands 'id > marker'`,
+      allowlist: [{ pattern: pluginList, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("prevents allow-always bypass for caffeinate wrapper chains", async () => {
     if (process.platform === "win32") {
       return;
