@@ -184,6 +184,49 @@ describe("slackOutbound", () => {
     );
   });
 
+  it("falls back to text for rendered provenance minted before a runtime restart", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "Deployments",
+          headers: ["Name", "Status"],
+          rows: [["Marvin", "Ready"]],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: { text: "Safe fallback", presentation },
+      presentation,
+      ctx: { cfg, accountId: "default" } as never,
+    });
+    const { presentation: _presentation, ...renderedForDelivery } = rendered!;
+
+    vi.resetModules();
+    const { slackOutbound: restartedSlackOutbound } = await import("./outbound-adapter.js");
+    await restartedSlackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: renderedForDelivery,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Safe fallback",
+      expect.objectContaining({
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
   it("does not trust caller-authored rendered presentation provenance", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
 
