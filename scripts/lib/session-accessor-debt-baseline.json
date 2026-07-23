@@ -16,7 +16,8 @@
   "sessionCompactManualTrim": {},
   "sessionLifecycleCleanup": {
     "src/config/sessions/session-accessor.sqlite-projection.ts": 2,
-    "src/config/sessions/store-maintenance-operations.ts": 2
+    "src/config/sessions/store-maintenance-operations.ts": 2,
+    "src/infra/state-migrations.legacy-session-store.ts": 2
   },
   "transcriptWriter": {
     "src/agents/embedded-agent-runner/compaction-hooks.ts": 2,
