@@ -95,10 +95,15 @@ function applyLegacyInboundLabelRewrites(text: string): string {
     "Reply chain of current user message (nearest first):\n```json",
   );
 
-  // 7. FENCE-GATED fenced: "Replied message" block (shipped ≤v2026.5.2, fenced, recognized as current sentinel).
+  // 7. FENCE-GATED fenced: the oldest reply-target label. Emitters ≤ the 64e28a6ac94 rename wrote
+  //    `Replied message (untrusted, for context):`; that commit renamed the SAME block to
+  //    `Reply target of current user message (...)` (its untrusted form is handled by rule 5). Rewrite
+  //    this legacy form to the current lineage-canonical label — the one both the core stripper's
+  //    INBOUND_META_SENTINELS and memory-lancedb recognize. (Plain `Replied message:` is recognized only
+  //    by memory-lancedb, so it would leave the block un-stripped by core; do not use it as the target.)
   normalized = normalized.replace(
     /^Replied message \(untrusted, for context\):[ \t]*\n```json/gm,
-    "Replied message:\n```json",
+    "Reply target of current user message:\n```json",
   );
 
   // 8. PATTERN-BASED chat windows (dynamic labels, non-fenced): distinctive (untrusted, chronological, ...)

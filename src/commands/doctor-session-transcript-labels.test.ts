@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  hasInboundMetadataSentinel,
+  stripInboundMetadata,
+} from "../auto-reply/reply/strip-inbound-meta.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
   readSqliteTranscriptEventRows,
@@ -407,14 +411,73 @@ describe("doctor SQLite session transcript label migration", () => {
     // Recency preserved: the watermark advances minimally (prev+1) to invalidate in-flight
     // projection snapshots, but must NOT jump to repair-time and reorder the session list.
     expect(readUpdatedAt()).toBe(OLD_UPDATED_AT + 1);
-    const legacyRowIndex = before.events.findIndex(
-      (e) =>
-        Boolean(e) &&
-        typeof e === "object" &&
-        !Array.isArray(e) &&
-        (e as { id?: unknown }).id === "legacy-fenced",
+    expect(findEventJson(before.events, before.rows, "legacy-fenced")).not.toBe(
+      findEventJson(after.events, after.rows, "legacy-fenced"),
     );
-    expect(before.rows[legacyRowIndex].eventJson).not.toBe(after.rows[legacyRowIndex].eventJson);
+  });
+
+  it("preserves FTS entry timestamps when rebuilding the index during repair", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    // Timestamp-less user message: extractTranscriptIndexEntry falls back to the row's created_at,
+    // so this row exercises the FTS fallback-timestamp path the repair's rebuild must reproduce.
+    const legacyFencedContent = [
+      "Thread starter (untrusted, for context):",
+      "```json",
+      '{"body":"test"}',
+      "```",
+    ].join("\n");
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "fts-user",
+        parentId: null,
+        message: { role: "user", content: legacyFencedContent },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    // Force the message row to a distinctly OLD created_at, well before repair-time Date.now(). The
+    // append-time FTS timestamp still holds the (recent) append value until the repair rebuilds it.
+    const OLD_CREATED_AT = 1_000_000;
+    runOpenClawAgentWriteTransaction((db) => {
+      db.db
+        .prepare("UPDATE transcript_events SET created_at = ? WHERE session_id = ?")
+        .run(OLD_CREATED_AT, SESSION_ID);
+    }, databaseOptions);
+    const readFtsTimestamp = () =>
+      Number(
+        (
+          database.db
+            .prepare(
+              "SELECT timestamp AS v FROM session_transcript_fts WHERE session_id = ? AND message_id = ?",
+            )
+            .get(SESSION_ID, "fts-user") as { v: number | string }
+        ).v,
+      );
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    // The rebuild (delete+reconcile) must re-derive the FTS timestamp from the row's own created_at,
+    // NOT stamp Date.now(); otherwise every timestamp-less event's search recency resets on repair.
+    expect(readFtsTimestamp()).toBe(OLD_CREATED_AT);
   });
 
   it("fence-gates rules 4-6: unfenced variations must not be rewritten", async () => {
@@ -533,7 +596,7 @@ describe("doctor SQLite session transcript label migration", () => {
     );
   });
 
-  it("rewrites fenced rule 7: Replied message", async () => {
+  it("rewrites fenced rule 7: Replied message → canonical Reply target label", async () => {
     const databaseOptions = { agentId: AGENT_ID, env: state.env };
     const scope = {
       ...databaseOptions,
@@ -583,8 +646,16 @@ describe("doctor SQLite session transcript label migration", () => {
     ) as { message?: { content?: unknown } } | undefined;
     const content = repairedUser?.message?.content;
 
-    expect(content).toContain("Replied message:");
-    expect(content).not.toContain("Replied message (untrusted, for context):");
+    // The oldest `Replied message` label is rewritten to the lineage-canonical target, NOT to a bare
+    // `Replied message:` — only `Reply target of current user message:` is a core INBOUND_META sentinel.
+    expect(typeof content).toBe("string");
+    expect(content).toContain("Reply target of current user message:");
+    expect(content).not.toContain("Replied message");
+
+    // Prove the rewritten label is recognized (and stripped) by the CORE stripper, not just memory-lancedb.
+    const repaired = content as string;
+    expect(hasInboundMetadataSentinel(repaired)).toBe(true);
+    expect(stripInboundMetadata(repaired)).not.toContain("Reply target of current user message:");
   });
 
   it("does not rewrite unfenced rule 7: Replied message", async () => {
