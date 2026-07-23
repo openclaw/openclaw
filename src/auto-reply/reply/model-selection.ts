@@ -7,7 +7,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
@@ -51,6 +50,7 @@ export {
 } from "./model-selection-directive.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
+  normalizeStoredRuntimeModelRef,
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
 
@@ -123,28 +123,8 @@ const modelCatalogRuntimeLoader = createLazyImportLoader(
 const sessionPersistenceRuntimeLoader = createLazyImportLoader(
   () => import("./session-entry-persistence.js"),
 );
-function normalizeRuntimeModelRef(
-  provider: string,
-  model: string,
-  cfg?: OpenClawConfig,
-  sessionEntry?: SessionEntry,
-) {
-  const normalized = normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
-  // Only CLI-bound sessions can persist a runtime id in providerOverride. Keep
-  // ordinary provider overrides on the static model-selection path instead of
-  // loading the CLI setup registry for every reply.
-  const hasCliSessionBinding = Object.keys(sessionEntry?.cliSessionBindings ?? {}).some(
-    (runtime) => normalizeProviderId(runtime) === normalized.provider,
-  );
-  const canonicalProvider =
-    cfg && hasCliSessionBinding
-      ? resolveCliRuntimeCanonicalProvider({
-          runtime: normalized.provider,
-          config: cfg,
-          includeSetupRegistry: true,
-        })
-      : undefined;
-  return canonicalProvider ? { ...normalized, provider: canonicalProvider } : normalized;
+function normalizeRuntimeModelRef(provider: string, model: string) {
+  return normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
 }
 
 function loadPreparedModelCatalogRuntime() {
@@ -361,7 +341,7 @@ export async function createModelSelectionState(params: {
     directStoredOverride &&
     !hasOneTurnModelOverride
   ) {
-    const normalizedOverride = normalizeRuntimeModelRef(
+    const normalizedOverride = normalizeStoredRuntimeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
       cfg,
@@ -452,7 +432,7 @@ export async function createModelSelectionState(params: {
     (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
-    const normalizedStoredOverride = normalizeRuntimeModelRef(
+    const normalizedStoredOverride = normalizeStoredRuntimeModelRef(
       storedOverride.provider || defaultProvider,
       storedOverride.model,
       cfg,
