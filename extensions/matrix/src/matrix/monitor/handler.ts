@@ -21,6 +21,7 @@ import {
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
+  bindIngressLifecycleToReplyOptions,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -88,6 +89,7 @@ import {
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
 import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import type { MatrixIngressLifecycle } from "./ingress.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
@@ -584,7 +586,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     return await roomIngressQueue.enqueue(roomId, task);
   };
 
-  return async (roomId: string, event: MatrixRawEvent) => {
+  return async (
+    roomId: string,
+    event: MatrixRawEvent,
+    ingressLifecycle?: MatrixIngressLifecycle,
+  ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let inboundReplayClaim:
       | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
@@ -636,7 +642,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (senderId === selfUserId) {
           return undefined;
         }
-        if (dropPreStartupMessages) {
+        if (dropPreStartupMessages && !ingressLifecycle) {
+          // The pre-startup drop targets stale sync-cache replays. A dispatch
+          // carrying an ingress lifecycle is a journaled replay of never-adopted
+          // work, so dropping it here would lose an accepted event after a crash.
           if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
             return undefined;
           }
@@ -2419,6 +2428,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: _route.accountId,
         raw: event,
+        // Durable ingress: adoption tombstones the journaled claim once the
+        // turn's recovery state is durable; before that a crash replays it.
+        ...(ingressLifecycle ? bindIngressLifecycleToReplyOptions(ingressLifecycle) : {}),
         adapter: {
           ingest: () => ({
             id: messageId,
@@ -2581,6 +2593,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       await commitInboundEventIfClaimed();
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
+      if (ingressLifecycle) {
+        // Journaled dispatch must surface failures so the drain's retry /
+        // dead-letter policy owns them instead of silently tombstoning.
+        throw err;
+      }
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
       // model run throws or times out mid-stream.
