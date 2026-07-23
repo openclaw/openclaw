@@ -671,6 +671,41 @@ describe("meeting transcript Doctor migration", () => {
     expect(resumed.changes.join("\n")).toContain("Resumed and archived");
   });
 
+  it("refuses to archive a new legacy session added after a pending import", async () => {
+    const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+    await seedLegacySession({ stateDir, sessionId: "pending-original" });
+    const detected = detectLegacyMeetingTranscripts({
+      stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+    await migrateLegacyMeetingTranscripts({
+      detected,
+      env: databaseEnv(stateDir),
+      stateDir,
+      testHooks: {
+        afterImport: () => {
+          throw new Error("interrupted");
+        },
+      },
+    });
+    const lateDir = await seedLegacySession({ stateDir, sessionId: "pending-late" });
+
+    const pending = detectLegacyMeetingTranscripts({
+      stateDir,
+      env: databaseEnv(stateDir),
+      doctorOnlyStateMigrations: true,
+    });
+    const resumed = await migrateLegacyMeetingTranscripts({
+      detected: pending,
+      env: databaseEnv(stateDir),
+      stateDir,
+    });
+
+    expect(resumed.changes).toEqual([]);
+    expect(resumed.warnings.join("\n")).toContain("session tree changed before archive");
+    await expect(fs.stat(lateDir)).resolves.toBeDefined();
+  });
+
   it("finalizes receipts after interruption following the archive move", async () => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {

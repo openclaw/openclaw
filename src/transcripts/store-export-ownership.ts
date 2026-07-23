@@ -164,11 +164,37 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
       await handle?.close();
     }
   }
-  if (!owner) {
-    const pendingOwners = owners.filter((row) =>
-      (JSON.parse(row.export_pending_json) as string[]).includes("metadata.json"),
-    );
-    owner = pendingOwners.length === 1 ? pendingOwners[0] : undefined;
+  if (!owner && !metadataArtifact) {
+    const manifestMatches = [];
+    for (const candidate of owners) {
+      const candidateManifest = JSON.parse(candidate.export_manifest_json) as Record<
+        string,
+        string
+      >;
+      const candidatePending = new Set(JSON.parse(candidate.export_pending_json) as string[]);
+      let verified = 0;
+      let matches = true;
+      for (const { entry, canonicalName } of artifacts) {
+        const artifactPath = path.join(sessionDir, entry.name);
+        const stat = await fs.lstat(artifactPath);
+        const expectedHash = candidateManifest[canonicalName];
+        if (
+          stat.isSymbolicLink() ||
+          !stat.isFile() ||
+          candidatePending.has(canonicalName) ||
+          !expectedHash ||
+          (await sha256File(artifactPath)) !== expectedHash
+        ) {
+          matches = false;
+          break;
+        }
+        verified += 1;
+      }
+      if (matches && verified > 0) {
+        manifestMatches.push(candidate);
+      }
+    }
+    owner = manifestMatches.length === 1 ? manifestMatches[0] : undefined;
   }
   if (!owner) {
     return false;

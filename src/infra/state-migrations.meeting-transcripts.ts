@@ -458,7 +458,21 @@ async function resumePendingImports(params: {
       );
       continue;
     }
-    const expectedRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(params.sourceRoot);
+    const canonicalRelativeDirs = [
+      ...new Set([
+        ...run.canonicalRelativeDirs,
+        ...(await listCanonicalMeetingTranscriptExportDirs({
+          rootDir: params.sourceRoot,
+          env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+        })),
+      ]),
+    ];
+    const expectedRelativeDirs = [
+      ...new Set([
+        ...run.sources.map((source) => path.relative(params.sourceRoot, source.sourcePath) || "."),
+        ...canonicalRelativeDirs,
+      ]),
+    ].toSorted((a, b) => a.localeCompare(b));
     const pending = await snapshotPendingImportRun({
       run,
       snapshotRoot: params.sourceRoot,
@@ -484,15 +498,7 @@ async function resumePendingImports(params: {
       sourceRoot: params.sourceRoot,
       snapshots: pending.snapshots,
       expectedRelativeDirs,
-      canonicalRelativeDirs: [
-        ...new Set([
-          ...run.canonicalRelativeDirs,
-          ...(await listCanonicalMeetingTranscriptExportDirs({
-            rootDir: params.sourceRoot,
-            env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-          })),
-        ]),
-      ],
+      canonicalRelativeDirs,
       archiveRoot: run.archiveRoot,
     });
     finishPendingMigration({
@@ -647,11 +653,11 @@ export async function migrateLegacyMeetingTranscripts(params: {
           relativeDir,
           recoveryRoot,
         });
+        recoveryChanges.push(
+          `Archived modified meeting transcript export ${relativeDir} → ${recoveryRoot}`,
+        );
         await store.materializeSessionArtifacts(session, "all");
       }
-      recoveryChanges.push(
-        `Archived and regenerated ${divergentExportDirs.length} modified meeting transcript export${divergentExportDirs.length === 1 ? "" : "s"} → ${recoveryRoot}`,
-      );
     }
     if (plans.length === 0 && partialRelativeDirs.length > 0) {
       const recoveryRoot = `${detected.sourceDir}.partials-recovered-${new Date(now)

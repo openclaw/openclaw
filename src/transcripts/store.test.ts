@@ -149,6 +149,18 @@ describe("TranscriptsStore", () => {
     }
   });
 
+  it("uses remaining manifest artifacts when aliased export metadata is absent", async () => {
+    const { store } = createStore();
+    const upper = session("Capital", "2026-07-01T10:00:00.000Z");
+    const lower = session("capital", "2026-07-01T11:00:00.000Z");
+    await store.writeSession(upper);
+    await store.appendUtteranceForSession(upper, { text: "owned transcript" });
+    const artifacts = await store.materializeSessionArtifacts(upper, "transcript");
+    fs.rmSync(artifacts.metadataPath);
+
+    await expect(store.writeSession(lower)).resolves.toBeUndefined();
+  });
+
   it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
     const { stateDir, store } = createStore();
     const upper = session("Capital", "2026-07-01T10:00:00.000Z");
