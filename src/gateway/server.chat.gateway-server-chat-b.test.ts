@@ -2386,11 +2386,13 @@ describe("gateway server chat", () => {
         expect(responses[0]?.ok).toBe(true);
         await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
         expect(captured?.replyOptions?.images).toBeUndefined();
-        expect(captured?.ctx?.MediaPath).toEqual(expect.any(String));
-        expect(captured?.ctx?.MediaPaths).toEqual([expect.any(String)]);
-        expect(captured?.ctx?.MediaType).toBe("image/png");
-        expect(captured?.ctx?.MediaTypes).toEqual(["image/png"]);
-        expect(captured?.ctx?.MediaStaged).toBe(true);
+        expect(captured?.ctx?.media).toEqual([
+          expect.objectContaining({
+            path: expect.any(String),
+            contentType: "image/png",
+            workspaceDir: expect.any(String),
+          }),
+        ]);
         await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
