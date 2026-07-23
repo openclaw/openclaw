@@ -42,6 +42,7 @@ import {
 import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
+import { isReplySessionInitConflictError } from "./reply-session-conflict.js";
 import { resolveResponseTimeoutMs } from "./response-timeout.js";
 import type {
   GatewayAccount,
@@ -711,9 +712,11 @@ export async function dispatchOutbound(
     },
   });
 
+  let dispatchError: unknown;
   try {
     await Promise.race([dispatchPromise, timeoutPromise]);
   } catch (error) {
+    dispatchError = error;
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
@@ -759,6 +762,15 @@ export async function dispatchOutbound(
         }
       }
     }
+  }
+
+  // Re-throw only reply-session-init conflicts so the gateway layer can
+  // surface a terminal notice to the user.  All other errors retain the
+  // same silent cleanup semantics that existed before this guard was added.
+  if (dispatchError !== undefined && isReplySessionInitConflictError(dispatchError)) {
+    throw dispatchError instanceof Error
+      ? dispatchError
+      : new Error(typeof dispatchError === "string" ? dispatchError : "ReplySessionInitConflict");
   }
 }
 
