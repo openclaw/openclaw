@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS } from "./workspace-quiescence-script-runtime.js";
 import {
   REMOTE_WORKSPACE_QUIESCE_JS,
   REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
@@ -304,52 +305,58 @@ describe("remote workspace quiescence scripts", () => {
     expect(result.code).not.toBe(0);
   });
 
-  it("retries a signal-resistant stalled watchdog process probe before releasing the lease", async () => {
-    const input = await fixture();
-    const nonce = await quiesce(input, 1_000);
-    const leaseFile = leasePath(input.home, input.workspace, nonce);
-    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
-      expiresAtMs: number;
-      nonce: string;
-      processes: Array<{ pid: number; start: string }>;
-      watchdog: { pid: number; start: string };
-    };
-    await fs.writeFile(
-      leaseFile,
-      JSON.stringify({
-        ...lease,
-        expiresAtMs: Date.now() + 1_000,
-        processes: [{ pid: process.pid, start: await processStart(process.pid) }],
-      }),
-    );
-    await fs.writeFile(input.stalledProcessProbePath, "stall\n");
+  it(
+    "retries a signal-resistant stalled watchdog process probe before releasing the lease",
+    async () => {
+      const input = await fixture();
+      const nonce = await quiesce(input, 1_000);
+      const leaseFile = leasePath(input.home, input.workspace, nonce);
+      const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        expiresAtMs: number;
+        nonce: string;
+        processes: Array<{ pid: number; start: string }>;
+        watchdog: { pid: number; start: string };
+      };
+      await fs.writeFile(
+        leaseFile,
+        JSON.stringify({
+          ...lease,
+          expiresAtMs: Date.now() + 1_000,
+          processes: [{ pid: process.pid, start: await processStart(process.pid) }],
+        }),
+      );
+      await fs.writeFile(input.stalledProcessProbePath, "stall\n");
 
-    let stalledPid = 0;
-    try {
-      await vi.waitFor(
-        async () => {
-          stalledPid = Number((await fs.readFile(input.stalledProcessProbePidPath, "utf8")).trim());
-          expect(stalledPid).toBeGreaterThan(0);
-        },
-        { interval: 50, timeout: 2_500 },
-      );
-      await vi.waitFor(
-        async () => {
-          await expect(fs.access(leaseFile)).rejects.toThrow();
-        },
-        { interval: 50, timeout: 4_000 },
-      );
-    } finally {
+      let stalledPid = 0;
       try {
-        process.kill(lease.watchdog.pid, "SIGKILL");
-      } catch {}
-      if (stalledPid > 0) {
+        await vi.waitFor(
+          async () => {
+            stalledPid = Number(
+              (await fs.readFile(input.stalledProcessProbePidPath, "utf8")).trim(),
+            );
+            expect(stalledPid).toBeGreaterThan(0);
+          },
+          { interval: 50, timeout: 2_500 },
+        );
+        await vi.waitFor(
+          async () => {
+            await expect(fs.access(leaseFile)).rejects.toThrow();
+          },
+          { interval: 50, timeout: REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS + 2_000 },
+        );
+      } finally {
         try {
-          process.kill(stalledPid, "SIGKILL");
+          process.kill(lease.watchdog.pid, "SIGKILL");
         } catch {}
+        if (stalledPid > 0) {
+          try {
+            process.kill(stalledPid, "SIGKILL");
+          } catch {}
+        }
       }
-    }
-  }, 6_000);
+    },
+    REMOTE_WATCHDOG_PROCESS_RECOVERY_TIMEOUT_MS + 4_000,
+  );
 
   it("serializes renewal against watchdog recovery before resuming processes", async () => {
     const input = await fixture();
