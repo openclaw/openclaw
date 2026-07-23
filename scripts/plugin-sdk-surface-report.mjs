@@ -149,7 +149,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: channel-owned setup contract factory.
       // +18: generic schema primitives needed by plugin-owned channel config schemas.
       // +2: shared Teams reply-style and TTS schema leaves.
-      4698,
+      // +2: generic inbound-root and SCP-host schema validators.
+      4700,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -160,7 +161,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: channel-owned setup contract factory.
       // +4: generic channel schema shape builders.
       // +1: plugin-owned sensitive-schema registration.
-      2847,
+      // +2: generic inbound-root and SCP-host schema validators.
+      2849,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
