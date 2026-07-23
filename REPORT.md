@@ -1,357 +1,181 @@
-# W5 archive attribution report
+# W4 Drafts UX implementation report
 
-Implementation commit: `083482ea654 feat(sessions): attribute archive transitions`
+## Outcome
 
-Alias-rollback follow-up: `14230f2e84a fix(sessions): restore alias layout after archive audit failure`
+Implemented the complete drafts UX on top of the landed ownership, visibility, membership, and person-filter machinery.
 
-Final rollback redesign: `b5cc8061a9b fix(sessions): isolate archive audit rollback`
-
-Final best-effort policy: `320237964e0 fix(sessions): make archive audit note best-effort`
+- New-session creation can start atomically as `visibility: "draft"`; the initial durable session entry carries draft visibility before the create response or any session-change broadcast.
+- The create affordance is exposed only when the hello policy allows drafts and the Gateway reports at least two canonical, non-merged sharing identities. Older gateways and solo mode fail closed by hiding the control.
+- Own drafts keep normal row emphasis with a subtle ghost marker. Admin-visible drafts owned by someone else use the same draft class family with a faded, light/dark-safe treatment.
+- A dedicated **Publish draft** header menu item calls the existing visibility callback with `"shared"`, which continues through the landed `session.visibility.set` RPC, audit-line, rollback, and live-event path.
+- Multi-user and sharing configuration docs now explain create-as-draft behavior, admin visibility, and the non-security-boundary constraint.
+- No suggestion queue, invite link, config key, SQLite schema/table/version, membership enforcement, new Gateway event, or changelog change was added.
 
 ## Files changed
 
-Session state and mutation:
+### Protocol and Gateway
 
-- `src/config/sessions/session-entry-provenance.ts`
-- `src/config/sessions/types.ts`
-- `src/gateway/sessions-patch.ts`
-- `src/gateway/server-methods/sessions-mutations.ts`
-- `src/gateway/server-methods/session-audit.ts`
-- `src/gateway/server-methods/sessions-sharing.ts`
-- `src/plugins/session-entry-slot-keys.ts`
-
-Gateway projection and event contract:
-
-- `packages/gateway-protocol/src/schema/sessions-row.ts`
-- `src/gateway/session-utils.ts`
-- `src/gateway/session-utils.types.ts`
-- `src/gateway/session-event-payload.ts`
+- `packages/gateway-protocol/src/schema/sessions-create.ts`
+- `packages/gateway-protocol/src/schema/sessions-create.test.ts`
+- `packages/gateway-protocol/src/schema/frames.ts`
+- `src/gateway/session-create-service.ts`
+- `src/gateway/server-methods/sessions-create.ts`
+- `src/gateway/server/ws-connection/connect-hello.ts`
+- `src/gateway/server.sessions.create.test.ts`
+- `src/gateway/server.auth.default-token.suite.ts`
+- `dist/protocol.schema.json`
 - `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
 
-Control UI:
+The Kotlin generators ran successfully; their tracked outputs were byte-identical. `dist/protocol.schema.json` is normally ignored, but was force-added because the task explicitly required committing it.
 
-- `ui/src/api/types.ts`
+### Control UI
+
+- `ui/src/pages/new-session/new-session-page.ts`
+- `ui/src/pages/new-session/create-params.ts`
+- `ui/src/pages/new-session/create-params.test.ts`
+- `ui/src/pages/new-session/catalog-target.ts`
+- `ui/src/pages/new-session/target-controls.ts`
+- `ui/src/pages/new-session/target-controls.test.ts`
+- `ui/src/pages/chat/components/chat-session-sharing.ts`
+- `ui/src/pages/chat/components/chat-session-sharing.test.ts`
 - `ui/src/components/app-sidebar-session-navigation-logic.ts`
+- `ui/src/components/app-sidebar-session-navigation-logic.test.ts`
 - `ui/src/components/app-sidebar-session-row-render.ts`
 - `ui/src/components/app-sidebar-session-types.ts`
-- `ui/src/components/session-owner-chip.ts`
+- `ui/src/styles/components.css`
+- `ui/src/styles/new-session.css`
 - `ui/src/i18n/locales/en.ts`
-- `ui/src/lib/sessions/reconcile.ts`
+- `ui/src/e2e/session-ownership.e2e.test.ts`
+- `ui/src/test-helpers/control-ui-e2e.ts`
 
-Behavior tests:
+### Docs
 
-- `src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts`
-- `src/gateway/sessions-patch.test.ts`
-- `src/gateway/session-utils-creators.test.ts`
-- `src/gateway/session-event-payload.test.ts`
-- `packages/gateway-protocol/src/schema/sessions-row.test.ts`
-- `ui/src/lib/sessions/reconcile.test.ts`
-- `ui/src/test-helpers/app-sidebar-cases/session-ownership.ts`
+- `docs/concepts/multi-user.md`
+- `docs/gateway/config-agents.md`
 
-Task handoff:
+### Local proof artifacts, not committed
 
-- `REPORT.md`
+- `.artifacts/control-ui-e2e/drafts-ux/behavior-contract.md`
+- `.artifacts/control-ui-e2e/drafts-ux/01-sidebar-draft-treatment.png`
+- `.artifacts/control-ui-e2e/drafts-ux/01-sidebar-draft-treatment-dark.png`
+- `.artifacts/control-ui-e2e/drafts-ux/02-create-draft-available.png`
+- `.artifacts/control-ui-e2e/drafts-ux/03-create-draft-selected.png`
+- `.artifacts/control-ui-e2e/drafts-ux/04-publish-draft-action.png`
+- `.artifacts/control-ui-e2e/drafts-ux/*.webm`
 
-## Key decisions and resolved ambiguities
+## Key decisions and ambiguity resolution
 
-- `archivedBy` uses the canonical `SessionCreatedActor` shape and is written only on a real unarchived-to-archived transition. Repeating `archived: true` preserves the original archiver. Unarchive clears it.
-- The acting identity comes only from `gatewayClientSessionCreator(client)`. Unidentified token/password clients get no fabricated identity and no actor-stamped audit line.
-- Archive and unarchive audit notes use the same shared `SessionManager.appendMessage` helper as visibility/membership audit notes. Archive notes are deliberately best-effort: if append fails, the durable archive remains committed, the RPC succeeds, and `sessionLog.warn` records the lost note. Visibility audit remains rollback-on-failure because it protects an access boundary.
-- The existing `applySessionPatchProjection` candidate resolver already supplies the freshest authoritative alias entry. Archive transition comparison uses that `existingEntry`, so alias migration does not invent or suppress a transition.
-- The session catalog is stored as canonical `session_entries.entry_json`; `archivedBy` is an additive JSON field. No SQL DDL, schema-version bump, backfill, dual path, or migration is needed.
-- `sessions.changed` remains the existing event and is still emitted with its concrete session-key scope, so draft/visibility filtering remains in force. No new event or `EVENT_SCOPE_GUARDS` entry was needed.
-- In the exact View-archived filter, the existing owner chip renders `archivedBy` with an `Archived by {name}` accessible label. Other session lists retain creator attribution. The existing `sessionOwnershipVisible` gate suppresses this chrome with fewer than two creator identities.
-- All protocol generators ran. Swift changed. Kotlin did not change because `scripts/protocol-gen-kotlin.ts` does not include `SessionRow` in its emitted schema whitelist. `dist/protocol.schema.json` was generated and checked, but current main intentionally ignores and does not track `dist/`; force-adding the 1.9 MB ignored artifact would undo repository policy.
+1. `visibility` is optional and additive in `SessionsCreateParamsSchema`. The service rejects a disallowed visibility with the existing `SESSION_VISIBILITY_DISABLED` error shape and rejects create-time visibility when an existing keyed session would be adopted or reset in place.
+2. The hello `policy` object now exposes optional `allowedSessionVisibilities` and `sessionSharingIdentityCount`. Current Gateways always populate both. Optional schema fields preserve compatibility with older Gateway/client pairs.
+3. Identity count comes from canonical non-merged user profiles, not loaded session creators. This was an accepted autoreview finding: session history and pagination are not a reliable proxy for a two-person Gateway.
+4. The new-session UI rechecks the hello policy at submit time. A stale checked control cannot submit draft visibility after policy/identity availability disappears.
+5. Admin ownership styling compares the session creator id with the current authenticated user id because `sharingRole: "admin"` intentionally wins over `"owner"` for administrators.
+6. Promotion remains one existing `session.visibility.set` call with `visibility: "shared"`; no parallel publish method, event, audit path, or invite workflow was introduced.
+7. The sidebar's pending unsent-composer `showDraft`/`renderDraftSessionRow` machinery was not touched.
 
 ## Verification
 
-Dependency install:
+All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c22c30ffe42f`, based on `34caf4b0dc59f8fdada97fd6935d0ca29667f1cf`. `origin/main` advanced again after proof; the reviewer-requested final rebase remains outstanding.
 
-```text
-pnpm install
-Done in 19.9s using pnpm v11.2.2 (exit 0)
-```
+### Install and formatting
 
-Focused behavior tests:
+- `pnpm install`
+  - Initial fresh install: exit 0, 1,272 packages, pnpm 11.2.2.
+  - Post-rebase refresh: exit 0; final run reported `Already up to date`.
+- `./node_modules/.bin/oxfmt --write --threads=1 <changed files>`
+  - Exit 0. The final changed gate reported `All matched files use the correct format.`
+- `git diff --check origin/main...HEAD`
+  - Exit 0, no output.
 
-```text
-node scripts/run-vitest.mjs src/gateway/sessions-patch.test.ts src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/session-utils-creators.test.ts src/gateway/session-event-payload.test.ts packages/gateway-protocol/src/schema/sessions-row.test.ts ui/src/components/app-sidebar.test.ts ui/src/lib/sessions/reconcile.test.ts
-Test Files 4 passed, Tests 90 passed (gateway-core)
-Test Files 1 passed, Tests 1 passed (gateway-client)
-Test Files 2 passed, Tests 175 passed (UI)
-[test] passed 3 Vitest shards in 32.67s (exit 0)
+### Focused Vitest and browser behavior
 
-node scripts/run-vitest.mjs src/gateway/server-methods/sessions-sharing.test.ts
-Test Files 1 passed, Tests 9 passed
-[test] passed 1 Vitest shard in 17.36s (exit 0)
+- `node scripts/run-vitest.mjs packages/gateway-protocol/src/schema/sessions-create.test.ts ui/src/pages/new-session/create-params.test.ts ui/src/pages/new-session/target-controls.test.ts ui/src/pages/chat/components/chat-session-sharing.test.ts ui/src/components/app-sidebar-session-navigation-logic.test.ts`
+  - Exit 0.
+  - Gateway-client shard: 1 file, 2 tests passed.
+  - UI shard: 4 files, 20 tests passed.
+  - Final wrapper: `passed 2 Vitest shards in 21.81s`.
+- `node scripts/run-vitest.mjs src/gateway/server.sessions.create.test.ts`
+  - Exit 0: 1 file, 61 tests passed; final wrapper `passed 1 Vitest shard in 51.57s`.
+- `node scripts/run-vitest.mjs src/gateway/server.auth.default-token.test.ts`
+  - Exit 0: 1 file, 23 tests passed; final wrapper `passed 1 Vitest shard in 18.25s`.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/session-ownership.e2e.test.ts`
+  - Exit 0: 1 file, 6 tests passed in 8.77s.
+  - Proves multi-person availability, solo dormancy, atomic `sessions.create` traffic, own/foreign sidebar treatment, light/dark rendering, and the one-call publish action.
+- One combined Gateway run produced 83/84 because the unrelated worktree-provisioning case transiently returned `ok: false` on a loaded host. Its immediate isolated rerun passed 61/61; the final isolated run above also passed 61/61.
 
-node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts
-Test Files 1 passed, Tests 3 passed (exit 0)
-```
+### Required typechecks
 
-The archive-attribution handler tests cover actor stamping, idempotent re-archive, unarchive clearing, exact audit text, unidentified-client behavior, alias archiving, and successful best-effort audit failure with no reversal writes. The UI suite includes the required collaborative and solo-dormancy archive-row cases.
+- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json`
+  - Exit 0, no diagnostics.
+- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.ui.json`
+  - Exit 0, no diagnostics.
+- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.extensions.json`
+  - Exit 0, no diagnostics.
+- `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -b tsconfig.projects.json`
+  - Exit 0, no diagnostics.
 
-Protocol and i18n generation/checks:
+### Protocol and localization
 
-```text
-pnpm protocol:gen && pnpm protocol:gen:swift && pnpm protocol:gen:kotlin
-wrote dist/protocol.schema.json
-wrote apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift
-wrote apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt
-wrote apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt
-exit 0
+- `pnpm protocol:gen`
+  - Exit 0; wrote `dist/protocol.schema.json`.
+- `pnpm protocol:gen:swift`
+  - Exit 0; wrote `GatewayModels.swift`.
+- `pnpm protocol:gen:kotlin`
+  - Exit 0; wrote both Kotlin generator targets, with no tracked diff.
+- `pnpm protocol:check`
+  - Exit 0; regenerated JSON/Swift/Kotlin and printed `protocol since guard passed: 0 new core methods use train 2026.7`.
+- `node --import tsx scripts/control-ui-i18n-verify.ts baseline`
+  - Exit 0: `raw-copy: baseline entries=105`, `source: keys=3962`.
+- `node --import tsx scripts/native-app-i18n.ts baseline --write`
+  - Exit 0: `entries=5232 changed=false`.
 
-pnpm protocol:check
-protocol since guard passed: 0 new core methods use train 2026.7
-exit 0
+### Docs and changed gate
 
-node --import tsx scripts/native-app-i18n.ts baseline --write
-native-app-i18n: entries=5232 changed=false
+- `pnpm docs:check-mdx`
+  - Exit 0: `Docs MDX check passed (751 files, 8519ms).`
+- `pnpm check:changed`
+  - The normal invocation delegated to Testbox `tbx_01ky7qadfw9ew7vz9rwggqpbb2`, which remained queued without an IP for about three minutes. It was explicitly stopped; no remote code command ran.
+  - Trusted-source fallback command: `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed`.
+  - Final exit 0.
+  - Because the requested tracked `dist/protocol.schema.json` is an unknown changed surface, the gate ran all lanes: ratchets/guards, formatting, Plugin SDK API/boundaries, database-first guard, full project typecheck, all oxlint shards, and import cycles.
+  - Final line: `Import cycle check: 0 runtime value cycle(s).`
+  - A loaded-host lint run first timed out while generating Plugin SDK root shims at 300 seconds. `OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS=600000 ... prepare-extension-package-boundary-artifacts.mjs` completed the same generator without weakening it; the standard final gate then reported all boundary artifacts `fresh; skipping` and passed lint.
 
-node --import tsx scripts/control-ui-i18n-verify.ts baseline
-control-ui-i18n: raw-copy: baseline entries=105
-control-ui-i18n: source: keys=3960
-exit 0
-```
+### Autoreview
 
-Requested type gates:
-
-```text
-node scripts/run-tsgo.mjs -p tsconfig.core.json
-exit 0 (no diagnostics)
-
-node scripts/run-tsgo.mjs -p tsconfig.ui.json
-exit 0 (no diagnostics)
-
-node scripts/run-tsgo.mjs -p tsconfig.extensions.json
-exit 0 (no diagnostics)
-
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json
-exit 0 (no diagnostics)
-```
-
-Changed gate:
-
-```text
-pnpm check:changed --staged
-Blacksmith Testbox tbx_01ky7mr2xxsf79mxq8er4r3g7y
-command=22m27.882s total=22m29.893s exit=0 runStatus=succeeded
-```
-
-After autoreview fixes, the final Blacksmith rerun remained capacity-queued for eight minutes and was stopped cleanly. The trusted-source fallback ran the identical staged path set locally without the slow staged-per-file `git show` mode:
-
-```text
-changed_paths=("${(@f)$(git diff --cached --name-only)}")
-OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- "${changed_paths[@]}"
-lanes=core, coreTests, ui, apps
-OPENCLAW_* count 529/529
-max-lines ratchet OK: 1133 grandfathered suppressions
-Control UI i18n verified: baseline entries=105, source keys=3960
-Typecheck core, core tests, and UI: passed
-Core, UI, packages, and Swift lint: 0 errors/violations
-Mac app CI tests: 232 passed across 5 Vitest shards
-Native state schema guard: v5 passed
-Database-first legacy-store guard: passed
-Import cycle check: 0 runtime value cycles
-exit 0
-```
-
-Review and final sanity:
-
-```text
-.agents/skills/autoreview/scripts/autoreview --mode uncommitted
-trufflehog: clean
-autoreview clean: no accepted/actionable findings reported
-overall: patch is correct (0.94)
-
-git diff --cached --check
-exit 0
-```
+- Full feature command: `.agents/skills/autoreview/scripts/autoreview --mode uncommitted --stream-engine-output`.
+  - Accepted finding: loaded session creators were an invalid proxy for Gateway identities. Fixed by adding canonical `sessionSharingIdentityCount`, with handshake and browser coverage.
+  - Final source pass: no findings; explanation explicitly confirmed atomic visibility, policy/identity gating, sidebar treatment, and promotion reuse.
+  - Rejected as out of scope: pre-existing issues surfaced only because the entire normally ignored generated JSON schema became a new tracked file (artifact query scope, targetless abort, existing `sessions.create` field dependencies, Talk `callId`, ClawHub target exclusivity, and cron pacing bounds). None is introduced by the two W4 schema additions.
+- Final focused correction command used the same helper with an explicit prompt to review only `ui/src/e2e/session-ownership.e2e.test.ts` and treat untracked `SPEC.md` as context.
+  - Exit 0: `autoreview clean: no accepted/actionable findings reported`, overall confidence 0.97.
 
 ## LOC summary
 
-From `git show --numstat 083482ea654`, classifying `*.test.*` and `ui/src/test-helpers/**` as tests:
+`git diff --numstat origin/main...HEAD`, grouped by role and excluding generated/docs from production:
 
-```text
-prod 138 added, 37 deleted, net +101
-test 322 added, 11 deleted, net +311
-total 460 added, 48 deleted, net +412
-```
+| Group                  |  Added | Deleted |
+| ---------------------- | -----: | ------: |
+| Production             |    175 |      18 |
+| Tests and test support |    423 |       1 |
+| Generated JSON/Swift   | 67,775 |       0 |
+| Docs                   |      5 |       1 |
 
-The shared audit extraction is nearly LOC-neutral by moving the former sharing-only implementation into one reusable helper. The main production growth is the actor field plumbing, event tombstones, protocol/UI types, and accessible archive-chip state.
+The generated total is dominated by the explicitly required, newly tracked `dist/protocol.schema.json` (67,771 lines). Non-generated production growth is the additive protocol policy/create contract plus the complete UI workflow.
+
+## Commits
+
+- `0e70368a7db feat(protocol): support draft session creation`
+- `449563e97f7 feat(ui): add draft session workflows`
+- `1d5767244ed docs: explain multi-user drafts`
+- `9f6e831c9b8 test(ui): tighten draft ownership fixture`
+- `0fed2857071 test(ui): satisfy draft E2E lint`
+- `5f4e34fe9ef test(ui): keep draft fixtures strictly typed`
 
 ## Skipped or deferred
 
-- No live browser/source-blind validation was run. This task had no independent live Gateway/browser fixture, and the same agent was already source-aware. The Control UI DOM behavior suite provides the requested behavior-level proof, including solo dormancy.
-- No SQLite schema version or migration was added because the canonical session entry is stored in `entry_json`; adding one would violate the spec and repository storage rules.
-- No Kotlin generated diff was committed because the Kotlin generator does not emit `SessionRow` and produced no change.
-- No ignored `dist/protocol.schema.json` was force-added; it was generated and checked, while current repository policy leaves `dist/` untracked.
-- No push, PR, changelog edit, `scripts/pr`, or live Gateway mutation was performed.
-- `origin/main` advanced during the long validation window. The branch is intentionally left for the reviewer to rebase as requested.
-
-## Superseded raw-layout rollback follow-up
-
-This section records the intermediate `14230f2e84a` approach for review history. It was superseded and removed by `b5cc8061a9b` because restoring snapshotted `session_members` could revive a membership concurrently revoked outside the archive lifecycle lock.
-
-The first rollback restored only the canonical primary entry after an audit append failure. That was logically complete for the archive fields but not layout-complete: `applySessionPatchProjection` removes every non-primary alias candidate while canonicalizing the freshest row.
-
-The follow-up captures the exact raw `session_entries` rows for every candidate key, plus `session_members` rows that SQLite cascades when an alias entry is removed. On audit failure it deletes the projected candidate set and reinserts the snapshot in one SQLite write transaction, preserving raw `entry_json`, `session_id`, `updated_at`, `status`, alias keys, and memberships. It then emits the inverse session identity diff, matching the forward projection notification path. `sessions.changed` remains post-audit and therefore is never emitted for the failed archive.
-
-The visibility rollback was checked separately. It is alias-safe for its narrower mutation because it patches `current.storeKey` in place and never runs candidate canonicalization; copying that path alone would not have repaired archive rollback.
-
-Follow-up files:
-
-- `src/config/sessions/session-accessor.types.ts`
-- `src/config/sessions/session-accessor.lifecycle.ts`
-- `src/config/sessions/session-accessor.sqlite-projection.ts`
-- `src/config/sessions/session-accessor.sqlite.ts`
-- `src/config/sessions/session-accessor.ts`
-- `src/gateway/server-methods/sessions-mutations.ts`
-- `src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts`
-
-Follow-up proof:
-
-```text
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts -- --reporter=verbose
-Test Files 1 passed
-Tests 4 passed
-The alias case passed in 2834ms and asserted exact raw entry/member row equality.
-[test] passed 1 Vitest shard in 52.88s (exit 0)
-
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/sessions-patch.test.ts -- -t 'attributes the archive transition|does not fabricate archive attribution' --reporter=verbose
-Test Files 1 passed
-Tests 2 passed, 84 skipped
-[test] passed 1 Vitest shard in 33.06s (exit 0)
-
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/sessions-patch.test.ts -- -t 'atomically snapshots prior selection for agent model patches' --reporter=verbose
-Test Files 1 passed
-Tests 1 passed, 85 skipped
-[test] passed 1 Vitest shard in 38.39s (exit 0)
-
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json
-exit 0 (no diagnostics)
-
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json
-exit 0 (no diagnostics)
-
-OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- src/config/sessions/session-accessor.lifecycle.ts src/config/sessions/session-accessor.sqlite-projection.ts src/config/sessions/session-accessor.sqlite.ts src/config/sessions/session-accessor.ts src/config/sessions/session-accessor.types.ts src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/server-methods/sessions-mutations.ts
-lanes=core, coreTests
-format, core/core-test typechecks, changed-file lint, database-first guard, runtime sidecar loader guard, import-cycle guard, webhook and pairing guards passed
-exit 0
-
-.agents/skills/autoreview/scripts/autoreview --mode uncommitted --engine codex
-trufflehog: clean
-autoreview clean: no accepted/actionable findings reported
-overall: patch is correct (0.97)
-```
-
-The first full local `sessions-patch.test.ts` attempt passed 85/86 tests; the unrelated agent-model snapshot test timed out under severe host contention after 120 seconds. Its isolated retry passed in 27.8 seconds, and the two archive projection cases passed independently. The first delegated `check:changed --staged` attempt also stopped before feature lanes because the current trusted-workflow checkout used env budget 525 while this reviewer-owned branch uses 529. The branch-relative local trusted-source fallback above passed; the follow-up adds no environment variables.
-
-Follow-up LOC from `git show --numstat 14230f2e84a`:
-
-```text
-prod 154 added, 15 deleted, net +139
-test 96 added, 1 deleted, net +95
-total 250 added, 16 deleted, net +234
-```
-
-No push, PR, changelog edit, protocol change, schema-version bump, or `CLAUDE.md` edit was performed.
-
-## Superseded archive-only rollback redesign
-
-This section records the intermediate `b5cc8061a9b` approach. It was superseded by `320237964e0`; archive audit notes no longer trigger any rollback.
-
-The final design treats candidate-key canonicalization as the normal benign behavior of `sessions.patch`; alias layout is not rolled back. If archive auditing fails, the handler re-reads the current candidate state and applies the inverse archived boolean through a second `applySessionPatchProjection` plus `projectSessionsPatchEntry` pass. It then restores only the prior `archivedAt` and `archivedBy` values. Other valid patch effects remain, and the rollback never reads or writes `session_members`.
-
-The intermediate raw `session_entries`/`session_members` snapshot API and all related accessor plumbing were deleted. This avoids reviving a member removed concurrently between archive projection and audit failure.
-
-Final regression behavior:
-
-- archive is requested through the alias `alias-archive`;
-- a canonical session member exists before the request;
-- the forced audit failure removes that member before throwing;
-- rollback leaves the canonical session unarchived with no `archivedBy`;
-- the removed member remains absent;
-- alias canonicalization may remain under the primary key by design.
-
-Final proof:
-
-```text
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts -- --reporter=verbose
-Test Files 1 passed
-Tests 4 passed
-[test] passed 1 Vitest shard in 13.59s (exit 0)
-
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json
-exit 0 (no diagnostics)
-
-OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- src/config/sessions/session-accessor.lifecycle.ts src/config/sessions/session-accessor.sqlite-projection.ts src/config/sessions/session-accessor.sqlite.ts src/config/sessions/session-accessor.ts src/config/sessions/session-accessor.types.ts src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/server-methods/sessions-mutations.ts
-lanes=core, coreTests
-format, core/core-test typechecks, changed-file lint, database-first guard, runtime sidecar loader guard, import-cycle guard, webhook and pairing guards passed
-exit 0
-
-.agents/skills/autoreview/scripts/autoreview --mode uncommitted --engine codex
-trufflehog: clean
-autoreview clean: no accepted/actionable findings reported
-overall: patch is correct (0.98)
-```
-
-Final redesign LOC from `git show --numstat b5cc8061a9b`:
-
-```text
-prod 45 added, 166 deleted, net -121
-test 24 added, 62 deleted, net -38
-total 69 added, 228 deleted, net -159
-```
-
-No push was performed. `SPEC.md` remains the only untracked file.
-
-## Final best-effort archive audit policy
-
-The final policy deletes the archive rollback path entirely. `archivedAt` and `archivedBy` are the durable result. If the actor-stamped transcript note cannot be appended, `sessions.patch` logs `sessionLog.warn`, returns success, and keeps the archive. The catch performs no entry, alias, pin, or membership writes. This is a deliberate tradeoff for a non-security lifecycle note; visibility audit remains rollback-on-failure because visibility is an access boundary.
-
-Final focused behavior proof:
-
-```text
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-vitest.mjs src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts -- --reporter=verbose
-Test Files 1 passed
-Tests 4 passed
-[test] passed 1 Vitest shard in 8.85s (exit 0)
-```
-
-The forced-failure case archives through an alias and verifies:
-
-- the RPC succeeds;
-- the derived row has `archived: true`, `archivedAt`, and `archivedBy`;
-- the expected warning includes the audit failure and “archive kept” decision;
-- candidate entry state and `session_members` match their state at the failure point;
-- SQLite `total_changes()` does not advance after the audit throw, proving there are no reversal writes.
-
-Final gates:
-
-```text
-OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree node scripts/run-tsgo.mjs -p tsconfig.core.json
-exit 0 (no diagnostics)
-
-OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree CI=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false pnpm check:changed --base HEAD --head HEAD -- src/gateway/server-methods/sessions-mutations.archive-attribution.test.ts src/gateway/server-methods/sessions-mutations.ts
-lanes=core, coreTests
-format, core/core-test typechecks, changed-file lint, database-first guard, runtime sidecar loader guard, import-cycle guard, webhook and pairing guards passed
-exit 0
-
-.agents/skills/autoreview/scripts/autoreview --mode uncommitted --engine codex
-trufflehog: clean
-autoreview clean: no accepted/actionable findings reported
-overall: patch is correct (0.98)
-```
-
-The full branch review uses base `3023d69fd8858882470da009c8874541c2ddd9e9`. Its only initial finding was this report's stale rollback wording; the implementation was accepted as consistent with the deliberate best-effort policy.
-
-Best-effort cleanup LOC from `git show --numstat 320237964e0`:
-
-```text
-prod 14 added, 40 deleted, net -26
-test 61 added, 38 deleted, net +23
-total 75 added, 78 deleted, net -3
-```
-
-No push was performed. `SPEC.md` remains the only untracked file.
+- No push, pull request, `scripts/pr`, release, publish, `CHANGELOG.md`, or GitHub mutation was performed.
+- No SQLite change was needed; therefore there was no schema-version bump or lazy table ensure.
+- No new Gateway event was added; existing `sessions.changed` and `session.sharing` paths retain their current scope guards and draft filtering.
+- Foreign-language UI bundles were not edited; the requested `en.ts` plus baseline workflow was used.
+- Final branch status after proof: feature work is committed and the product tree is clean; only the reviewer-provided, locally formatted `SPEC.md` is untracked. `origin/main` continued advancing after the frozen proof base, so final rebase/landing is intentionally deferred to the reviewer as requested.
