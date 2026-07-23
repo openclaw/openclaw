@@ -249,7 +249,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     if (!ownerSession) {
       throw new Error("expected owner draft fixture");
     }
-    sessions.sessions[0] = { ...ownerSession, sharingRole: "owner" };
+    Object.assign(ownerSession, { sharingRole: "owner" });
     const gateway = await installMockGateway(currentPage, {
       sessionKey: "agent:main:ada",
       featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
