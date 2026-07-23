@@ -241,7 +241,7 @@ export function authorizeResolvedSessionMutation(params: {
   return authorizeSessionSharingTarget({ client: params.client, target });
 }
 
-function authorizeSessionSharingTarget(params: {
+export function authorizeSessionSharingTarget(params: {
   client: GatewayClient | null;
   target: SessionSharingTarget;
 }): ErrorShape | null {

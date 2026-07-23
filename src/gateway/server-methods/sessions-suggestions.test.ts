@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS } from "../../config/sessions/session-suggestion-store.js";
+import {
+  addSessionSuggestion,
+  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+} from "../../config/sessions/session-suggestion-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
@@ -155,6 +158,83 @@ describe("session suggestion handlers", () => {
       expect(listed.responses[0]?.[1]).toMatchObject({
         role: "viewer",
         suggestions: [{ author: { id: "alice" }, text: "  Try the focused fix\n" }],
+      });
+    });
+  });
+
+  it("hides draft suggestions from members while owner and admin can list", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const draftKey = "agent:main:draft-suggestions";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: draftKey },
+        {
+          sessionId: "session-draft",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "draft",
+        },
+      );
+      addSessionMember(
+        { agentId: "main", sessionKey: draftKey },
+        { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
+      );
+      addSessionSuggestion(
+        { agentId: "main", sessionKey: draftKey },
+        {
+          id: "draft-suggestion",
+          authorId: "member",
+          text: "private draft suggestion",
+          expectedSessionId: "session-draft",
+        },
+      );
+
+      const member = client("member", "Member");
+      const expectHiddenDraft = (result: Awaited<ReturnType<typeof call>>) => {
+        expect(result.responses[0]?.[0]).toBe(false);
+        expect(result.responses[0]?.[1]).toBeUndefined();
+        expect(result.responses[0]?.[2]).toMatchObject({
+          message: "session is draft for this connection",
+          details: {
+            code: "SESSION_PARTICIPATION_REQUIRED",
+            sessionKey: draftKey,
+            visibility: "draft",
+          },
+        });
+      };
+
+      expectHiddenDraft(await call("session.suggestions.list", { sessionKey: draftKey }, member));
+      expectHiddenDraft(
+        await call("session.suggestions.add", { sessionKey: draftKey, text: "leak draft" }, member),
+      );
+      expectHiddenDraft(
+        await call(
+          "session.suggestions.resolve",
+          { sessionKey: draftKey, id: "draft-suggestion", resolution: "dismiss" },
+          member,
+        ),
+      );
+      expect(
+        (await call("session.typing", { sessionKey: draftKey, typing: true }, member))
+          .responses[0]?.[1],
+      ).toEqual({ ok: true, broadcast: false });
+
+      const ownerList = await call(
+        "session.suggestions.list",
+        { sessionKey: draftKey },
+        client("owner", "Owner"),
+      );
+      expect(ownerList.responses[0]?.[1]).toMatchObject({
+        role: "owner",
+        suggestions: [{ id: "draft-suggestion", text: "private draft suggestion" }],
+      });
+      const adminList = await call(
+        "session.suggestions.list",
+        { sessionKey: draftKey },
+        client("admin", "Admin", true),
+      );
+      expect(adminList.responses[0]?.[1]).toMatchObject({
+        role: "admin",
+        suggestions: [{ id: "draft-suggestion", text: "private draft suggestion" }],
       });
     });
   });

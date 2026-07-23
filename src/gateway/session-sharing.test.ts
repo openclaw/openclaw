@@ -325,7 +325,7 @@ describe("session sharing policy", () => {
     });
   });
 
-  it("allows draft members to receive typing events without exposing other draft events", async () => {
+  it("keeps draft typing events owner and admin only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:draft-typing";
       await upsertSessionEntry(
@@ -349,9 +349,18 @@ describe("session sharing policy", () => {
           event,
         });
 
-      expect(check("member", "session.typing")).toBe(true);
+      expect(check("owner", "session.typing")).toBe(true);
+      expect(check("member", "session.typing")).toBe(false);
       expect(check("viewer", "session.typing")).toBe(false);
       expect(check("member", "session.message")).toBe(false);
+      expect(
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({ user: "admin", scopes: ["operator.admin"] }) as never,
+          sessionKeys: [sessionKey],
+          event: "session.typing",
+        }),
+      ).toBe(true);
       expect(
         canReceiveSessionEvent({
           cfg: {},

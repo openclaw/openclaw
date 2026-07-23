@@ -22,6 +22,8 @@ import {
 } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import {
+  authorizeSessionSharingTarget,
+  canManageSessionSharing,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
@@ -98,6 +100,23 @@ function requireSuggestionTarget(params: {
     return null;
   }
   return target;
+}
+
+function requireVisibleSuggestionRole(params: {
+  client: GatewayClient | null;
+  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
+  respond: RespondFn;
+}) {
+  const role = resolveSessionSharingRole({ client: params.client, target: params.target });
+  if (resolveSessionVisibility(params.target.entry) !== "draft") {
+    return role;
+  }
+  const error = authorizeSessionSharingTarget({ client: params.client, target: params.target });
+  if (!error) {
+    return role;
+  }
+  params.respond(false, undefined, error);
+  return null;
 }
 
 function publishSuggestion(
@@ -329,6 +348,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
+    if (requireVisibleSuggestionRole({ client, target, respond }) === null) {
+      return;
+    }
     if (!author) {
       respond(
         false,
@@ -396,7 +418,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
-    const role = resolveSessionSharingRole({ client, target });
+    const role = requireVisibleSuggestionRole({ client, target, respond });
+    if (role === null) {
+      return;
+    }
     const identity = gatewayClientSessionCreator(client);
     const stored =
       role === "viewer"
@@ -434,7 +459,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!target) {
       return;
     }
-    const role = resolveSessionSharingRole({ client, target });
+    const role = requireVisibleSuggestionRole({ client, target, respond });
+    if (role === null) {
+      return;
+    }
     if (role !== "owner" && role !== "admin") {
       respond(
         false,
@@ -580,6 +608,10 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     }
     const role = resolveSessionSharingRole({ client, target });
     const visibility = resolveSessionVisibility(target.entry);
+    if (visibility === "draft" && !canManageSessionSharing(role)) {
+      respond(true, { ok: true, broadcast: false });
+      return;
+    }
     if (role === "viewer" && visibility !== "shared" && visibility !== "suggest") {
       respond(true, { ok: true, broadcast: false });
       return;
@@ -612,6 +644,9 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         }
         const currentRole = resolveSessionSharingRole({ client, target: current });
         const currentVisibility = resolveSessionVisibility(current.entry);
+        if (currentVisibility === "draft" && !canManageSessionSharing(currentRole)) {
+          return false;
+        }
         if (
           currentRole === "viewer" &&
           currentVisibility !== "shared" &&
