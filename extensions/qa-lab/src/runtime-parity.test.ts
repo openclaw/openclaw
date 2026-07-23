@@ -67,6 +67,8 @@ async function seedRuntimeParityTranscript(params: {
 async function captureRuntimeParityWithMockRequests(params: {
   messages?: Array<Record<string, unknown>>;
   requests: Array<Record<string, unknown>>;
+  responseBody?: string;
+  responseStatus?: number;
   scenarioResult?: Parameters<typeof captureRuntimeParityCell>[0]["scenarioResult"];
 }) {
   const parentPrompt = "Delegate one bounded QA task to a subagent.";
@@ -86,8 +88,11 @@ async function captureRuntimeParityWithMockRequests(params: {
       response.end();
       return;
     }
+    if (params.responseStatus !== undefined) {
+      response.statusCode = params.responseStatus;
+    }
     response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify(requests));
+    response.end(params.responseBody ?? JSON.stringify(requests));
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -297,6 +302,33 @@ describe("runtime parity", () => {
     expect(
       resolveRuntimeParityUsagePolicy({ expectation: "not-applicable", reason: "   " }),
     ).toEqual({ expectation: "assistant-message-required" });
+  });
+
+  it("returns no mock tool calls when the runtime parity mock endpoint is not OK", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [{ plannedToolName: "read_file" }],
+      responseStatus: 500,
+    });
+
+    expect(cell.toolCalls).toEqual([]);
+  });
+
+  it("returns no mock tool calls for oversized runtime parity mock responses", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [],
+      responseBody: "x".repeat(256 * 1024 + 1),
+    });
+
+    expect(cell.toolCalls).toEqual([]);
+  });
+
+  it("returns no mock tool calls for malformed runtime parity mock JSON", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [],
+      responseBody: "{",
+    });
+
+    expect(cell.toolCalls).toEqual([]);
   });
 
   it("classifies planned-only matching tool calls as failure-mode", async () => {
