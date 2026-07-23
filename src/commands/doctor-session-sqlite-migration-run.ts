@@ -33,7 +33,7 @@ export type SessionSqliteMigrationTargetInput = {
   storePath: string;
 };
 
-type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & {
+export type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetInput & {
   completedMoves: SessionSqliteMigrationMove[];
   issues: DoctorSessionSqliteIssue[];
   plannedMoves: SessionSqliteMigrationMove[];
@@ -68,6 +68,8 @@ export type ActiveSessionSqliteMigrationRun = {
 
 const SESSION_SQLITE_MIGRATION_RUNS_DIR = "session-sqlite-migration-runs";
 const COMPLETED_MIGRATION_RUN_RETENTION = 50;
+const FAILURE_REPORT_PREAMBLE =
+  "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.";
 const AbsolutePathSchema = z
   .string()
   .min(1)
@@ -456,21 +458,19 @@ export function createSessionSqliteMigrationFailureIssue(
     })),
     version: VERSION,
   });
-  const body = [
-    "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.",
-    "",
-    reportBody,
-  ].join("\n");
-  const boundedBody = truncateUtf16Safe(body, 20_000);
+  const body = truncateUtf16Safe(`${FAILURE_REPORT_PREAMBLE}\n\n${reportBody}`, 20_000);
   return {
-    body: boundedBody,
+    body,
     ...(bodyPath ? { bodyPath } : {}),
     title,
-    url: createPrefilledGithubIssueUrl(title, boundedBody),
+    url: createPrefilledGithubIssueUrl(title, body),
   };
 }
 
-function sessionSqliteMigrationTargetKey(target: { agentId: string; storePath: string }): string {
+export function sessionSqliteMigrationTargetKey(target: {
+  agentId: string;
+  storePath: string;
+}): string {
   return `${target.agentId}\u0000${canonicalMigrationFilePath(target.storePath)}`;
 }
 
@@ -669,7 +669,7 @@ function filterRestoreManifestTargets(
   );
 }
 
-function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string[] {
+export function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string[] {
   const runsDir = resolveSessionSqliteMigrationRunsDir(env);
   let entries: string[];
   try {
@@ -684,7 +684,7 @@ function listSessionSqliteMigrationManifestPaths(env: NodeJS.ProcessEnv): string
     .toSorted((left, right) => right.localeCompare(left));
 }
 
-function readSessionSqliteMigrationManifest(
+export function readSessionSqliteMigrationManifest(
   manifestPath: string,
 ): SessionSqliteMigrationManifest | undefined {
   try {
@@ -946,11 +946,13 @@ function renderFailureMarkdown(payload: {
 }
 
 function sanitizeFailureReportText(value: string): string {
-  const sanitized = value
-    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[redacted-email]")
-    .replace(/(api[_-]?key|token|secret|password)[=-][A-Za-z0-9._-]+/gi, "$1-[redacted]")
-    .replace(/(api[_-]?key|token|secret|password)=\S+/gi, "$1=[redacted]");
-  return truncateUtf16Safe(sanitized, 500);
+  return truncateUtf16Safe(
+    value
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[redacted-email]")
+      .replace(/(api[_-]?key|token|secret|password)[=-][A-Za-z0-9._-]+/gi, "$1-[redacted]")
+      .replace(/(api[_-]?key|token|secret|password)=\S+/gi, "$1=[redacted]"),
+    500,
+  );
 }
 
 function shortenFailureReportPath(filePath: string): string {
@@ -996,4 +998,3 @@ function redactAbsoluteHomePaths(value: string): string {
   }
   return value.split(home).join("~");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
