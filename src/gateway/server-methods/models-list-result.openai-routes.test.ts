@@ -149,7 +149,10 @@ describe("models.list OpenAI routes", () => {
         catalogProjector: { evaluateEntry } as never,
       }),
     ).resolves.toEqual({ models: [] });
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ readOnly: false });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+      agentId: "main",
+      readOnly: false,
+    });
     expect(evaluateEntry).not.toHaveBeenCalled();
   });
 
@@ -226,6 +229,35 @@ describe("models.list OpenAI routes", () => {
     });
     expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
+      readOnly: false,
+    });
+  });
+
+  it("passes the resolved default agent to catalog loads", async () => {
+    const config = {
+      agents: { defaults: {}, list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+    const loadGatewayModelCatalogSnapshot = vi.fn(
+      (params: { agentId?: string; readOnly?: boolean }) =>
+        Promise.resolve({
+          agentId: params.agentId,
+          agentDir: "/tmp/models-list-openai-agent",
+          config,
+          entries: [],
+          routeVariants: [],
+        }),
+    );
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(buildModelsListResult({ context, params: { view: "all" } })).resolves.toEqual({
+      models: [],
+    });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+      agentId: "main",
       readOnly: false,
     });
   });

@@ -497,7 +497,7 @@ export async function buildModelsListResult(
         return { entries: [], routeVariants: [] };
       }
       loadedSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
+        agentId: initialAgentId,
         readOnly: loadedReadOnly,
       });
       return loadedSnapshot;
@@ -516,7 +516,7 @@ export async function buildModelsListResult(
       view,
       loadCatalog: async ({ readOnly }) => {
         fullSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
-          ...(params.agentId ? { agentId: params.agentId } : {}),
+          agentId: initialAgentId,
           readOnly,
         });
         return fullSnapshot;
