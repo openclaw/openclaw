@@ -126,6 +126,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-policy": 7,
   "channel-send-result": 1,
   "session-store-runtime": 4,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "group-access": 13,
   "reply-history": 6,
   "messaging-targets": 12,
@@ -156,7 +158,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: outbound formatting capability profile.
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      4695,
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      4697,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -172,13 +175,15 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: agent-harness transcript visibility projector.
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      2843,
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      2845,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-      1686,
+      // +2: shipped Slack and Discord setup compatibility helpers.
+      1688,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
