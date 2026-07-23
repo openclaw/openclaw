@@ -773,6 +773,38 @@ describe("verifyTwilioWebhook", () => {
     expect(result.isNgrokFreeTier).toBe(true);
   });
 
+  it("does not classify query-injected ngrok substrings as ngrok free tier", () => {
+    const result = verifyTwilioWebhook(
+      {
+        headers: { host: "evil.example", "x-twilio-signature": "invalid" },
+        rawBody: "CallSid=CS123&CallStatus=completed",
+        url: "http://evil.example/voice/webhook?x=.ngrok.io",
+        method: "POST",
+      },
+      "test-auth-token",
+    );
+
+    expect(result.ok).toBe(false);
+    // Query injection must not bypass the hostname-only ngrok check.
+    expect(result.isNgrokFreeTier).toBe(false);
+  });
+
+  it("does not classify path-injected ngrok substrings as ngrok free tier", () => {
+    const result = verifyTwilioWebhook(
+      {
+        headers: { host: "evil.example", "x-twilio-signature": "invalid" },
+        rawBody: "CallSid=CS123&CallStatus=completed",
+        url: "http://evil.example/x.ngrok-free.app/webhook",
+        method: "POST",
+      },
+      "test-auth-token",
+    );
+
+    expect(result.ok).toBe(false);
+    // Path injection must not bypass the hostname-only ngrok check.
+    expect(result.isNgrokFreeTier).toBe(false);
+  });
+
   it("ignores attacker X-Forwarded-Host without allowedHosts or trustForwardingHeaders", () => {
     const authToken = "test-auth-token";
     const postBody = "CallSid=CS123&CallStatus=completed&From=%2B15550000000";
