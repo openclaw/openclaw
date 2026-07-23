@@ -98,7 +98,7 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import {
   takeCommandSessionMetadataChanges,
@@ -162,6 +162,7 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
+import { stripLegacyMediaContextFields } from "./inbound-context.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -592,12 +593,7 @@ async function dispatchReplyFromConfigInner(
     const messageReceivedCtx = { ...hookCtx };
     // message_received hooks run before normal get-reply staging, so remote
     // host paths are not safe as live media. Keep originals as debug metadata.
-    delete messageReceivedCtx.MediaPath;
-    delete messageReceivedCtx.MediaPaths;
-    delete messageReceivedCtx.MediaUrl;
-    delete messageReceivedCtx.MediaUrls;
-    delete messageReceivedCtx.MediaType;
-    delete messageReceivedCtx.MediaTypes;
+    stripLegacyMediaContextFields(messageReceivedCtx);
     delete messageReceivedCtx.media;
     return {
       ...buildHookState(messageReceivedCtx).hookContext,

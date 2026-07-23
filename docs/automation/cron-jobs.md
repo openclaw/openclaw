@@ -280,7 +280,7 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
   <Accordion title="Main session vs isolated vs custom">
     **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    Main-session cron events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt's "Read HEARTBEAT.md" instruction; say that explicitly in the cron event text if a reminder should consult `HEARTBEAT.md`.
+    Main-session cron events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the cron event text if a reminder should consult that context.
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">

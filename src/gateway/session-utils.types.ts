@@ -5,6 +5,8 @@ import type {
   SessionCreatedActor,
   SessionPlacement,
   SessionRow,
+  SessionSharingRole,
+  SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { QueueMode } from "../auto-reply/reply/queue/types.js";
@@ -49,6 +51,11 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  /** Additive collaboration state; absent on older gateways. */
+  visibility?: SessionVisibility;
+  /** Caller-relative role used by Control UI participation controls. */
+  sharingRole?: SessionSharingRole;
+  incognito?: true;
   spawnedBy?: string;
   /** Current runtime controller, falling back to the durable spawning session. */
   controlOwnerSessionKey?: string;
@@ -87,6 +94,7 @@ export type GatewaySessionRow = {
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;

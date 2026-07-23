@@ -45,6 +45,7 @@ import {
   renderChatImageLightbox,
 } from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
@@ -262,28 +263,6 @@ export type ChatProps = {
   onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
-
-export function renderChatResizableDivider(props: {
-  className?: string;
-  label: string;
-  maxRatio?: number;
-  minRatio?: number;
-  onElement?: (element: Element | undefined) => void;
-  onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
-  orientation: "horizontal" | "vertical";
-  splitRatio: number;
-}) {
-  return html`<resizable-divider
-    ${ref(props.onElement ?? (() => {}))}
-    class=${props.className ?? nothing}
-    .splitRatio=${props.splitRatio}
-    .minRatio=${props.minRatio ?? 0.4}
-    .maxRatio=${props.maxRatio ?? 0.7}
-    .label=${props.label}
-    .orientation=${props.orientation}
-    @resize=${props.onResize}
-  ></resizable-divider>`;
-}
 
 function isImageLightboxEvent(event: Event): boolean {
   return event

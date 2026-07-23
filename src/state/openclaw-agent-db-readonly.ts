@@ -9,7 +9,11 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
-import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 type OpenClawAgentReadOnlyDatabase = {
@@ -37,6 +41,14 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
+    // Read-only misses must not create process-lifetime handles; only creation and
+    // write paths may materialize the process-held incognito database.
+    const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
+    return database
+      ? { found: true, value: operation(database) }
+      : { found: false, reason: "database-missing" };
+  }
   if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
   }

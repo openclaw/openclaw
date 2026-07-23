@@ -324,29 +324,20 @@ function assertConfigSurvived() {
   }
 
   if (acceptsIntent(coverage, "agents")) {
-    const agents = config.agents?.list ?? [];
-    assert(Array.isArray(agents), "agents.list missing after update/doctor");
-    assert(
-      agents.some((agent) => agent?.id === "main"),
-      "main agent missing",
-    );
-    assert(
-      agents.some((agent) => agent?.id === "ops"),
-      "ops agent missing",
-    );
+    const legacyAgents = config.agents?.list ?? [];
+    const mainAgent =
+      config.agents?.entries?.main ?? legacyAgents.find((agent) => agent?.id === "main");
+    const opsAgent =
+      config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
+    assert(mainAgent, "main agent missing");
+    assert(opsAgent, "ops agent missing");
     if (hasCoverage(coverage)) {
       assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
     } else {
-      assert(
-        agents.find((agent) => agent?.id === "main")?.contextTokens === 64000,
-        "main agent contextTokens changed",
-      );
+      assert(mainAgent.contextTokens === 64000, "main agent contextTokens changed");
     }
     if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(
-        agents.find((agent) => agent?.id === "ops")?.fastModeDefault === true,
-        "ops fastModeDefault changed",
-      );
+      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
     }
   }
 
@@ -698,14 +689,13 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     const hasSessionEntries = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_entries'")
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'")
       .get();
     const rows = hasSessionEntries
       ? db
           .prepare(
-            `SELECT se.session_key AS key, sr.session_id, se.entry_json AS value_json
-             FROM session_entries AS se
-             INNER JOIN session_routes AS sr ON sr.session_key = se.session_key`,
+            `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
+             FROM session_nodes`,
           )
           .all()
       : db

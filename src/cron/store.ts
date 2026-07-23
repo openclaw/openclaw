@@ -64,6 +64,15 @@ export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.Process
   return resolveDefaultCronStorePath(env);
 }
 
+/** Resolves the active cron partition from runtime config and environment. */
+export function resolveCronJobsStorePathFromConfig(
+  cfg: { cron?: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const store = (cfg.cron as { store?: unknown } | undefined)?.store;
+  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
+}
+
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
 export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
   const resolvedStorePath = path.resolve(storePath);

@@ -10,6 +10,8 @@ import {
   validateCronRemoveParams,
   validateCronRunParams,
   validateCronRunsParams,
+  validateCronScratchGetParams,
+  validateCronScratchSetParams,
   validateCronStatusParams,
   validateCronUpdateParams,
   validateWakeParams,
@@ -25,6 +27,7 @@ import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
+import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isInvalidCronSessionTargetIdError,
@@ -87,6 +90,21 @@ class CronJobConfigRevisionConflictError extends Error {
   ) {
     super("cron job definition no longer matches the loaded version");
   }
+}
+
+// Migration provenance (sourceSha256) stays internal; the closed result schema
+// exposes only content/revision/updatedAtMs.
+function publicCronScratch(
+  scratch: { content: string; revision: number; updatedAtMs: number } | undefined,
+) {
+  if (!scratch) {
+    return null;
+  }
+  return {
+    content: scratch.content,
+    revision: scratch.revision,
+    updatedAtMs: scratch.updatedAtMs,
+  };
 }
 
 function cronJobReadView(job: CronJob) {
@@ -517,6 +535,98 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     respond(true, cronJobReadView(job), undefined);
+  },
+  "cron.scratch.get": async ({ params, respond, context, client }) => {
+    if (!validateCronScratchGetParams(params)) {
+      respondInvalidCronParams(
+        respond,
+        "cron.scratch.get",
+        formatValidationErrors(validateCronScratchGetParams.errors),
+      );
+      return;
+    }
+    const jobId = resolveCronJobId(params as CronJobIdParams);
+    if (!jobId) {
+      respondMissingCronJobId(respond, "cron.scratch.get");
+      return;
+    }
+    const callerScope = readCronCallerScope(client);
+    const job = await context.cron.readJob(jobId);
+    if (
+      !job ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
+      respondInvalidCronParams(respond, "cron.scratch.get", "id not found");
+      return;
+    }
+    const state = await context.cron.readScratch(jobId);
+    respond(
+      true,
+      {
+        scratch: publicCronScratch(state.scratch),
+        currentRevision: state.currentRevision,
+        maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+      },
+      undefined,
+    );
+  },
+  "cron.scratch.set": async ({ params, respond, context, client }) => {
+    if (!validateCronScratchSetParams(params)) {
+      respondInvalidCronParams(
+        respond,
+        "cron.scratch.set",
+        formatValidationErrors(validateCronScratchSetParams.errors),
+      );
+      return;
+    }
+    const p = params as CronJobIdParams & {
+      content: string | null;
+      expectedRevision?: number;
+    };
+    const jobId = resolveCronJobId(p);
+    if (!jobId) {
+      respondMissingCronJobId(respond, "cron.scratch.set");
+      return;
+    }
+    const callerScope = readCronCallerScope(client);
+    const job = await context.cron.readJob(jobId);
+    if (
+      !job ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+      })
+    ) {
+      respondInvalidCronParams(respond, "cron.scratch.set", "id not found");
+      return;
+    }
+    try {
+      const result = await context.cron.writeScratch(jobId, {
+        content: p.content,
+        expectedRevision: p.expectedRevision,
+      });
+      if (!result.ok) {
+        respond(true, result, undefined);
+        return;
+      }
+      respond(
+        true,
+        {
+          ok: true,
+          scratch: publicCronScratch(result.scratch),
+          currentRevision: result.currentRevision,
+          maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+        },
+        undefined,
+      );
+    } catch (error) {
+      respondInvalidCronParams(respond, "cron.scratch.set", formatErrorMessage(error));
+    }
   },
   "cron.add": async ({ params, respond, context, client }) => {
     const rawParams = params as {

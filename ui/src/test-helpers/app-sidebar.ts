@@ -81,9 +81,8 @@ export type TestSessionMenu = HTMLElement & {
 export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -330,6 +329,12 @@ export async function mountSidebar(
   sidebar.variant = variant;
   provider.append(sidebar);
   document.body.append(provider);
+  await sidebar.updateComplete;
+  await (
+    sidebar as unknown as {
+      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+    }
+  ).sidebarMenus.preloadMenuRenderer();
   await sidebar.updateComplete;
   return { provider, sidebar, context };
 }

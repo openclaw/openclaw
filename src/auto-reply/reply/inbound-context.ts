@@ -2,9 +2,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { projectMediaFacts, resolveMediaFacts } from "../../media/media-facts.js";
+import {
+  projectMediaFacts,
+  resolveMediaFacts,
+  resolveStagedMediaFacts,
+} from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type { FinalizedMsgContext, FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -13,6 +17,26 @@ export type FinalizeInboundContextOptions = {
   forceChatType?: boolean;
   forceConversationLabel?: boolean;
 };
+
+const LEGACY_MEDIA_CONTEXT_KEYS = [
+  "MediaPath",
+  "MediaUrl",
+  "MediaType",
+  "MediaPaths",
+  "MediaUrls",
+  "MediaTypes",
+  "MediaDir",
+  "MediaWorkspaceDir",
+  "MediaTranscribedIndexes",
+  "MediaStaged",
+] as const;
+type LegacyMediaContextKey = (typeof LEGACY_MEDIA_CONTEXT_KEYS)[number];
+
+export function stripLegacyMediaContextFields(ctx: Record<string, unknown>): void {
+  for (const key of LEGACY_MEDIA_CONTEXT_KEYS) {
+    delete ctx[key];
+  }
+}
 
 function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -57,9 +81,10 @@ function applySupplementalContext(ctx: MsgContext): void {
   delete ctx.SupplementalContext;
 }
 
-export function finalizeInboundContext<T extends Record<string, unknown>>(
+function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   ctx: T,
-  opts: FinalizeInboundContextOptions = {},
+  opts: FinalizeInboundContextOptions,
+  preserveLegacyMedia: boolean,
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
   applySupplementalContext(normalized);
@@ -126,15 +151,41 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     normalized.CommandSource = undefined;
   }
 
-  const media = resolveMediaFacts(normalized).map((fact) =>
+  const mediaSource =
+    !preserveLegacyMedia &&
+    (normalized.MediaStaged === true || normalizeOptionalString(normalized.MediaWorkspaceDir))
+      ? resolveStagedMediaFacts(normalized)
+      : resolveMediaFacts(normalized);
+  const media = mediaSource.map((fact) =>
     (fact.path || fact.url) && !fact.contentType && !fact.kind
       ? Object.assign(fact, { contentType: "application/octet-stream" })
       : fact,
   );
   if (media.length > 0) {
     normalized.media = media;
-    Object.assign(normalized, projectMediaFacts(media));
+    if (preserveLegacyMedia) {
+      Object.assign(normalized, projectMediaFacts(media));
+    }
+  }
+  if (!preserveLegacyMedia) {
+    stripLegacyMediaContextFields(normalized);
   }
 
   return normalized as T & FinalizedMsgContext;
+}
+
+export function finalizeInboundContext<T extends Record<string, unknown>>(
+  ctx: T,
+  opts: FinalizeInboundContextOptions = {},
+): Omit<T, LegacyMediaContextKey> & FinalizedRuntimeMsgContext {
+  return finalizeInboundContextImpl(ctx, opts, false) as Omit<T, LegacyMediaContextKey> &
+    FinalizedRuntimeMsgContext;
+}
+
+/** Keeps the shipped Plugin SDK return type while internal callers use the stricter type above. */
+export function finalizeInboundContextForSdk<T extends Record<string, unknown>>(
+  ctx: T,
+  opts: FinalizeInboundContextOptions = {},
+): T & FinalizedMsgContext {
+  return finalizeInboundContextImpl(ctx, opts, true);
 }

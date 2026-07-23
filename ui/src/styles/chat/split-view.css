@@ -189,7 +189,8 @@ openclaw-chat-pane {
   }
 }
 
-.chat-pane__cloud {
+.chat-pane__cloud,
+.chat-pane__incognito {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -197,6 +198,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__cloud svg,
+.chat-pane__incognito svg,
 .chat-pane__workspace-chip svg {
   width: 14px;
   height: 14px;
@@ -296,6 +298,28 @@ openclaw-chat-pane {
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
   margin-left: auto;
+}
+
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
 }
 
 @media (max-width: 480px) {

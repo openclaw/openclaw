@@ -36,7 +36,7 @@ import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type {
@@ -272,7 +272,7 @@ export function buildGatewayCronService(params: {
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(undefined, env);
+  const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
@@ -1252,13 +1252,13 @@ export function buildGatewayCronService(params: {
     }
   };
   const removeCron = cron.remove.bind(cron);
-  cron.remove = async (jobId) => {
+  cron.remove = async (jobId, opts) => {
     const previous = cron.getJob(jobId);
     try {
       if (previous?.schedule.kind === "stream") {
         await streamWatchersRef.current?.stop(jobId, "removed", previous);
       }
-      const result = await removeCron(jobId);
+      const result = await removeCron(jobId, opts);
       if (!result.removed) {
         await routeLiveStreamJobLogged(jobId);
       }

@@ -294,7 +294,7 @@ func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ str
 func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
 	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
-	translated = regexp.MustCompile(`(?m)^(__OC_I18N_\d+__)`).ReplaceAllString(translated, "  $1")
+	translated = regexp.MustCompile(`(?m)^(__OC_I18N_\d+__)`).ReplaceAllString(translated, "  1. $1")
 	return translated, nil
 }
 
@@ -758,6 +758,8 @@ func TestNormalizeMaskedListMarkerPlaceholdersRemovesAddedContainers(t *testing.
 		"  __OC_I18N_000001__Top level",
 		"> __OC_I18N_000002__Nested",
 		"  > __OC_I18N_000003__Quoted",
+		"1. __OC_I18N_000001__Numbered wrapper",
+		"  - __OC_I18N_000002__Bullet wrapper",
 		"  __OC_I18N_000004__ prose",
 		"",
 	}, "\n")
@@ -765,6 +767,8 @@ func TestNormalizeMaskedListMarkerPlaceholdersRemovesAddedContainers(t *testing.
 		"__OC_I18N_000001__Top level",
 		"__OC_I18N_000002__Nested",
 		"__OC_I18N_000003__Quoted",
+		"__OC_I18N_000001__Numbered wrapper",
+		"__OC_I18N_000002__Bullet wrapper",
 		"  __OC_I18N_000004__ prose",
 		"",
 	}, "\n")
@@ -800,8 +804,23 @@ func TestEscapeUnexpectedMarkdownListMarkersPreservesFencedExamples(t *testing.T
 		"",
 	}, "\n")
 
-	if got := escapeUnexpectedMarkdownListMarkers(translated, map[string]struct{}{"__OC_I18N_000001__": {}}); got != want {
+	if got := escapeUnexpectedMarkdownListMarkers(translated, map[string]string{"__OC_I18N_000001__": "- "}); got != want {
 		t.Fatalf("unexpected escaped list markers:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestNormalizeMaskedListMarkerSpacingRestoresSourceWhitespace(t *testing.T) {
+	t.Parallel()
+
+	first := "__OC_I18N_000001__"
+	second := "__OC_I18N_000002__"
+	markers := map[string]string{first: "- ", second: "  - "}
+	source := "Intro.\n\n" + first + "First\n  continuation\n" + second + "Second\n"
+	translated := "Einleitung. " + first + "Erste\n  Fortsetzung\n\n\n" + second + "Zweite\n"
+	want := "Einleitung.\n\n" + first + "Erste\n  Fortsetzung\n" + second + "Zweite\n"
+
+	if got := normalizeMaskedListMarkerSpacing(source, translated, markers); got != want {
+		t.Fatalf("unexpected normalized spacing:\n%s\nwant:\n%s", got, want)
 	}
 }
 

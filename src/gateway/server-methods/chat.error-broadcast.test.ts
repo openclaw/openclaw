@@ -198,33 +198,26 @@ describe("chat.send error broadcast", () => {
       isWebchatConnect: () => false,
     });
 
+    // The global agent alias canonicalizes to the agent's main session before
+    // load, so errors broadcast on the same key the visible thread subscribes
+    // to — the alias fan-out keys no longer carry sends.
     expect(ctx.broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({
         runId: "test-run-global",
-        sessionKey: "global",
-        agentId: "main",
+        sessionKey: "agent:main:main",
         state: "error",
       }),
-      { sessionKeys: ["agent:main:global", "global"] },
+      { sessionKeys: ["agent:main:main"] },
     );
-    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
-      "agent:main:global",
-      "chat",
-      expect.objectContaining({
-        agentId: "main",
-        state: "error",
-      }),
-    );
-    const globalPayload = expectDefined(
-      ctx.nodeSendToSession.mock.calls.find(([sessionKey]) => sessionKey === "global"),
-      "global node error payload",
+    const canonicalPayload = expectDefined(
+      ctx.nodeSendToSession.mock.calls.find(([sessionKey]) => sessionKey === "agent:main:main"),
+      "canonical node error payload",
     )[2] as Record<string, unknown>;
-    expect(globalPayload).toMatchObject({
-      agentId: "main",
+    expect(canonicalPayload).toMatchObject({
       state: "error",
       errorMessage: expect.stringContaining("LLM timeout"),
     });
-    expect(globalPayload).not.toHaveProperty("message");
+    expect(canonicalPayload).not.toHaveProperty("message");
   });
 });
