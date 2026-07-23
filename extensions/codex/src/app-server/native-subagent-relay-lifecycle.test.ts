@@ -19,16 +19,18 @@ describe("Codex native subagent relay lifecycle", () => {
     });
     expect(relay.isRegistered()).toBe(true);
 
+    const recordExecutionReceipt = vi.fn((params) => ({
+      taskId: "task-1",
+      sequence: 1,
+      recordedAt: 10_000,
+      ...params,
+    }));
+    const recordTaskRunProgressByRunId = vi.fn(() => []);
     const runtime = {
       tryCreateRunningTaskRun: vi.fn((params) => ({ taskId: "task-1", ...params })),
-      recordTaskRunProgressByRunId: vi.fn(() => []),
+      recordTaskRunProgressByRunId,
       finalizeTaskRunByRunId: vi.fn(() => []),
-      recordExecutionReceipt: vi.fn((params) => ({
-        taskId: "task-1",
-        sequence: 1,
-        recordedAt: 10_000,
-        ...params,
-      })),
+      recordExecutionReceipt,
     } as unknown as AgentHarnessTaskRuntime;
     const mirror = new CodexNativeSubagentTaskMirror(
       {
@@ -62,10 +64,10 @@ describe("Codex native subagent relay lifecycle", () => {
       },
     });
 
-    expect(runtime.recordExecutionReceipt).toHaveBeenCalledWith(
+    expect(recordExecutionReceipt).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "relay_health", status: "error" }),
     );
-    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
+    expect(recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
         progressSummary: "Stalled: native hook relay registration is unavailable.",
       }),
