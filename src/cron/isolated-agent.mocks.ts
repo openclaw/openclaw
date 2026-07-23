@@ -12,27 +12,35 @@ vi.mock("../agents/embedded-agent.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
-vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog,
-  loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
-  loadPublishedPreparedModelCatalogOwnerSnapshot: vi.fn(
-    async (params: {
-      agentId?: string;
-      agentDir?: string;
-      config?: object;
-      workspaceDir?: string;
-    }) => ({
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      agentDir: params.agentDir ?? "/tmp/cron-agent",
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      config: params.config ?? {},
-      modelCatalog: {
-        entries: (await loadPreparedModelCatalog(params)) ?? [],
-        routeVariants: [],
+vi.mock("../agents/prepared-model-catalog.js", async () => {
+  const { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
+  return {
+    loadPreparedModelCatalog,
+    loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
+    loadPublishedPreparedModelCatalogOwnerSnapshot: vi.fn(
+      async (params: {
+        agentId?: string;
+        agentDir?: string;
+        config?: object;
+        workspaceDir?: string;
+      }) => {
+        const config = params.config ?? {};
+        const agentId = params.agentId ?? resolveDefaultAgentId(config);
+        return {
+          agentId,
+          agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
+          workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
+          config,
+          modelCatalog: {
+            entries: (await loadPreparedModelCatalog(params)) ?? [],
+            routeVariants: [],
+          },
+        };
       },
-    }),
-  ),
-}));
+    ),
+  };
+});
 
 vi.mock("../agents/model-selection.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(

@@ -52,7 +52,7 @@ function usesRealAccessorStore(storePath?: string): boolean {
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
-export const resolveAgentWorkspaceDirMock = vi.fn(
+const resolveAgentWorkspaceDirMock = vi.fn(
   (cfg: { agents?: { list?: Array<{ id?: string; workspace?: string }> } }, agentId: string) =>
     cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ?? "/tmp/workspace",
 );
@@ -571,19 +571,22 @@ function resetRunConfigMocks(): void {
   loadModelCatalogOwnerMock.mockImplementation(
     async (params: {
       agentId?: string;
-      agentDir: string;
+      agentDir?: string;
       config: object;
-      workspaceDir: string;
-    }) => ({
-      agentId: params.agentId ?? "default",
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      config: params.config,
-      modelCatalog: {
-        entries: await loadModelCatalogMock(params),
-        routeVariants: [],
-      },
-    }),
+      workspaceDir?: string;
+    }) => {
+      const agentId = params.agentId ?? "default";
+      return {
+        agentId,
+        agentDir: params.agentDir ?? "/tmp/agent-dir",
+        workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId),
+        config: params.config,
+        modelCatalog: {
+          entries: await loadModelCatalogMock(params),
+          routeVariants: [],
+        },
+      };
+    },
   );
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
