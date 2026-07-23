@@ -7,8 +7,8 @@ import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
-import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 
 vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
