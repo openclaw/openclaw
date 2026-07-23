@@ -127,7 +127,10 @@ const PluginDiagnosticSchema = z.object({
 });
 
 const InstalledPluginIndexSchema = z.object({
-  version: z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
+  version: z.union([
+    z.literal(INSTALLED_PLUGIN_INDEX_VERSION),
+    z.literal(INSTALLED_PLUGIN_INDEX_VERSION - 1),
+  ]),
   warning: z.string().optional(),
   hostContractVersion: z.string(),
   compatRegistryVersion: z.string(),
