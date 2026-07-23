@@ -209,6 +209,46 @@ describe("windows output encoding", () => {
     ).toBe("测试");
   });
 
+  it("decodes UTF-16LE BOM-prefixed Windows output as text", () => {
+    const raw = Buffer.from([
+      0xff, 0xfe, 0x68, 0x00, 0x65, 0x00, 0x6c, 0x00, 0x6c, 0x00, 0x6f, 0x00, 0x0a, 0x00,
+    ]);
+
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "utf-8",
+      }),
+    ).toBe("hello\n");
+  });
+
+  it("decodes UTF-8 BOM-prefixed Windows output as text", () => {
+    const raw = Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from("hello\n", "utf8")]);
+
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "gbk",
+      }),
+    ).toBe("hello\n");
+  });
+
+  it("decodes UTF-16BE BOM-prefixed Windows output as text", () => {
+    const raw = Buffer.from([
+      0xfe, 0xff, 0x00, 0x68, 0x00, 0x65, 0x00, 0x6c, 0x00, 0x6c, 0x00, 0x6f, 0x00, 0x0a,
+    ]);
+
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "utf-8",
+      }),
+    ).toBe("hello\n");
+  });
+
   it("decodes legacy text files with the Windows system encoding", () => {
     const raw = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
 
@@ -285,6 +325,21 @@ describe("windows output encoding", () => {
       raw.subarray(0, splitIndex).toString("utf8"),
     );
     expect(decoder.decode(raw.subarray(splitIndex + 1))).toBe('世"}');
+    expect(decoder.flush()).toBe("");
+  });
+
+  it("decodes split UTF-16LE BOM-prefixed Windows output chunks as text", () => {
+    const decoder = createWindowsOutputDecoder({
+      platform: "win32",
+      windowsEncoding: "utf-8",
+    });
+    const raw = Buffer.from([
+      0xff, 0xfe, 0x68, 0x00, 0x65, 0x00, 0x6c, 0x00, 0x6c, 0x00, 0x6f, 0x00, 0x0a, 0x00,
+    ]);
+
+    expect(decoder.decode(raw.subarray(0, 1))).toBe("");
+    expect(decoder.decode(raw.subarray(1, 5))).toBe("h");
+    expect(decoder.decode(raw.subarray(5))).toBe("ello\n");
     expect(decoder.flush()).toBe("");
   });
 });

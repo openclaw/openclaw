@@ -197,6 +197,11 @@ function decodeWindowsBufferWithFallback(params: {
     return params.buffer.toString("utf8");
   }
 
+  const bomDecoded = decodeBomPrefixedBuffer(params.buffer);
+  if (bomDecoded !== null) {
+    return bomDecoded;
+  }
+
   const utf8 = decodeStrictUtf8(params.buffer);
   if (utf8 !== null) {
     return utf8;
@@ -211,6 +216,49 @@ function decodeWindowsBufferWithFallback(params: {
   } catch {
     return params.buffer.toString("utf8");
   }
+}
+
+type TextBomState =
+  | { status: "matched"; encoding: "utf-8" | "utf-16le" | "utf-16be" }
+  | { status: "pending" }
+  | { status: "none" };
+
+function detectTextBom(buffer: Buffer): TextBomState {
+  const first = buffer.at(0);
+  if (first === undefined) {
+    return { status: "none" };
+  }
+  const second = buffer.at(1);
+  const third = buffer.at(2);
+  if (first === 0xff) {
+    if (second === undefined) {
+      return { status: "pending" };
+    }
+    return second === 0xfe ? { status: "matched", encoding: "utf-16le" } : { status: "none" };
+  }
+  if (first === 0xfe) {
+    if (second === undefined) {
+      return { status: "pending" };
+    }
+    return second === 0xff ? { status: "matched", encoding: "utf-16be" } : { status: "none" };
+  }
+  if (first === 0xef) {
+    if (second === undefined || (second === 0xbb && third === undefined)) {
+      return { status: "pending" };
+    }
+    return second === 0xbb && third === 0xbf
+      ? { status: "matched", encoding: "utf-8" }
+      : { status: "none" };
+  }
+  return { status: "none" };
+}
+
+function decodeBomPrefixedBuffer(buffer: Buffer): string | null {
+  const bom = detectTextBom(buffer);
+  if (bom.status !== "matched") {
+    return null;
+  }
+  return new TextDecoder(bom.encoding).decode(buffer);
 }
 
 /** Creates a streaming decoder for subprocess output chunks that may split multibyte characters. */
@@ -233,48 +281,92 @@ export function createWindowsOutputDecoder(params?: {
     platform === "win32" && legacyDecoder ? new TextDecoder("utf-8", { fatal: true }) : null;
   const streamingUtf8Decoder = legacyDecoder ? null : new TextDecoder("utf-8");
   let useLegacyDecoder = false;
-  let pendingUtf8Bytes = Buffer.alloc(0);
+  let pendingUtf8Bytes: Buffer = Buffer.alloc(0);
+  let bomChecked = platform !== "win32";
+  let pendingBomBytes: Buffer = Buffer.alloc(0);
+  let bomDecoder: TextDecoder | null = null;
+
+  const decodeWithoutBom = (buffer: Buffer) => {
+    if (!legacyDecoder || !utf8Decoder) {
+      return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
+    }
+    if (useLegacyDecoder) {
+      return legacyDecoder.decode(buffer, { stream: true });
+    }
+    // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
+    // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
+    const replayBuffer =
+      pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
+    try {
+      const decoded = utf8Decoder.decode(buffer, { stream: true });
+      pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
+      return decoded;
+    } catch {
+      useLegacyDecoder = true;
+      pendingUtf8Bytes = Buffer.alloc(0);
+      return legacyDecoder.decode(replayBuffer, { stream: true });
+    }
+  };
+
+  const flushWithoutBom = () => {
+    if (!legacyDecoder || !utf8Decoder) {
+      return streamingUtf8Decoder?.decode() ?? "";
+    }
+    if (useLegacyDecoder) {
+      return legacyDecoder.decode();
+    }
+    try {
+      const decoded = utf8Decoder.decode();
+      pendingUtf8Bytes = Buffer.alloc(0);
+      return decoded;
+    } catch {
+      useLegacyDecoder = true;
+      const replayBuffer = pendingUtf8Bytes;
+      pendingUtf8Bytes = Buffer.alloc(0);
+      return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
+    }
+  };
 
   return {
     decode(chunk) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (!legacyDecoder || !utf8Decoder) {
-        return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
+      if (bomDecoder) {
+        return bomDecoder.decode(buffer, { stream: true });
       }
-      if (useLegacyDecoder) {
-        return legacyDecoder.decode(buffer, { stream: true });
+      if (!bomChecked) {
+        const candidate =
+          pendingBomBytes.length > 0 ? Buffer.concat([pendingBomBytes, buffer]) : buffer;
+        const bom = detectTextBom(candidate);
+        if (bom.status === "pending") {
+          pendingBomBytes = candidate;
+          return "";
+        }
+        bomChecked = true;
+        pendingBomBytes = Buffer.alloc(0);
+        if (bom.status === "matched") {
+          bomDecoder = new TextDecoder(bom.encoding);
+          return bomDecoder.decode(candidate, { stream: true });
+        }
+        return decodeWithoutBom(candidate);
       }
-      // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
-      // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
-      const replayBuffer =
-        pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
-      try {
-        const decoded = utf8Decoder.decode(buffer, { stream: true });
-        pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
-        return decoded;
-      } catch {
-        useLegacyDecoder = true;
-        pendingUtf8Bytes = Buffer.alloc(0);
-        return legacyDecoder.decode(replayBuffer, { stream: true });
-      }
+      return decodeWithoutBom(buffer);
     },
     flush() {
-      if (!legacyDecoder || !utf8Decoder) {
-        return streamingUtf8Decoder?.decode() ?? "";
+      if (bomDecoder) {
+        return bomDecoder.decode();
       }
-      if (useLegacyDecoder) {
-        return legacyDecoder.decode();
+      if (!bomChecked && pendingBomBytes.length > 0) {
+        bomChecked = true;
+        const pending = pendingBomBytes;
+        pendingBomBytes = Buffer.alloc(0);
+        const bom = detectTextBom(pending);
+        if (bom.status === "matched") {
+          bomDecoder = new TextDecoder(bom.encoding);
+          return bomDecoder.decode(pending);
+        }
+        return decodeWithoutBom(pending) + flushWithoutBom();
       }
-      try {
-        const decoded = utf8Decoder.decode();
-        pendingUtf8Bytes = Buffer.alloc(0);
-        return decoded;
-      } catch {
-        useLegacyDecoder = true;
-        const replayBuffer = pendingUtf8Bytes;
-        pendingUtf8Bytes = Buffer.alloc(0);
-        return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
-      }
+      return flushWithoutBom();
     },
   };
 }
