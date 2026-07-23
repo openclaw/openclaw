@@ -1596,9 +1596,19 @@ $0 \\"$1\\"" touch {marker}`,
       second: 'elixir --rpc-eval worker@127.0.0.1 \'System.cmd("sh", ["-c", "id > {marker}"])\'',
     },
     {
+      executable: "iex",
+      first: "iex -e 'IO.puts(:ok)'",
+      second: 'iex -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
+    },
+    {
       executable: "guile",
       first: "guile -c '(display 1)'",
       second: "guile -c '(system \"id > {marker}\")'",
+    },
+    {
+      executable: "guile",
+      first: "guile -e main /dev/null",
+      second: "guile -e '(lambda args (system \"id > {marker}\"))' /dev/null",
     },
     {
       executable: "groovy",

@@ -178,11 +178,11 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     rawExactFlags: new Map([["-E", "-E"]]),
   },
   {
-    names: ["elixir"],
+    names: ["elixir", "iex"],
     exactFlags: new Set(["-e", "--eval", "--rpc-eval"]),
     joinedExactFlags: new Set(),
   },
-  { names: ["guile"], exactFlags: new Set(["-c"]), joinedExactFlags: new Set() },
+  { names: ["guile"], exactFlags: new Set(["-c", "-e"]), joinedExactFlags: new Set() },
   {
     names: ["groovy"],
     exactFlags: new Set(["-e"]),

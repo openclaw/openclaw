@@ -72,7 +72,13 @@ describe("exec inline eval detection", () => {
       argv: ["elixir", "--rpc-eval", "worker@127.0.0.1", 'System.cmd("id", [])'],
       expected: "elixir --rpc-eval",
     },
+    { argv: ["iex", "-e", 'System.cmd("id", [])'], expected: "iex -e" },
+    {
+      argv: ["iex", "--rpc-eval", "worker@127.0.0.1", 'System.cmd("id", [])'],
+      expected: "iex --rpc-eval",
+    },
     { argv: ["guile", "-c", '(system "id")'], expected: "guile -c" },
+    { argv: ["guile", "-e", '(lambda args (system "id"))', "/dev/null"], expected: "guile -e" },
     { argv: ["groovy", "-e", '"id".execute()'], expected: "groovy -e" },
     { argv: ["groovy", '-e"id".execute()'], expected: "groovy -e" },
     { argv: ["groovy", "-ne", '["id"].execute()'], expected: "groovy -e" },
@@ -254,8 +260,10 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["julia", "script.jl"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["elixir", "script.exs"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["elixir", "-eIO.puts(1)"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["iex", "-eIO.puts(1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["guile", "script.scm"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["guile", "-c(display 1)"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["guile", "-e(display 1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["groovy", "script.groovy"])).toBeNull();
     expect(
       detectInterpreterInlineEvalArgv(["groovy", "-encoding", "UTF-8", "script.groovy"]),
@@ -304,6 +312,7 @@ describe("exec inline eval detection", () => {
     expect(isInterpreterLikeAllowlistPattern("Rscript")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/opt/bin/julia")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/elixir")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("iex")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("guile3.0")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/groovy")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("scala")).toBe(true);
