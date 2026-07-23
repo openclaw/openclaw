@@ -91,6 +91,17 @@ function projectPresencePayload(value: unknown, selfInstanceId?: string) {
   return cachedPresenceProjection;
 }
 
+export function hasSessionPresenceViewers(
+  value: unknown,
+  selfInstanceId: string | undefined,
+  sessionKey: string,
+): boolean {
+  const projection = projectPresencePayload(value, selfInstanceId);
+  return projection.users.some(
+    (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
+  );
+}
+
 export function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
 }

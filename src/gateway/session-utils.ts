@@ -902,7 +902,7 @@ function resolveTranscriptUsageFallback(params: {
 function readAcpMetaForDeletedAgentCheck(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  entry?: Pick<SessionEntry, "acp" | "sessionId"> | null;
+  entry?: Pick<SessionEntry, "acp" | "lifecycleRevision"> | null;
   acpMetadataSessionKey?: string | null;
 }) {
   if (params.entry?.acp) {

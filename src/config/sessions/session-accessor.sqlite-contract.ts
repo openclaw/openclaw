@@ -253,12 +253,14 @@ export type ForkSessionEntryFromParentTargetParams = {
 };
 
 export type ResetSessionEntryLifecycleParams = {
+  archivePreviousTranscript?: boolean;
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 };

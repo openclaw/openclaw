@@ -54,6 +54,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import "../lib/toast.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -125,6 +126,9 @@ type AppSidebarElement = HTMLElement & {
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
 
 type StoredOutboxScopeHost = {
   settings: { gatewayUrl?: string | null };
@@ -938,7 +942,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
     if (nextNavCollapsed) {
       void this.updateComplete.then(() => {
-        this.restoreFocusTo(this.querySelector<HTMLElement>(".shell-nav-expand"));
+        this.restoreFocusTo(this.querySelector<HTMLElement>(".shell-chrome-controls__nav-toggle"));
       });
     }
   }
@@ -987,6 +991,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     context.navigation.update({ navWidth });
   }
 
+  private openNewSession(agentId: string, target?: NewSessionTarget) {
+    this.navigate("new-session", { search: newSessionSearch(agentId, target) });
+  }
+
   // Shipped Mac app builds without web chrome still drive these handlers.
   private readonly handleNativeToggleSidebar = () => {
     this.toggleNavigationSurface();
@@ -1018,9 +1026,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     const agentId = context.agentSelection.state.selectedId ?? "";
-    this.navigate("new-session", {
-      search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
-    });
+    this.openNewSession(agentId);
   };
 
   private readonly handleNativeHistoryState = (event: Event) => {
@@ -1585,6 +1591,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       mobileNavLayout,
     });
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    // Mirror the sidebar brand action: an open new-session draft wins over the
+    // persisted selection so the collapsed cluster "+" targets the same agent.
+    const selectedAgentId = normalizeAgentId(
+      this.draftSessionAgentId() ||
+        (context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId),
+    );
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
     // The new-session draft shares the chat layout: full-height pane that owns
@@ -1648,19 +1660,52 @@ class OpenClawShell extends OpenClawLightDomElement {
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
-        ${navCollapsed && !onboarding
+        ${!onboarding && !settingsTakeover && !mobileNavLayout
           ? html`
-              <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`}>
-                <button
-                  type="button"
-                  class="shell-nav-expand"
-                  aria-label=${t("nav.expand")}
-                  aria-expanded="false"
-                  @click=${() => this.toggleNavigationSurface()}
+              <div class="shell-chrome-controls">
+                <openclaw-tooltip
+                  .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
                 >
-                  ${icons.panelLeftOpen}
-                </button>
-              </openclaw-tooltip>
+                  <button
+                    type="button"
+                    class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
+                    aria-label=${t(navCollapsed ? "nav.expand" : "nav.collapse")}
+                    aria-expanded=${navCollapsed ? "false" : "true"}
+                    @click=${() => this.toggleNavigationSurface()}
+                  >
+                    ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                  </button>
+                </openclaw-tooltip>
+                ${navCollapsed
+                  ? html`<openclaw-tooltip
+                      .content=${gatewaySnapshot.connected
+                        ? t("chat.runControls.newSession")
+                        : t("chat.runControls.newSessionDisconnected")}
+                    >
+                      <button
+                        type="button"
+                        class="shell-chrome-controls__button shell-chrome-controls__new-thread"
+                        aria-label=${t("chat.runControls.newSession")}
+                        ?disabled=${!gatewaySnapshot.connected}
+                        @click=${() => this.openNewSession(selectedAgentId)}
+                      >
+                        ${icons.plus}
+                      </button>
+                    </openclaw-tooltip>`
+                  : nothing}
+                <openclaw-tooltip
+                  .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}
+                >
+                  <button
+                    type="button"
+                    class="shell-chrome-controls__button shell-chrome-controls__search"
+                    aria-label=${t("chat.openCommandPalette")}
+                    @click=${this.openPalette}
+                  >
+                    ${icons.search}
+                  </button>
+                </openclaw-tooltip>
+              </div>
             `
           : nothing}
         <div class="shell-nav">
@@ -1726,14 +1771,10 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
-                .onOpenPalette=${this.openPalette}
                 .onOpenApprovals=${this.openApprovals}
-                .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onRetryConnect=${() => context.gateway.connect()}
-                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
-                  const search = newSessionSearch(agentId, target);
-                  this.navigate("new-session", { search });
-                }}
+                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) =>
+                  this.openNewSession(agentId, target)}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onUpdateSidebarEntries=${(entries: string[]) =>
                   context.navigation.update({ sidebarEntries: entries })}

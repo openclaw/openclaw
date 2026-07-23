@@ -99,6 +99,7 @@ import {
   type SetupInferenceAuthOption,
   type SetupInferenceManualProvider,
 } from "./setup-inference-auth-options.js";
+import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -130,6 +131,8 @@ export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferen
 
 export type SetupInferenceCandidate = {
   kind: SetupInferenceKind;
+  /** Canonical provider identity for clients with bundled brand artwork. */
+  brandId?: string;
   label: string;
   detail: string;
   modelRef: string;
@@ -376,14 +379,17 @@ function invalidSetupConfigError(snapshot: {
 }
 
 function resolveCandidatePresentation(
-  kind: SetupInferenceKind,
+  candidate: Pick<SetupInferenceCandidate, "kind" | "modelRef">,
   authChoices: readonly ProviderAuthChoiceMetadata[],
-): Pick<SetupInferenceCandidate, "icon" | "website"> {
+): Pick<SetupInferenceCandidate, "brandId" | "icon" | "website"> {
   const choice = authChoices.find(
-    (candidate) =>
-      candidate.choiceId === kind || candidate.deprecatedChoiceIds?.includes(kind) === true,
+    (entry) =>
+      entry.choiceId === candidate.kind ||
+      entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
+  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
   return {
+    ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),
     ...(choice?.website ? { website: choice.website } : {}),
   };
@@ -519,7 +525,7 @@ export async function detectSetupInference(
     Object.assign(
       candidate,
       { recommended: false as const },
-      resolveCandidatePresentation(candidate.kind, authChoices),
+      resolveCandidatePresentation(candidate, authChoices),
     ),
   );
   const configuredModel = candidates.find(
@@ -583,6 +589,7 @@ export async function detectSetupInference(
           return Object.assign(
             {
               kind: toProviderAutoSetupKind(choice.choiceId),
+              brandId: choice.providerId,
               label: choice.choiceLabel,
               detail: candidate.detail?.trim() || "available locally",
               modelRef: candidate.modelRef,
@@ -2694,6 +2701,8 @@ export async function verifySetupInferenceConfig(params: {
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
   authProfiles?: ProviderAuthResult["profiles"];
   agentId?: string;
+  /** Explicit isolated agent directory for staged onboarding verification. */
+  agentDir?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -2740,7 +2749,9 @@ export async function verifySetupInferenceConfig(params: {
         error: builtPlan.error,
       };
     }
-    let plan: SetupInferenceTestPlan = builtPlan;
+    let plan: SetupInferenceTestPlan = params.agentDir
+      ? { ...builtPlan, agentDir: params.agentDir }
+      : builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
       const selectedProfile = plan.authProfileId
         ? params.authProfiles.find((profile) => profile.profileId === plan.authProfileId)

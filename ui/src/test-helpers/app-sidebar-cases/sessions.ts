@@ -2,11 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
-  createLobsterPetLook,
-  LOBSTER_LOGO_VISIT_EVENT,
-  type LobsterLogoVisitDetail,
-} from "../../components/lobster-pet.ts";
-import {
   createContext,
   createGateway,
   createGatewayHarness,
@@ -204,65 +199,6 @@ describe("AppSidebar lobster outcome wiring", () => {
       expect(pet?.runOutcome).toBe(expectedOutcome);
     },
   );
-});
-
-describe("AppSidebar logo stand-in wiring", () => {
-  it("swaps the brand mark while the pet's logo visit is in, leaving, then out", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const pet = sidebar.querySelector("openclaw-lobster-pet");
-    if (!pet) {
-      throw new Error("Expected sidebar lobster pet");
-    }
-    const dispatch = (detail: LobsterLogoVisitDetail) =>
-      pet.dispatchEvent(
-        new CustomEvent(LOBSTER_LOGO_VISIT_EVENT, { detail, bubbles: true, composed: true }),
-      );
-    const logo = () => sidebar.querySelector(".sidebar-brand__logo");
-    const standIn = () => sidebar.querySelector(".sidebar-brand__pet");
-    const standInHost = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-lobster-logo-standin",
-    );
-    const settleStandIn = async () => {
-      await sidebar.updateComplete;
-      await standInHost?.updateComplete;
-    };
-
-    expect(standInHost).not.toBeNull();
-    await standInHost?.updateComplete;
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
-    expect(standIn()).toBeNull();
-
-    const look = createLobsterPetLook(70);
-    dispatch({ phase: "in", look, name: "Pinchy" });
-    await settleStandIn();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
-    const sprite = standIn();
-    expect(sprite).not.toBeNull();
-    expect(sprite?.classList.contains(`lobster-pet--palette-${look.palette.id}`)).toBe(true);
-    expect(sprite?.getAttribute("title")).toContain("Pinchy");
-    expect(sprite?.querySelector(".lobster-pet__svg")).not.toBeNull();
-
-    dispatch({ phase: "leaving", look, name: "Pinchy" });
-    await settleStandIn();
-    expect(standIn()?.classList.contains("sidebar-brand__pet--leaving")).toBe(true);
-
-    dispatch({ phase: "out", look: null, name: null });
-    await settleStandIn();
-    expect(standIn()).toBeNull();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
-
-    // A lookless scare phase hides the logo with no stand-in crab, and the
-    // "out" edge restores it.
-    dispatch({ phase: "in", look: null, name: null });
-    await settleStandIn();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(true);
-    expect(standIn()).toBeNull();
-
-    dispatch({ phase: "out", look: null, name: null });
-    await settleStandIn();
-    expect(logo()?.classList.contains("sidebar-brand__logo--vacated")).toBe(false);
-  });
 });
 
 describe("AppSidebar session source lifecycle", () => {

@@ -52,7 +52,11 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
+import {
+  readPresenceEntries,
+  resolveCurrentSelfUser,
+  type PresencePayload,
+} from "../../app/user-profile.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -66,6 +70,7 @@ import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { icons } from "../../components/icons.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
@@ -441,6 +446,7 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private headerRenameValue = "";
   @litState() private headerPlatform: string | null = null;
   @litState() private headerCopiedAction: ChatPaneHeaderAction | null = null;
+  @litState() private presencePayload: PresencePayload | undefined;
   @litState() private boardCommandDock: {
     sessionKey: string;
     tabId: string;
@@ -2356,6 +2362,10 @@ class ChatPane extends OpenClawLightDomElement {
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
+        if (event.event === "presence") {
+          const presence = readPresenceEntries(event.payload);
+          this.presencePayload = presence ? { presence } : undefined;
+        }
         if (state) {
           handleQuestionPromptEvent(this.questionPromptState, event);
         }
@@ -2488,6 +2498,7 @@ class ChatPane extends OpenClawLightDomElement {
     }
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
+    this.presencePayload = undefined;
     this.announceCommandPaletteTarget(null);
     dismissConfirmedActionPopovers(this);
     resetChatViewState(this.paneId);
@@ -2609,6 +2620,12 @@ class ChatPane extends OpenClawLightDomElement {
     const wasConnected = state.connected;
     const sourceChanged = state.client !== snapshot.client || wasConnected !== snapshot.connected;
     const clientChanged = this.connectedClient !== snapshot.client;
+    if (!snapshot.connected) {
+      this.presencePayload = undefined;
+    } else if (clientChanged || !wasConnected) {
+      const presence = readPresenceEntries(snapshot.hello?.snapshot);
+      this.presencePayload = presence ? { presence } : undefined;
+    }
     if (sourceChanged) {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
@@ -3222,6 +3239,22 @@ class ChatPane extends OpenClawLightDomElement {
       diffAction: renderSessionDiffToggle(sessionWorkspace),
       backgroundTasksAction: renderBackgroundTasksToggle(backgroundTasks),
       workspaceAction: renderSessionWorkspaceToggle(sessionWorkspace),
+      presence:
+        !catalog &&
+        hasSessionPresenceViewers(
+          this.presencePayload,
+          this.context.gateway.snapshot.client?.instanceId,
+          this.state?.sessionKey ?? "",
+        )
+          ? html`<openclaw-viewer-facepile
+              class="chat-pane__presence"
+              .presencePayload=${this.presencePayload}
+              .selfInstanceId=${this.context.gateway.snapshot.client?.instanceId}
+              .sessionKey=${this.state?.sessionKey}
+              .maxVisible=${4}
+              variant="session"
+            ></openclaw-viewer-facepile>`
+          : nothing,
       faceControl: renderBoardFaceToggle(board.hasBoard, board.face, (face) => {
         this.persistBoardSessionView({ face });
       }),

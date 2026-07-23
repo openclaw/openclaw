@@ -10,9 +10,11 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
+  appendTranscriptMessage,
   appendTranscriptEvent,
   listSessionEntries,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -1168,7 +1170,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
     expect(result.sessionEntry.totalTokens).toBe(0);
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
@@ -1248,7 +1250,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     await expect(
       drainFormattedSystemEvents({
         cfg,
@@ -1306,7 +1308,7 @@ describe("initSessionState RawBody", () => {
     // The session rolled over implicitly (stale), not via /new.
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     // The user override must survive.
     expect(result.sessionEntry.providerOverride).toBe("minimax");
     expect(result.sessionEntry.modelOverride).toBe("m2.7");
@@ -1406,8 +1408,8 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.sessionEntry.previousSessionId).toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.sessionEntry.previousSessionId).toBeUndefined();
     expectEntryFields(result.sessionEntry, lineage);
   });
 
@@ -1460,7 +1462,7 @@ describe("initSessionState RawBody", () => {
     // The session rolled over implicitly (stale), not via /new.
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     // The user-set behavior overrides must survive the implicit rollover.
     expect(result.sessionEntry.thinkingLevel).toBe("medium");
     expect(result.sessionEntry.verboseLevel).toBe("on");
@@ -1518,7 +1520,7 @@ describe("initSessionState RawBody", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.responseUsage).toBe("full");
   });
 
@@ -1554,7 +1556,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.label).toBe("Other");
     expect(result.sessionEntry.displayName).toBe("Dashboard Chat");
 
@@ -2007,7 +2009,7 @@ describe("initSessionState RawBody", () => {
 
     expect(result.resetTriggered).toBe(true);
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("prefers native command target sessions over bound slash sessions", async () => {
@@ -2239,7 +2241,7 @@ describe("initSessionState reset policy", () => {
     vi.useFakeTimers();
     clearBootstrapSnapshotOnSessionRolloverSpy = vi.spyOn(
       bootstrapCache,
-      "clearBootstrapSnapshotOnSessionRollover",
+      "clearBootstrapSnapshotOnSessionBoundary",
     );
   });
 
@@ -2271,8 +2273,8 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      boundaryAppended: false,
       sessionKey,
-      previousSessionId: undefined,
     });
   });
 
@@ -2300,7 +2302,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("expires sessions when idle timeout wins over daily reset", async () => {
@@ -2330,7 +2332,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("preserves idle rollover when an ordinary send asserts the current session id", async () => {
@@ -2361,7 +2363,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("pins a durably admitted session across an idle reset boundary", async () => {
@@ -2456,7 +2458,7 @@ describe("initSessionState reset policy", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("drains stale system events when idle rollover creates a new session", async () => {
@@ -2491,7 +2493,7 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(false);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     await expect(
       drainFormattedSystemEvents({
         cfg,
@@ -2621,8 +2623,8 @@ describe("initSessionState reset policy", () => {
     const persisted = readSessionStoreFast(storePath);
     const entry = persisted[scenario.sessionKey];
     if (scenario.expectNewSession) {
-      expect(result.sessionId).not.toBe(existingSessionId);
-      expect(entry?.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.sessionId).toBe(existingSessionId);
       expect(entry?.status).toBeUndefined();
       expect(entry?.startedAt).toBeUndefined();
       expect(entry?.endedAt).toBeUndefined();
@@ -2725,8 +2727,8 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      boundaryAppended: true,
       sessionKey,
-      previousSessionId: existingSessionId,
     });
   });
 
@@ -2765,8 +2767,8 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      boundaryAppended: true,
       sessionKey,
-      previousSessionId: existingSessionId,
     });
   });
 
@@ -2805,8 +2807,8 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).not.toHaveBeenCalledWith({
+      boundaryAppended: true,
       sessionKey,
-      previousSessionId: existingSessionId,
     });
   });
 
@@ -2876,10 +2878,10 @@ describe("initSessionState reset policy", () => {
 
     expect(result.resetTriggered).toBe(false);
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      boundaryAppended: true,
       sessionKey,
-      previousSessionId: existingSessionId,
     });
   });
 
@@ -3003,8 +3005,8 @@ describe("initSessionState reset policy", () => {
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
+      boundaryAppended: false,
       sessionKey,
-      previousSessionId: undefined,
     });
   });
 });
@@ -3318,7 +3320,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       expect(result.triggerBodyNormalized, testCase.name).toBe("/new");
       expect(result.isNewSession, testCase.name).toBe(testCase.expectedIsNewSession);
       if (testCase.expectedIsNewSession) {
-        expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+        expect(result.sessionId, testCase.name).toBe(existingSessionId);
         expect(result.bodyStripped, testCase.name).toBe("");
       } else {
         expect(result.sessionId, testCase.name).toBe(existingSessionId);
@@ -3362,9 +3364,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
+    expect(result.sessionId).toBe("old-group-activation-session");
     expect(result.sessionEntry.groupActivation).toBe("always");
     expect(result.sessionEntry.sessionId).toBe(result.sessionId);
     expect(typeof result.sessionEntry.updatedAt).toBe("number");
@@ -3422,7 +3422,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.bodyStripped).toBe("take notes");
   });
 });
@@ -3589,7 +3589,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expectEntryFields(result.sessionEntry, overrides, testCase.name);
     }
   });
@@ -3639,12 +3639,11 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
 
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expect(result.sessionEntry.usageFamilyKey, testCase.name).toBe("family:user-usage-family");
       expect(result.sessionEntry.usageFamilySessionIds, testCase.name).toEqual([
         "ancestor-session",
         existingSessionId,
-        result.sessionId,
       ]);
 
       const stored = readSessionStoreFast(storePath);
@@ -3656,7 +3655,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         expectDefined(stored[sessionKey], "stored[sessionKey] test invariant")
           .usageFamilySessionIds,
         testCase.name,
-      ).toEqual(["ancestor-session", existingSessionId, result.sessionId]);
+      ).toEqual(["ancestor-session", existingSessionId]);
     }
   });
 
@@ -3720,7 +3719,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expect(result.sessionEntry.providerOverride, testCase.name).toBe(overrides.providerOverride);
       expect(result.sessionEntry.modelOverride, testCase.name).toBe(overrides.modelOverride);
       expect(result.sessionEntry.authProfileOverride, testCase.name).toBe(
@@ -3797,7 +3796,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
       expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
       expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
@@ -3855,7 +3854,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expect(result.sessionEntry.modelOverride, testCase.name).toBeUndefined();
       expect(result.sessionEntry.providerOverride, testCase.name).toBeUndefined();
       expect(result.sessionEntry.modelOverrideSource, testCase.name).toBeUndefined();
@@ -3915,7 +3914,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverride).toBeUndefined();
     expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
@@ -3996,7 +3995,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expect(result.sessionEntry.modelProvider, testCase.name).toBeUndefined();
       expect(result.sessionEntry.model, testCase.name).toBeUndefined();
       expect(result.sessionEntry.cacheRead, testCase.name).toBeUndefined();
@@ -4125,7 +4124,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionId, testCase.name).toBe(existingSessionId);
       expectEntryFields(result.sessionEntry, overrides, testCase.name);
     }
   });
@@ -4245,18 +4244,24 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionId).toBe(existingSessionId);
   });
 
-  it("archives the old session store entry on /new", async () => {
+  it("retains the transcript in place on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
     const existingSessionId = "existing-session-archive";
-    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
     await seedSessionStoreWithOverrides({
       storePath,
       sessionKey,
       sessionId: existingSessionId,
       overrides: { verboseLevel: "on" },
     });
-    await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: existingSessionId, sessionKey, storePath },
+      { message: { role: "user", content: "kept question" } },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: existingSessionId, sessionKey, storePath },
+      { message: { role: "assistant", content: "kept answer" } },
+    );
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
@@ -4280,14 +4285,24 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+    expect(result.sessionId).toBe(existingSessionId);
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: existingSessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
+    expect(
+      events.findLast((event) => (event as { type?: unknown }).type === "reset"),
+    ).toMatchObject({ reason: "new", firstKeptEntryId: expect.any(String) });
     const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
       entry.startsWith(`${existingSessionId}.jsonl.reset.`),
     );
-    expect(archived).toHaveLength(1);
+    expect(archived).toHaveLength(0);
   });
 
-  it("drains foreign work before replacing a reply session", async () => {
+  it("drains foreign work before appending a reply reset boundary", async () => {
     const storePath = await createStorePath("openclaw-rollover-admission-");
     const sessionKey = "agent:main:telegram:dm:rollover-admission";
     const existingSessionId = "session-before-admitted-rollover";
@@ -4333,8 +4348,8 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       admission.release();
       const result = await initialization;
-      expect(result.sessionId).not.toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
     } finally {
       admission.release();
       await initialization.catch(() => {});
@@ -4375,7 +4390,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
             commandAuthorized: true,
           }),
       );
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(onInterrupt).not.toHaveBeenCalled();
     } finally {
       admission.release();
@@ -4432,7 +4447,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     const outcomes = await Promise.allSettled([runRollover(0), runRollover(1)]);
     expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
-    expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).not.toBe(existingSessionId);
+    expect(readSessionStoreFast(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
   });
 
   it.each([
@@ -4595,7 +4610,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         expect(replacementIdentityFenced).toBe(true);
         expect(postDrainIdentityFenced).toBe(true);
         expect(finalGapIdentityFenced).toBe(true);
-        expect(result.sessionId).not.toBe(finalGapSessionId);
+        expect(result.sessionId).toBe(finalGapSessionId);
       } else {
         expect(result.sessionId).toBe(replacementSessionId);
       }
@@ -4611,7 +4626,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
+  it("retains the transcript on daily/scheduled reset (stale session)", async () => {
     // Daily resets occur when the session becomes stale (not via /new or /reset command).
     // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
     // old transcript files orphaned on disk. Refs #35481.
@@ -4653,12 +4668,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).not.toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -4725,7 +4740,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("does not defer stale archival for the current turn's queued reservation", async () => {
+  it("does not defer stale boundary append for the current turn's queued reservation", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
     try {
@@ -4770,20 +4785,20 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(operation.phase).toBe("queued");
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
     } finally {
       operation?.complete();
       vi.useRealTimers();
     }
   });
 
-  it("does not defer stale archival for a different active session id", async () => {
+  it("does not defer stale boundary append for a different active session id", async () => {
     vi.useFakeTimers();
     let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
     try {
@@ -4828,13 +4843,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
-      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.sessionId).toBe(existingSessionId);
       expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
-      expect(archived).toHaveLength(1);
+      expect(archived).toHaveLength(0);
     } finally {
       operation?.complete();
       vi.useRealTimers();
@@ -4946,7 +4961,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
   });
 
