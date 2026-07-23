@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { saveCronStore } from "../cron/store.js";
+import { loadCronJobsStoreSync, saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
@@ -584,6 +584,41 @@ describe("tasks commands", () => {
       expect(loadSessionEntry({ sessionKey: rawKey, storePath })).toBeDefined();
       expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toBeUndefined();
     });
+  });
+
+  it("does not prune cron-run sessions when the cron-state read fails (#110935)", async () => {
+    const spy = vi
+      .spyOn(await import("../cron/store.js"), "loadCronJobsStoreSync")
+      .mockImplementation(() => {
+        throw new Error("SQLITE_IOERR: cron state unavailable");
+      });
+    try {
+      await withTaskCommandStateDir(async (state) => {
+        const now = Date.now();
+        const old = now - 8 * 24 * 60 * 60_000;
+        const sessionsDir = state.sessionsDir("main");
+        const storePath = path.join(sessionsDir, "sessions.json");
+        const agedKey = "agent:main:cron:running-job:run:old-run";
+        await writeSessionEntries(storePath, {
+          [agedKey]: { sessionId: "old-run", updatedAt: old },
+        });
+
+        const runtime = createRuntime();
+        await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+        // The aged cron-run entry must survive: with the read failing we must
+        // not pretend "nothing is running" and prune it.
+        expect(loadSessionEntry({ sessionKey: agedKey, storePath })).toBeDefined();
+
+        const payload = readFirstJsonLog(runtime) as {
+          maintenance: { sessions: { pruned: number; cronStateError: boolean } };
+        };
+        expect(payload.maintenance.sessions.cronStateError).toBe(true);
+        expect(payload.maintenance.sessions.pruned).toBe(0);
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("preserves a running cron session with an explicit session key", async () => {
