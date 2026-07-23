@@ -21,7 +21,6 @@ import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
   type CodexTestAppServerClientFactory,
-  withPersistentCodexTestToolPolicy,
 } from "./test-support.js";
 
 let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
@@ -37,6 +36,36 @@ function setCodexAppServerClientFactoryForTest(factory: CodexTestAppServerClient
 
 function resetCodexAppServerClientFactoryForTest(): void {
   codexAppServerClientFactoryForTest = undefined;
+}
+
+/** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
+function withPersistentCodexTestToolPolicy(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  const modelCompat =
+    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
+  const model = {
+    ...params.model,
+    compat: { ...modelCompat, supportsTools: false },
+  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
+  return {
+    ...params,
+    disableTools: false,
+    model,
+    config: {
+      ...params.config,
+      tools: {
+        ...params.config?.tools,
+        web: {
+          ...params.config?.tools?.web,
+          search: {
+            ...params.config?.tools?.web?.search,
+            enabled: false,
+          },
+        },
+      },
+    },
+  };
 }
 
 function runCodexAppServerAttempt(
