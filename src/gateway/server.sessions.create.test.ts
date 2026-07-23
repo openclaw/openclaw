@@ -593,6 +593,41 @@ test("sessions.create keeps omitted visibility on the prior shared default", asy
   expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("shared");
 });
 
+test("sessions.create preserves keyed draft adoption idempotency", async () => {
+  await createSessionStoreDir();
+  const key = "agent:main:dashboard:idempotent-draft";
+  const first = await directSessionReq<{
+    sessionId: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+
+  expect(first.ok).toBe(true);
+  const retried = await directSessionReq<{
+    sessionId: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  expect(retried).toMatchObject({
+    ok: true,
+    payload: {
+      sessionId: first.payload?.sessionId,
+      entry: { visibility: "draft" },
+    },
+  });
+
+  const mismatch = await directSessionReq("sessions.create", {
+    agentId: "main",
+    key,
+    visibility: "shared",
+  });
+  expect(mismatch).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "sessions.create visibility requires a new session",
+    },
+  });
+});
+
 test("sessions.create rejects draft visibility when policy disables drafts", async () => {
   testState.sessionConfig = { sharing: { drafts: false } };
   const created = await directSessionReq("sessions.create", {

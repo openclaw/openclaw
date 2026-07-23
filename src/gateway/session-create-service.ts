@@ -71,7 +71,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
-import { isSessionVisibilityAllowed } from "./session-sharing.js";
+import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
@@ -804,7 +804,11 @@ export async function createGatewaySession(params: {
             ),
           };
         }
-        if (params.visibility && existingEntry !== undefined) {
+        if (
+          params.visibility &&
+          existingEntry !== undefined &&
+          resolveSessionVisibility(existingEntry) !== params.visibility
+        ) {
           return {
             ok: false,
             error: errorShape(
