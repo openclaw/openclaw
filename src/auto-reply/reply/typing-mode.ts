@@ -162,7 +162,14 @@ export function createTypingSignaler(params: {
       return;
     }
     if (!typing.isActive()) {
+      // Match signalToolStart: message mode waits for renderable text before
+      // execution-phase activity can start the typing indicator.
+      if (shouldStartOnMessageStart && !hasRenderableText) {
+        return;
+      }
       await typing.startTypingLoop();
+      typing.refreshTypingTtl();
+      return;
     }
     typing.refreshTypingTtl();
   };

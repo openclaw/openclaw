@@ -881,7 +881,7 @@ describe("createTypingSignaler", () => {
   });
 
   it("starts typing on execution activity for active reply modes", async () => {
-    for (const mode of ["instant", "message", "thinking"] as const) {
+    for (const mode of ["instant", "thinking"] as const) {
       const typing = createMockTypingController();
       const signaler = createTypingSignaler({ typing, mode, isHeartbeat: false });
 
@@ -891,6 +891,31 @@ describe("createTypingSignaler", () => {
       expect(typing.refreshTypingTtl, `mode=${mode}`).toHaveBeenCalledTimes(1);
       expect(typing.startTypingOnText, `mode=${mode}`).not.toHaveBeenCalled();
     }
+  });
+
+  it("suppresses execution-activity typing in message mode until renderable text arrives", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    // Execution phase before any text — suppressed in message mode.
+    await signaler.signalExecutionActivity?.();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+
+    // Renderable text arrives — typing starts via startTypingOnText.
+    await signaler.signalTextDelta("hello");
+    expect(typing.startTypingOnText).toHaveBeenCalledTimes(1);
+
+    // Typing now active; subsequent execution activity keeps TTL alive.
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
+    await signaler.signalExecutionActivity?.();
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
   it("suppresses typing when disabled", async () => {
