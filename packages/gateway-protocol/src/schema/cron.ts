@@ -545,7 +545,7 @@ export const CronJobSchema = closedObject({
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
-payload: CronReportedPayloadSchema,
+  payload: CronReportedPayloadSchema,
   precheck: Type.Optional(CronJobPrecheckSchema),
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
