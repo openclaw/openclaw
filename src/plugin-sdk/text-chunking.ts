@@ -49,6 +49,11 @@ export {
   renderMarkdownIRChunksWithinLimit,
   type RenderMarkdownIRChunksWithinLimitOptions,
 } from "../../packages/markdown-core/src/render-aware-chunking.js";
+/** Attributed Markdown rendering hooks for native channel formatting. */
+export {
+  renderMarkdownWithAttributedRanges,
+  type AttributedRenderOptions,
+} from "../../packages/markdown-core/src/render-attributed.js";
 /** Marker-based Markdown rendering hooks for channel-specific formatting. */
 export {
   renderMarkdownWithMarkers,
