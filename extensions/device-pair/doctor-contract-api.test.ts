@@ -12,7 +12,7 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import { MAX_LEGACY_NOTIFY_FILE_BYTES, stateMigrations } from "./doctor-contract-api.js";
 import {
   DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE,
   DEVICE_PAIR_NOTIFY_SUBSCRIBER_MAX_ENTRIES,
@@ -117,5 +117,27 @@ describe("device-pair doctor notify migration", () => {
       warnings: [],
     });
     await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+  });
+
+  it("warns and skips migration when the legacy notify file exceeds the safety cap", async () => {
+    const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
+    await fs.writeFile(sourcePath, Buffer.alloc(MAX_LEGACY_NOTIFY_FILE_BYTES + 1, "x"));
+
+    const migration = expectDefined(stateMigrations[0], "device-pair state migration");
+    const detectResult = await migration.detectLegacyState(migrationParams());
+
+    expect(detectResult).toMatchObject({
+      preview: [expect.stringContaining("file too large")],
+    });
+
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([expect.stringContaining("file too large")]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived oversized Device Pair notify subscribers legacy source"),
+    ]);
+    const migratedPath = `${sourcePath}.migrated`;
+    await expect(fs.access(sourcePath)).rejects.toThrow("ENOENT");
+    await expect(fs.access(migratedPath)).resolves.toBeUndefined();
   });
 });
