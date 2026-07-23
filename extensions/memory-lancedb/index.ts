@@ -1956,6 +1956,17 @@ export default definePluginEntry({
       if (!event.prompt || event.prompt.length < 5) {
         return undefined;
       }
+      // An embedder outage must not stall every prompt build for the full
+      // timeout: auto-recall shares the per-agent recall cooldown with the
+      // memory_recall tool, so one tripped breaker covers both paths until
+      // the half-open retry after DEFAULT_TOOL_RECALL_COOLDOWN_MS.
+      const cooldown = readMemoryRecallCooldown(agentId);
+      if (cooldown) {
+        api.logger.debug?.(
+          `memory-lancedb: auto-recall skipped during recall cooldown: ${cooldown.error}`,
+        );
+        return undefined;
+      }
 
       try {
         const recallQuery = normalizeRecallQuery(
@@ -1966,15 +1977,24 @@ export default definePluginEntry({
         const recall = await runWithTimeout({
           timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
           task: async () => {
-            const vector = await embeddings.embed(recallQuery, {
-              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-            });
+            let vector: number[];
+            try {
+              vector = await embeddings.embed(recallQuery, {
+                timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+              });
+            } catch (error) {
+              throw new MemoryRecallEmbeddingError(error);
+            }
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
             return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
           },
         });
         if (recall.status === "timeout") {
+          recordMemoryRecallCooldown(
+            agentId,
+            `auto-recall timed out after ${Math.round(DEFAULT_AUTO_RECALL_TIMEOUT_MS / 1000)}s`,
+          );
           api.logger.warn?.(
             `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
           );
@@ -2001,6 +2021,11 @@ export default definePluginEntry({
           prependContext: context,
         };
       } catch (err) {
+        // Cooldown only on embedding failures, mirroring memory_recall:
+        // LanceDB search errors are local and cheap to retry next turn.
+        if (err instanceof MemoryRecallEmbeddingError) {
+          recordMemoryRecallCooldown(agentId, formatMemoryRecallError(err.originalError));
+        }
         api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
       }
       return undefined;

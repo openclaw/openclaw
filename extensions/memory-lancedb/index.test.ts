@@ -977,6 +977,118 @@ describe("memory plugin e2e", () => {
     }
   });
 
+  test("shares the recall cooldown between auto-recall and memory_recall when embedding stalls", async () => {
+    vi.useFakeTimers();
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const post = vi.fn(() => new Promise(() => {}));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch: vi.fn(),
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    try {
+      await withMockedOpenAiMemoryPlugin({
+        ensureGlobalUndiciEnvProxyDispatcher,
+        openAiPost: post,
+        loadLanceDbModule,
+        run: async (dynamicMemoryPlugin) => {
+          const registeredTools: any[] = [];
+          const on = vi.fn();
+          const logger = {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          };
+          const mockApi = {
+            id: "memory-lancedb",
+            name: "Memory (LanceDB)",
+            source: "test",
+            config: {},
+            pluginConfig: {
+              embedding: {
+                apiKey: OPENAI_API_KEY,
+                model: "text-embedding-3-small",
+              },
+              dbPath: getDbPath(),
+              autoCapture: false,
+              autoRecall: true,
+            },
+            runtime: {},
+            logger,
+            registerTool: (tool: any, opts: any) => {
+              registeredTools.push({ tool, opts });
+            },
+            registerCli: vi.fn(),
+            registerService: vi.fn(),
+            on,
+            resolvePath: (filePath: string) => filePath,
+          };
+
+          registerTestPlugin(dynamicMemoryPlugin, mockApi);
+          const beforePromptBuild = on.mock.calls.find(
+            ([hookName]) => hookName === "before_prompt_build",
+          )?.[1];
+          expect(beforePromptBuild).toBeTypeOf("function");
+          const hookEvent = {
+            prompt: "what editor should i use today?",
+            messages: [{ role: "user", content: "what editor should i use today?" }],
+          };
+
+          // First prompt build pays the timeout once and trips the breaker.
+          const firstRun = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          await vi.advanceTimersByTimeAsync(15_000);
+          expect(await firstRun).toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(1);
+          expect(logger.warn).toHaveBeenCalledWith(
+            "memory-lancedb: auto-recall timed out after 15000ms; skipping memory injection to avoid stalling agent startup",
+          );
+
+          // Second prompt build inside the cooldown skips instantly.
+          expect(await beforePromptBuild?.(hookEvent, { agentId: "main" })).toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(1);
+          expect(logger.debug).toHaveBeenCalledWith(
+            "memory-lancedb: auto-recall skipped during recall cooldown: auto-recall timed out after 15s",
+          );
+
+          // The breaker is shared: memory_recall reports unavailable too.
+          const recallTool = materializeRegisteredTool(
+            registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool,
+          );
+          if (!recallTool) {
+            throw new Error("memory_recall tool was not registered");
+          }
+          const toolResult = await recallTool.execute("cooldown-call", { query: "editor" });
+          expect(toolResult.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "auto-recall timed out after 15s",
+          });
+          expect(post).toHaveBeenCalledTimes(1);
+
+          // After the cooldown TTL a half-open probe retries the embedder.
+          await vi.advanceTimersByTimeAsync(60_000);
+          const probeRun = beforePromptBuild?.(hookEvent, { agentId: "main" });
+          await vi.advanceTimersByTimeAsync(15_000);
+          expect(await probeRun).toBeUndefined();
+          expect(post).toHaveBeenCalledTimes(2);
+          expect(loadLanceDbModule).not.toHaveBeenCalled();
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("normalizes signed decimal CLI limits through the shared parser", async () => {
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
