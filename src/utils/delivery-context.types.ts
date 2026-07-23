@@ -45,6 +45,7 @@ export type DeliveryContextSessionSource = {
   /** Older origin fields emitted before delivery context became canonical. */
   origin?: {
     provider?: string;
+    to?: string;
     accountId?: string;
     threadId?: string | number;
   };
