@@ -21,7 +21,7 @@ import { isPlainObject, resolveUserPath } from "../../utils.js";
 
 type ConfigLayerArgument = { id: string; path: string };
 
-export function parseConfigLayerArguments(value: unknown): ConfigLayerArgument[] {
+function parseConfigLayerArguments(value: unknown): ConfigLayerArgument[] {
   if (value === undefined) {
     return [];
   }

@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfigLayers, parseConfigLayerArguments } from "./config-layers.js";
+import { loadConfigLayers } from "./config-layers.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -20,21 +20,14 @@ afterEach(async () => {
   );
 });
 
-describe("parseConfigLayerArguments", () => {
-  it("preserves declared order", () => {
-    const parsed = parseConfigLayerArguments(["global=global.json", "operator=operator.json"]);
-    expect(parsed.map((entry) => entry.id)).toEqual(["global", "operator"]);
-  });
-
-  it("rejects malformed and duplicate declarations", () => {
-    expect(() => parseConfigLayerArguments(["global"])).toThrow("invalid --config-layer value");
-    expect(() => parseConfigLayerArguments(["global=one.json", "global=two.json"])).toThrow(
+describe("loadConfigLayers", () => {
+  it("rejects malformed and duplicate declarations", async () => {
+    await expect(loadConfigLayers(["global"])).rejects.toThrow("invalid --config-layer value");
+    await expect(loadConfigLayers(["global=one.json", "global=two.json"])).rejects.toThrow(
       "duplicate --config-layer id",
     );
   });
-});
 
-describe("loadConfigLayers", () => {
   it("resolves includes and returns a validated gateway startup snapshot", async () => {
     const directory = await temporaryDirectory();
     const included = path.join(directory, "included.json");

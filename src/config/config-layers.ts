@@ -3,9 +3,9 @@ import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
-export type ConfigLayer = { id: string; config: unknown };
+type ConfigLayer = { id: string; config: unknown };
 
-export type ConfigLayerFinding = {
+type ConfigLayerFinding = {
   reason:
     | "EmptyLayerId"
     | "DuplicateLayerId"
@@ -18,7 +18,7 @@ export type ConfigLayerFinding = {
   controllingLayer?: string;
 };
 
-export type ConfigLayerResult =
+type ConfigLayerResult =
   | { valid: true; config: Record<string, unknown> }
   | { valid: false; findings: ConfigLayerFinding[] };
 
