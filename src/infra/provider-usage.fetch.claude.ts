@@ -60,6 +60,12 @@ function readClaudeWindow(
   };
 }
 
+function parseResetTimestamp(value: unknown): number | undefined {
+  if (!value) return undefined;
+  const ts = new Date(value as string | number).getTime();
+  return Number.isFinite(ts) ? ts : undefined;
+}
+
 function buildClaudeUsageWindows(
   usage: NormalizedClaudeUsage,
   options?: { skipExtraUsage?: boolean },
@@ -67,14 +73,22 @@ function buildClaudeUsageWindows(
   const { data, extraUsage } = usage;
   const windows: UsageWindow[] = [];
 
-  const fiveHour = readClaudeWindow(data, "five_hour", "5h");
-  if (fiveHour) {
-    windows.push(fiveHour);
+
+  if (data.five_hour?.utilization !== undefined) {
+    windows.push({
+      label: "5h",
+      usedPercent: clampPercent(data.five_hour.utilization),
+      resetAt: data.five_hour.resets_at ? parseResetTimestamp(data.five_hour.resets_at) : undefined,
+    });
   }
 
-  const sevenDay = readClaudeWindow(data, "seven_day", "Week");
-  if (sevenDay) {
-    windows.push(sevenDay);
+  if (data.seven_day?.utilization !== undefined) {
+    windows.push({
+      label: "Week",
+      usedPercent: clampPercent(data.seven_day.utilization),
+      resetAt: data.seven_day.resets_at ? parseResetTimestamp(data.seven_day.resets_at) : undefined,
+    });
+
   }
 
   const modelWindow =
@@ -104,8 +118,9 @@ function buildClaudeUsageWindows(
     knownLabels.add(label.toLowerCase());
     windows.push({
       label,
-      usedPercent: clampPercent(percent),
-      resetAt: parseUsageResetAt(rawLimit.resets_at),
+      usedPercent: clampPercent(limit.percent ?? 0),
+      resetAt: limit.resets_at ? parseResetTimestamp(limit.resets_at) : undefined,
+
     });
   }
 
