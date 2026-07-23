@@ -441,13 +441,15 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     } catch (error) {
       rawDecision = Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
-    const isSynchronousBypass =
-      rawDecision !== undefined && "action" in rawDecision && rawDecision.action === "bypass";
-    if (isSynchronousBypass) {
+    const synchronousBypass =
+      rawDecision !== undefined && "action" in rawDecision && rawDecision.action === "bypass"
+        ? rawDecision
+        : undefined;
+    if (synchronousBypass) {
       for (const release of pendingDecisionReleases.get(key) ?? []) {
         release();
       }
-      return enqueueResolved(item, key, rawDecision, undefined, generation);
+      return enqueueResolved(item, key, synchronousBypass, undefined, generation);
     }
     const rawDecisionPromise = Promise.resolve(rawDecision);
     // Decisions start eagerly, so observe rejection before an earlier same-key
