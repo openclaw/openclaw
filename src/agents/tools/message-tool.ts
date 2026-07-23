@@ -1713,6 +1713,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           cfg,
           action,
           params: actionParams,
+          actionOrigin: "message-tool",
           defaultAccountId: accountId ?? undefined,
           requesterAccountId: trustedTurnContext?.requesterAccountId,
           requesterSenderId: trustedTurnContext?.requesterSenderId,
