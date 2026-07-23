@@ -150,6 +150,29 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a live catalog response with invalid UTF-8 bytes", async () => {
+    const release = vi.fn(async () => undefined);
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"data":[{"id":"model-a","object":"model"},{"id":"model-b'),
+      0xff,
+      ...new TextEncoder().encode('","object":"model"}]}'),
+    ]);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(body),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow(/not valid for encoding/);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("follows next_cursor pagination before projecting model ids", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
