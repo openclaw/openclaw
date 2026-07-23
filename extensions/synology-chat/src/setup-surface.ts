@@ -114,7 +114,7 @@ function patchSynologyChatAccountConfig(params: {
 
 function isSynologyChatConfigured(cfg: OpenClawConfig, accountId: string): boolean {
   const account = resolveAccount(cfg, accountId);
-  return Boolean(account.token.trim() && account.incomingUrl.trim());
+  return Boolean(account.token?.trim() && account.incomingUrl?.trim());
 }
 
 function validateWebhookUrl(value: string): string | undefined {
