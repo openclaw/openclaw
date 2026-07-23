@@ -72,6 +72,7 @@ describe("exec shell snapshots", () => {
   beforeEach(() => {
     envSnapshot = captureEnv([
       "HOME",
+      "USERPROFILE",
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_EXEC_SHELL_SNAPSHOT",
       "PNPM_HOME",
@@ -367,13 +368,9 @@ describe("exec shell snapshots", () => {
 
     // A blank trusted HOME must fall back to USERPROFILE; resolving to "" would
     // change the snapshot identity and drop the previously captured rc values.
-    process.env.HOME = "";
-    process.env.USERPROFILE = home;
-    try {
-      await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
-    } finally {
-      delete process.env.USERPROFILE;
-    }
+    setTestEnvValue("HOME", "");
+    setTestEnvValue("USERPROFILE", home);
+    await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
   });
 
   it("preserves per-call env outside the snapshot allowlist", async () => {
