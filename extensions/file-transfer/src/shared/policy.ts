@@ -127,7 +127,7 @@ function readFilePolicyConfig(pluginConfig?: Record<string, unknown>): FilePolic
 }
 
 function expandTilde(p: string): string {
-  if (p.startsWith("~/") || p === "~") {
+  if (p.startsWith("~/") || p.startsWith("~\\") || p === "~") {
     return path.join(os.homedir(), p.slice(p === "~" ? 1 : 2));
   }
   return p;

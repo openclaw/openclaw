@@ -176,6 +176,21 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
   });
 
+  it("expands Windows-style home globs in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~\\Downloads\\**\\*.pem"],
+      },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: path.join(os.homedir(), "Downloads", "key.pem"),
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+  });
+
   it("preserves minimatch brace semantics in denyPaths", () => {
     withConfig({
       n1: {
@@ -313,6 +328,20 @@ describe("evaluateFilePolicy — allow matching", () => {
         nodeId: "n1",
         kind: "read",
         path: path.join(home, "Screenshots", "shot.png"),
+      }),
+      { ok: true },
+    );
+  });
+
+  it("expands Windows-style home globs before matching", () => {
+    withConfig({
+      n1: { allowReadPaths: ["~\\Downloads\\**"] },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", "shot.png"),
       }),
       { ok: true },
     );
