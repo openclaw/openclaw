@@ -336,7 +336,7 @@ export function agentBadgeText(agentId: string, defaultId: string | null) {
 }
 
 export function formatBytes(bytes?: number) {
-  if (bytes == null || !Number.isFinite(bytes)) {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) {
     return "-";
   }
   return formatByteSize(bytes, {
