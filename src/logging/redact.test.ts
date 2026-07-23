@@ -800,32 +800,43 @@ describe("redactSensitiveText", () => {
     const apiSecret = ["api", "secret", "fixture", "1234567890"].join("-");
     const secretKey = ["django", "secret", "key", "1234567890"].join("-");
     const passphrase = ["tls", "passphrase", "fixture", "1234567890"].join("-");
+    const dbPass = ["db", "pass", "fixture", "1234567890"].join("-");
     const input = [
       `password = ${dbPassword}`,
+      `password = "${dbPassword}"`,
       `db_password = ${dbPassword}`,
       `database_password: ${databasePassword}`,
+      `api_secret: '${apiSecret}'`,
       `db_password=${dbPassword}`,
       `api_secret: ${apiSecret}`,
       `api_secret=${apiSecret}`,
       `jdbc.password=${dbPassword}`,
+      `jdbc.password="${dbPassword}"`,
       `secret_key = ${secretKey}`,
       `secret_key=${secretKey}`,
       `tls.passphrase: ${passphrase}`,
+      `tls_passphrase=${passphrase}`,
+      `db_pass=${dbPass}`,
       `passphrase=${passphrase}`,
       "safe_option = visible",
     ].join("\n");
 
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toContain("password = db-pas…7890");
+    expect(output).toContain('password = "db-pas…7890"');
     expect(output).toContain("db_password = db-pas…7890");
     expect(output).toContain("database_password: databa…7890");
+    expect(output).toContain("api_secret: 'api-se…7890'");
     expect(output).toContain("db_password=db-pas…7890");
     expect(output).toContain("api_secret: api-se…7890");
     expect(output).toContain("api_secret=api-se…7890");
     expect(output).toContain("jdbc.password=db-pas…7890");
+    expect(output).toContain('jdbc.password="db-pas…7890"');
     expect(output).toContain("secret_key = django…7890");
     expect(output).toContain("secret_key=django…7890");
     expect(output).toContain("tls.passphrase: tls-pa…7890");
+    expect(output).toContain("tls_passphrase=tls-pa…7890");
+    expect(output).toContain("db_pass=db-pas…7890");
     expect(output).toContain("passphrase=tls-pa…7890");
     expect(output).toContain("safe_option = visible");
     expect(output).not.toContain(dbPassword);
@@ -833,6 +844,7 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(apiSecret);
     expect(output).not.toContain(secretKey);
     expect(output).not.toContain(passphrase);
+    expect(output).not.toContain(dbPass);
   });
 
   it("masks complete unquoted assignment values that contain delimiter-like punctuation", () => {

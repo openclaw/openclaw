@@ -726,6 +726,10 @@ describe("diagnostic support export", () => {
         "config password = suppor…7890",
       ],
       [
+        `config password = "${["support", "password", "1234567890"].join("-")}"`,
+        'config password = "suppor…7890"',
+      ],
+      [
         `config db_password = ${["support", "password", "1234567890"].join("-")}`,
         "config db_password = suppor…7890",
       ],

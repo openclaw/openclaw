@@ -138,6 +138,8 @@ const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOK
 // quotes still mask like plain values instead of escaping both patterns.
 const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
 const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60]?[^\s&#"'\x60<>]+)`;
+const CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS = String.raw`api[-_]?secret|secret[-_]?key|key[-_]?material|password|passphrase|pass|passwd`;
+const CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:(?:${CONFIG_QUOTED_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*|=)|[a-z0-9][a-z0-9.-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*|[a-z0-9_.-]{1,80}\.(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*)(["'\x60])((?:(?!\2)[^\r\n])+)\2/g`;
 const CONFIG_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_ASSIGNMENT_SECRET_KEYS})(?:\s*:\s*|\s+=\s*)([^\s#"',\x60<>]+)/g`;
 const CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])(?:${CONFIG_DIRECT_ASSIGNMENT_SECRET_KEYS})=([^\s#"',\x60<>]+)/g`;
 const CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|[\s,{])[a-z0-9][a-z0-9.-]{0,79}[-_](?:${CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_SECRET_KEYS})\s*[:=]\s*([^\s#"',\x60<>]+)/g`;
@@ -214,6 +216,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
   // Config-file style assignments, including lowercase INI/YAML/properties keys
   // and dotted namespaces such as `jdbc.password`.
+  CONFIG_QUOTED_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_DIRECT_ASSIGNMENT_REDACT_PATTERN,
   CONFIG_PREFIXED_PASSWORD_ASSIGNMENT_REDACT_PATTERN,
@@ -312,7 +315,7 @@ let defaultResolvedPatterns: RegExp[] | undefined;
 const DEFAULT_REDACT_PREFILTER_SOURCES: string[] = [
   // Sensitive key names shared by the env/JSON/query/form/header/assignment families.
   String.raw`KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CREDENTIAL|CARD|CVC|CVV|PAYMENT|PRIVATE KEY`,
-  String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|jwt=|session=|code=`,
+  String.raw`security[-_]?code|\bpass\s*[=:]|\bpassphrase\s*[=:]|_(?:pass|passphrase|passwd)\s*[=:]|jwt=|session=|code=`,
   String.raw`\bBearer\s+`,
   // URL userinfo and connection-string password slots (`scheme://user:pass@host`).
   String.raw`:\/\/[^\/\s:@]*:[^\/\s@]+@`,
