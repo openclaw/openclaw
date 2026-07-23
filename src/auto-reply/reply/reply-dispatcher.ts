@@ -230,6 +230,54 @@ function buildReplyDispatchRuntimeInfo(
   };
 }
 
+function hasReplyDeliveryId(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  return typeof value === "bigint";
+}
+
+function hasReplyDeliveryIdentity(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (hasReplyDeliveryId(record.messageId)) {
+    return true;
+  }
+  const messageIds = record.messageIds;
+  if (Array.isArray(messageIds) && messageIds.some(hasReplyDeliveryId)) {
+    return true;
+  }
+  return Boolean(record.receipt && typeof record.receipt === "object");
+}
+
+function hasReplyDeliveryEvidence(result: unknown): boolean {
+  if (result === true) {
+    return true;
+  }
+  if (Array.isArray(result)) {
+    return result.some(hasReplyDeliveryEvidence);
+  }
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const record = result as Record<string, unknown>;
+  if (record.delivered === true || record.visibleReplySent === true) {
+    return true;
+  }
+  if (hasReplyDeliveryIdentity(record)) {
+    return true;
+  }
+  if (record.delivery && hasReplyDeliveryEvidence(record.delivery)) {
+    return true;
+  }
+  return Array.isArray(record.results) && record.results.some(hasReplyDeliveryEvidence);
+}
+
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
   const mode = config?.mode ?? "off";
@@ -369,6 +417,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const deliveredCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -473,7 +526,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
         }
         deliveryStarted = true;
-        await options.deliver(deliverPayload, dispatchInfo);
+        const deliveryResult = await options.deliver(deliverPayload, dispatchInfo);
+        if (hasReplyDeliveryEvidence(deliveryResult)) {
+          deliveredCounts[kind] += 1;
+        }
         deliveryOutcome = "delivered";
       })
       .catch(async (err: unknown) => {
@@ -543,6 +599,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getDeliveredCounts: () => ({ ...deliveredCounts }),
     getCancelledCounts: () => ({ ...cancelledCounts }),
     getFailedCounts: () => ({ ...failedCounts }),
     markComplete,

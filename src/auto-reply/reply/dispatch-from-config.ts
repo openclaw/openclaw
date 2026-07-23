@@ -661,6 +661,10 @@ async function dispatchReplyFromConfigInner(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  const requiresConfirmedRoutedFinalDelivery =
+    normalizeMessageChannel(deliveryChannel) === "telegram";
+  const requiresConfirmedDispatcherFinalDelivery =
+    requiresConfirmedRoutedFinalDelivery && typeof dispatcher.getDeliveredCounts === "function";
   const shouldPrepareRoutedReplyDelivery = shouldRouteToOriginating && Boolean(routeReplyChannel);
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
@@ -754,8 +758,16 @@ async function dispatchReplyFromConfigInner(
     });
   };
 
-  const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
-    result.ok && result.suppressed !== true;
+  const hasRoutedReplyMessageIdentity = (result: { messageId?: string }) =>
+    result.messageId !== undefined && result.messageId.trim().length > 0;
+  const isRoutedReplyDelivered = (result: {
+    ok: boolean;
+    suppressed?: boolean;
+    messageId?: string;
+  }) =>
+    result.ok &&
+    result.suppressed !== true &&
+    (!requiresConfirmedRoutedFinalDelivery || hasRoutedReplyMessageIdentity(result));
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -1590,7 +1602,9 @@ async function dispatchReplyFromConfigInner(
     ): Promise<{
       queuedFinal: boolean;
       routedFinalCount: number;
+      visibleFinalDeliveryAttempted: boolean;
       dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
+      dispatcherDeliveredBefore?: number;
     }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
@@ -1644,20 +1658,22 @@ async function dispatchReplyFromConfigInner(
         ...(hasTranscriptOwner ? { mirror: false } : {}),
       });
       if (result) {
+        const routedDelivered = isRoutedReplyDelivered(result);
         if (!result.ok) {
           logVerbose(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (isRoutedReplyDelivered(result)) {
+        if (routedDelivered) {
           await mirrorDeliveredReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
           });
         }
         return {
-          queuedFinal: result.ok,
-          routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+          queuedFinal: requiresConfirmedRoutedFinalDelivery ? routedDelivered : result.ok,
+          routedFinalCount: routedDelivered ? 1 : 0,
+          visibleFinalDeliveryAttempted: result.attemptedDelivery === true,
         };
       }
       throwIfFinalDeliveryAborted();
@@ -1714,6 +1730,9 @@ async function dispatchReplyFromConfigInner(
         setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
       }
       const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedPayload);
+      const dispatcherDeliveredBefore = requiresConfirmedDispatcherFinalDelivery
+        ? (dispatcher.getDeliveredCounts?.().final ?? 0)
+        : undefined;
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       const dispatcherOutcome =
         queuedFinal && deliveryOutcome.isTracked() ? deliveryOutcome.promise : undefined;
@@ -1727,14 +1746,39 @@ async function dispatchReplyFromConfigInner(
             before: finalOutcomeBefore,
             metadata: deliveredTranscriptMirror,
             cfg,
+            requireDeliveredCount: requiresConfirmedDispatcherFinalDelivery,
           }),
         );
       }
       return {
         queuedFinal,
         routedFinalCount: 0,
+        visibleFinalDeliveryAttempted: queuedFinal,
         ...(queuedFinal && dispatcherOutcome ? { dispatcherOutcome } : {}),
+        ...(dispatcherDeliveredBefore !== undefined ? { dispatcherDeliveredBefore } : {}),
       };
+    };
+
+    const confirmFinalReplyQueued = async (finalReply: {
+      queuedFinal: boolean;
+      routedFinalCount: number;
+      dispatcherOutcome?: Promise<ReplyDispatchDeliveryOutcome>;
+      dispatcherDeliveredBefore?: number;
+    }): Promise<boolean> => {
+      if (!requiresConfirmedDispatcherFinalDelivery) {
+        return finalReply.queuedFinal;
+      }
+      if (finalReply.routedFinalCount > 0) {
+        return finalReply.queuedFinal;
+      }
+      if (!finalReply.dispatcherOutcome || finalReply.dispatcherDeliveredBefore === undefined) {
+        return false;
+      }
+      const outcome = await finalReply.dispatcherOutcome;
+      return (
+        outcome === "delivered" &&
+        (dispatcher.getDeliveredCounts?.().final ?? 0) > finalReply.dispatcherDeliveredBefore
+      );
     };
 
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
@@ -1781,6 +1825,7 @@ async function dispatchReplyFromConfigInner(
         const text = beforeDispatchResult.text;
         let queuedFinal = false;
         let routedFinalCount = 0;
+        let attemptedVisibleFinalDelivery = false;
         if (text && !suppressDelivery) {
           const handledReply = await sendFinalPayload(
             { text },
@@ -1789,8 +1834,10 @@ async function dispatchReplyFromConfigInner(
               deliveryId: "before-dispatch",
             },
           );
-          queuedFinal = handledReply.queuedFinal;
+          queuedFinal = await confirmFinalReplyQueued(handledReply);
           routedFinalCount += handledReply.routedFinalCount;
+          attemptedVisibleFinalDelivery =
+            handledReply.visibleFinalDeliveryAttempted || attemptedVisibleFinalDelivery;
         }
         const counts = dispatcher.getQueuedCounts();
         counts.final += routedFinalCount;
@@ -1798,7 +1845,13 @@ async function dispatchReplyFromConfigInner(
         markIdle("message_completed");
         commitInboundDedupeIfClaimed();
         completeDispatchReplyOperation();
-        return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+        return attachSourceReplyDeliveryMode({
+          queuedFinal,
+          counts,
+          ...(!queuedFinal && attemptedVisibleFinalDelivery
+            ? { attemptedVisibleFinalDelivery: true }
+            : {}),
+        });
       }
     }
 
@@ -2841,7 +2894,7 @@ async function dispatchReplyFromConfigInner(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    let attemptedFinalDelivery = false;
+    let attemptedVisibleFinalDelivery = false;
     let finalDeliveryFailed = false;
     const finalDeliveries: Array<{
       outcome: Promise<ReplyDispatchDeliveryOutcome>;
@@ -2892,23 +2945,29 @@ async function dispatchReplyFromConfigInner(
         continue;
       }
       sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
-      attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
-      queuedFinal = finalReply.queuedFinal || queuedFinal;
+      const finalQueued = await confirmFinalReplyQueued(finalReply);
+      queuedFinal = finalQueued || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
-      if (finalReply.queuedFinal) {
+      attemptedVisibleFinalDelivery =
+        finalReply.visibleFinalDeliveryAttempted || attemptedVisibleFinalDelivery;
+      if (finalQueued) {
         if (finalReply.dispatcherOutcome) {
           finalDeliveries.push({ outcome: finalReply.dispatcherOutcome, payload: reply });
         } else {
           allQueuedFinalsObserved = false;
         }
       }
-      if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
+      if (
+        finalReply.visibleFinalDeliveryAttempted &&
+        !finalQueued &&
+        finalReply.routedFinalCount === 0
+      ) {
         finalDeliveryFailed = true;
       }
     }
 
-    if (attemptedFinalDelivery && !finalDeliveryFailed) {
+    if (attemptedVisibleFinalDelivery && !finalDeliveryFailed) {
       if (queuedFinal && allQueuedFinalsObserved) {
         // Delivery observers run from the queue itself, so direct low-level callers
         // reconcile too; the settle task only makes lifecycle owners await it.
@@ -2994,8 +3053,10 @@ async function dispatchReplyFromConfigInner(
               kind: "final",
             });
             if (result) {
-              queuedFinal = result.ok || queuedFinal;
-              if (isRoutedReplyDelivered(result)) {
+              const routedDelivered = isRoutedReplyDelivered(result);
+              queuedFinal =
+                (requiresConfirmedRoutedFinalDelivery ? routedDelivered : result.ok) || queuedFinal;
+              if (routedDelivered) {
                 routedFinalCount += 1;
               }
               if (!result.ok) {
@@ -3006,8 +3067,26 @@ async function dispatchReplyFromConfigInner(
             } else {
               throwIfDispatchOperationAborted();
               markInboundDedupeReplayUnsafe();
+              const deliveryOutcome = captureReplyDispatchDeliveryOutcome(normalizedTtsOnlyPayload);
+              const dispatcherDeliveredBefore = requiresConfirmedDispatcherFinalDelivery
+                ? (dispatcher.getDeliveredCounts?.().final ?? 0)
+                : undefined;
               const didQueue = dispatcher.sendFinalReply(normalizedTtsOnlyPayload);
-              queuedFinal = didQueue || queuedFinal;
+              let ttsQueued = didQueue;
+              if (requiresConfirmedDispatcherFinalDelivery) {
+                ttsQueued = false;
+                if (
+                  didQueue &&
+                  deliveryOutcome.isTracked() &&
+                  dispatcherDeliveredBefore !== undefined
+                ) {
+                  const outcome = await deliveryOutcome.promise;
+                  ttsQueued =
+                    outcome === "delivered" &&
+                    (dispatcher.getDeliveredCounts?.().final ?? 0) > dispatcherDeliveredBefore;
+                }
+              }
+              queuedFinal = ttsQueued || queuedFinal;
             }
           }
         } catch (err) {
@@ -3041,6 +3120,9 @@ async function dispatchReplyFromConfigInner(
       ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
       ...(!queuedFinal && !getObservedReplyDelivery() && !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
+        : {}),
+      ...(!queuedFinal && attemptedVisibleFinalDelivery
+        ? { attemptedVisibleFinalDelivery: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     });
