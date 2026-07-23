@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import {
   materializeSqliteSessionStateDeletePlans,
   type MaterializedSqliteSessionStateDeletePlan,
@@ -65,7 +66,6 @@ import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-stat
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type { SessionArchivedTranscriptCleanupRule } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 // Bulk mutation owner. Detached callbacks prepare first; one validated transaction commits the projection.

@@ -725,8 +725,6 @@ src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/sessions.test.ts
-src/config/sessions/store.pruning.integration.test.ts
-src/config/sessions/store.ts
 src/config/sessions/transcript.test.ts
 src/config/sessions/transcript.ts
 src/config/validation.ts

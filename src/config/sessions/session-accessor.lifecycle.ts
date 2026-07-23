@@ -16,6 +16,17 @@ import {
   replaceSessionEntry,
   patchSessionEntry,
 } from "./session-accessor.entry.js";
+import type {
+  DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleResult,
+  DeletedAgentSessionEntryPurgeParams,
+  SessionArchivedTranscriptCleanupRule,
+  SessionEntryLifecycleMutationResult,
+  SessionEntryLifecycleRemoval,
+  SessionEntryLifecycleUpsert,
+  SessionLifecycleArtifactCleanupParams,
+  SessionLifecycleArtifactCleanupResult,
+} from "./session-accessor.lifecycle-types.js";
 import {
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
@@ -48,17 +59,6 @@ import type {
 } from "./session-accessor.types.js";
 import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type {
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleResult,
-  DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
-} from "./store.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 type TemporarySessionMappingSnapshot =

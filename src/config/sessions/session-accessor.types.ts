@@ -1,11 +1,6 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "./session-transcript-turn-lifecycle.types.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type {
   DeleteSessionEntryLifecycleResult,
   ResetSessionEntryLifecycleMutation,
   ResetSessionEntryLifecycleResult,
@@ -18,7 +13,12 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
-} from "./store.js";
+} from "./session-accessor.lifecycle-types.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
@@ -27,12 +27,8 @@ import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
  * identity, and this module resolves the current entry/transcript target while
  * preserving canonical-key, transcript-linking, and update-notification rules.
  *
- * Ownership contract (#88838): this accessor is the permanent storage-neutral
- * domain boundary for session/transcript runtime access; the SQLite storage
- * flip implements this interface. The entry workflow helpers in store.ts are
- * the file-backend implementation it delegates to plus the plugin-SDK
- * deprecation-window surface (RFC 0007); they become internal as direct
- * callers migrate here. New runtime callers use this module, not store.ts.
+ * This accessor is the permanent storage-neutral domain boundary for
+ * session/transcript runtime access. Legacy JSON import remains doctor-only.
  */
 export type SessionAccessScope = {
   /** Agent owner used when the session key does not already encode one. */

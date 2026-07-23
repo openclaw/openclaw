@@ -68,7 +68,6 @@ import {
   getReplyFromConfig,
   agentDiscoveryMock,
   sendWhatsAppMock,
-  sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
   testTailscaleWhois,
@@ -370,7 +369,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
-  sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
@@ -470,7 +468,6 @@ async function resetGatewayTestRuntimeOnly() {
   invalidateSessionSharingSnapshot();
   resetTestPluginRegistry();
   clearGatewaySubagentRuntime();
-  sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
   testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;

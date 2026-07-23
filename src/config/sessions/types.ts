@@ -792,10 +792,9 @@ export type SessionSkillSnapshot = {
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Stripped from sessions.json on every read and write
-   * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/skills/runtime/embedded-run-entries.ts
-   * rebuilds it by reloading skill entries from disk.
+   * scan within a turn. Persistence projections strip it before committing
+   * session state. On a cold session resume this is undefined and
+   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
   version?: number;

@@ -13,6 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { ResetSessionEntryLifecycleMutation } from "./session-accessor.lifecycle-types.js";
 import { materializeSqliteSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionLifecycleArchivedTranscript,
@@ -57,7 +58,6 @@ import {
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
 import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
-import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.

@@ -11,7 +11,7 @@ import {
   listSessionMembers,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
