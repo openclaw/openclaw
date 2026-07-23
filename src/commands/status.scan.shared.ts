@@ -297,36 +297,52 @@ export async function resolveGatewayProbeSnapshot(params: {
     ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
         resolveGatewayProbeAuthResolution(params.cfg),
       )
-    : { auth: {}, warning: undefined };
+    : { auth: {}, warning: undefined, failureReason: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const defaultProbeTimeoutMs = params.opts.all ? 5000 : 2500;
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
   const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
-  const initialGatewayProbe = shouldProbe
-    ? await loadProbeGatewayModule()
-        .then(({ probeGateway }) =>
-          probeGateway({
-            url: gatewayConnection.url,
-            auth: gatewayProbeAuthResolution.auth,
-            timeoutMs: probeTimeoutMs,
-            detailLevel: params.opts.detailLevel ?? "presence",
-          }),
-        )
-        .catch(() => null)
-    : null;
-  const gatewayProbe = await applyLocalStatusRpcFallback({
-    cfg: params.cfg,
-    gatewayMode,
-    gatewayUrl: gatewayConnection.url,
-    gatewayProbe: initialGatewayProbe,
-    gatewayProbeAuth: gatewayProbeAuthResolution.auth,
-    timeoutMs: probeTimeoutMs,
-    timeoutMsExplicit,
-    enabled: params.opts.localStatusRpcFallback !== false,
-  });
+  const initialGatewayProbe = !shouldProbe
+    ? null
+    : gatewayProbeAuthResolution.failureReason
+      ? ({
+          ok: false,
+          url: gatewayConnection.url,
+          connectLatencyMs: null,
+          error: gatewayProbeAuthResolution.failureReason,
+          close: null,
+          auth: { role: null, scopes: [], capability: "unknown" },
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        } satisfies GatewayProbeResult)
+      : await loadProbeGatewayModule()
+          .then(({ probeGateway }) =>
+            probeGateway({
+              url: gatewayConnection.url,
+              auth: gatewayProbeAuthResolution.auth,
+              timeoutMs: probeTimeoutMs,
+              detailLevel: params.opts.detailLevel ?? "presence",
+            }),
+          )
+          .catch(() => null);
+  const gatewayProbe = gatewayProbeAuthResolution.failureReason
+    ? initialGatewayProbe
+    : await applyLocalStatusRpcFallback({
+        cfg: params.cfg,
+        gatewayMode,
+        gatewayUrl: gatewayConnection.url,
+        gatewayProbe: initialGatewayProbe,
+        gatewayProbeAuth: gatewayProbeAuthResolution.auth,
+        timeoutMs: probeTimeoutMs,
+        timeoutMsExplicit,
+        enabled: params.opts.localStatusRpcFallback !== false,
+      });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
     gatewayProbeAuthWarning &&
+    !gatewayProbeAuthResolution.failureReason &&
     gatewayProbe?.ok === false
   ) {
     gatewayProbe.error = gatewayProbe.error

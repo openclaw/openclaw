@@ -50,6 +50,9 @@ function expectUnresolvedProbeTokenWarning(cfg: OpenClawConfig) {
   expect(result.auth).toStrictEqual({});
   expect(result.warning).toContain("gateway.auth.token");
   expect(result.warning).toContain("unresolved");
+  // Fail-fast results skip the probe, so the warning must not claim one ran.
+  expect(result.warning).not.toContain("probing without configured auth credentials");
+  expect(result.failureReason).toMatch(/gateway auth token|gateway\.auth\.token/i);
 }
 
 describe("resolveGatewayProbeAuthSafe", () => {
@@ -210,6 +213,75 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
     expect(result.auth).toStrictEqual({});
     expect(result.warning).toContain("gateway.auth.token");
     expect(result.warning).toContain("unresolved");
+    expect(result.warning).not.toContain("probing without configured auth credentials");
+    expect(result.failureReason).toMatch(/gateway auth token|gateway\.auth\.token/i);
+  });
+
+  it("keeps the probing warning when the unresolved SecretRef does not fail-fast", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configWithDefaultEnvProvider({
+        // No auth.mode configured: open gateway, so no failureReason and the
+        // caller still probes without credentials.
+        auth: { token: envSecretRef("MISSING_TOKEN_XYZ") },
+      } as NonNullable<OpenClawConfig["gateway"]>),
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.failureReason).toBeUndefined();
+    expect(result.warning).toContain("probing without configured auth credentials");
+  });
+});
+
+describe("resolveGatewayProbeAuthSafeWithSecretInputs - undefined authMode no-fail", () => {
+  it("does not fail-fast when authMode is undefined (open gateway)", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        // No gateway.auth.mode configured -- open gateway
+        gateway: {},
+      } as OpenClawConfig,
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.failureReason).toBeUndefined();
+    expect(result.auth).toEqual({});
+  });
+
+  it("does not fail-fast when authMode is none", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: { auth: { mode: "none" } },
+      } as OpenClawConfig,
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.failureReason).toBeUndefined();
+  });
+
+  it("does not fail-fast when authMode is trusted-proxy", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: { auth: { mode: "trusted-proxy" } },
+      } as OpenClawConfig,
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.failureReason).toBeUndefined();
+  });
+
+  it("does fail-fast when authMode is token and no token is present", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: {
+        gateway: { auth: { mode: "token" } },
+      } as OpenClawConfig,
+      mode: "local",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result.failureReason).toBeTruthy();
   });
 });
 

@@ -1035,13 +1035,19 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
-    expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBeUndefined();
-    expect(status.rpc?.authWarning).toBeUndefined();
+    expect(callGatewayStatusProbe).not.toHaveBeenCalled();
+    // The fail-fast synthesized the rpc failure without probing; restart-health
+    // must not run its own unauthenticated loopback probe either.
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.error).toContain("gateway.auth.token");
+    expect(status.rpc?.authWarning).toContain(
+      "gateway.auth.token SecretRef is unresolved in this command path",
+    );
+    expect(status.rpc?.authWarning).not.toContain("probing without configured auth credentials");
   });
 
-  it("surfaces authWarning when daemon probe auth SecretRef is unresolved and probe fails", async () => {
+  it("probes explicit URL override despite unresolved local auth SecretRef and surfaces authWarning", async () => {
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -1060,20 +1066,21 @@ describe("gatherDaemonStatus", () => {
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: false,
       error: "gateway closed",
-      url: "wss://127.0.0.1:19001",
+      url: "wss://gateway.example:19001",
     });
 
     const status = await gatherDaemonStatus({
-      rpc: {},
+      rpc: { url: "wss://gateway.example:19001" },
       probe: true,
       deep: false,
     });
 
+    expect(callGatewayStatusProbe).toHaveBeenCalledTimes(1);
     expect(status.rpc?.ok).toBe(false);
+    expect(status.rpc?.error).toBe("gateway closed");
     expect(status.rpc?.authWarning).toContain(
       "gateway.auth.token SecretRef is unresolved in this command path",
     );
-    expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
   it("keeps remote probe auth strict when remote token is missing", async () => {
