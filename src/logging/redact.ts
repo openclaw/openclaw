@@ -216,7 +216,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(ghs_[A-Za-z0-9]{10,})`,
   String.raw`(ghr_[A-Za-z0-9]{10,})`,
   String.raw`(glpat-[A-Za-z0-9._=\-]{20,})`,
-  String.raw`(gloas-(?:[A-Fa-f0-9]{32,}(?![A-Za-z0-9_-])|[A-Za-z0-9_-]{64}))`,
+  String.raw`(gloas-(?:[A-Fa-f0-9]{65,}|[A-Za-z0-9_-]{64}|[A-Fa-f0-9]{32,}))`,
   String.raw`(gldt-[A-Za-z0-9_-]{20,})`,
   String.raw`(glcbt-[A-Za-z0-9]{1,5}_[A-Za-z0-9_-]{20,})`,
   String.raw`(glptt-[A-Za-z0-9_-]{40,})`,

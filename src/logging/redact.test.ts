@@ -1303,10 +1303,11 @@ describe("redactSensitiveText", () => {
     const dashToken = (prefix: string, suffix: string): string => [prefix, suffix].join("-");
     const repeatedDashToken = (prefix: string, length: number): string =>
       dashToken(prefix, "A".repeat(length));
+    const legacyOauthToken = dashToken("gloas", "a".repeat(32));
     const longHexOauthToken = dashToken("gloas", "a".repeat(80));
     const mixedOauthToken = dashToken("gloas", `${"a".repeat(32)}Z${"b".repeat(31)}`);
     const tokens = [
-      dashToken("gloas", "a".repeat(32)),
+      legacyOauthToken,
       longHexOauthToken,
       mixedOauthToken,
       repeatedDashToken("gldt", 20),
@@ -1336,6 +1337,12 @@ describe("redactSensitiveText", () => {
     );
     expect(redactSensitiveText(longHexOauthToken, { mode: "tools" })).not.toContain(
       longHexOauthToken.slice("gloas-".length + 64),
+    );
+    expect(redactSensitiveText(`${legacyOauthToken}_suffix`, { mode: "tools" })).not.toContain(
+      legacyOauthToken,
+    );
+    expect(redactSensitiveText(`${longHexOauthToken}_suffix`, { mode: "tools" })).not.toContain(
+      `${longHexOauthToken.slice("gloas-".length + 64)}_suffix`,
     );
   });
 
