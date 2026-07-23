@@ -43,17 +43,17 @@ type MatrixFinalFreshnessAiDecision = {
 export function sanitizeMatrixFinalFreshnessActions(
   actions?: readonly MatrixFreshnessFinalAction[],
 ): MatrixFreshnessFinalAction[] {
+  if (actions === undefined) {
+    return [...MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS];
+  }
   const validActions = new Set<MatrixFreshnessFinalAction>(
     MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS,
   );
-  const sanitized = Array.from(
+  return Array.from(
     new Set(
-      (actions ?? []).filter((action): action is MatrixFreshnessFinalAction =>
-        validActions.has(action),
-      ),
+      actions.filter((action): action is MatrixFreshnessFinalAction => validActions.has(action)),
     ),
   );
-  return sanitized.length > 0 ? sanitized : [...MATRIX_DEFAULT_ALLOWED_FINAL_FRESHNESS_ACTIONS];
 }
 
 export function resolveMatrixFreshnessMode(config?: MatrixFreshnessConfig): MatrixFreshnessMode {
@@ -277,8 +277,6 @@ export async function chooseMatrixFinalFreshnessAction(params: {
   log?: (message: string) => void;
 }): Promise<MatrixFreshnessFinalAction> {
   const allowedActions = sanitizeMatrixFinalFreshnessActions(params.allowedActions);
-  const pickAllowed = (preferred: MatrixFreshnessFinalAction): MatrixFreshnessFinalAction =>
-    allowedActions.includes(preferred) ? preferred : (allowedActions[0] ?? "send-as-is");
 
   if (params.mode !== "auto") {
     return params.mode;
@@ -297,7 +295,7 @@ export async function chooseMatrixFinalFreshnessAction(params: {
     });
     if ("error" in prepared) {
       params.log?.(`matrix freshness ai action selector unavailable: ${prepared.error}`);
-      return pickAllowed("send-as-is");
+      return "send-as-is";
     }
     params.signal?.throwIfAborted();
     const completion = await completeWithPreparedSimpleCompletionModel({
@@ -327,10 +325,10 @@ export async function chooseMatrixFinalFreshnessAction(params: {
       decision: extractMatrixFinalFreshnessJsonObject((completion as { text?: string }).text ?? ""),
       allowedActions,
     });
-    return selected ?? pickAllowed("send-as-is");
+    return selected ?? "send-as-is";
   } catch (err) {
     params.log?.(`matrix freshness ai action selector failed: ${String(err)}`);
-    return pickAllowed("send-as-is");
+    return "send-as-is";
   }
 }
 

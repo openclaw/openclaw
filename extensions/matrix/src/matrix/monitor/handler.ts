@@ -2464,15 +2464,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             return payload;
           }
           const selectedAction = selectedActionResult.value;
-          const stateAfterActionSelection = refreshDraftFreshnessState(draftEventId);
-          if (freshnessStateAdvanced(state, stateAfterActionSelection)) {
-            state = stateAfterActionSelection;
-            continue;
-          }
           const finalAction =
             visibleReplyOutputStarted && selectedAction !== "send-as-is"
               ? "send-as-is"
               : selectedAction;
+          if (finalAction !== "send-as-is") {
+            const stateAfterActionSelection = refreshDraftFreshnessState(draftEventId);
+            if (freshnessStateAdvanced(state, stateAfterActionSelection)) {
+              state = stateAfterActionSelection;
+              continue;
+            }
+          }
           logger.info("matrix freshness decision", {
             roomId,
             eventId: messageId,

@@ -10,6 +10,7 @@ import {
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
+import type { MatrixFreshnessConfig } from "../../types.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import {
   createMatrixHandlerTestHarness,
@@ -1037,6 +1038,7 @@ describe("matrix monitor handler pairing account scope", () => {
 
   async function runMatrixFreshnessScenario(params: {
     mode: "revise" | "send-as-is" | "suppress";
+    freshnessConfig?: MatrixFreshnessConfig;
     finalText?: string;
     historyLimit?: number;
     triggerRelatesTo?: {
@@ -1047,6 +1049,7 @@ describe("matrix monitor handler pairing account scope", () => {
     finalPayload?: { text?: string } & Record<string, unknown>;
     interveningEvent?: MatrixRawEvent;
     injectDuringFirstRevision?: MatrixRawEvent;
+    injectDuringActionSelections?: MatrixRawEvent[];
   }) {
     type DeliverFn = (payload: { text?: string }, info: { kind: string }) => Promise<void>;
     type BeforeDeliverFn = (
@@ -1077,7 +1080,7 @@ describe("matrix monitor handler pairing account scope", () => {
       isDirectMessage: false,
       historyLimit: params.historyLimit ?? 10,
       accountConfig: {
-        freshness: {
+        freshness: params.freshnessConfig ?? {
           enabled: true,
           mode: params.mode,
         },
@@ -1112,6 +1115,16 @@ describe("matrix monitor handler pairing account scope", () => {
           return { text: "first revised reply" };
         }
         return { text: "second revised reply" };
+      });
+    } else if (params.injectDuringActionSelections) {
+      let selectionIndex = 0;
+      completeWithPreparedSimpleCompletionModelMock.mockImplementation(async () => {
+        const event = params.injectDuringActionSelections?.[selectionIndex];
+        selectionIndex += 1;
+        if (event) {
+          await handler("!room:example.org", event);
+        }
+        return { text: '{"finalAction":"send-as-is"}' };
       });
     }
 
@@ -1424,6 +1437,43 @@ describe("matrix monitor handler pairing account scope", () => {
     );
     expect(beforeDeliverOptions.timeoutMs).toBe(14_000);
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(requireRecord(replies[0], "delivered reply").text).toBe("original final reply");
+  });
+
+  it("honors AI-selected send-as-is while newer room state keeps arriving", async () => {
+    await runMatrixFreshnessScenario({
+      mode: "send-as-is",
+      freshnessConfig: {
+        enabled: true,
+        mode: "auto",
+        aiDeterminesFinalAction: true,
+        allowedFinalActions: ["send-as-is"],
+      },
+      injectDuringActionSelections: [
+        createMatrixTextMessageEvent({
+          eventId: "$fresh-during-selection-1",
+          sender: "@new:example.org",
+          body: "first message during action selection",
+        }),
+        createMatrixTextMessageEvent({
+          eventId: "$fresh-during-selection-2",
+          sender: "@new:example.org",
+          body: "second message during action selection",
+        }),
+        createMatrixTextMessageEvent({
+          eventId: "$fresh-during-selection-3",
+          sender: "@new:example.org",
+          body: "third message during action selection",
+        }),
+      ],
+    });
+
+    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
     const deliverParams = requireRecord(
       callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
       "deliver replies params",
