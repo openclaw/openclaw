@@ -313,6 +313,15 @@ describe("session sharing policy", () => {
       expect(check("member")).toBe(true);
       expect(check("owner")).toBe(true);
       expect(check("viewer")).toBe(false);
+      expect(
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({}) as never,
+          sessionKeys: [sessionKey],
+          event: "session.suggestion",
+          payload: { suggestion: { author: { id: "author" } } },
+        }),
+      ).toBe(false);
     });
   });
 
