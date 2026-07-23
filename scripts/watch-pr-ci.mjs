@@ -15,6 +15,17 @@ const FAILURE_CONCLUSIONS = new Set([
   "TIMED_OUT",
 ]);
 const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100){totalCount nodes{kind:__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+// Adapted from Node's MIT-licensed util.stripVTControlCharacters implementation.
+const ANSI_ESCAPE_SEQUENCE = new RegExp(
+  "[\\u001B\\u009B][[\\]()#;?]*" +
+    "(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*" +
+    "|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?" +
+    "(?:\\u0007|\\u001B\\u005C|\\u009C))" +
+    "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?" +
+    "[\\dA-PR-TZcf-nq-uy=><~]))",
+  "g",
+);
+const UNSAFE_CHECK_NAME_RUN = /[^\u0020-\u007E\p{L}\p{M}\p{N}]+/gu;
 
 function positiveInteger(value, name) {
   const parsed = Number(value);
@@ -66,6 +77,8 @@ export function parseArgs(argv) {
 }
 
 const checkName = (check) => (check.kind === "StatusContext" ? check.context : check.name);
+export const sanitizeCheckName = (name) =>
+  name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
 const isSuccess = (check) =>
   check.kind === "StatusContext" ? check.state === "SUCCESS" : check.conclusion === "SUCCESS";
 const isAutoResponse = (check) =>
@@ -96,6 +109,7 @@ export function classifyRollup(rollup) {
   const failingNames = failingChecks
     .map(checkName)
     .filter(Boolean)
+    .map(sanitizeCheckName)
     .toSorted()
     .filter((name, index, names) => name !== names[index - 1]);
   if (rollup?.state === "SUCCESS") {
@@ -195,8 +209,25 @@ const emit = (line, code) => {
   console.log(line);
   return code;
 };
-const pause = (deadline, interval) =>
-  sleep(Math.max(0, Math.min(interval * 1000, deadline - Date.now())));
+export async function pollUntilDeadline({
+  deadline,
+  interval,
+  poll,
+  now = Date.now,
+  wait = sleep,
+}) {
+  while (true) {
+    const result = await poll();
+    if (result !== undefined) {
+      return result;
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      return undefined;
+    }
+    await wait(Math.min(interval * 1000, remaining));
+  }
+}
 const retry = (phase, error) =>
   console.log(
     `RETRY phase=${phase} error=${(error instanceof Error ? error.message : String(error)).replaceAll(/\s+/gu, " ")}`,
@@ -222,84 +253,94 @@ function precheck(pr, sha, midWait = false) {
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const attachDeadline = Date.now() + args.attachTimeout * 1000;
-  let runId;
-  while (!runId) {
-    if (Date.now() >= attachDeadline) {
-      return emit(
-        'NO-RUN-ATTACHED hint="close/reopen re-fires CI; pr-ci-sweeper re-fires hourly at :07"',
-        13,
-      );
-    }
-    try {
-      const blocked = precheck(readPr(args.pr, args.repo), args.headSha);
-      if (blocked !== null) {
-        return blocked;
-      }
-      const candidate = findRun(args.repo, args.headSha, args.after);
-      if (candidate) {
-        const attachment = classifyRunAttachment(
-          candidate.databaseId,
-          readRun(args.repo, candidate.databaseId),
-          args.after,
-        );
-        if (attachment.attach) {
-          if (attachment.warning) {
-            console.log(attachment.warning);
-          }
-          runId = candidate.databaseId;
+  const attachment = await pollUntilDeadline({
+    deadline: attachDeadline,
+    interval: args.interval,
+    poll: () => {
+      try {
+        const blocked = precheck(readPr(args.pr, args.repo), args.headSha);
+        if (blocked !== null) {
+          return { exitCode: blocked };
         }
+        const candidate = findRun(args.repo, args.headSha, args.after);
+        if (candidate) {
+          const classification = classifyRunAttachment(
+            candidate.databaseId,
+            readRun(args.repo, candidate.databaseId),
+            args.after,
+          );
+          if (classification.attach) {
+            if (classification.warning) {
+              console.log(classification.warning);
+            }
+            return { runId: candidate.databaseId };
+          }
+        }
+      } catch (error) {
+        retry("attach", error);
       }
-    } catch (error) {
-      retry("attach", error);
-    }
-    if (!runId) {
-      await pause(attachDeadline, args.interval);
-    }
+      return undefined;
+    },
+  });
+  if (attachment === undefined) {
+    return emit(
+      'NO-RUN-ATTACHED hint="close/reopen re-fires CI; pr-ci-sweeper re-fires hourly at :07"',
+      13,
+    );
   }
+  if ("exitCode" in attachment) {
+    return attachment.exitCode;
+  }
+  const { runId } = attachment;
   console.log(`ATTACHED run=${runId} url=https://github.com/${args.repo}/actions/runs/${runId}`);
 
   const watchDeadline = Date.now() + args.timeout * 1000;
   let lastState = "NONE";
   let lastPending = 0;
-  while (true) {
-    if (Date.now() >= watchDeadline) {
-      return emit(`TIMEOUT state=${lastState} pending=${lastPending}`, 16);
-    }
-    try {
-      const pr = readRollup(args.pr, args.repo);
-      const blocked = precheck(pr, args.headSha, true);
-      if (blocked !== null) {
-        return blocked;
+  const watchResult = await pollUntilDeadline({
+    deadline: watchDeadline,
+    interval: args.interval,
+    poll: () => {
+      try {
+        const pr = readRollup(args.pr, args.repo);
+        const blocked = precheck(pr, args.headSha, true);
+        if (blocked !== null) {
+          return blocked;
+        }
+        const result = classifyRollup(pr.statusCheckRollup);
+        lastState = pr.statusCheckRollup?.state ?? "NONE";
+        lastPending = result.pendingCount;
+        console.log(`STATUS state=${lastState} pending=${lastPending}`);
+        if (result.verdict === "STALE-CANCELLED") {
+          return emit(
+            'STALE-CANCELLED hint="aggregate FAILURE but every failing context is a CANCELLED check run with a same-name SUCCESS — likely stale attempts; verify manually"',
+            17,
+          );
+        }
+        if (result.verdict === "FAILING") {
+          return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
+        }
+        const run = readRun(args.repo, runId);
+        if (run.status === "completed" && run.conclusion !== "success") {
+          return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
+        }
+        if (
+          result.verdict === "GREEN" &&
+          run.status === "completed" &&
+          run.conclusion === "success"
+        ) {
+          return emit("GREEN", 0);
+        }
+      } catch (error) {
+        retry("watch", error);
       }
-      const result = classifyRollup(pr.statusCheckRollup);
-      lastState = pr.statusCheckRollup?.state ?? "NONE";
-      lastPending = result.pendingCount;
-      console.log(`STATUS state=${lastState} pending=${lastPending}`);
-      if (result.verdict === "STALE-CANCELLED") {
-        return emit(
-          'STALE-CANCELLED hint="aggregate FAILURE but every failing context is a CANCELLED check run with a same-name SUCCESS — likely stale attempts; verify manually"',
-          17,
-        );
-      }
-      if (result.verdict === "FAILING") {
-        return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
-      }
-      const run = readRun(args.repo, runId);
-      if (run.status === "completed" && run.conclusion !== "success") {
-        return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
-      }
-      if (
-        result.verdict === "GREEN" &&
-        run.status === "completed" &&
-        run.conclusion === "success"
-      ) {
-        return emit("GREEN", 0);
-      }
-    } catch (error) {
-      retry("watch", error);
-    }
-    await pause(watchDeadline, args.interval);
+      return undefined;
+    },
+  });
+  if (watchResult !== undefined) {
+    return watchResult;
   }
+  return emit(`TIMEOUT state=${lastState} pending=${lastPending}`, 16);
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

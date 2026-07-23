@@ -43,7 +43,16 @@ export interface RunAttachmentClassification {
   warning?: string;
 }
 
+export interface PollUntilDeadlineOptions<T> {
+  deadline: number;
+  interval: number;
+  poll: () => T | undefined | Promise<T | undefined>;
+  now?: () => number;
+  wait?: (milliseconds: number) => Promise<void>;
+}
+
 export function parseArgs(argv: string[]): WatchPrCiArgs;
+export function sanitizeCheckName(name: string): string;
 export function classifyRollup(rollup: RollupPayload | null | undefined): RollupClassification;
 export function buildFindRunArgs(repo: string, sha: string): string[];
 export function selectRunAfter(runs: RunListItem[], after?: number): RunListItem | undefined;
@@ -52,3 +61,4 @@ export function classifyRunAttachment(
   run: RunStatus,
   after?: number,
 ): RunAttachmentClassification;
+export function pollUntilDeadline<T>(options: PollUntilDeadlineOptions<T>): Promise<T | undefined>;

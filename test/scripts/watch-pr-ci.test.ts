@@ -4,6 +4,8 @@ import {
   classifyRollup,
   classifyRunAttachment,
   parseArgs,
+  pollUntilDeadline,
+  sanitizeCheckName,
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mjs";
 
@@ -80,6 +82,77 @@ describe("watch-pr-ci", () => {
     expect(selectRunAfter(runs, 101)).toBe(newer);
     expect(selectRunAfter(runs, 102)).toBeUndefined();
     expect(selectRunAfter(runs)).toBe(newer);
+  });
+
+  it("sanitizes untrusted check names for terminal output", () => {
+    expect(sanitizeCheckName("plain ASCII / check (1)")).toBe("plain ASCII / check (1)");
+    expect(sanitizeCheckName("Crème 日本語 １２３")).toBe("Crème 日本語 １２３");
+    expect(sanitizeCheckName("unit\n\r\t\u0000check")).toBe("unit?check");
+    expect(sanitizeCheckName("safe\u001b[31mred\u001b[0m text")).toBe("safe?red? text");
+    expect(sanitizeCheckName("link\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007")).toBe(
+      "link?text?",
+    );
+    expect(sanitizeCheckName("left\u202Eright 😀")).toBe("left?right ?");
+  });
+
+  it("sanitizes failing check and status-context names before classification output", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "unit\u001b[31mowned\u001b[0m",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+            },
+            { kind: "StatusContext", context: "deploy\nprod", state: "ERROR" },
+          ],
+        },
+      }).failingNames,
+    ).toEqual(["deploy?prod", "unit?owned?"]);
+  });
+
+  it("polls once more after the deadline-clamped final wait", async () => {
+    let now = 0;
+    const waits = [];
+    let polls = 0;
+    const result = await pollUntilDeadline({
+      deadline: 1_000,
+      interval: 120,
+      now: () => now,
+      wait: async (milliseconds) => {
+        waits.push(milliseconds);
+        now += milliseconds;
+      },
+      poll: () => (++polls === 2 ? "transitioned" : undefined),
+    });
+
+    expect(result).toBe("transitioned");
+    expect(waits).toEqual([1_000]);
+    expect(polls).toBe(2);
+  });
+
+  it("times out only after polling at the deadline", async () => {
+    let now = 0;
+    let polls = 0;
+    const result = await pollUntilDeadline({
+      deadline: 1_000,
+      interval: 120,
+      now: () => now,
+      wait: async (milliseconds) => {
+        now += milliseconds;
+      },
+      poll: () => {
+        polls += 1;
+        return undefined;
+      },
+    });
+
+    expect(result).toBeUndefined();
+    expect(now).toBe(1_000);
+    expect(polls).toBe(2);
   });
 
   it("warns for an already-completed late attachment without changing attachment", () => {
