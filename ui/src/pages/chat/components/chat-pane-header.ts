@@ -166,6 +166,15 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             >${icons.globe}</span
           >`
         : nothing}
+      ${props.session?.incognito
+        ? html`<span
+            class="chat-pane__incognito"
+            role="img"
+            aria-label=${t("chat.sessionHeader.incognito")}
+            title=${t("chat.sessionHeader.incognito")}
+            >${icons.lock}</span
+          >`
+        : nothing}
       ${props.editing
         ? html`<input
             class="chat-pane__session-title-input"
