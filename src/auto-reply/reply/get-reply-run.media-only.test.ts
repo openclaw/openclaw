@@ -1319,7 +1319,12 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
 
-  it("persists sender attribution from ctx when sessionCtx omits it", async () => {
+  it("persists the live ctx sender, not a stale sessionCtx sender from a different group member", async () => {
+    // Two distinct members of the same group session: sessionCtx still reflects the
+    // first member's identity (carried over from session-level context), while ctx
+    // carries the second, current message's live sender. Before the fix, the
+    // sessionCtx-only read silently attributed the second member's message to the
+    // first member.
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -1329,9 +1334,9 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "telegram",
           OriginatingTo: "chat-1",
           ChatType: "group",
-          SenderId: "user-42",
-          SenderName: "Ada",
-          SenderUsername: "ada",
+          SenderId: "user-bob",
+          SenderName: "Bob",
+          SenderUsername: "bob",
         },
         sessionCtx: {
           Body: "hello",
@@ -1340,6 +1345,9 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingChannel: "telegram",
           OriginatingTo: "chat-1",
           ChatType: "group",
+          SenderId: "user-alice",
+          SenderName: "Alice",
+          SenderUsername: "alice",
         },
         sessionEntry: {
           sessionId: "session-1",
@@ -1353,9 +1361,9 @@ describe("runPreparedReply media-only handling", () => {
     const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
     expect(message).toMatchObject({
       __openclaw: {
-        senderId: "user-42",
-        senderName: "Ada",
-        senderUsername: "ada",
+        senderId: "user-bob",
+        senderName: "Bob",
+        senderUsername: "bob",
       },
     });
   });
