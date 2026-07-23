@@ -890,6 +890,90 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
   });
 
+  it("recognizes an alias defined only under the active agent's model list", async () => {
+    // Regression: the alias index was built without an agentId, so an alias declared
+    // solely under the active agent's `agents.list[].models` was not recognized and
+    // `/new fast summarize this` saved the whole tail as the session title, dropping
+    // the prompt. Scoping the index to the active agent must classify it as a model
+    // directive so it falls through to the reset-model resolver.
+    const params = buildResetParams(
+      "/new fast summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: { "openai/gpt-5.5-fast": { alias: "fast" } },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "fast summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("names a fresh session from a non-active agent's model alias tail", async () => {
+    // The alias index is scoped to the ACTIVE agent, so an alias living only on
+    // another agent must not be treated as a model directive; the tail stays a
+    // legitimate multi-word session name.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new fast summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "other", models: { "openai/gpt-5.5-fast": { alias: "fast" } } },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "fast summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “fast summarize this”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "fast summarize this",
+    );
+  });
+
   it("names a fresh session from a non-active agent's model override tail", async () => {
     // Only the active agent's model keys gate classification. A model override that
     // lives solely on ANOTHER agent must not be treated as a model directive, so the

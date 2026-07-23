@@ -129,12 +129,16 @@ function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
   }
   // Classify by the FIRST token, not the whole tail: `/new opus summarize this` leads with a
   // model alias and must fall through to the reset-model resolver (opus + prompt), not be
-  // captured verbatim as a multi-word session name.
+  // captured verbatim as a multi-word session name. Scope the alias index to the active agent
+  // (matching the canonical directive path) so an alias defined only under the selected agent's
+  // `agents.list[].models` is recognized instead of dropping the trailing prompt into the title.
   if (
     !firstToken.includes("/") &&
     buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: params.provider || DEFAULT_PROVIDER,
+      agentId: params.agentId ?? resolveDefaultAgentId(params.cfg),
+      allowPluginNormalization: false,
     }).byAlias.has(firstToken)
   ) {
     return true;

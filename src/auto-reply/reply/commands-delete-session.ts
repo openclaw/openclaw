@@ -94,7 +94,10 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
         identities: [params.sessionKey],
       })
     : undefined;
-  const deletion = await callGateway<{ deleted?: boolean }>({
+  const deletion = await callGateway<{
+    deleted?: boolean;
+    worktreePreserved?: { id: string; branch: string; path: string };
+  }>({
     method: "sessions.delete",
     // The gateway may still drain OTHER competing admitted work for up to
     // SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS before returning success or its
@@ -125,5 +128,15 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   }
   params.sessionEntry = undefined;
   markCommandSessionMetadataChanged(params);
+  // The session is gone, but if its managed worktree could not be removed the
+  // gateway reports it as preserved: dirty or unpushed work remains in an
+  // ownerless checkout. Surface it (like the Sessions UI does) instead of
+  // reporting an unconditional success that hides the cleanup failure.
+  if (deletion.worktreePreserved) {
+    const { branch, path } = deletion.worktreePreserved;
+    return deleteSessionReply(
+      `✅ Session closed and archived.\n⚠️ Its worktree could not be removed and may hold uncommitted or unpushed work: branch “${branch}” at ${path}. Remove it manually when you no longer need it.`,
+    );
+  }
   return deleteSessionReply("✅ Session closed and archived.");
 };

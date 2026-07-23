@@ -138,6 +138,33 @@ describe("delete session command", () => {
     ]);
   });
 
+  it("warns when the deleted session's worktree could not be removed", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "delete-me",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    );
+    callGatewayMock.mockResolvedValue({
+      deleted: true,
+      worktreePreserved: { id: "wt-1", branch: "feature/x", path: "/tmp/worktrees/wt-1" },
+    });
+    const params = buildDeleteParams("/close", storePath);
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    const text = (result?.reply as { text: string }).text;
+    expect(text).toContain("✅ Session closed and archived.");
+    expect(text).toContain("worktree could not be removed");
+    expect(text).toContain("feature/x");
+    expect(text).toContain("/tmp/worktrees/wt-1");
+  });
+
   it("binds the deletion to the captured session incarnation", async () => {
     const storePath = await createStorePath();
     const params = buildDeleteParams("/close", storePath);
