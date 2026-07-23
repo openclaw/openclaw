@@ -457,17 +457,15 @@ Toggle and configure bundled or managed skills under `skills.entries` in
         },
       },
       peekaboo: { enabled: true },
-      sag: { enabled: false },
+      summarize: { enabled: false },
     },
   },
 }
 ```
 
 <ParamField path="enabled" type="boolean">
-  `false` disables the skill even when bundled or installed. The `coding-agent`
-  bundled skill is opt-in — set `skills.entries.coding-agent.enabled: true`
-  and ensure one of `claude`, `codex`, `opencode`, or another supported CLI
-  is installed and authenticated.
+  `false` disables the skill even when bundled or installed. `true` explicitly
+  enables it.
 </ParamField>
 
 <ParamField path="apiKey" type='string | { source, provider, id }'>

@@ -133,10 +133,21 @@ describe("plugin install plan helpers", () => {
     const result = resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin");
 
     expect(result).toEqual({
+      source: "npm",
       pluginId: "wecom-openclaw-plugin",
       npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
       expectedIntegrity:
         "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
+    });
+  });
+
+  it("resolves ClawHub-only official external plugin ids before npm fallback", () => {
+    const result = resolveCatalogOfficialExternalInstallPlan("sherpa-onnx-tts");
+
+    expect(result).toEqual({
+      source: "clawhub",
+      pluginId: "sherpa-onnx-tts",
+      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
     });
   });
 
@@ -162,6 +173,14 @@ describe("plugin install plan helpers", () => {
 
   it("does not trust npm package names outside the official external catalog", () => {
     const result = resolveCatalogOfficialExternalNpmPackageTrust("@acme/outside@1.0.0");
+
+    expect(result).toBeNull();
+  });
+
+  it("does not trust npm installs for ClawHub-only official external plugins", () => {
+    const result = resolveCatalogOfficialExternalNpmPackageTrust(
+      "@openclaw/sherpa-onnx-tts@2026.6.8",
+    );
 
     expect(result).toBeNull();
   });

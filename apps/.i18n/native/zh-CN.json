@@ -21989,9 +21989,9 @@
       "translated": "为你的代理赋予更多能力"
     },
     {
-      "id": "native.apple.fea44c40dc512455",
-      "source": "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
-      "translated": "从 Settings → Skills 启用可选技能（Peekaboo、oracle、camsnap、…）。"
+      "id": "native.apple.eedd58d334365d6d",
+      "source": "Enable bundled and ClawHub skills from Settings → Skills.",
+      "translated": "从设置 → Skills 启用捆绑 Skills 和 ClawHub Skills。"
     },
     {
       "id": "native.apple.420781e5adca4122",

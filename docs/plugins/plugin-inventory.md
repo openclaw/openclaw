@@ -307,6 +307,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - npm; ClawHub: `clawhub:@openclaw/searxng-plugin`. Adds web search provider support.
 
+- **[sherpa-onnx-tts](/plugins/reference/sherpa-onnx-tts)** (`@openclaw/sherpa-onnx-tts`) - ClawHub: `clawhub:@openclaw/sherpa-onnx-tts`. Offline local text-to-speech skill using sherpa-onnx.
+
 - **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - npm; ClawHub: `clawhub:@openclaw/signal`. Adds the Signal channel surface for sending and receiving OpenClaw messages.
 
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm; ClawHub. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.

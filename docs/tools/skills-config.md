@@ -15,7 +15,7 @@ Most skills configuration lives under `skills` in
 ```json5
 {
   skills: {
-    allowBundled: ["gemini", "peekaboo"],
+    allowBundled: ["summarize", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
@@ -41,7 +41,7 @@ Most skills configuration lives under `skills` in
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
       peekaboo: { enabled: true },
-      sag: { enabled: false },
+      summarize: { enabled: false },
     },
   },
 }
@@ -275,10 +275,8 @@ Keys under `entries` match the skill `name` by default. If a skill defines
 (JSON5 allows quoted keys).
 
 <ParamField path="skills.entries.<key>.enabled" type="boolean">
-  `false` disables the skill even when bundled or installed. The
-  `coding-agent` bundled skill is opt-in — set it to `true` and ensure one of
-  `claude`, `codex`, `opencode`, or another supported CLI is installed and
-  authenticated.
+  `false` disables the skill even when bundled or installed. `true` explicitly
+  enables it.
 </ParamField>
 
 <ParamField path="skills.entries.<key>.apiKey" type='string | { source, provider, id }'>

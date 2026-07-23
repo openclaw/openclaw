@@ -35397,9 +35397,9 @@
       "kind": "ui-named-argument",
       "line": 939,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
-      "source": "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
+      "source": "Enable bundled and ClawHub skills from Settings → Skills.",
       "surface": "apple",
-      "id": "native.apple.fea44c40dc512455"
+      "id": "native.apple.eedd58d334365d6d"
     },
     {
       "kind": "ui-named-argument",

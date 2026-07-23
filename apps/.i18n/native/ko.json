@@ -21989,9 +21989,9 @@
       "translated": "에이전트에 더 많은 기능을 부여하세요"
     },
     {
-      "id": "native.apple.fea44c40dc512455",
-      "source": "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
-      "translated": "Settings → Skills에서 선택적 Skills(Peekaboo, oracle, camsnap, …)를 활성화하세요."
+      "id": "native.apple.eedd58d334365d6d",
+      "source": "Enable bundled and ClawHub skills from Settings → Skills.",
+      "translated": "설정 → Skills에서 번들 Skills 및 ClawHub Skills를 활성화하세요."
     },
     {
       "id": "native.apple.420781e5adca4122",

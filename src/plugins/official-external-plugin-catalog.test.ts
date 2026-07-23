@@ -1207,6 +1207,19 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("keeps Sherpa ONNX TTS ClawHub-only without inventing an npm fallback", () => {
+    const sherpa = expectCatalogEntry("sherpa-onnx-tts");
+
+    expect(resolveOfficialExternalPluginInstall(sherpa)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+      defaultChoice: "clawhub",
+      minHostVersion: ">=2026.6.11",
+    });
+    expect(
+      getOfficialExternalPluginCatalogManifest(sherpa)?.contracts?.speechProviders,
+    ).toBeUndefined();
+  });
+
   it("resolves third-party channel lookup aliases to published plugin ids", () => {
     const wecomByChannel = expectCatalogEntry("wecom");
     const wecomByPlugin = expectCatalogEntry("wecom-openclaw-plugin");

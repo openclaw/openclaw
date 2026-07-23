@@ -7,6 +7,7 @@ import {
   type BundledPluginSource,
 } from "./bundled-sources.js";
 import {
+  hasCatalogOfficialExternalPackage,
   resolveCatalogOfficialExternalInstallPlan,
   resolveCatalogOfficialExternalNpmPackageTrust,
 } from "./official-external-install-trust.js";
@@ -32,6 +33,10 @@ export function resolveOpenClawTrustedNpmPackageInstall(
   if (!packageName) {
     return null;
   }
+  const officialExternalTrust = resolveCatalogOfficialExternalNpmPackageTrust(npmSpec);
+  if (officialExternalTrust || hasCatalogOfficialExternalPackage(packageName)) {
+    return officialExternalTrust;
+  }
   const bundled = findBundledPluginSourceInMap({
     bundled: bundledSources,
     lookup: { kind: "npmSpec", value: packageName },
@@ -39,7 +44,7 @@ export function resolveOpenClawTrustedNpmPackageInstall(
   if (bundled) {
     return { pluginId: bundled.pluginId };
   }
-  return resolveCatalogOfficialExternalNpmPackageTrust(npmSpec);
+  return null;
 }
 
 export function isOpenClawTrustedPluginInstallSpec(

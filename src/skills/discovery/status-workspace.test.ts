@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
@@ -68,13 +67,6 @@ function requireReportedSkill(
     throw new Error(`reported skill ${name} missing`);
   }
   return skill;
-}
-
-function requireSkillEntry(entry: SkillEntry | undefined, name: string): SkillEntry {
-  if (!entry) {
-    throw new Error(`skill entry ${name} missing`);
-  }
-  return entry;
 }
 
 describe("buildWorkspaceSkillStatus", () => {
@@ -189,65 +181,6 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill.blockedByAllowlist).toBe(true);
     expect(skill.eligible).toBe(false);
     expect(skill.bundled).toBe(true);
-  });
-
-  it("requires explicit enablement before exposing bundled coding-agent", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const bundledSkillsDir = path.resolve("skills");
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir,
-      config: {
-        skills: {
-          allowBundled: ["coding-agent"],
-        },
-      },
-    });
-    const codingAgent = requireSkillEntry(
-      entries.find((entry) => entry.skill.name === "coding-agent"),
-      "coding-agent",
-    );
-
-    const eligibility = {
-      remote: {
-        platforms: [process.platform],
-        hasBin: () => false,
-        hasAnyBin: (bins: string[]) => bins.includes("codex"),
-      },
-    };
-    const defaultReport = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [codingAgent],
-        config: {
-          skills: {
-            allowBundled: ["coding-agent"],
-          },
-        },
-        eligibility,
-      }),
-    );
-    const defaultStatus = defaultReport.skills[0];
-    expect(defaultStatus?.eligible).toBe(false);
-    expect(defaultStatus?.requirements.config).toEqual(["skills.entries.coding-agent.enabled"]);
-    expect(defaultStatus?.missing.config).toEqual(["skills.entries.coding-agent.enabled"]);
-
-    const enabledReport = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [codingAgent],
-        config: {
-          skills: {
-            allowBundled: ["coding-agent"],
-            entries: {
-              "coding-agent": { enabled: true },
-            },
-          },
-        },
-        eligibility,
-      }),
-    );
-    const enabledStatus = enabledReport.skills[0];
-    expect(enabledStatus?.eligible).toBe(true);
-    expect(enabledStatus?.missing.config).toStrictEqual([]);
   });
 
   it("does not mark an overridden workspace skill as bundled by bundled name alone", async () => {

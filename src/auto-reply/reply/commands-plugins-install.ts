@@ -65,14 +65,63 @@ function resolveNonClawHubChatInstallAcknowledgement(params: {
   };
 }
 
+type PluginsCommandInstallResult =
+  | { ok: true; pluginId: string; warnings?: readonly string[] }
+  | { ok: false; error: string };
+
+async function installClawHubPluginFromPluginsCommand(params: {
+  spec: string;
+  expectedPluginId?: string;
+  config: OpenClawConfig;
+  snapshot: ConfigSnapshotForInstallPersist;
+  installMode: "install" | "update";
+}): Promise<PluginsCommandInstallResult> {
+  const warnings: string[] = [];
+  const logger = createPluginInstallLogger();
+  const result = await installPluginFromClawHub({
+    spec: params.spec,
+    config: params.config,
+    mode: params.installMode,
+    ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
+    logger: {
+      info: logger.info,
+      warn: (message) => {
+        warnings.push(stripAnsi(message));
+        logger.warn(message);
+      },
+      terminalLinks: false,
+    },
+  });
+  if (!result.ok) {
+    const warning = "warning" in result ? result.warning : warnings.join("\n");
+    const warningPrefix = warning ? `${warning} ` : "";
+    if (result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED) {
+      return {
+        ok: false,
+        error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
+      };
+    }
+    return { ok: false, error: `${warningPrefix}${result.error}` };
+  }
+  await persistPluginInstall({
+    snapshot: params.snapshot,
+    pluginId: result.pluginId,
+    install: {
+      ...buildClawHubPluginInstallRecordFields(result.clawhub),
+      spec: params.spec,
+      installPath: result.targetDir,
+      version: result.version,
+    },
+  });
+  return { ok: true, pluginId: result.pluginId, warnings };
+}
+
 export async function installPluginFromPluginsCommand(params: {
   raw: string;
   force: boolean;
   config: OpenClawConfig;
   snapshot: ConfigSnapshotForInstallPersist;
-}): Promise<
-  { ok: true; pluginId: string; warnings?: readonly string[] } | { ok: false; error: string }
-> {
+}): Promise<PluginsCommandInstallResult> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
   if (fileSpec && !fileSpec.ok) {
     return { ok: false, error: fileSpec.error };
@@ -213,55 +262,26 @@ export async function installPluginFromPluginsCommand(params: {
 
   const clawhubSpec = parseClawHubPluginSpec(params.raw);
   if (clawhubSpec) {
-    const warnings: string[] = [];
-    const logger = createPluginInstallLogger();
-    const result = await installPluginFromClawHub({
+    return await installClawHubPluginFromPluginsCommand({
       spec: params.raw,
       config: params.config,
-      mode: installMode,
-      logger: {
-        info: logger.info,
-        warn: (message) => {
-          warnings.push(stripAnsi(message));
-          logger.warn(message);
-        },
-        terminalLinks: false,
-      },
-    });
-    if (!result.ok) {
-      const warning = "warning" in result ? result.warning : warnings.join("\n");
-      const warningPrefix = warning ? `${warning} ` : "";
-      if (result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED) {
-        return {
-          ok: false,
-          error: `${warningPrefix}${result.error} The /plugins chat command cannot acknowledge ClawHub risk; run the local openclaw plugins install command with --acknowledge-clawhub-risk from a trusted shell after reviewing the warning.`,
-        };
-      }
-      return { ok: false, error: `${warningPrefix}${result.error}` };
-    }
-    await persistPluginInstall({
       snapshot: params.snapshot,
-      pluginId: result.pluginId,
-      install: {
-        ...buildClawHubPluginInstallRecordFields(result.clawhub),
-        spec: params.raw,
-        installPath: result.targetDir,
-        version: result.version,
-      },
+      installMode,
     });
-    return { ok: true, pluginId: result.pluginId, warnings };
   }
 
   const npmSpec = params.raw.trim().toLowerCase().startsWith("npm:")
     ? params.raw.trim().slice("npm:".length)
     : params.raw;
   const explicitNpm = params.raw.trim().toLowerCase().startsWith("npm:");
-  const bundledPlan = explicitNpm
-    ? null
-    : resolveBundledInstallPlanBeforeNpm({
-        rawSpec: params.raw,
-        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-      });
+  const officialIdPlan = resolveCatalogOfficialExternalInstallPlan(params.raw);
+  const bundledPlan =
+    explicitNpm || officialIdPlan?.source === "clawhub"
+      ? null
+      : resolveBundledInstallPlanBeforeNpm({
+          rawSpec: params.raw,
+          findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+        });
   if (bundledPlan) {
     const bundledInstall = await installBundledPluginSource({
       snapshot: params.snapshot,
@@ -276,9 +296,18 @@ export async function installPluginFromPluginsCommand(params: {
     };
   }
   const trustedNpmInstall = resolveOpenClawTrustedNpmPackageInstall(npmSpec);
-  const officialIdPlan = resolveCatalogOfficialExternalInstallPlan(params.raw);
+  if (officialIdPlan?.source === "clawhub") {
+    return await installClawHubPluginFromPluginsCommand({
+      spec: officialIdPlan.clawhubSpec,
+      expectedPluginId: officialIdPlan.pluginId,
+      config: params.config,
+      snapshot: params.snapshot,
+      installMode,
+    });
+  }
+  const officialNpmPlan = officialIdPlan?.source === "npm" ? officialIdPlan : null;
   const arbitraryNpmAcknowledgement =
-    !trustedNpmInstall && !officialIdPlan
+    !trustedNpmInstall && !officialNpmPlan
       ? resolveNonClawHubChatInstallAcknowledgement({
           force: params.force,
           sourceClass: "npm",
@@ -288,17 +317,17 @@ export async function installPluginFromPluginsCommand(params: {
   if (arbitraryNpmAcknowledgement && !arbitraryNpmAcknowledgement.ok) {
     return arbitraryNpmAcknowledgement;
   }
-  const trustedPluginId = trustedNpmInstall?.pluginId ?? officialIdPlan?.pluginId;
-  const trustedNpmSpec = officialIdPlan?.npmSpec ?? npmSpec;
+  const trustedPluginId = trustedNpmInstall?.pluginId ?? officialNpmPlan?.pluginId;
+  const trustedNpmSpec = officialNpmPlan?.npmSpec ?? npmSpec;
   const expectedIntegrity =
-    trustedNpmInstall?.expectedIntegrity ?? officialIdPlan?.expectedIntegrity;
+    trustedNpmInstall?.expectedIntegrity ?? officialNpmPlan?.expectedIntegrity;
   const result = await installPluginFromNpmSpec({
     spec: trustedNpmSpec,
     config: params.config,
     mode: installMode,
     ...(trustedPluginId ? { expectedPluginId: trustedPluginId } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),
-    ...(trustedNpmInstall || officialIdPlan ? { trustedSourceLinkedOfficialInstall: true } : {}),
+    ...(trustedNpmInstall || officialNpmPlan ? { trustedSourceLinkedOfficialInstall: true } : {}),
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {

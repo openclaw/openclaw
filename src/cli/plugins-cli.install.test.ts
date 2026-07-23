@@ -1989,6 +1989,38 @@ describe("plugins cli install", () => {
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
   });
 
+  it("resolves ClawHub-only official external plugin ids through ClawHub", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("sherpa-onnx-tts");
+    loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
+    parseClawHubPluginSpec.mockReturnValue({ name: "@openclaw/sherpa-onnx-tts" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "sherpa-onnx-tts",
+        packageName: "@openclaw/sherpa-onnx-tts",
+        version: "2026.6.8",
+        channel: "official",
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "sherpa-onnx-tts"]);
+
+    expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/sherpa-onnx-tts");
+    expect(clawHubInstallCall().expectedPluginId).toBe("sherpa-onnx-tts");
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    const record = persistedInstallRecord("sherpa-onnx-tts");
+    expect(record.source).toBe("clawhub");
+    expect(record.spec).toBe("clawhub:@openclaw/sherpa-onnx-tts");
+    expect(record.clawhubPackage).toBe("@openclaw/sherpa-onnx-tts");
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
   it("passes third-party external catalog integrity with catalog install trust", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
@@ -2237,6 +2269,32 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().expectedPluginId).toBe("discord");
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
     expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+  });
+
+  it("does not mark explicit npm installs for ClawHub-only official plugins as trusted", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("sherpa-onnx-tts");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("sherpa-onnx-tts"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runAcknowledgedPluginsInstallCommand([
+      "plugins",
+      "install",
+      "npm:@openclaw/sherpa-onnx-tts",
+    ]);
+
+    expect(npmInstallCall().spec).toBe("@openclaw/sherpa-onnx-tts");
+    expect(npmInstallCall().expectedPluginId).toBeUndefined();
+    expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBeUndefined();
+    expect(runtimeLogsContain("outside ClawHub review")).toBe(true);
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 

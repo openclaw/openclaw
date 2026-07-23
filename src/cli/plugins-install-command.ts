@@ -858,15 +858,16 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
   if (!resolvesToLocalPath && (gitSpec || npmPackPath !== null || clawhubSpec)) {
     request = { ...request, installKind: "plugin" };
   }
-  const bundledPreNpmPlan = resolvesToLocalPath
-    ? null
-    : resolveBundledInstallPlanBeforeNpm({
-        rawSpec: raw,
-        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-      });
   const officialExternalPlan = resolvesToLocalPath
     ? null
     : resolveCatalogOfficialExternalInstallPlan(raw);
+  const bundledPreNpmPlan =
+    resolvesToLocalPath || officialExternalPlan?.source === "clawhub"
+      ? null
+      : resolveBundledInstallPlanBeforeNpm({
+          rawSpec: raw,
+          findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+        });
   if (bundledPreNpmPlan || officialExternalPlan) {
     request = { ...request, installKind: "plugin" };
   }
@@ -1209,7 +1210,7 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
     return;
   }
 
-  if (officialExternalPlan) {
+  if (officialExternalPlan?.source === "npm") {
     const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
       installMode,
@@ -1230,7 +1231,19 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
     return;
   }
 
-  if (clawhubSpec) {
+  const clawhubInstallSpec =
+    officialExternalPlan?.source === "clawhub"
+      ? officialExternalPlan.clawhubSpec
+      : clawhubSpec
+        ? raw
+        : undefined;
+  if (clawhubInstallSpec) {
+    const parsedClawHubInstallSpec = parseClawHubPluginSpec(clawhubInstallSpec);
+    if (!parsedClawHubInstallSpec) {
+      runtime.error(`Invalid ClawHub plugin spec: ${clawhubInstallSpec}`);
+      return runtime.exit(1);
+    }
+    const expectedClawHubPluginId = officialExternalPlan?.pluginId ?? opts.expectedPluginId;
     const installFromClawHub = async (
       installSnapshot = snapshot,
       installSafetyOverrides = safetyOverrides,
@@ -1242,9 +1255,9 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
           action: "installing",
         }),
         mode: installMode,
-        spec: raw,
+        spec: clawhubInstallSpec,
         ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
-        ...(opts.expectedPluginId ? { expectedPluginId: opts.expectedPluginId } : {}),
+        ...(expectedClawHubPluginId ? { expectedPluginId: expectedClawHubPluginId } : {}),
         extensionsDir,
         logger: createPluginInstallLogger(runtime),
       });
@@ -1260,7 +1273,7 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
         pluginId: result.pluginId,
         install: {
           ...buildClawHubPluginInstallRecordFields(result.clawhub),
-          spec: raw,
+          spec: clawhubInstallSpec,
           installPath: result.targetDir,
         },
         invalidateRuntimeCache,
@@ -1279,7 +1292,7 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
       return await installFromClawHub();
     }
     return await withClawPackageLifecycleLease(
-      { kind: "plugin", source: "clawhub", ref: clawhubSpec.name },
+      { kind: "plugin", source: "clawhub", ref: parsedClawHubInstallSpec.name },
       async () => {
         const leasedSnapshot = await loadConfigForInstall(request).catch((error: unknown) => {
           runtime.error(formatErrorMessage(error));

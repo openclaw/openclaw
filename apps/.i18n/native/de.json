@@ -21989,9 +21989,9 @@
       "translated": "Gib deinem Agenten mehr Möglichkeiten"
     },
     {
-      "id": "native.apple.fea44c40dc512455",
-      "source": "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
-      "translated": "Aktiviere optionale Skills (Peekaboo, oracle, camsnap, …) in Einstellungen → Skills."
+      "id": "native.apple.eedd58d334365d6d",
+      "source": "Enable bundled and ClawHub skills from Settings → Skills.",
+      "translated": "Aktiviere gebündelte Skills und ClawHub-Skills in Einstellungen → Skills."
     },
     {
       "id": "native.apple.420781e5adca4122",

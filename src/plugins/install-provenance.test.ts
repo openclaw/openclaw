@@ -11,6 +11,14 @@ const bundledSources = new Map<string, BundledPluginSource>([
       npmSpec: "@openclaw/discord",
     },
   ],
+  [
+    "sherpa-onnx-tts",
+    {
+      pluginId: "sherpa-onnx-tts",
+      localPath: "/repo/extensions/sherpa-onnx-tts",
+      npmSpec: "@openclaw/sherpa-onnx-tts",
+    },
+  ],
 ]);
 
 describe("plugin install provenance", () => {
@@ -32,4 +40,10 @@ describe("plugin install provenance", () => {
       expect(isOpenClawTrustedPluginInstallSpec(spec, bundledSources)).toBe(false);
     },
   );
+
+  it("keeps ClawHub-only catalog packages untrusted for npm installs", () => {
+    expect(
+      isOpenClawTrustedPluginInstallSpec("npm:@openclaw/sherpa-onnx-tts", bundledSources),
+    ).toBe(false);
+  });
 });

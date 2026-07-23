@@ -1,0 +1,14 @@
+{
+  "id": "sherpa-onnx-tts",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Sherpa ONNX TTS",
+  "description": "Offline local text-to-speech skill using sherpa-onnx.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

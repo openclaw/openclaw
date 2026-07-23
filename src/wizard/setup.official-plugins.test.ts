@@ -54,7 +54,13 @@ describe("setupOfficialPluginInstalls", () => {
     });
     const pluginIds = prompt.options.slice(1).map((option) => option.value);
     expect(pluginIds).toEqual(
-      expect.arrayContaining(["acpx", "diagnostics-otel", "diagnostics-prometheus", "tokenjuice"]),
+      expect.arrayContaining([
+        "acpx",
+        "diagnostics-otel",
+        "diagnostics-prometheus",
+        "sherpa-onnx-tts",
+        "tokenjuice",
+      ]),
     );
     expect(pluginIds).not.toContain("brave");
     expect(pluginIds).not.toContain("codex");
@@ -77,6 +83,11 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diagnostics Prometheus exporter",
         },
         {
+          value: "sherpa-onnx-tts",
+          label: "Sherpa ONNX TTS",
+          hint: "Offline Sherpa ONNX text-to-speech skill plugin",
+        },
+        {
           value: "tokenjuice",
           label: "Tokenjuice",
           hint: "OpenClaw tokenjuice exec output compaction plugin",
@@ -94,6 +105,40 @@ describe("setupOfficialPluginInstalls", () => {
           npmSpec: "@openclaw/diagnostics-otel",
           defaultChoice: "npm",
           minHostVersion: ">=2026.4.25",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      promptInstall: false,
+    });
+  });
+
+  it("installs ClawHub-only official plugins from their declared source", async () => {
+    const multiselect = vi.fn(async (_params: WizardMultiSelectParams) => ["sherpa-onnx-tts"]);
+    const prompter = createWizardPrompter({
+      multiselect: multiselect as unknown as WizardPrompter["multiselect"],
+    });
+    const runtime = createNonExitingRuntime();
+
+    await setupOfficialPluginInstalls({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith({
+      cfg: {},
+      entry: {
+        pluginId: "sherpa-onnx-tts",
+        label: "Sherpa ONNX TTS",
+        description: "Offline Sherpa ONNX text-to-speech skill plugin",
+        install: {
+          clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+          defaultChoice: "clawhub",
+          minHostVersion: ">=2026.6.11",
         },
         trustedSourceLinkedOfficialInstall: true,
       },
