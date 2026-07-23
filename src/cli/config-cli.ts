@@ -386,9 +386,18 @@ function parsePath(raw: string): PathSegment[] {
   // Tracks whether a bracket segment was emitted since the last "." boundary, so
   // "foo[0].bar" is accepted while empty key segments are rejected.
   let segmentEmitted = false;
+  let postBracket = false;
   let i = 0;
   while (i < trimmed.length) {
     const ch = trimmed[i];
+    if (postBracket) {
+      // After a bracket segment, only "." and "[" are valid continuations.
+      // Reject bare text, whitespace, and escape sequences immediately.
+      if (ch !== "." && ch !== "[") {
+        throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
+      }
+      postBracket = false;
+    }
     if (ch === "\\") {
       const next = trimmed[i + 1];
       if (next) {
@@ -436,6 +445,7 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
       }
       segmentEmitted = true;
+      postBracket = true;
       i = close + 1;
       continue;
     }
