@@ -1,0 +1,139 @@
+title: Channel lifecycle request-admission boundary
+
+scenario:
+  id: channel-lifecycle-admission
+  surface: channels
+  # Admin HTTP is required for suspend prepare/resume: suite gateway.call opens a
+  # fresh WebSocket each time, and a prepared suspension rejects new handshakes.
+  plugins:
+    - admin-http-rpc
+  coverage:
+    primary:
+      - gateway.channel-apis
+    secondary:
+      - gateway.channel-readiness
+      - runtime.gateway-restart
+  objective: Verify a channel account started by a short-lived Gateway request keeps accepting later work without bypassing process-global suspension admission.
+  successCriteria:
+    - A qa-channel account started through channels.start accepts inbound work after that RPC returns.
+    - A prepared Gateway suspension rejects ordinary channel RPC work.
+    - Resuming the suspension restores channel delivery.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/gateway/external-apps.md
+    - docs/gateway/protocol.md
+    - docs/plugins/admin-http-rpc.md
+  codeRefs:
+    - src/gateway/server-channels.ts
+    - src/process/gateway-work-admission.ts
+    - extensions/qa-channel/src/gateway.ts
+    - extensions/admin-http-rpc/src/methods.ts
+  gatewayConfigPatch:
+    plugins:
+      entries:
+        admin-http-rpc:
+          enabled: true
+  execution:
+    kind: flow
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: The scenario stops and restarts the channel account and temporarily prepares process-global Gateway suspension.
+    summary: Start the real qa-channel plugin through a Gateway RPC, prove post-request delivery, then prove suspension still refuses work and resumes cleanly.
+    config:
+      channelId: qa-channel
+      accountId: default
+      conversationId: qa-lifecycle-admission
+      firstMarker: QA-CHANNEL-LIFECYCLE-AFTER-RPC-OK
+      resumedMarker: QA-CHANNEL-LIFECYCLE-AFTER-RESUME-OK
+
+flow:
+  steps:
+    - name: accepts channel work after the starting RPC root is released
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - call: env.gateway.call
+          saveAs: stopped
+          args:
+            - channels.stop
+            - channel: { ref: config.channelId }
+              accountId: { ref: config.accountId }
+            - timeoutMs: 15000
+        - call: env.gateway.call
+          saveAs: started
+          args:
+            - channels.start
+            - channel: { ref: config.channelId }
+              accountId: { ref: config.accountId }
+            - timeoutMs: 15000
+        - assert:
+            expr: "started.started === true"
+            message:
+              expr: "`channels.start did not report a running account: ${JSON.stringify(started)}`"
+        - call: sleep
+          args: [250]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Lifecycle Driver
+            text:
+              expr: "`Reply exactly: ${config.firstMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.firstMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: firstOutbound
+      detailsExpr: "({ stopped, started, firstOutbound: firstOutbound.text })"
+
+    - name: preserves process-global suspension refusal and resumes delivery
+      actions:
+        - set: suspensionRequestId
+          value:
+            expr: "`qa-channel-lifecycle-${randomUUID()}`"
+        # Use Admin HTTP for the suspend lease: the suite's gateway.call opens a new
+        # WebSocket per RPC, and prepared suspension rejects new handshakes by design
+        # (docs/gateway/external-apps.md). Admin HTTP stays reachable during the lease.
+        - call: waitForCondition
+          saveAs: suspensionCycle
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const token = env.gateway.runtimeEnv.OPENCLAW_GATEWAY_TOKEN; if (!token) { throw new Error('missing OPENCLAW_GATEWAY_TOKEN for admin HTTP suspend control'); } const url = `${env.gateway.baseUrl}/api/v1/admin/rpc`; const adminRpc = async (method, params = {}) => { const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ method, params }) }); const body = await response.json(); return { httpStatus: response.status, body }; }; const prepared = await adminRpc('gateway.suspend.prepare', { requestId: suspensionRequestId }); if (prepared.body?.ok !== true || prepared.body?.payload?.status !== 'ready') { return undefined; } const suspension = prepared.body.payload; let suspendedCallRejected = false; let suspendedCallError = ''; try { const refused = await adminRpc('channels.status', { probe: false, timeoutMs: 2000 }); const errorText = JSON.stringify(refused.body ?? refused); if (refused.body?.ok === false && /unavailable|suspend|not accepted/i.test(errorText)) { suspendedCallRejected = true; suspendedCallError = errorText; } else { suspendedCallError = errorText; } } catch (error) { suspendedCallRejected = true; suspendedCallError = String(error?.message ?? error); } if (!suspendedCallRejected || !/unavailable|suspend|not accepted/i.test(suspendedCallError)) { throw new Error(`ordinary channel RPC was not rejected by suspension: rejected=${suspendedCallRejected} error=${suspendedCallError}`); } let resumed; try { const resumeResponse = await adminRpc('gateway.suspend.resume', { suspensionId: suspension.suspensionId }); resumed = resumeResponse.body?.payload ?? resumeResponse.body; if (resumeResponse.body?.ok !== true || resumed?.ok !== true || resumed?.status !== 'running') { throw new Error(`gateway did not resume cleanly: ${JSON.stringify(resumeResponse)}`); } } catch (error) { throw new Error(`gateway.suspend.resume failed: ${String(error?.message ?? error)}`); } return { suspension, suspendedCallError, resumed }; })()"
+            - 45000
+            - 250
+        - assert:
+            expr: "Boolean(suspensionCycle?.suspension?.suspensionId) && Boolean(suspensionCycle?.resumed?.ok) && Boolean(suspensionCycle?.suspendedCallError)"
+            message:
+              expr: "`suspend cycle incomplete: ${JSON.stringify(suspensionCycle)}`"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            senderId: driver
+            senderName: QA Lifecycle Driver
+            text:
+              expr: "`Reply exactly: ${config.resumedMarker}`"
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: group
+            textIncludes: { ref: config.resumedMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: resumedOutbound
+      detailsExpr: "({ suspension: suspensionCycle?.suspension, suspendedCallError: suspensionCycle?.suspendedCallError, resumed: suspensionCycle?.resumed, resumedOutbound: resumedOutbound.text })"

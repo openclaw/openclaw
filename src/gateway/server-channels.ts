@@ -21,6 +21,7 @@ import {
 import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -648,17 +649,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             restarts.delete(rKey);
           }
           try {
+            // Approval bootstrap can schedule detached follow-up work. Create it outside
+            // the request admission root so later callbacks do not see a released ALS root.
             stopApprovalBootstrap = await measureStartup(
               `channels.${channelId}.approval-bootstrap`,
               () =>
-                startChannelApprovalHandlerBootstrap({
-                  plugin,
-                  cfg,
-                  accountId: id,
-                  channelRuntime: channelRuntimeForTask,
-                  gatewayRuntime: opts.getNativeApprovalRuntime?.(),
-                  logger: log,
-                }),
+                runOutsideGatewayRootWorkAdmission(() =>
+                  startChannelApprovalHandlerBootstrap({
+                    plugin,
+                    cfg,
+                    accountId: id,
+                    channelRuntime: channelRuntimeForTask,
+                    gatewayRuntime: opts.getNativeApprovalRuntime?.(),
+                    logger: log,
+                  }),
+                ),
             );
           } catch (error) {
             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
@@ -674,7 +679,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
-          const task = Promise.resolve().then(async () => {
+          // Process-lifetime channel work must not inherit a short-lived request root.
+          // Callers often start channels inside tryBeginGatewayRootWorkAdmission; once that
+          // root releases, ALS still treats the closed root as subordinate-closed and can
+          // reject later provider, cleanup, and auto-restart work with GatewayDrainingError.
+          // Global restart/suspension fences still close admission outside any request root.
+          const runChannelTask = async () => {
             if (optsValue.deferAccountStartUntil) {
               await waitForDeferredAccountStart(optsValue.deferAccountStartUntil, abort.signal);
             } else if (startupTrace) {
@@ -724,64 +734,83 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               return;
             }
             await startAccountTask;
-          });
+          };
           // Recovery can replace a timed-out task before the old promise settles.
           // Only the task that still owns the store slot may write lifecycle state.
-          const trackedPromise = task
-            .then(() => {
-              if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
-                return;
-              }
-              const message = "channel exited without an error";
-              setRuntime(channelId, id, { accountId: id, lastError: message });
-              log.error?.(`[${id}] ${message}`);
-            })
-            .catch((err: unknown) => {
-              if (!isCurrentTask()) {
-                return;
-              }
-              const message = formatErrorMessage(err);
-              setRuntime(channelId, id, { accountId: id, lastError: message });
-              log.error?.(`[${id}] channel exited: ${message}`);
-            })
-            .then(async () => {
-              await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
-              if (!isCurrentTask()) {
-                return;
-              }
-              setStoppedRuntime(channelId, id, {
-                lastStopAt: Date.now(),
-              });
-            })
-            .then(async () => {
-              if (!isCurrentTask()) {
-                return;
-              }
-              if (manuallyStopped.has(rKey)) {
-                recoveryStopTimedOut.delete(rKey);
-                recoveryStartRequested.delete(rKey);
-                return;
-              }
-              if (getRuntime(channelId, id).terminalDisconnect) {
-                // Authentication/session termination wins over pending recovery.
-                // Leaving recovery state behind would restart a channel that needs user action.
-                recoveryStopTimedOut.delete(rKey);
-                recoveryStartRequested.delete(rKey);
-                restarts.delete(rKey);
-                setRuntime(channelId, id, {
-                  accountId: id,
-                  restartPending: false,
-                  reconnectAttempts: 0,
+          // Build the full provider → cleanup → restart chain outside request ALS so
+          // .then scheduling from inside an admitted request cannot re-capture the root.
+          const trackedPromise = runOutsideGatewayRootWorkAdmission(() =>
+            Promise.resolve()
+              .then(runChannelTask)
+              .then(() => {
+                if (abort.signal.aborted || manuallyStopped.has(rKey) || !isCurrentTask()) {
+                  return;
+                }
+                const message = "channel exited without an error";
+                setRuntime(channelId, id, { accountId: id, lastError: message });
+                log.error?.(`[${id}] ${message}`);
+              })
+              .catch((err: unknown) => {
+                if (!isCurrentTask()) {
+                  return;
+                }
+                const message = formatErrorMessage(err);
+                setRuntime(channelId, id, { accountId: id, lastError: message });
+                log.error?.(`[${id}] channel exited: ${message}`);
+              })
+              .then(async () => {
+                await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
+                if (!isCurrentTask()) {
+                  return;
+                }
+                setStoppedRuntime(channelId, id, {
+                  lastStopAt: Date.now(),
                 });
-                log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
-                return;
-              }
-              if (recoveryStopTimedOut.has(rKey)) {
-                recoveryStopTimedOut.delete(rKey);
-                if (!recoveryStartRequested.delete(rKey)) {
+              })
+              .then(async () => {
+                if (!isCurrentTask()) {
+                  return;
+                }
+                if (manuallyStopped.has(rKey)) {
+                  recoveryStopTimedOut.delete(rKey);
+                  recoveryStartRequested.delete(rKey);
+                  return;
+                }
+                if (getRuntime(channelId, id).terminalDisconnect) {
+                  // Authentication/session termination wins over pending recovery.
+                  // Leaving recovery state behind would restart a channel that needs user action.
+                  recoveryStopTimedOut.delete(rKey);
+                  recoveryStartRequested.delete(rKey);
+                  restarts.delete(rKey);
                   setRuntime(channelId, id, {
                     accountId: id,
                     restartPending: false,
+                    reconnectAttempts: 0,
+                  });
+                  log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
+                  return;
+                }
+                if (recoveryStopTimedOut.has(rKey)) {
+                  recoveryStopTimedOut.delete(rKey);
+                  if (!recoveryStartRequested.delete(rKey)) {
+                    setRuntime(channelId, id, {
+                      accountId: id,
+                      restartPending: false,
+                      reconnectAttempts: 0,
+                    });
+                    if (store.tasks.get(id) === trackedPromise) {
+                      store.tasks.delete(id);
+                    }
+                    if (store.aborts.get(id) === abort) {
+                      store.aborts.delete(id);
+                    }
+                    return;
+                  }
+                  restarts.delete(rKey);
+                  log.info?.(`[${id}] restarting after timed-out channel stop completed`);
+                  setRuntime(channelId, id, {
+                    accountId: id,
+                    restartPending: true,
                     reconnectAttempts: 0,
                   });
                   if (store.tasks.get(id) === trackedPromise) {
@@ -790,96 +819,82 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   if (store.aborts.get(id) === abort) {
                     store.aborts.delete(id);
                   }
+                  // The settled task may have left background work racing on this
+                  // signal. Abort before the replacement starts so two account
+                  // instances can never share a live lifetime.
+                  abort.abort();
+                  try {
+                    await startChannelInternal(channelId, id, {
+                      preserveManualStop: true,
+                    });
+                  } catch {
+                    // abort or startup failure — runtime state was recorded by startChannelInternal
+                  }
                   return;
                 }
-                restarts.delete(rKey);
-                log.info?.(`[${id}] restarting after timed-out channel stop completed`);
+                // Only plugin task lifetime counts. Deferred handoff and cleanup must not
+                // make a short crash look stable and erase crash-loop attempts.
+                if (
+                  channelRunDurationMs !== undefined &&
+                  channelRunDurationMs >= CHANNEL_STABLE_RUN_MS
+                ) {
+                  restarts.delete(rKey);
+                }
+                const restart =
+                  restarts.get(rKey) ?? new RetrySupervisor(RESTART_POLICY, MAX_RESTARTS);
+                restarts.set(rKey, restart);
+                const retry = restart.next(abort.signal);
+                if (!retry) {
+                  setRuntime(channelId, id, {
+                    accountId: id,
+                    restartPending: false,
+                    reconnectAttempts: restart.attempts,
+                  });
+                  log.error?.(`[${id}] giving up after ${MAX_RESTARTS} restart attempts`);
+                  return;
+                }
+                log.info?.(
+                  `[${id}] auto-restart attempt ${restart.attempts}/${MAX_RESTARTS} in ${Math.round(retry.delayMs / 1000)}s`,
+                );
                 setRuntime(channelId, id, {
                   accountId: id,
                   restartPending: true,
-                  reconnectAttempts: 0,
+                  reconnectAttempts: restart.attempts,
                 });
-                if (store.tasks.get(id) === trackedPromise) {
-                  store.tasks.delete(id);
-                }
-                if (store.aborts.get(id) === abort) {
-                  store.aborts.delete(id);
-                }
-                // The settled task may have left background work racing on this
-                // signal. Abort before the replacement starts so two account
-                // instances can never share a live lifetime.
-                abort.abort();
                 try {
+                  await sleepWithAbort(retry.delayMs, retry.signal);
+                  if (manuallyStopped.has(rKey)) {
+                    return;
+                  }
+                  if (store.tasks.get(id) === trackedPromise) {
+                    store.tasks.delete(id);
+                  }
+                  if (store.aborts.get(id) === abort) {
+                    store.aborts.delete(id);
+                  }
+                  // The retry signal includes abort.signal, so end the predecessor
+                  // only after backoff completes, immediately before replacement.
+                  abort.abort();
                   await startChannelInternal(channelId, id, {
+                    preserveRestartAttempts: true,
                     preserveManualStop: true,
                   });
                 } catch {
-                  // abort or startup failure — runtime state was recorded by startChannelInternal
+                  // abort or startup failure — next crash will retry
                 }
-                return;
-              }
-              // Only plugin task lifetime counts. Deferred handoff and cleanup must not
-              // make a short crash look stable and erase crash-loop attempts.
-              if (
-                channelRunDurationMs !== undefined &&
-                channelRunDurationMs >= CHANNEL_STABLE_RUN_MS
-              ) {
-                restarts.delete(rKey);
-              }
-              const restart =
-                restarts.get(rKey) ?? new RetrySupervisor(RESTART_POLICY, MAX_RESTARTS);
-              restarts.set(rKey, restart);
-              const retry = restart.next(abort.signal);
-              if (!retry) {
-                setRuntime(channelId, id, {
-                  accountId: id,
-                  restartPending: false,
-                  reconnectAttempts: restart.attempts,
-                });
-                log.error?.(`[${id}] giving up after ${MAX_RESTARTS} restart attempts`);
-                return;
-              }
-              log.info?.(
-                `[${id}] auto-restart attempt ${restart.attempts}/${MAX_RESTARTS} in ${Math.round(retry.delayMs / 1000)}s`,
-              );
-              setRuntime(channelId, id, {
-                accountId: id,
-                restartPending: true,
-                reconnectAttempts: restart.attempts,
-              });
-              try {
-                await sleepWithAbort(retry.delayMs, retry.signal);
-                if (manuallyStopped.has(rKey)) {
-                  return;
-                }
+              })
+              .finally(() => {
                 if (store.tasks.get(id) === trackedPromise) {
                   store.tasks.delete(id);
                 }
                 if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
-                // See the timed-out-stop restart above: never start the crash
-                // replacement while the predecessor's signal is unaborted.
+                // Terminal paths (give-up, terminal disconnect, manual stop) end
+                // here without a restart; leave no unaborted lifetime behind.
                 abort.abort();
-                await startChannelInternal(channelId, id, {
-                  preserveRestartAttempts: true,
-                  preserveManualStop: true,
-                });
-              } catch {
-                // abort or startup failure — next crash will retry
-              }
-            })
-            .finally(() => {
-              if (store.tasks.get(id) === trackedPromise) {
-                store.tasks.delete(id);
-              }
-              if (store.aborts.get(id) === abort) {
-                store.aborts.delete(id);
-              }
-              // Terminal paths (give-up, terminal disconnect, manual stop) end
-              // here without a restart; leave no unaborted lifetime behind.
-              abort.abort();
-            });
+              }),
+          );
           function isCurrentTask() {
             return store.tasks.get(id) === trackedPromise;
           }

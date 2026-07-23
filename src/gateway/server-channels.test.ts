@@ -13,6 +13,11 @@ import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/regis
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -259,6 +264,7 @@ describe("server-channels auto restart", () => {
   let previousRegistry: PluginRegistry | null = null;
 
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     previousRegistry = getActivePluginRegistry();
     vi.useRealTimers();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -281,6 +287,121 @@ describe("server-channels auto restart", () => {
     vi.useRealTimers();
     setActiveDegradedSecretOwners([]);
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
+    resetGatewayWorkAdmission();
+  });
+
+  it("does not inherit a released request admission into a channel task", async () => {
+    const continueChannelTask = createDeferred();
+    let resolveAdmissionClosed = (_closed: boolean) => {};
+    const admissionClosed = new Promise<boolean>((resolve) => {
+      resolveAdmissionClosed = resolve;
+    });
+    const startAccount = vi.fn(async () => {
+      await continueChannelTask.promise;
+      resolveAdmissionClosed(isGatewaySubordinateWorkAdmissionClosed());
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+
+    await root?.run(async () => {
+      await manager.startChannels();
+      await waitForMicrotaskCondition(
+        () => startAccount.mock.calls.length === 1,
+        "expected the channel task to start inside the request admission",
+      );
+    });
+    root?.release();
+    continueChannelTask.resolve();
+
+    await expect(admissionClosed).resolves.toBe(false);
+  });
+
+  it("does not inherit a released request admission into approval bootstrap work", async () => {
+    const continueApprovalWork = createDeferred();
+    let resolveAdmissionClosed = (_closed: boolean) => {};
+    const admissionClosed = new Promise<boolean>((resolve) => {
+      resolveAdmissionClosed = resolve;
+    });
+    hoisted.startChannelApprovalHandlerBootstrap.mockImplementation(async () => {
+      void Promise.resolve().then(async () => {
+        await continueApprovalWork.promise;
+        resolveAdmissionClosed(isGatewaySubordinateWorkAdmissionClosed());
+      });
+      return async () => {};
+    });
+    const startAccount = vi.fn(
+      async (ctx: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          if (ctx.abortSignal.aborted) {
+            resolve();
+            return;
+          }
+          ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+
+    await root?.run(async () => {
+      await manager.startChannels();
+      await waitForMicrotaskCondition(
+        () => startAccount.mock.calls.length === 1,
+        "expected the channel task to start inside the request admission",
+      );
+    });
+    root?.release();
+    continueApprovalWork.resolve();
+
+    await expect(admissionClosed).resolves.toBe(false);
+  });
+
+  it("does not inherit a released request admission into an automatic channel restart", async () => {
+    const continueFirstChannelTask = createDeferred();
+    const admissionClosedAtApproval: boolean[] = [];
+    hoisted.startChannelApprovalHandlerBootstrap.mockImplementation(async () => {
+      admissionClosedAtApproval.push(isGatewaySubordinateWorkAdmissionClosed());
+      return async () => {};
+    });
+    let startCount = 0;
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      startCount += 1;
+      if (startCount === 1) {
+        await continueFirstChannelTask.promise;
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+
+    await root?.run(async () => {
+      await manager.startChannels();
+      await waitForMicrotaskCondition(
+        () => startAccount.mock.calls.length === 1,
+        "expected the first channel task to start inside the request admission",
+      );
+    });
+    root?.release();
+    continueFirstChannelTask.resolve();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length === 2,
+      "expected the channel to restart after the first task exited",
+      { stepMs: 10, maxMs: 100 },
+    );
+
+    expect(admissionClosedAtApproval).toEqual([false, false]);
   });
 
   it("caps crash-loop restarts after max attempts", async () => {
