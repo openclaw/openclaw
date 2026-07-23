@@ -122,6 +122,7 @@ export { readStringParam } from "../agents/tools/common.js";
 export {
   resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentThinkingDefaultOverride,
   resolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
 export { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";

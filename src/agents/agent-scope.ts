@@ -27,6 +27,7 @@ import { resolveUserPath } from "../utils.js";
 import {
   listAgentIds,
   resolveAgentConfig,
+  resolveAgentThinkingDefaultOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "./agent-scope-config.js";
@@ -36,6 +37,7 @@ export {
   resolveAgentConfig,
   resolveAgentContextLimits,
   resolveAgentDir,
+  resolveAgentThinkingDefaultOverride,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,

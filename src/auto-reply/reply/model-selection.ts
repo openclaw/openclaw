@@ -3,6 +3,7 @@ import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentThinkingDefaultOverride,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-profiles/order.js";
@@ -234,6 +235,9 @@ export async function createModelSelectionState(params: {
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
   let resetModelOverrideReason: "disallowed" | "stale" | "temporarily-unavailable" | undefined;
+  const agentThinkingDefaultOverride = params.agentId
+    ? resolveAgentThinkingDefaultOverride(cfg, params.agentId)
+    : undefined;
   const normalizedDirectStoredOverride = normalizeStoredOverrideModel({
     providerOverride: sessionEntry?.providerOverride,
     modelOverride: sessionEntry?.modelOverride,
@@ -591,7 +595,7 @@ export async function createModelSelectionState(params: {
     if (cached) {
       return cached;
     }
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const agentThinkingDefault = agentThinkingDefaultOverride as ThinkLevel | undefined;
     if (agentThinkingDefault) {
       defaultThinkingLevels.set(cacheKey, agentThinkingDefault);
       return agentThinkingDefault;
@@ -683,7 +687,7 @@ export async function createModelSelectionState(params: {
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
   const hasConfiguredThinkingDefault =
-    agentEntry?.thinkingDefault !== undefined ||
+    agentThinkingDefaultOverride !== undefined ||
     resolveConfiguredModelThinkingDefault(configuredModelThinkingDefault) !== undefined ||
     agentCfg?.thinkingDefault !== undefined;
 

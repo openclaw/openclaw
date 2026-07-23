@@ -3,7 +3,10 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
+import {
+  resolveAgentThinkingDefaultOverride,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
@@ -142,12 +145,11 @@ export function formatAgentModelStartupDetails(params: {
   model: string;
 }): string {
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
   const explicitThinking = resolveExplicitStartupThinking({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    defaultAgentThinking: defaultAgentConfig?.thinkingDefault,
+    defaultAgentThinking: resolveAgentThinkingDefaultOverride(params.cfg, defaultAgentId),
   });
   let thinking = explicitThinking;
   if (thinking === undefined) {

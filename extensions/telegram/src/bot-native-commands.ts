@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import {
   loadPreparedModelCatalog,
-  resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentThinkingDefaultOverride,
   resolveDefaultModelForAgent,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -444,7 +444,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     return explicit;
   }
   const agentThinkingDefault = normalizeOptionalString(
-    resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault,
+    resolveAgentThinkingDefaultOverride(params.cfg, params.agentId),
   );
   if (agentThinkingDefault) {
     return agentThinkingDefault;

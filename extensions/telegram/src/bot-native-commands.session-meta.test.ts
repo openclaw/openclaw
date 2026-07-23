@@ -1089,6 +1089,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
             },
           },
         },
+        list: [{ id: "main" }],
       },
     } as OpenClawConfig;
     sessionMocks.loadSessionStore.mockReturnValue({

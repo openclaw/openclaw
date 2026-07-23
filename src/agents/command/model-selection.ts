@@ -17,12 +17,12 @@ import {
   repairProviderWrappedModelOverride,
 } from "../../sessions/model-overrides.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import { resolveAgentThinkingDefaultOverride } from "../agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   resolveAutoFallbackPrimaryProbe,
-  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
@@ -452,7 +452,7 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionEntry: sessionEntryForAttempt,
   });
   const configuredThinkLevel = normalizeThinkLevel(
-    resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
+    resolveAgentThinkingDefaultOverride(params.cfg, params.sessionAgentId),
   );
   const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
   const primaryThinkLevel =

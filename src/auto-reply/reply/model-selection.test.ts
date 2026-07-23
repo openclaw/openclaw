@@ -184,6 +184,7 @@ describe("createModelSelectionState catalog loading", () => {
               },
             },
           },
+          list: [{ id: "alpha" }],
         },
         models: {
           providers: {
@@ -197,6 +198,7 @@ describe("createModelSelectionState catalog loading", () => {
 
       const state = await createModelSelectionState({
         cfg,
+        agentId: "alpha",
         agentCfg: cfg.agents?.defaults,
         defaultProvider: "openai-codex",
         defaultModel: "gpt-5.4",

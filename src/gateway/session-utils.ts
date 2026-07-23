@@ -17,9 +17,9 @@ import {
   repairAcpSessionMetaKeyForMigration,
 } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveAgentThinkingDefaultOverride } from "../agents/agent-scope-config.js";
 import {
   listAgentIds,
-  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -1622,7 +1622,7 @@ function resolveGatewaySessionThinkingDefault(params: {
   agentRuntime: string;
 }) {
   const agentThinkingDefault = params.agentId
-    ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
+    ? resolveAgentThinkingDefaultOverride(params.cfg, params.agentId)
     : undefined;
   const defaultLevel =
     agentThinkingDefault ??

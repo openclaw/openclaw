@@ -118,6 +118,14 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
+/** Resolves only the explicit per-agent thinking default, without global fallback. */
+export function resolveAgentThinkingDefaultOverride(
+  cfg: OpenClawConfig,
+  agentId: string,
+): AgentEntry["thinkingDefault"] | undefined {
+  return resolveAgentEntry(cfg, agentId)?.thinkingDefault;
+}
+
 /** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
@@ -140,7 +148,7 @@ export function resolveAgentConfig(
     ...(entry.models ? { models: entry.models } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
     utilityModel: readStringValue(entry.utilityModel),
-    thinkingDefault: entry.thinkingDefault,
+    thinkingDefault: entry.thinkingDefault ?? agentDefaults?.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
