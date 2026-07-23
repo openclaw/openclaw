@@ -230,6 +230,8 @@ type SpawnSubagentContext = {
 type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
+  /** Durable child session identity (UUID). Prefer this over parsing childSessionKey. */
+  sessionId?: string;
   sessionKey?: string;
   runId?: string;
   mode?: SpawnSubagentMode;
@@ -1412,6 +1414,12 @@ export async function spawnSubagentDirect(
       ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
       ...(incognito ? { incognito: true } : {}),
     };
+    const childSessionId =
+      typeof initialChildSessionPatch.sessionId === "string" &&
+      initialChildSessionPatch.sessionId.trim()
+        ? initialChildSessionPatch.sessionId.trim()
+        : crypto.randomUUID();
+    initialChildSessionPatch.sessionId = childSessionId;
 
     const initialPatchError = await patchChildSession(
       initialChildSessionPatch,
@@ -1948,6 +1956,12 @@ export async function spawnSubagentDirect(
       return {
         status: "accepted",
         childSessionKey,
+        sessionId:
+          (preparedSpawnContext.status === "ok" && preparedSpawnContext.mode === "fork"
+            ? preparedSpawnContext.forked.sessionId
+            : undefined) ??
+          childCreationEntry?.sessionId ??
+          childSessionId,
         sessionKey: childSessionKey,
         runId: childRunId,
         mode: spawnMode,
@@ -1978,6 +1992,13 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      sessionId:
+        (preparedSpawnContext.status === "ok" && preparedSpawnContext.mode === "fork"
+          ? preparedSpawnContext.forked.sessionId
+          : undefined) ??
+        childCreationEntry?.sessionId ??
+        childSessionId,
+      sessionKey: childSessionKey,
       runId: childRunId,
       mode: spawnMode,
       taskName,
