@@ -1192,10 +1192,18 @@ $0 \\"$1\\"" touch {marker}`,
       const executablePath = makeExecutable(dir, executable);
       const env = makePathEnv(dir);
       const safeBins = resolveSafeBins(undefined);
+      const commandArgv = command.split(" ");
+      const allowlist = [
+        {
+          pattern: executablePath,
+          source: "allow-always" as const,
+          argPattern: buildHashedArgPatternFromArgv([executablePath, ...commandArgv.slice(1)]),
+        },
+      ];
 
       const result = await evaluateShellAllowlistWithAuthorization({
         command,
-        allowlist: [{ pattern: executablePath, source: "allow-always" }],
+        allowlist,
         safeBins,
         cwd: dir,
         env,
@@ -1203,6 +1211,16 @@ $0 \\"$1\\"" touch {marker}`,
       });
 
       expect(result.allowlistSatisfied).toBe(true);
+
+      const stale = await evaluateShellAllowlistWithAuthorization({
+        command,
+        allowlist: [{ pattern: executablePath, source: "allow-always" }],
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+      expect(stale.allowlistSatisfied).toBe(false);
     },
   );
 

@@ -362,7 +362,6 @@ function matchExecutableAllowlistForSegment(params: {
   isShellWrapperInvocation: boolean;
   isPositionalCarrierInvocation: boolean;
   allowlistTargetIsExecutionTarget: boolean;
-  allowLegacyGeneratedPathOnly?: boolean;
 }): ExecAllowlistEntry | null {
   if (params.isPositionalCarrierInvocation) {
     return null;
@@ -372,7 +371,6 @@ function matchExecutableAllowlistForSegment(params: {
     params.candidateResolution,
     params.effectiveArgv,
     params.platform,
-    { allowLegacyGeneratedPathOnly: params.allowLegacyGeneratedPathOnly === true },
   );
   const hasBoundArgPattern =
     typeof match?.argPattern === "string" && match.argPattern.trim().length > 0;
@@ -533,8 +531,6 @@ function resolveSegmentAllowlistMatch(params: {
       executableResolution,
       matchExecutionResolution ?? executionResolution,
     ),
-    allowLegacyGeneratedPathOnly:
-      resolveKnownPackageManagerExecInvocation(matchArgv).kind === "not-exec",
   });
   const shellPositionalArgvCandidatePath =
     inlineCommand !== null
