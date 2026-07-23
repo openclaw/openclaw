@@ -1602,7 +1602,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted card",
         messageIds: ["om_stream"],
@@ -1642,7 +1642,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     rejectMedia(new Error("media failed"));
 
     await expect(deliveryErrorPromise).resolves.toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "first",
         messageIds: ["om-first-static"],
@@ -1677,7 +1677,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
     expect(error).toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         messageIds: ["om-media"],
         visibleReplySent: true,
@@ -1699,7 +1699,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted caption",
         messageIds: ["om-text"],
@@ -1723,7 +1723,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     await expect(options.onIdle?.()).rejects.toThrow("final update failed");
     await expect(delivery?.finalization).rejects.toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted preview",
         messageIds: ["om-stream"],
@@ -1777,7 +1777,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     await expect(options.onIdle?.()).rejects.toThrow("final update failed");
     await expect(delivery?.finalization).rejects.toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted final",
         messageIds: ["om-static"],
@@ -1837,7 +1837,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
 
     await expect(delivery?.finalization).rejects.toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "first",
         messageIds: ["om-first-static"],
@@ -1970,7 +1970,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const delivery = await deliveryPromise;
 
     await expect(delivery?.finalization).rejects.toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted card",
         messageIds: ["om-stream", "om-media"],
@@ -2022,7 +2022,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     await idle;
     await expect(deliveryErrorPromise).resolves.toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted card",
         messageIds: ["om-card"],

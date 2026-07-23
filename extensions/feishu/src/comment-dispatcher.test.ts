@@ -188,7 +188,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         messageIds: ["reply_native_1"],
         content: "first",

@@ -1362,8 +1362,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           info?.kind === "final" && inFlightStreamingClose?.content === text
             ? inFlightStreamingClose
             : undefined;
-        const ownerGeneration =
-          activeStreamingGeneration ?? matchingInFlightClose?.generation;
+        const ownerGeneration = activeStreamingGeneration ?? matchingInFlightClose?.generation;
         if (
           shouldStreamText &&
           ownerGeneration !== undefined &&

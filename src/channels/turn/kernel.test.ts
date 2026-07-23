@@ -733,7 +733,7 @@ describe("channel turn kernel", () => {
     const partialError = Object.assign(
       new Error("final edit failed", { cause: new Error("provider rejected edit") }),
       {
-        code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+        code: "CHANNEL_PARTIAL_DELIVERY",
         deliveryResult: {
           content: "accepted preview",
           messageIds: ["om-preview"],
@@ -785,7 +785,7 @@ describe("channel turn kernel", () => {
     void finalization.catch(() => undefined);
     const dispatchError = new Error("stream close failed");
     const settlementError = Object.assign(new Error("static fallback failed"), {
-      code: "OPENCLAW_CHANNEL_PARTIAL_DELIVERY",
+      code: "CHANNEL_PARTIAL_DELIVERY",
       deliveryResult: {
         content: "accepted preview",
         messageIds: ["om-preview"],

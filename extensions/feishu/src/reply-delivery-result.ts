@@ -23,7 +23,7 @@ export type FeishuReplyDeliveryResultWithFinalization = FeishuReplyDeliveryResul
   finalization: Promise<FeishuReplyDeliveryResult>;
 };
 
-const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "OPENCLAW_CHANNEL_PARTIAL_DELIVERY";
+const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
 
 export type FeishuPartialReplyDeliveryError = Error & {
   code: typeof CHANNEL_PARTIAL_DELIVERY_ERROR_CODE;
