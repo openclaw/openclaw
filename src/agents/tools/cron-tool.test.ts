@@ -320,6 +320,32 @@ describe("cron tool", () => {
     expect(result.details).toEqual({ id: "job-current", name: "current" });
   });
 
+  it.each(["get", "list"] as const)(
+    "redacts command env values from cron tool %s",
+    async (action) => {
+      const marker = `cron-tool-${action}-secret-marker`;
+      const job = {
+        id: "job-current",
+        payload: {
+          kind: "command",
+          argv: ["deploy"],
+          env: { DEPLOY_TOKEN: marker },
+        },
+      };
+      callGatewayMock.mockResolvedValueOnce(action === "list" ? { jobs: [job] } : job);
+      const tool = createTestCronTool();
+
+      const result = await tool.execute(`call-${action}`, {
+        action,
+        ...(action === "get" ? { jobId: "job-current" } : {}),
+      });
+
+      expect(JSON.stringify(result)).not.toContain(marker);
+      expect(JSON.stringify(result)).toContain("[redacted]");
+      expect(job.payload.env.DEPLOY_TOKEN).toBe(marker);
+    },
+  );
+
   it.each([
     ["another job", { action: "get", jobId: "job-other" }],
     ["missing job id", { action: "get" }],

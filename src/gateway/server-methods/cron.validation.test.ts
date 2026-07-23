@@ -567,6 +567,31 @@ describe("cron method validation", () => {
     expectCronReadSuccess(respond, job);
   });
 
+  it("redacts command env values from operator cron.get without mutating storage", async () => {
+    const marker = "cron-gateway-get-secret-marker";
+    const job = createCronJob({
+      id: "cron-secret",
+      payload: {
+        kind: "command",
+        argv: ["deploy"],
+        env: { DEPLOY_TOKEN: marker },
+      },
+    });
+
+    const { respond } = await invokeCronGet({ id: job.id }, job);
+    const serialized = JSON.stringify(respond.mock.calls);
+
+    expect(serialized).not.toContain(marker);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        payload: expect.objectContaining({ env: { DEPLOY_TOKEN: "[redacted]" } }),
+      }),
+      undefined,
+    );
+    expect(job.payload).toMatchObject({ env: { DEPLOY_TOKEN: marker } });
+  });
+
   it("allows caller-scoped cron.get for the same agent", async () => {
     const job = createCronJob({ id: "cron-42", agentId: "ops" });
 
@@ -673,6 +698,36 @@ describe("cron method validation", () => {
       expect.objectContaining({ total: 1, jobs: expect.any(Array) }),
       undefined,
     );
+  });
+
+  it("redacts command env values from operator cron.list without mutating storage", async () => {
+    const marker = "cron-gateway-list-secret-marker";
+    const job = createCronJob({
+      id: "cron-secret",
+      payload: {
+        kind: "command",
+        argv: ["deploy"],
+        env: { DEPLOY_TOKEN: marker },
+      },
+    });
+    const context = createCronContext(job);
+
+    const { respond } = await invokeCron("cron.list", { includeDisabled: true }, { context });
+    const serialized = JSON.stringify(respond.mock.calls);
+
+    expect(serialized).not.toContain(marker);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        jobs: [
+          expect.objectContaining({
+            payload: expect.objectContaining({ env: { DEPLOY_TOKEN: "[redacted]" } }),
+          }),
+        ],
+      }),
+      undefined,
+    );
+    expect(job.payload).toMatchObject({ env: { DEPLOY_TOKEN: marker } });
   });
 
   it("filters operator command cron jobs from caller-scoped cron.list", async () => {
