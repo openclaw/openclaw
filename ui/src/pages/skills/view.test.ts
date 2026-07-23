@@ -751,3 +751,47 @@ function installDialogMethod(
     delete proto[name];
   });
 }
+
+describe("linked skill verdict badge", () => {
+  afterEach(() => {
+    while (dialogRestores.length > 0) {
+      dialogRestores.pop()?.();
+    }
+  });
+
+  function renderLinkedSkill(overrides: Partial<SkillsProps>) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [
+        createSkill({
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "repo-skill",
+            installedVersion: "1.0.0",
+            installedAt: 123,
+          },
+        }),
+      ],
+    };
+    render(renderSkills(createProps({ report, clawhubVerdicts: {}, ...overrides })), container);
+    return container;
+  }
+
+  it("shows Pending instead of Unavailable while the verdict fetch is in flight", () => {
+    const container = renderLinkedSkill({ clawhubVerdictsLoading: true });
+    const text = normalizeText(container);
+    expect(text).toContain("Pending");
+    expect(text).not.toContain("Unavailable");
+  });
+
+  it("keeps Unavailable for a settled empty verdict map", () => {
+    const container = renderLinkedSkill({ clawhubVerdictsLoading: false });
+    expect(normalizeText(container)).toContain("Unavailable");
+  });
+});

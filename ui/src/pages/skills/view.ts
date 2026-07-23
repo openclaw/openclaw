@@ -161,9 +161,14 @@ function verdictForSkill(skill: SkillStatusEntry, verdicts: SkillsProps["clawhub
   );
 }
 
-function verdictLabel(verdict: ClawHubSkillSecurityVerdict | null | undefined): string {
+function verdictLabel(
+  verdict: ClawHubSkillSecurityVerdict | null | undefined,
+  loading = false,
+): string {
   if (!verdict) {
-    return t("skillsPage.verdict.unavailable");
+    // An in-flight verdict fetch is a pending verification, not an unavailable
+    // or failed security state; only a settled empty map reads as Unavailable.
+    return loading ? t("skillsPage.verdict.pending") : t("skillsPage.verdict.unavailable");
   }
   const status = verdict.securityStatus?.trim() || null;
   if (verdict.ok && verdict.decision === "pass") {
@@ -181,9 +186,12 @@ function verdictLabel(verdict: ClawHubSkillSecurityVerdict | null | undefined): 
   return t("skillsPage.verdict.unavailable");
 }
 
-function verdictChipClass(verdict: ClawHubSkillSecurityVerdict | null | undefined): string {
+function verdictChipClass(
+  verdict: ClawHubSkillSecurityVerdict | null | undefined,
+  loading = false,
+): string {
   if (!verdict) {
-    return "chip-warn";
+    return loading ? "chip" : "chip-warn";
   }
   if (verdict.ok && verdict.decision === "pass") {
     return "chip-ok";
@@ -194,9 +202,10 @@ function verdictChipClass(verdict: ClawHubSkillSecurityVerdict | null | undefine
 
 function verdictStatusKind(
   verdict: ClawHubSkillSecurityVerdict | null | undefined,
+  loading = false,
 ): "ok" | "warn" | "muted" {
   if (!verdict) {
-    return "warn";
+    return loading ? "muted" : "warn";
   }
   if (verdict.ok && verdict.decision === "pass") {
     return "ok";
@@ -567,7 +576,10 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
       <div class="settings-row__control">
         ${skillAvailabilityStatus(skill)}
         ${skill.clawhub?.status === "linked"
-          ? renderSettingsStatus({ kind: verdictStatusKind(verdict), label: verdictLabel(verdict) })
+          ? renderSettingsStatus({
+              kind: verdictStatusKind(verdict, props.clawhubVerdictsLoading),
+              label: verdictLabel(verdict, props.clawhubVerdictsLoading),
+            })
           : skill.clawhub?.status === "invalid"
             ? renderSettingsStatus({ kind: "warn", label: t("skillsPage.invalidLink") })
             : nothing}
@@ -782,7 +794,9 @@ function renderInstalledClawHubOverview(
       style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-2);"
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-        <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>
+        <span class="chip ${verdictChipClass(verdict, props.clawhubVerdictsLoading)}"
+          >${verdictLabel(verdict, props.clawhubVerdictsLoading)}</span
+        >
         <span class="muted" style="font-size: 12px;">${link.slug}@${link.installedVersion}</span>
         ${props.clawhubVerdictsLoading
           ? html`<span class="muted">${t("skillsPage.refreshing")}</span>`

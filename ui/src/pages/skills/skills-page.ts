@@ -16,6 +16,7 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -232,11 +233,28 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
+    if (data.report) {
+      // The route loader hydrates the skills report but not ClawHub security
+      // verdicts, and ensureInitialData() short-circuits once a report is
+      // present, so without this the verdict map stays empty and badges fall
+      // back to "Unavailable" on first paint even when the verdict is clean.
+      void loadClawHubSecurityVerdicts(this, data.report);
+    }
   }
 
   private ensureInitialData() {
     if (!this.connected || !this.client) {
       return;
+    }
+    // Verdict hydration is skipped when a report arrived while disconnected
+    // (the loader clears the map silently) and nothing retries afterwards.
+    // Backfill whenever a report is present but no verdicts were loaded.
+    if (
+      this.skillsReport &&
+      !this.clawhubVerdictsLoading &&
+      Object.keys(this.clawhubVerdicts).length === 0
+    ) {
+      void loadClawHubSecurityVerdicts(this, this.skillsReport);
     }
     if (
       this.routeDataEnabled &&

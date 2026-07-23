@@ -6,9 +6,10 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   installFromClawHub,
   installSkill,
+  loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkills,
   loadSkillCard,
-  loadClawHubDetail,
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
@@ -100,6 +101,73 @@ function mockSkillMutationRequests(
     return {};
   });
 }
+
+describe("loadClawHubSecurityVerdicts", () => {
+  const linkedReport = {
+    workspaceDir: "/tmp/workspace",
+    managedSkillsDir: "/tmp/skills",
+    skills: [
+      {
+        name: "AgentReceipt",
+        skillKey: "agentreceipt",
+        source: "clawhub",
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: "agentreceipt",
+          installedVersion: "1.2.3",
+          installedAt: 123,
+        },
+      },
+      { name: "Local", skillKey: "local", source: "workspace" },
+    ],
+  } as unknown as Parameters<typeof loadClawHubSecurityVerdicts>[1];
+
+  it("hydrates verdicts from a route-provided report with linked ClawHub skills", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValueOnce({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        {
+          registry: "https://clawhub.ai",
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          requestedSlug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          slug: "agentreceipt",
+          version: "1.2.3",
+          securityStatus: "clean",
+          securityPassed: true,
+        },
+      ],
+    });
+
+    await loadClawHubSecurityVerdicts(state, linkedReport);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("skills.securityVerdicts", {});
+    expect(Object.keys(state.clawhubVerdicts)).toHaveLength(1);
+    expect(state.clawhubVerdictsError).toBeNull();
+  });
+
+  it("clears verdicts without a request when no linked ClawHub skills are present", async () => {
+    const { state, request } = createState();
+    state.clawhubVerdicts = { stale: {} as never };
+    const localOnlyReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ name: "Local", skillKey: "local", source: "workspace" }],
+    } as unknown as Parameters<typeof loadClawHubSecurityVerdicts>[1];
+
+    await loadClawHubSecurityVerdicts(state, localOnlyReport);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.clawhubVerdicts).toEqual({});
+    expect(state.clawhubVerdictsError).toBeNull();
+  });
+});
 
 describe("loadSkills", () => {
   it("does not request ClawHub verdicts when no installed skills are linked", async () => {
