@@ -17,6 +17,7 @@ import {
 import {
   isWindowsPlatform,
   matchAllowlist,
+  buildHashedArgPatternFromArgv,
   resolveExecutableTrustPath,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
@@ -1153,9 +1154,10 @@ function buildScriptArgPatternFromArgv(
 
 function buildArgPatternFromArgv(argv: string[], platform?: string | null): string | undefined {
   const args = argv.slice(1);
-  const normalized = isWindowsPlatform(platform ?? process.platform)
-    ? args.map((a) => a.replace(/\//g, "\\"))
-    : args;
+  if (!isWindowsPlatform(platform ?? process.platform)) {
+    return buildHashedArgPatternFromArgv(argv);
+  }
+  const normalized = args.map((a) => a.replace(/\//g, "\\"));
   if (normalized.length === 0) {
     return "^\x00\x00$";
   }

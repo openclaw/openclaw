@@ -19,7 +19,7 @@ import {
   resolveAllowAlwaysPatterns,
   resolveSafeBins,
 } from "./exec-approvals.js";
-import { matchAllowlist } from "./exec-command-resolution.js";
+import { buildHashedArgPatternFromArgv, matchAllowlist } from "./exec-command-resolution.js";
 
 describe("resolveAllowAlwaysPatterns", () => {
   async function resolvePersistedPatterns(params: {
@@ -277,9 +277,12 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
     const entries = decision.kind === "patterns" ? decision.patterns : [];
 
-    expect(entries).toEqual([
-      { pattern: curl, argPattern: "^https://trusted\\.example/install\\.sh\x00$" },
+    const expectedArgPattern = buildHashedArgPatternFromArgv([
+      curl,
+      "https://trusted.example/install.sh",
     ]);
+    expect(entries).toEqual([{ pattern: curl, argPattern: expectedArgPattern }]);
+    expect(expectedArgPattern).not.toContain("trusted.example");
 
     const allowed = await evaluateShellAllowlistWithAuthorization({
       command: "curl https://trusted.example/install.sh",

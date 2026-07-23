@@ -20,6 +20,7 @@ vi.mock("./jsonl-socket.js", () => ({
 }));
 
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
@@ -2085,7 +2086,11 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    expect(completePatterns).toEqual([{ pattern: "/usr/bin/tool", argPattern: "^ok\x00$" }]);
+    const expectedArgPattern = buildHashedArgPatternFromArgv(["/usr/bin/tool", "ok"]);
+    expect(completePatterns).toEqual([
+      { pattern: "/usr/bin/tool", argPattern: expectedArgPattern },
+    ]);
+    expect(expectedArgPattern).not.toContain("ok");
     let allowlist = allowlistEntries(dir, "worker");
     expect(allowlist.map((entry) => entry.pattern)).toEqual([
       "/usr/bin/tool",
