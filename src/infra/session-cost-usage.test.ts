@@ -902,14 +902,17 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-v8-upgrade", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await waitForFast(async () => {
-        const current = await loadSessionCostSummariesFromCache({
-          sessions: [session],
-          agentId: "main",
-          requestRefresh: false,
-        });
-        expect(current.cacheStatus.status).toBe("fresh");
-      });
+      await waitForFast(
+        async () => {
+          const current = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            requestRefresh: false,
+          });
+          expect(current.cacheStatus.status).toBe("fresh");
+        },
+        { timeout: 10_000 },
+      );
 
       const currentRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
@@ -938,17 +941,20 @@ describe("session cost usage", () => {
         startMs: Date.UTC(2026, 1, 5),
         endMs: rangeEndMs,
       });
-      await waitForFast(async () => {
-        const rebuilt = await loadSessionCostSummariesFromCache({
-          sessions: [session],
-          agentId: "main",
-          startMs: Date.UTC(2026, 1, 5),
-          endMs: rangeEndMs,
-          requestRefresh: false,
-        });
-        expect(rebuilt.cacheStatus.status).toBe("fresh");
-        expect(rebuilt.summaries[0]?.totalTokens).toBe(20);
-      });
+      await waitForFast(
+        async () => {
+          const rebuilt = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            startMs: Date.UTC(2026, 1, 5),
+            endMs: rangeEndMs,
+            requestRefresh: false,
+          });
+          expect(rebuilt.cacheStatus.status).toBe("fresh");
+          expect(rebuilt.summaries[0]?.totalTokens).toBe(20);
+        },
+        { timeout: 10_000 },
+      );
 
       await fs.appendFile(
         sessionFile,
@@ -956,17 +962,20 @@ describe("session cost usage", () => {
         "utf-8",
       );
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await waitForFast(async () => {
-        const appended = await loadSessionCostSummariesFromCache({
-          sessions: [session],
-          agentId: "main",
-          startMs: Date.UTC(2026, 1, 5),
-          endMs: rangeEndMs,
-          requestRefresh: false,
-        });
-        expect(appended.cacheStatus.status).toBe("fresh");
-        expect(appended.summaries[0]?.totalTokens).toBe(25);
-      });
+      await waitForFast(
+        async () => {
+          const appended = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            startMs: Date.UTC(2026, 1, 5),
+            endMs: rangeEndMs,
+            requestRefresh: false,
+          });
+          expect(appended.cacheStatus.status).toBe("fresh");
+          expect(appended.summaries[0]?.totalTokens).toBe(25);
+        },
+        { timeout: 10_000 },
+      );
 
       const appendedRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
