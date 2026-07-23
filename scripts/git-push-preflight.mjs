@@ -9,6 +9,8 @@ export const DEFAULT_FORBIDDEN_PATHS = [
   "youtube-v1/.venv-youtube-3.12",
   "music-creator-v1/state/garageband-bridge-signing-key.pem",
   "music-creator-v1/state/garageband-bridge-signing-key.pub.pem",
+  "music-creator-v1/state/macbook-remote-exec_ed25519",
+  "music-creator-v1/state/macbook-remote-exec_ed25519.pub",
 ];
 export const EXPECTED_PUSH_REMOTE_ENV = "OPENCLAW_PUSH_REMOTE";
 export const FORBIDDEN_PATH_CONFIG_KEY = "openclaw.pushPreflight.forbiddenPath";

@@ -1,6 +1,9 @@
 // Git push preflight tests cover local-only checks before publishing branches.
 import { describe, expect, it } from "vitest";
-import { evaluateGitPushPreflight } from "../../scripts/git-push-preflight.mjs";
+import {
+  DEFAULT_FORBIDDEN_PATHS,
+  evaluateGitPushPreflight,
+} from "../../scripts/git-push-preflight.mjs";
 
 type GitResult = {
   ok?: boolean;
@@ -44,6 +47,17 @@ function createGit(overrides: Record<string, GitResult>) {
 
 describe("evaluateGitPushPreflight", () => {
   const forbiddenPaths = ["youtube-v1/local-output", "music-creator-v1/state/key.pem"];
+
+  it("forbids local music bridge key material by default", () => {
+    expect(DEFAULT_FORBIDDEN_PATHS).toEqual(
+      expect.arrayContaining([
+        "music-creator-v1/state/garageband-bridge-signing-key.pem",
+        "music-creator-v1/state/garageband-bridge-signing-key.pub.pem",
+        "music-creator-v1/state/macbook-remote-exec_ed25519",
+        "music-creator-v1/state/macbook-remote-exec_ed25519.pub",
+      ]),
+    );
+  });
 
   it("passes a clean codex branch that pushes to the fork", () => {
     const { git } = createGit({});
