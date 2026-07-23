@@ -1925,7 +1925,11 @@ describe("gateway session utils", () => {
 
         const loaded = loadSessionEntry("agent:main:main", { clone: false });
 
-        expect(loaded.entry).toEqual({ sessionId: "sess-main", updatedAt: 7 });
+        expect(loaded.entry).toEqual({
+          sessionId: "sess-main",
+          updatedAt: 7,
+          delivery: { kind: "none" },
+        });
       });
     } finally {
       resetConfigRuntimeState();
