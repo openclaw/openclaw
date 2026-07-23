@@ -34,6 +34,21 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
 
 function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
   const refs = new Set<string>();
+  const addModelRefValue = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      return;
+    }
+    refs.add(normalized);
+    const slash = normalized.indexOf("/");
+    if (slash > 0) {
+      refs.add(normalized.slice(0, slash));
+      refs.add(normalized.slice(slash + 1));
+    }
+  };
   const providers = (
     params.cfg as {
       models?: {
@@ -41,10 +56,7 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
       };
     }
   ).models?.providers;
-  if (!providers) {
-    return refs;
-  }
-  for (const [providerId, provider] of Object.entries(providers)) {
+  for (const [providerId, provider] of Object.entries(providers ?? {})) {
     refs.add(providerId.toLowerCase());
     for (const model of provider.models ?? []) {
       const modelId = typeof model.id === "string" ? model.id.trim() : "";
@@ -56,6 +68,19 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
         refs.add(value.toLowerCase());
         refs.add(`${providerId}/${value}`.toLowerCase());
       }
+    }
+  }
+  // Configured primary/fallback models may not be duplicated under models.providers,
+  // but the reset-model resolver still honors them, so treat them as model refs here.
+  const defaultsModel = (
+    params.cfg as {
+      agents?: { defaults?: { model?: { primary?: unknown; fallbacks?: unknown[] } } };
+    }
+  ).agents?.defaults?.model;
+  if (defaultsModel) {
+    addModelRefValue(defaultsModel.primary);
+    for (const fallback of Array.isArray(defaultsModel.fallbacks) ? defaultsModel.fallbacks : []) {
+      addModelRefValue(fallback);
     }
   }
   return refs;
@@ -71,7 +96,13 @@ function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
   }
   const refs = collectConfiguredModelRefs(params);
   const tokens = normalized.split(/\s+/);
-  if (tokens.length >= 2) {
+  const firstToken = tokens[0] ?? "";
+  // A leading provider/model ref (e.g. a configured primary) is a model directive even when
+  // trailing tokens form a prompt, so it must not be captured as a session name.
+  if (firstToken.includes("/") && refs.has(firstToken)) {
+    return true;
+  }
+  if (tokens.length >= 2 && !firstToken.includes("/")) {
     const [provider, model] = tokens;
     if (provider && model && refs.has(provider)) {
       return refs.has(`${provider}/${model}`) || refs.has(model) || MODEL_REF_PREFIX_RE.test(model);
@@ -255,6 +286,12 @@ export async function maybeHandleResetCommand(
       ? boundAcpSessionKey.trim()
       : undefined;
   if (boundAcpKey) {
+    if (commandAction === "new" && parseNamedNewSessionTail(params, resetTail)) {
+      return {
+        shouldContinue: false,
+        reply: { text: "Naming a new session isn't supported for ACP-bound sessions yet." },
+      };
+    }
     const resetResult = await resetConfiguredBindingTargetInPlace({
       cfg: params.cfg,
       sessionKey: boundAcpKey,

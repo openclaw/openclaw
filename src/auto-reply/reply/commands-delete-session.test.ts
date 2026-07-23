@@ -134,6 +134,31 @@ describe("delete session command", () => {
     ]);
   });
 
+  it("binds the deletion to the captured session incarnation", async () => {
+    const storePath = await createStorePath();
+    const params = buildDeleteParams("/close", storePath);
+    params.sessionStore = {
+      [sessionKey]: {
+        sessionId: "incarnation-1",
+        lifecycleRevision: "rev-7",
+        updatedAt: 42,
+      },
+    } as never;
+
+    await handleDeleteSessionCommand(params, true);
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: sessionKey,
+        deleteTranscript: true,
+        expectedSessionId: "incarnation-1",
+        expectedLifecycleRevision: "rev-7",
+        expectedSessionUpdatedAt: 42,
+      },
+    });
+  });
+
   it("rejects delete command arguments instead of deleting the current session", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry(

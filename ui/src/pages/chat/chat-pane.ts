@@ -2169,7 +2169,7 @@ class ChatPane extends OpenClawLightDomElement {
     `;
   }
 
-  private readonly createSession = async (): Promise<boolean> => {
+  private readonly createSession = async (options?: { label?: string }): Promise<boolean> => {
     const state = this.state;
     if (!state || !state.client || !state.connected) {
       return false;
@@ -2244,6 +2244,7 @@ class ChatPane extends OpenClawLightDomElement {
       agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
+      ...(options?.label ? { label: options.label } : {}),
     });
     if (!isCurrent()) {
       return false;
@@ -2464,7 +2465,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.chatMessagesBySession,
     );
     pageState.chatScrollToEnd = (options) => this.transcript.scrollToEnd(options);
-    pageState.createChatSession = () => this.createSession();
+    pageState.createChatSession = (options?: { label?: string }) => this.createSession(options);
     pageState.confirmConversationReset = () => this.confirmConversationReset();
     pageState.exportCurrentChat = () =>
       exportChatMarkdown(pageState.chatMessages, pageState.assistantName);

@@ -76,11 +76,18 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
 
   const store = params.sessionStore ?? {};
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  const targetEntry = resolved.existing ?? params.sessionEntry;
   const deletion = await callGateway<{ deleted?: boolean }>({
     method: "sessions.delete",
     params: {
       key: resolved.normalizedKey,
       deleteTranscript: true,
+      // Bind the deletion to the incarnation the user closed: if a concurrent /new,
+      // reset, or rollover rotates this key first, the gateway returns "session
+      // changed" instead of deleting the replacement session.
+      expectedSessionId: targetEntry?.sessionId,
+      expectedLifecycleRevision: targetEntry?.lifecycleRevision,
+      expectedSessionUpdatedAt: targetEntry?.updatedAt,
     },
   });
   if (!deletion?.deleted) {
