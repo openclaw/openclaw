@@ -19,7 +19,7 @@ const KNIP_SCANS = [
   },
   {
     name: "full-tree unused-file scan",
-    args: ["--config", "config/knip.all-exports.config.ts"],
+    args: ["--config", "config/knip.config.ts"],
   },
 ];
 
