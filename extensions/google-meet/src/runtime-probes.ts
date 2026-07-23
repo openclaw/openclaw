@@ -1,3 +1,7 @@
+import {
+  isMeetingSpeechOutputVerified,
+  readMeetingSpeechOutputBaseline,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { normalizeMeetUrl } from "./meet-url.js";
@@ -64,30 +68,34 @@ export async function testGoogleMeetSpeech(
   const beforeSessions = context.list();
   const before = new Set(beforeSessions.map((session) => session.id));
   const existing = beforeSessions.find((session) => context.isReusable(session, resolved));
-  const existingOutputBytes = existing?.chrome?.health?.lastOutputBytes ?? 0;
+  const existingBaseline = readMeetingSpeechOutputBaseline(existing?.chrome?.health);
   const result = await context.join({
     ...request,
     ...resolved,
     message: request.message ?? "Say exactly: Google Meet speech test complete.",
   });
-  const startOutputBytes = existing?.id === result.session.id ? existingOutputBytes : 0;
+  const baseline =
+    existing?.id === result.session.id
+      ? existingBaseline
+      : readMeetingSpeechOutputBaseline(undefined);
   let health = result.session.chrome?.health;
+  const verified = () => isMeetingSpeechOutputVerified(health, baseline);
   const shouldWait =
     result.spoken === true &&
     health?.manualActionRequired !== true &&
     context.hasHealthHandle(result.session.id);
-  if (shouldWait && (health?.lastOutputBytes ?? 0) <= startOutputBytes) {
+  if (shouldWait && !verified()) {
     const deadline = Date.now() + Math.min(context.config.chrome.joinTimeoutMs, 5_000);
     while (Date.now() < deadline) {
       await sleep(100);
       context.refreshHealth(result.session.id);
       health = result.session.chrome?.health;
-      if ((health?.lastOutputBytes ?? 0) > startOutputBytes) {
+      if (verified()) {
         break;
       }
     }
   }
-  const speechOutputVerified = (health?.lastOutputBytes ?? 0) > startOutputBytes;
+  const speechOutputVerified = verified();
   return {
     createdSession: !before.has(result.session.id),
     inCall: health?.inCall,
@@ -102,6 +110,13 @@ export async function testGoogleMeetSpeech(
     speechBlockedMessage: health?.speechBlockedMessage,
     audioOutputActive: health?.audioOutputActive,
     lastOutputBytes: health?.lastOutputBytes,
+    outputLoopbackSignalBytes: health?.outputLoopbackSignalBytes,
+    lastOutputLoopbackAt: health?.lastOutputLoopbackAt,
+    lastOutputLoopbackCorrelation: health?.lastOutputLoopbackCorrelation,
+    lastOutputLoopbackRms: health?.lastOutputLoopbackRms,
+    lastOutputLoopbackPeak: health?.lastOutputLoopbackPeak,
+    outputGeneration: health?.outputGeneration,
+    verifiedOutputGeneration: health?.verifiedOutputGeneration,
     session: result.session,
   };
 }

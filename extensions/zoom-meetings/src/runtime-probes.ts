@@ -1,3 +1,7 @@
+import {
+  isMeetingSpeechOutputVerified,
+  readMeetingSpeechOutputBaseline,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "./config.js";
 import { zoomMeetingsInvalidRequest as invalidRequest } from "./errors.js";
@@ -55,29 +59,33 @@ export async function testZoomMeetingSpeech(
   const beforeSessions = context.list();
   const before = new Set(beforeSessions.map((session) => session.id));
   const existing = beforeSessions.find((session) => context.isReusable(session, resolved));
-  const existingOutputBytes = existing?.chrome?.health?.lastOutputBytes ?? 0;
+  const existingBaseline = readMeetingSpeechOutputBaseline(existing?.chrome?.health);
   const result = await context.join({
     ...request,
     ...resolved,
     message: request.message ?? "Say exactly: Zoom speech test complete.",
   });
-  const startOutputBytes = existing?.id === result.session.id ? existingOutputBytes : 0;
+  const baseline =
+    existing?.id === result.session.id
+      ? existingBaseline
+      : readMeetingSpeechOutputBaseline(undefined);
   let health = result.session.chrome?.health;
+  const verified = () => isMeetingSpeechOutputVerified(health, baseline);
   const shouldWait =
     result.spoken === true &&
     health?.manualActionRequired !== true &&
     context.hasHealthHandle(result.session.id);
-  if (shouldWait && (health?.lastOutputBytes ?? 0) <= startOutputBytes) {
+  if (shouldWait && !verified()) {
     const deadline =
       Date.now() +
       resolveZoomMeetingsProbeTimeoutMs(request.timeoutMs, context.config.chrome.joinTimeoutMs);
-    while (Date.now() < deadline && (health?.lastOutputBytes ?? 0) <= startOutputBytes) {
+    while (Date.now() < deadline && !verified()) {
       await sleep(100);
       context.refreshHealth(result.session.id);
       health = result.session.chrome?.health;
     }
   }
-  const speechOutputVerified = (health?.lastOutputBytes ?? 0) > startOutputBytes;
+  const speechOutputVerified = verified();
   return {
     createdSession: !before.has(result.session.id),
     inCall: health?.inCall,
@@ -92,6 +100,13 @@ export async function testZoomMeetingSpeech(
     speechBlockedMessage: health?.speechBlockedMessage,
     audioOutputActive: health?.audioOutputActive,
     lastOutputBytes: health?.lastOutputBytes,
+    outputLoopbackSignalBytes: health?.outputLoopbackSignalBytes,
+    lastOutputLoopbackAt: health?.lastOutputLoopbackAt,
+    lastOutputLoopbackCorrelation: health?.lastOutputLoopbackCorrelation,
+    lastOutputLoopbackRms: health?.lastOutputLoopbackRms,
+    lastOutputLoopbackPeak: health?.lastOutputLoopbackPeak,
+    outputGeneration: health?.outputGeneration,
+    verifiedOutputGeneration: health?.verifiedOutputGeneration,
     session: result.session,
   };
 }
