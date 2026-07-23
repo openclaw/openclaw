@@ -51,7 +51,7 @@ export function normalizeThinkLevel(raw?: string | null): string | undefined {
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (key === "think") {
