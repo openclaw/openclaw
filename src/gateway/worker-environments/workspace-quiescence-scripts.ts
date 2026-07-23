@@ -806,5 +806,8 @@ async function resume() {
     releaseLeaseMutation(mutation);
   }
 }
-void resume();
+void resume().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 `;

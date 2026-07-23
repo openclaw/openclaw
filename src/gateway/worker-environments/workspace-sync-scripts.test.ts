@@ -715,6 +715,55 @@ describe("remote workspace quiescence scripts", () => {
     }
   }, 12_000);
 
+  it("returns a failure exit code when explicit resume rejects in warning mode", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      watchdog: { pid: number; start: string };
+    };
+    const stalled = { pid: process.pid, start: await processStart(process.pid) };
+
+    try {
+      process.kill(lease.watchdog.pid, "SIGTERM");
+      await expectProcessStopped(lease.watchdog.pid);
+      await fs.writeFile(
+        leaseFile,
+        JSON.stringify({
+          ...lease,
+          processes: [stalled],
+          watchdog: null,
+          recovery: { state: "probe-timeout", failedAtMs: Date.now() },
+        }),
+      );
+      await fs.writeFile(input.stalledProcessProbeTargetPath, `${process.pid}\n`);
+
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        {
+          timeoutMs: 10_000,
+          baseEnv: { ...input.env, NODE_OPTIONS: "--unhandled-rejections=warn" },
+        },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain(
+        "workspace quiescence recovery timed out; lease retained for operator recovery",
+      );
+      const retained = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+        processes: Array<{ pid: number }>;
+        recovery?: { state: string };
+      };
+      expect(retained.processes).toEqual([{ pid: process.pid, start: stalled.start }]);
+      expect(retained.recovery?.state).toBe("probe-timeout");
+    } finally {
+      await fs.rm(input.stalledProcessProbeTargetPath, { force: true });
+      try {
+        process.kill(lease.watchdog.pid, "SIGKILL");
+      } catch {}
+    }
+  }, 12_000);
+
   it("signals each explicit-resume entry as soon as its bounded probe completes", async () => {
     const input = await fixture();
     const nonce = await quiesce(input);
