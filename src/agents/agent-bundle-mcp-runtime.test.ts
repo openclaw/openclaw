@@ -1600,7 +1600,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("keeps a runtime-owned paginated catalog refresh alive after its operation waiter aborts", async () => {
+  it("cancels a paginated catalog refresh when its last operation waiter aborts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-deadline-"));
     const serverPath = path.join(tempDir, "catalog-deadline.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1646,13 +1646,19 @@ process.on("SIGINT", shutdown);`,
       await expect(runtime.getCatalog({ signal: AbortSignal.timeout(120) })).rejects.toThrow(
         /abort/i,
       );
+      await waitForFileText(
+        logPath,
+        "recv notifications/cancelled",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      expect(runtime.peekCatalog()).toBeNull();
       expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
         "initial_tool",
       ]);
-      const completedPageCount = (await fs.readFile(logPath, "utf8")).match(
+      const cancelledPageCount = (await fs.readFile(logPath, "utf8")).match(
         /tools\/list generation 2 page/g,
       )?.length;
-      expect(completedPageCount).toBe(CATALOG_REFRESH_TEST_PAGE_COUNT);
+      expect(cancelledPageCount).toBeLessThan(CATALOG_REFRESH_TEST_PAGE_COUNT);
       expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["initial_tool"]);
     } finally {
       await runtime.dispose();
