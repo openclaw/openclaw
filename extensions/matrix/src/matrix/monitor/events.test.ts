@@ -318,6 +318,29 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("forwards raw redaction room events into the shared room handler", async () => {
+    const { onRoomMessage, sendMessage, roomEventListener, flushTasks } = createHarness();
+
+    roomEventListener("!room:example.org", {
+      event_id: "$redaction1",
+      sender: "@moderator:example.org",
+      type: EventType.RoomRedaction,
+      origin_server_ts: Date.now(),
+      content: {},
+      redacts: "$msg1",
+    });
+
+    await flushTasks();
+    const roomMessageCalls = onRoomMessage.mock.calls as unknown[][];
+    expect(roomMessageCalls[0]?.[0]).toBe("!room:example.org");
+    expectRecordFields(requireRecord(roomMessageCalls[0]?.[1], "redaction event"), {
+      event_id: "$redaction1",
+      type: EventType.RoomRedaction,
+      redacts: "$msg1",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("invalidates direct-room membership cache on room member events", () => {
     const { invalidateRoom, roomEventListener } = createHarness();
 

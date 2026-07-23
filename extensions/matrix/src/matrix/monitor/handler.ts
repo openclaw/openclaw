@@ -1615,42 +1615,43 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           effectiveRoomUsers,
         };
       };
-      const ingressResult =
-        historyLimit > 0
-          ? await runRoomIngress(roomId, async () => {
-              const prefix = await readIngressPrefix();
-              if (!prefix) {
-                return undefined;
-              }
-              if (prefix.isDirectMessage) {
-                return { deferredPrefix: prefix } as const;
-              }
-              const result = await continueIngress({
-                ...prefix,
-                audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
-                  content: prefix.content,
-                  cfg,
-                })
-                  ? "defer"
-                  : "run",
-              });
-              return result && "deferredPrefix" in result
-                ? { deferredPrefix: result.deferredPrefix }
-                : { ingressResult: result };
-            })
-          : undefined;
-      const resolvedIngressResult =
-        historyLimit > 0
-          ? ingressResult?.deferredPrefix
-            ? await continueIngress(ingressResult.deferredPrefix)
-            : ingressResult?.ingressResult
-          : await (async () => {
-              const prefix = await readIngressPrefix();
-              if (!prefix) {
-                return undefined;
-              }
-              return await continueIngress(prefix);
-            })();
+      const shouldSerializeIngress =
+        // Freshness snapshots must be ordered before later room events can overtake async prefix work.
+        historyLimit > 0 || accountConfig?.freshness?.enabled === true;
+      const ingressResult = shouldSerializeIngress
+        ? await runRoomIngress(roomId, async () => {
+            const prefix = await readIngressPrefix();
+            if (!prefix) {
+              return undefined;
+            }
+            if (prefix.isDirectMessage) {
+              return { deferredPrefix: prefix } as const;
+            }
+            const result = await continueIngress({
+              ...prefix,
+              audioPreflightMode: shouldDeferMatrixAudioPreflightForRoomIngress({
+                content: prefix.content,
+                cfg,
+              })
+                ? "defer"
+                : "run",
+            });
+            return result && "deferredPrefix" in result
+              ? { deferredPrefix: result.deferredPrefix }
+              : { ingressResult: result };
+          })
+        : undefined;
+      const resolvedIngressResult = shouldSerializeIngress
+        ? ingressResult?.deferredPrefix
+          ? await continueIngress(ingressResult.deferredPrefix)
+          : ingressResult?.ingressResult
+        : await (async () => {
+            const prefix = await readIngressPrefix();
+            if (!prefix) {
+              return undefined;
+            }
+            return await continueIngress(prefix);
+          })();
       if (!resolvedIngressResult) {
         return;
       }

@@ -351,11 +351,17 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
     }),
     InboundHistory: params.latestPendingHistory,
   };
-  const prepared = await prepareSimpleCompletionModelForAgent({
-    cfg: params.cfg as never,
-    agentId: params.agentId,
-    modelRef: params.config?.model?.trim() || undefined,
-  });
+  let prepared: Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>;
+  try {
+    prepared = await prepareSimpleCompletionModelForAgent({
+      cfg: params.cfg as never,
+      agentId: params.agentId,
+      modelRef: params.config?.model?.trim() || undefined,
+    });
+  } catch (err) {
+    params.log?.(`matrix freshness revision model preparation failed: ${String(err)}`);
+    return params.fallbackPayload;
+  }
   if ("error" in prepared) {
     params.log?.(`matrix freshness revision model unavailable: ${prepared.error}`);
     return params.fallbackPayload;

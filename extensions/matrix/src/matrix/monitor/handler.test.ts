@@ -1086,6 +1086,117 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
   });
 
+  it("serializes freshness observation before async direct-room classification", async () => {
+    type DeliverFn = (payload: { text?: string }, info: { kind: string }) => Promise<void>;
+    type BeforeDeliverFn = (
+      payload: { text?: string },
+      info: { kind: string },
+    ) => Promise<{ text?: string } | null>;
+    let capturedDeliver: DeliverFn | undefined;
+    let capturedBeforeDeliver: BeforeDeliverFn | undefined;
+    let resolveCaptured: (() => void) | undefined;
+    const captured = new Promise<void>((resolve) => {
+      resolveCaptured = resolve;
+    });
+    let releaseFirstDispatch: (() => void) | undefined;
+    const firstDispatchGate = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    let releaseFirstDirectLookup: (() => void) | undefined;
+    const firstDirectLookupGate = new Promise<void>((resolve) => {
+      releaseFirstDirectLookup = resolve;
+    });
+    let resolveFirstDirectLookupStarted: (() => void) | undefined;
+    const firstDirectLookupStarted = new Promise<void>((resolve) => {
+      resolveFirstDirectLookupStarted = resolve;
+    });
+    let directLookupCount = 0;
+    const directTracker = {
+      isDirectMessage: vi.fn(async () => {
+        directLookupCount += 1;
+        if (directLookupCount === 1) {
+          resolveFirstDirectLookupStarted?.();
+          await firstDirectLookupGate;
+        }
+        return false;
+      }),
+    };
+    let dispatchCount = 0;
+    const dispatchInboundMessage = vi.fn(async () => {
+      dispatchCount += 1;
+      if (dispatchCount === 1) {
+        await firstDispatchGate;
+        return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+      }
+      return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
+    });
+    const { handler } = createMatrixHandlerTestHarness({
+      directTracker,
+      historyLimit: 0,
+      accountConfig: {
+        freshness: {
+          enabled: true,
+          mode: "suppress",
+        },
+      },
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      createReplyDispatcherWithTyping: (options: Record<string, unknown> | undefined) => {
+        if (!capturedDeliver) {
+          capturedDeliver = options?.deliver as DeliverFn | undefined;
+          capturedBeforeDeliver = options?.beforeDeliver as BeforeDeliverFn | undefined;
+          resolveCaptured?.();
+        }
+        return {
+          dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      dispatchInboundMessage: dispatchInboundMessage as never,
+    });
+
+    const firstDone = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$fresh-trigger",
+        body: "initial question",
+      }),
+    );
+    await firstDirectLookupStarted;
+
+    const secondDone = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$fresh-new",
+        sender: "@new:example.org",
+        body: "new context before the draft posts",
+      }),
+    );
+    await Promise.resolve();
+    expect(directTracker.isDirectMessage).toHaveBeenCalledTimes(1);
+
+    releaseFirstDirectLookup?.();
+    await captured;
+    await secondDone;
+
+    deliverMatrixRepliesMock.mockClear();
+    const deliveryPayload = await capturedBeforeDeliver?.(
+      { text: "original final reply" },
+      { kind: "final" },
+    );
+    if (deliveryPayload) {
+      await capturedDeliver?.(deliveryPayload, { kind: "final" });
+    }
+    releaseFirstDispatch?.();
+    await firstDone;
+
+    expect(directTracker.isDirectMessage).toHaveBeenCalledTimes(2);
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
   it("redrafts with latest-visible context when Matrix room history is disabled", async () => {
     await runMatrixFreshnessScenario({
       mode: "revise",
@@ -1183,6 +1294,19 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("sends the original final reply when Matrix freshness revision model prep fails", async () => {
     prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({ error: "no auth" } as never);
+
+    await runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
+
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(requireRecord(replies[0], "delivered reply").text).toBe("old draft");
+  });
+
+  it("sends the original final reply when Matrix freshness revision model prep rejects", async () => {
+    prepareSimpleCompletionModelForAgentMock.mockRejectedValueOnce(new Error("prep boom"));
 
     await runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
 
