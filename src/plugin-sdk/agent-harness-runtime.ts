@@ -351,7 +351,6 @@ export {
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
-export { resolveLiveToolResultMaxChars } from "../agents/tool-result-limits.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,

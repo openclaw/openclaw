@@ -836,6 +836,34 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("rerun with narrower args");
   });
 
+  it("applies the context-share ceiling for small effective windows", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "small_context_lookup",
+          execute: vi.fn(async () => textToolResult("x".repeat(20_000))),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: { contextWindowTokens: 8_000 },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-small-context",
+      namespace: null,
+      tool: "small_context_lookup",
+      arguments: {},
+    });
+    const firstItem = result.contentItems[0];
+    if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+      throw new Error("expected inputText tool result");
+    }
+    expect(firstItem.text.length).toBeLessThanOrEqual(9_600);
+    expect(firstItem.text).toContain("OpenClaw truncated dynamic tool result");
+  });
+
   it("keeps a whole code point when dynamic tool text crosses the automatic boundary", async () => {
     const maxChars = 16_000;
     const totalChars = 20_000;

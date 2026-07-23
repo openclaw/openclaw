@@ -39,7 +39,6 @@ import {
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
-  resolveLiveToolResultMaxChars,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -387,6 +386,28 @@ const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
 const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
+const LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 32_000;
+const XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 64_000;
+
+function resolveCodexDynamicToolResultMaxChars(contextWindowTokens?: number): number {
+  if (
+    typeof contextWindowTokens !== "number" ||
+    !Number.isFinite(contextWindowTokens) ||
+    contextWindowTokens <= 0
+  ) {
+    return DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+  }
+  const tokens = Math.floor(contextWindowTokens);
+  const autoCap =
+    tokens >= 200_000
+      ? XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
+      : tokens >= 100_000
+        ? LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
+        : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+  // Match the core live-result context-share ceiling without importing core
+  // internals across the bundled-plugin boundary.
+  return Math.min(autoCap, Math.max(1, Math.floor(tokens * 0.3) * 4));
+}
 
 function computerFrameImageIdentity(
   content: AgentToolResult<unknown>["content"] | undefined,
@@ -432,11 +453,9 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const toolResultMaxChars = params.hookContext?.contextWindowTokens
-    ? resolveLiveToolResultMaxChars({
-        contextWindowTokens: params.hookContext.contextWindowTokens,
-      })
-    : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(
+    params.hookContext?.contextWindowTokens,
+  );
   const availableProjection = projectCodexDynamicTools(params.tools);
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
