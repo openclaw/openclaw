@@ -24,7 +24,7 @@ binary presence.
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema and agent allowlists.
   </Card>
-  <Card title="ClawHub" href="/clawhub" icon="cloud">
+  <Card title="ClawHub" href="/clawhub/cli" icon="cloud">
     Browse and install community skills.
   </Card>
 </CardGroup>
@@ -618,7 +618,7 @@ Keep descriptions short and descriptive to minimize prompt overhead.
   <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
     How skill slash commands are registered and routed.
   </Card>
-  <Card title="ClawHub" href="/clawhub" icon="cloud">
+  <Card title="ClawHub" href="/clawhub/cli" icon="cloud">
     Browse and publish skills on the public registry.
   </Card>
   <Card title="Plugins" href="/tools/plugin" icon="plug">

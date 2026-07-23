@@ -615,7 +615,7 @@ const setupWizard: ChannelSetupWizard = {
 
 ## Publishing and installing
 
-**External plugins:** publish to [ClawHub](/clawhub), then install:
+**External plugins:** publish to [ClawHub](/clawhub/publishing), then install:
 
 <Tabs>
   <Tab title="npm">

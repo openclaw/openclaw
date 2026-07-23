@@ -462,15 +462,15 @@
     },
     {
       "source": "/clawdhub",
-      "destination": "/clawhub"
+      "destination": "/clawhub/cli"
     },
     {
       "source": "/tools/clawhub",
-      "destination": "/clawhub"
+      "destination": "/clawhub/cli"
     },
     {
       "source": "/tools/clawdhub",
-      "destination": "/clawhub"
+      "destination": "/clawhub/cli"
     },
     {
       "source": "/configuration",
@@ -1440,32 +1440,10 @@
             "tab": "ClawHub",
             "groups": [
               {
-                "group": "Overview",
-                "pages": [
-                  "clawhub/index",
-                  "clawhub/quickstart",
-                  "clawhub/how-it-works"
-                ]
-              },
-              {
                 "group": "Using ClawHub",
                 "pages": [
                   "clawhub/cli",
-                  "clawhub/publishing",
-                  "clawhub/skill-format",
-                  "clawhub/auth",
-                  "clawhub/telemetry",
-                  "clawhub/troubleshooting"
-                ]
-              },
-              {
-                "group": "API and trust",
-                "pages": [
-                  "clawhub/api",
-                  "clawhub/http-api",
-                  "clawhub/acceptable-usage",
-                  "clawhub/moderation",
-                  "clawhub/security-audits"
+                  "clawhub/publishing"
                 ]
               }
             ]

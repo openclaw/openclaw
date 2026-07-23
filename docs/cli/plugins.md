@@ -565,4 +565,4 @@ refreshes fail if OpenClaw cannot persist the validated snapshot.
 
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
-- [ClawHub](/clawhub)
+- [ClawHub](/clawhub/cli)

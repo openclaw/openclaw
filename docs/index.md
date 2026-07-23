@@ -66,7 +66,7 @@ these hub links to reach the same top-level docs areas from the page body.
   <Card title="Capabilities" href="/tools" icon="wand-sparkles">
     Tools, skills, cron, webhooks, and automation capabilities.
   </Card>
-  <Card title="ClawHub" href="/clawhub" icon="store">
+  <Card title="ClawHub" href="/clawhub/cli" icon="store">
     Plugin marketplace, publishing, curation, and trust guidance.
   </Card>
   <Card title="Models" href="/providers" icon="brain">
