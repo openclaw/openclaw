@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -18,13 +18,24 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
 
+const hookRunnerMocks = vi.hoisted(() => ({
+  getGlobalHookRunner: vi.fn(),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: hookRunnerMocks.getGlobalHookRunner,
+}));
+
 function createCompactionContext(params: {
   storePath: string;
   sessionKey: string;
+  resetSessionKey?: string;
   agentId?: string;
   initialCount: number;
   info?: (message: string, meta?: Record<string, unknown>) => void;
   messages?: AgentMessage[];
+  modelSelectionLocked?: boolean;
+  deferEmbeddedHookSessionReset?: EmbeddedAgentSubscribeContext["params"]["deferEmbeddedHookSessionReset"];
 }): EmbeddedAgentSubscribeContext {
   // Minimal context preserves only the compaction counters and callbacks the
   // handlers mutate, making store reconciliation assertions direct.
@@ -35,8 +46,11 @@ function createCompactionContext(params: {
       session: { messages: params.messages ?? [] } as never,
       config: { session: { store: params.storePath } } as never,
       sessionKey: params.sessionKey,
+      resetSessionKey: params.resetSessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
+      modelSelectionLocked: params.modelSelectionLocked,
+      deferEmbeddedHookSessionReset: params.deferEmbeddedHookSessionReset,
       onAgentEvent: undefined,
     },
     state: {
@@ -61,6 +75,11 @@ function createCompactionContext(params: {
     getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
+
+beforeEach(() => {
+  hookRunnerMocks.getGlobalHookRunner.mockReset();
+  hookRunnerMocks.getGlobalHookRunner.mockReturnValue(null);
+});
 
 function makeUsageSnapshot(totalTokens: number): AssistantUsageSnapshot {
   return {
@@ -102,8 +121,8 @@ function makeCompactionSummaryMessage(timestamp?: number): AgentMessage {
   } as AgentMessage;
 }
 
-function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void {
-  handleCompactionEnd(ctx, {
+function finishCompaction(ctx: EmbeddedAgentSubscribeContext): void | Promise<void> {
+  return handleCompactionEnd(ctx, {
     type: "compaction_end",
     reason: "threshold",
     result: { kept: 12 },
@@ -199,7 +218,7 @@ describe("compaction lifecycle logging", () => {
       type: "compaction_start",
       reason: "threshold",
     });
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "threshold",
       result: { kept: 12 },
@@ -249,7 +268,7 @@ describe("compaction lifecycle logging", () => {
       type: "compaction_start",
       reason: "manual",
     });
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "manual",
       result: undefined,
@@ -298,7 +317,7 @@ describe("compaction lifecycle logging", () => {
     handleCompactionStart(ctx, {
       type: "compaction_start",
     });
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       result: { kept: 12 },
       willRetry: false,
@@ -328,6 +347,185 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
+  it("awaits subscription after_compaction before using the run-owned reset queue", async () => {
+    const deferredRequests: unknown[] = [];
+    let releaseHook: (() => void) | undefined;
+    const hookGate = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        await hookGate;
+        await expect(hookContext.api?.resetSession?.("reset")).resolves.toMatchObject({
+          ok: true,
+          deferred: true,
+          key: "main",
+        });
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "main",
+      initialCount: 0,
+      deferEmbeddedHookSessionReset: (request) => {
+        deferredRequests.push(request);
+      },
+    });
+
+    const handled = finishCompaction(ctx);
+
+    await vi.waitFor(() => {
+      expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    });
+    expect(deferredRequests).toEqual([]);
+    releaseHook?.();
+    await handled;
+    expect(deferredRequests).toEqual([
+      {
+        key: "main",
+        agentId: "test-agent",
+        reason: "reset",
+        commandSource: "embedded-agent:hook",
+      },
+    ]);
+  });
+
+  it("exposes resetSession for incomplete non-aborted terminal after_compaction hooks", async () => {
+    const deferredReset = vi.fn();
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        await expect(hookContext.api?.resetSession?.("new")).resolves.toMatchObject({
+          ok: true,
+          deferred: true,
+          key: "main",
+        });
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "main",
+      initialCount: 0,
+      deferEmbeddedHookSessionReset: deferredReset,
+    });
+
+    await handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredReset).toHaveBeenCalledWith({
+      key: "main",
+      agentId: "test-agent",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+  });
+
+  it("binds after_compaction resetSession to the canonical reset key", async () => {
+    const deferredReset = vi.fn();
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          sessionKey?: string;
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        expect(hookContext.sessionKey).toBe("agent:strict:runtime-policy");
+        await expect(hookContext.api?.resetSession?.("new")).resolves.toMatchObject({
+          ok: true,
+          deferred: true,
+          key: "agent:main:discord:channel:123",
+        });
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "agent:strict:runtime-policy",
+      resetSessionKey: "agent:main:discord:channel:123",
+      initialCount: 0,
+      deferEmbeddedHookSessionReset: deferredReset,
+    });
+
+    await handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: undefined,
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredReset).toHaveBeenCalledWith({
+      key: "agent:main:discord:channel:123",
+      agentId: "test-agent",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+  });
+
+  it("does not expose resetSession for model-locked terminal after_compaction hooks", async () => {
+    const deferredReset = vi.fn();
+    const runAfterCompaction = vi.fn(
+      async (
+        _event: unknown,
+        hookContext: {
+          api?: { resetSession?: (reason?: "new" | "reset") => Promise<unknown> };
+        },
+      ) => {
+        expect(hookContext.api).toBeUndefined();
+      },
+    );
+    hookRunnerMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "after_compaction"),
+      runAfterCompaction,
+    });
+    const ctx = createCompactionContext({
+      storePath: "/tmp/unused-session-store.json",
+      sessionKey: "main",
+      initialCount: 0,
+      modelSelectionLocked: true,
+      deferEmbeddedHookSessionReset: deferredReset,
+    });
+
+    await handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: { summary: "compacted" },
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(runAfterCompaction).toHaveBeenCalledTimes(1);
+    expect(deferredReset).not.toHaveBeenCalled();
+  });
+
   it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -344,7 +542,7 @@ describe("handleCompactionEnd", () => {
       initialCount: 1,
     });
 
-    handleCompactionEnd(ctx, {
+    void handleCompactionEnd(ctx, {
       type: "compaction_end",
       reason: "threshold",
       result: { kept: 12 },
@@ -389,7 +587,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[3] as Extract<AgentMessage, { role: "assistant" }>;
@@ -424,7 +622,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const staleAssistant = messages[1] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
@@ -456,7 +654,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const staleAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
@@ -488,7 +686,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     const secondAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
@@ -516,7 +714,7 @@ describe("handleCompactionEnd", () => {
       messages,
     });
 
-    finishCompaction(ctx);
+    void finishCompaction(ctx);
 
     const freshAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }>;
     expect(freshAssistant.usage).toEqual(freshUsage);

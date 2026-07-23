@@ -133,6 +133,7 @@ export type ToolOutcomeObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
+  isError?: boolean;
   /** Monotonic model-call order within the owning embedded run. */
   toolCallOrdinal?: number;
   terminalPresentation?: string;
@@ -1435,6 +1436,7 @@ async function recordLoopOutcome(args: {
         toolName: record.toolName,
         argsHash: record.argsHash,
         resultHash: record.resultHash,
+        ...(args.error || resolveToolResultFailureKind(args.result) ? { isError: true } : {}),
         ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
         ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
       };

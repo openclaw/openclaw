@@ -7,6 +7,10 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
+import {
+  buildEmbeddedHookApi,
+  type DeferEmbeddedHookSessionReset,
+} from "./embedded-agent-runner/compaction-hook-reset-api.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
@@ -97,7 +101,10 @@ export function handleCompactionStart(
 }
 
 /** Handles compaction completion, retry, and incomplete events. */
-export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: CompactionEndEvent) {
+export function handleCompactionEnd(
+  ctx: EmbeddedAgentSubscribeContext,
+  evt: CompactionEndEvent,
+): void | Promise<void> {
   const reason = normalizeCompactionReason(evt.reason);
   const kind = compactionLogKind(reason);
   ctx.state.compactionInFlight = false;
@@ -181,18 +188,40 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   if (!willRetry) {
     const hookRunnerEnd = getGlobalHookRunner();
     if (hookRunnerEnd?.hasHooks("after_compaction")) {
-      void hookRunnerEnd
-        .runAfterCompaction(
-          {
-            messageCount: ctx.params.session.messages?.length ?? 0,
-            compactedCount: ctx.getCompactionCount(),
-            sessionFile: ctx.params.session.sessionFile,
-          },
-          { sessionKey: ctx.params.sessionKey },
-        )
-        .catch((err: unknown) => {
+      const deferResetSession: DeferEmbeddedHookSessionReset | undefined =
+        ctx.params.deferEmbeddedHookSessionReset;
+      return (async () => {
+        try {
+          const resetSessionKey = (ctx.params.resetSessionKey ?? ctx.params.sessionKey)?.trim();
+          const hookContext = {
+            ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
+            ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
+            sessionKey: ctx.params.sessionKey,
+            ...(!wasAborted &&
+            ctx.params.modelSelectionLocked !== true &&
+            resetSessionKey &&
+            deferResetSession
+              ? {
+                  api: buildEmbeddedHookApi({
+                    agentId: ctx.params.agentId,
+                    sessionKey: resetSessionKey,
+                    deferResetSession,
+                  }),
+                }
+              : {}),
+          };
+          await hookRunnerEnd.runAfterCompaction(
+            {
+              messageCount: ctx.params.session.messages?.length ?? 0,
+              compactedCount: ctx.getCompactionCount(),
+              sessionFile: ctx.params.session.sessionFile,
+            },
+            hookContext,
+          );
+        } catch (err) {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
-        });
+        }
+      })();
     }
   }
 }

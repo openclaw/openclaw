@@ -12,6 +12,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import type { DeferEmbeddedHookSessionReset } from "./embedded-agent-runner/compaction-hook-reset-api.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
 import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
@@ -37,6 +38,10 @@ export type SubscribeEmbeddedAgentSessionParams = {
   runId: string;
   /** Immutable gateway lifecycle ownership for this execution. */
   lifecycleGeneration?: string;
+  /** Current run uses a model-selection-locked session identity. */
+  modelSelectionLocked?: boolean;
+  /** Run-owned queue for compaction-hook reset requests. */
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
   /** Originating message channel used for subsystem log attribution. */
   messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
@@ -111,6 +116,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Canonical durable session key that hook-triggered resets should retire. */
+  resetSessionKey?: string;
   /** Current transport channel resolved for this run. */
   currentChannelId?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */

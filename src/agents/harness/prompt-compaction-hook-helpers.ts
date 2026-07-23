@@ -9,6 +9,10 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import {
+  buildEmbeddedHookApi,
+  type DeferEmbeddedHookSessionReset,
+} from "../embedded-agent-runner/compaction-hook-reset-api.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
@@ -158,6 +162,19 @@ export async function runAgentHarnessAfterCompactionHook(params: {
   if (!hookRunner?.hasHooks("after_compaction")) {
     return;
   }
+  const resetSessionKey = params.ctx.resetSessionKey?.trim();
+  const deferResetSession = params.ctx.deferEmbeddedHookSessionReset;
+  const resetEnabled =
+    params.ctx.modelSelectionLocked !== true && Boolean(resetSessionKey && deferResetSession);
+  const resetApi =
+    resetEnabled && resetSessionKey && deferResetSession
+      ? buildEmbeddedHookApi({
+          agentId: params.ctx.agentId,
+          sessionKey: resetSessionKey,
+          deferResetSession: (request: Parameters<DeferEmbeddedHookSessionReset>[0]) =>
+            deferResetSession(request),
+        })
+      : undefined;
   try {
     await hookRunner.runAfterCompaction(
       {
@@ -165,7 +182,10 @@ export async function runAgentHarnessAfterCompactionHook(params: {
         compactedCount: params.compactedCount,
         sessionFile: params.sessionFile,
       },
-      buildAgentHookContext(params.ctx),
+      {
+        ...buildAgentHookContext(params.ctx),
+        ...(resetApi ? { api: resetApi } : {}),
+      },
     );
   } catch (error) {
     log.warn(`after_compaction hook failed: ${String(error)}`);

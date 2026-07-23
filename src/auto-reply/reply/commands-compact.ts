@@ -7,6 +7,10 @@ import {
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  createEmbeddedHookSessionResetQueue,
+  withEmbeddedHookSessionResetAssertion,
+} from "../../agents/embedded-agent-runner/compaction-hook-reset-api.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -14,9 +18,11 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { markCommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -83,6 +89,28 @@ function formatCompactionReason(reason?: string): string | undefined {
       return "session was already compacted recently";
     default:
       return text;
+  }
+}
+
+function assertCompactionHookResetTargetCurrent(params: {
+  currentEntry?: SessionEntry;
+  expectedLifecycleRevision?: string;
+  expectedSessionId: string;
+  sessionKey: string;
+}): void {
+  const currentEntry = params.currentEntry;
+  if (!currentEntry?.sessionId || currentEntry.sessionId !== params.expectedSessionId) {
+    throw new Error(
+      `deferred after_compaction reset skipped: session ${params.sessionKey} is no longer ${params.expectedSessionId}`,
+    );
+  }
+  if (
+    params.expectedLifecycleRevision !== undefined &&
+    currentEntry.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
+    throw new Error(
+      `deferred after_compaction reset skipped: session ${params.sessionKey} lifecycle changed`,
+    );
   }
 }
 
@@ -205,6 +233,23 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
+  let hookResetExpectedSessionId = sessionId;
+  let hookResetExpectedLifecycleRevision = targetSessionEntry.lifecycleRevision;
+  const loadCurrentHookResetEntry = () =>
+    params.storePath
+      ? runtime.loadSessionEntry({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          readConsistency: "latest",
+        })
+      : (params.sessionStore?.[params.sessionKey] ?? targetSessionEntry);
+  const assertCurrentHookResetSession = () =>
+    assertCompactionHookResetTargetCurrent({
+      sessionKey: params.sessionKey,
+      currentEntry: loadCurrentHookResetEntry(),
+      expectedSessionId: hookResetExpectedSessionId,
+      expectedLifecycleRevision: hookResetExpectedLifecycleRevision,
+    });
   if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
     runtime.abortEmbeddedAgentRun(sessionId);
     const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
@@ -219,7 +264,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     }
   }
   const sessionAgentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    ? resolveSessionAgentId({
+        sessionKey: params.sessionKey,
+        config: params.cfg,
+      })
     : (params.agentId ?? "main");
   const currentAgentId = params.agentId ?? "main";
   const sessionAgentDir =
@@ -242,104 +290,133 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const result = await runtime.compactEmbeddedAgentSession({
-    abortSignal: params.opts?.abortSignal,
-    sessionId,
-    sessionKey: params.sessionKey,
-    allowGatewaySubagentBinding: true,
-    messageChannel: params.command.channel,
-    clientCaps: params.ctx.GatewayClientCaps,
-    groupId: targetSessionEntry.groupId,
-    groupChannel: targetSessionEntry.groupChannel,
-    groupSpace: targetSessionEntry.space,
-    spawnedBy: targetSessionEntry.spawnedBy,
-    senderId: params.command.senderId,
-    senderName: params.ctx.SenderName,
-    senderUsername: params.ctx.SenderUsername,
-    senderE164: params.ctx.SenderE164,
-    inputProvenance: params.ctx.InputProvenance,
-    sessionFile: runtime.resolveSessionFilePath(
+  const hookSessionResetQueue = createEmbeddedHookSessionResetQueue();
+  try {
+    const result = await runtime.compactEmbeddedAgentSession({
+      abortSignal: params.opts?.abortSignal,
       sessionId,
-      targetSessionEntry,
-      runtime.resolveSessionFilePathOptions({
-        agentId: sessionAgentId,
-        storePath: params.storePath,
-      }),
-    ),
-    workspaceDir: params.workspaceDir,
-    agentDir: sessionAgentDir,
-    config: params.cfg,
-    skillsSnapshot: targetSessionEntry.skillsSnapshot,
-    provider: params.provider,
-    model: params.model,
-    authProfileId: targetSessionEntry.authProfileOverride,
-    authProfileIdSource:
-      targetSessionEntry.authProfileOverrideSource ??
-      (targetSessionEntry.authProfileOverride
-        ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
-          ? "auto"
-          : "user"
-        : undefined),
-    contextTokenBudget,
-    agentHarnessId:
-      targetSessionEntry.modelSelectionLocked === true
-        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
-        : targetSessionEntry.agentHarnessId,
-    modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
-    bashElevated: {
-      enabled: false,
-      allowed: false,
-      defaultLevel: "off",
-    },
-    customInstructions,
-    trigger: "manual",
-    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
-  });
-
-  const compactLabel =
-    result.ok || isCompactionSkipReason(result.reason)
-      ? result.compacted
-        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-          : result.result?.tokensBefore
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
-            : "Compacted"
-        : "Compaction skipped"
-      : "Compaction failed";
-  if (result.ok && result.compacted) {
-    await runtime.incrementCompactionCount({
-      cfg: params.cfg,
-      sessionEntry: targetSessionEntry,
-      sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      // Update token counts after compaction
-      tokensAfter: result.result?.tokensAfter,
-      newSessionId: result.result?.sessionId,
-      newSessionFile: result.result?.sessionFile,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.command.channel,
+      clientCaps: params.ctx.GatewayClientCaps,
+      groupId: targetSessionEntry.groupId,
+      groupChannel: targetSessionEntry.groupChannel,
+      groupSpace: targetSessionEntry.space,
+      spawnedBy: targetSessionEntry.spawnedBy,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      inputProvenance: params.ctx.InputProvenance,
+      sessionFile: runtime.resolveSessionFilePath(
+        sessionId,
+        targetSessionEntry,
+        runtime.resolveSessionFilePathOptions({
+          agentId: sessionAgentId,
+          storePath: params.storePath,
+        }),
+      ),
+      workspaceDir: params.workspaceDir,
+      agentDir: sessionAgentDir,
+      config: params.cfg,
+      skillsSnapshot: targetSessionEntry.skillsSnapshot,
+      provider: params.provider,
+      model: params.model,
+      authProfileId: targetSessionEntry.authProfileOverride,
+      authProfileIdSource:
+        targetSessionEntry.authProfileOverrideSource ??
+        (targetSessionEntry.authProfileOverride
+          ? typeof targetSessionEntry.authProfileOverrideCompactionCount === "number"
+            ? "auto"
+            : "user"
+          : undefined),
+      contextTokenBudget,
+      agentHarnessId:
+        targetSessionEntry.modelSelectionLocked === true
+          ? resolvePersistedSessionRuntimeId(targetSessionEntry)
+          : targetSessionEntry.agentHarnessId,
+      modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
+      thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      customInstructions,
+      trigger: "manual",
+      ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
+      deferEmbeddedHookSessionReset: (request) =>
+        hookSessionResetQueue.deferResetSession(
+          withEmbeddedHookSessionResetAssertion(
+            {
+              ...request,
+              onCommitted: (commit) => {
+                request.onCommitted?.(commit);
+                markCommandSessionMetadataChange({
+                  ctx: params.ctx,
+                  rootCtx: params.rootCtx,
+                  sessionKey: commit.key,
+                  ...(request.agentId ? { agentId: request.agentId } : {}),
+                  reason: request.reason,
+                });
+              },
+            },
+            assertCurrentHookResetSession,
+          ),
+        ),
     });
+
+    const compactLabel =
+      result.ok || isCompactionSkipReason(result.reason)
+        ? result.compacted
+          ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
+            : result.result?.tokensBefore
+              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
+              : "Compacted"
+          : "Compaction skipped"
+        : "Compaction failed";
+    if (result.ok && result.compacted) {
+      await runtime.incrementCompactionCount({
+        cfg: params.cfg,
+        sessionEntry: targetSessionEntry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        // Update token counts after compaction
+        tokensAfter: result.result?.tokensAfter,
+        newSessionId: result.result?.sessionId,
+        newSessionFile: result.result?.sessionFile,
+      });
+      const postCompactionEntry = loadCurrentHookResetEntry() ?? targetSessionEntry;
+      hookResetExpectedSessionId = result.result?.sessionId ?? hookResetExpectedSessionId;
+      if (postCompactionEntry.sessionId === hookResetExpectedSessionId) {
+        hookResetExpectedLifecycleRevision = postCompactionEntry.lifecycleRevision;
+      }
+    }
+    // Use the post-compaction token count for context summary if available
+    const tokensAfterCompaction = result.result?.tokensAfter;
+    const totalTokens =
+      result.ok && result.compacted
+        ? tokensAfterCompaction
+        : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
+    const contextSummary = runtime.formatContextUsageShort(
+      typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
+      contextTokenBudget ?? null,
+    );
+    const reason = formatCompactionReason(result.reason);
+    const line = reason
+      ? `${compactLabel}: ${reason} • ${contextSummary}`
+      : `${compactLabel} • ${contextSummary}`;
+    runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `⚙️ ${line}`,
+        isStatusNotice: true,
+      },
+    };
+  } finally {
+    await hookSessionResetQueue.flush();
   }
-  // Use the post-compaction token count for context summary if available
-  const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    result.ok && result.compacted
-      ? tokensAfterCompaction
-      : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
-  const contextSummary = runtime.formatContextUsageShort(
-    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
-    contextTokenBudget ?? null,
-  );
-  const reason = formatCompactionReason(result.reason);
-  const line = reason
-    ? `${compactLabel}: ${reason} • ${contextSummary}`
-    : `${compactLabel} • ${contextSummary}`;
-  runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
-  return {
-    shouldContinue: false,
-    reply: {
-      text: `⚙️ ${line}`,
-      isStatusNotice: true,
-    },
-  };
 };

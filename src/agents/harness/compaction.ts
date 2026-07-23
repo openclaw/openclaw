@@ -6,7 +6,10 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionInternalParams,
+  CompactEmbeddedAgentSessionParams,
+} from "../embedded-agent-runner/compact.types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import {
@@ -33,6 +36,7 @@ import {
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
+import { harnessOwnsPrivateLifecycleResetAuthority } from "./private-authority.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -91,11 +95,26 @@ function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams
 }
 
 function stripHarnessOwnedAuthInputs(
-  params: CompactEmbeddedAgentSessionParams,
-): CompactEmbeddedAgentSessionParams {
+  params: CompactEmbeddedAgentSessionInternalParams,
+): CompactEmbeddedAgentSessionInternalParams {
   const result = { ...params };
   delete result.resolvedApiKey;
   delete result.runtimeModel;
+  return result;
+}
+
+function stripInternalHarnessCompactionLifecycleOwner(
+  harness: AgentHarness,
+  params: CompactEmbeddedAgentSessionInternalParams,
+): AgentHarnessCompactParams {
+  if (harnessOwnsPrivateLifecycleResetAuthority(harness)) {
+    return params;
+  }
+  if (!Object.hasOwn(params, "deferEmbeddedHookSessionReset")) {
+    return params;
+  }
+  const result = { ...params };
+  delete result.deferEmbeddedHookSessionReset;
   return result;
 }
 
@@ -122,7 +141,7 @@ function buildHarnessCompactionModelProvider(params: {
 
 async function resolveHarnessCompactApiKey(params: {
   agentDir: string;
-  compactParams: CompactEmbeddedAgentSessionParams;
+  compactParams: CompactEmbeddedAgentSessionInternalParams;
   initialHarness: AgentHarness;
   agentId: string;
   sessionKey?: string;
@@ -359,7 +378,7 @@ async function resolveHarnessCompactApiKey(params: {
 
 /** Runs harness-provided compaction when the selected runtime supports it. */
 export async function maybeCompactAgentHarnessSession(
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionInternalParams,
   options: InternalAgentHarnessCompactionOptions = {},
 ): Promise<EmbeddedAgentCompactResult | undefined> {
   const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
@@ -513,7 +532,7 @@ export async function maybeCompactAgentHarnessSession(
   const handoffCompactParams = harnessOwnsAuth
     ? stripHarnessOwnedAuthInputs(compactParamsWithResolvedAuth)
     : compactParamsWithResolvedAuth;
-  const resolvedCompactParams =
+  const resolvedCompactParamsWithInternalFields =
     resolvedApiKey || runtimeModel
       ? {
           ...handoffCompactParams,
@@ -535,6 +554,10 @@ export async function maybeCompactAgentHarnessSession(
             : {}),
         }
       : handoffCompactParams;
+  const resolvedCompactParams = stripInternalHarnessCompactionLifecycleOwner(
+    harness,
+    resolvedCompactParamsWithInternalFields,
+  );
   if (shouldCompactAfterContextEngine) {
     return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
   }

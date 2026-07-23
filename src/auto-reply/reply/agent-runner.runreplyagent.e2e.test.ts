@@ -22,11 +22,11 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "./agent-runner-failure-copy.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -64,6 +64,12 @@ type AgentRunParams = {
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+  onSessionResetCommitted?: (commit: {
+    key: string;
+    sessionId: string;
+    reason: "new" | "reset";
+    agentId?: string;
+  }) => void;
   silentExpected?: boolean;
   trigger?: string;
   bootstrapContextRunKind?: string;
@@ -252,7 +258,9 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState & ReplyOptionsWithHeartbeatRunScope;
+  opts?: InternalGetReplyOptions &
+    ReplyOptionsWithOperationRunState &
+    ReplyOptionsWithHeartbeatRunScope;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -871,6 +879,89 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
     expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
     expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+
+  it("keeps hook-reset sessions after direct auto-compaction returns stale metadata", async () => {
+    const root = tempDirs.make("openclaw-direct-compaction-reset-");
+    const storePath = join(root, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: join(root, "session.jsonl"),
+      updatedAt: Date.now(),
+      compactionCount: 4,
+      groupActivationNeedsSystemIntro: true,
+    };
+    const sessionStore = { main: sessionEntry };
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
+
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      const resetEntry: SessionEntry = {
+        sessionId: "session-reset",
+        sessionFile: join(root, "session-reset.jsonl"),
+        updatedAt: Date.now(),
+        compactionCount: 0,
+        groupActivationNeedsSystemIntro: true,
+      };
+      sessionStore.main = resetEntry;
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, resetEntry);
+      params.onSessionResetCommitted?.({
+        key: "main",
+        sessionId: "session-reset",
+        reason: "new",
+        agentId: "agent-1",
+      });
+      return {
+        payloads: [{ text: "final" }],
+        meta: {
+          agentMeta: {
+            sessionId: "session-stale-compacted",
+            sessionFile: join(root, "session-stale-compacted.jsonl"),
+            compactionCount: 1,
+            usage: { input: 1, output: 1 },
+            lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+          },
+        },
+      };
+    });
+
+    const onSessionMetadataChanges = vi.fn();
+    const { run, followupRun } = createMinimalRun({
+      opts: { onSessionMetadataChanges },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      runOverrides: {
+        sessionId: "session",
+        sessionFile: join(root, "session.jsonl"),
+      },
+    });
+
+    await run();
+
+    const stored = requireStoredSessionEntry(storePath);
+    expect(stored.sessionId).toBe("session-reset");
+    expect(stored.sessionFile).toBe(join(root, "session-reset.jsonl"));
+    expect(stored.compactionCount).toBe(0);
+    expect(stored.inputTokens).toBeUndefined();
+    expect(stored.totalTokens).toBeUndefined();
+    expect(stored.groupActivationNeedsSystemIntro).toBe(true);
+    expect(sessionStore.main.sessionId).toBe("session-reset");
+    expect(followupRun.run.sessionId).toBe("session-reset");
+    expect(followupRun.run.sessionFile).toBe(join(root, "session-reset.jsonl"));
+    expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+      key: "main",
+      previousSessionId: "session",
+      nextSessionId: "session-reset",
+      nextSessionFile: join(root, "session-reset.jsonl"),
+    });
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey: "main", agentId: "agent-1", reason: "new" },
+    ]);
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {

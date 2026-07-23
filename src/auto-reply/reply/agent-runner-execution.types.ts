@@ -75,6 +75,12 @@ export type AgentTurnParams = {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+  onSessionResetCommitted?: (commit: {
+    key: string;
+    sessionId: string;
+    reason: "new" | "reset";
+    agentId?: string;
+  }) => void;
   isRestartRecoveryArmed?: () => boolean;
 };
 

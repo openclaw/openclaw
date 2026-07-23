@@ -1064,6 +1064,112 @@ test("sessions.compact rejects stale terminal persistence after the session chan
   ws.close();
 });
 
+test("sessions.compact hook reset guard accepts persisted compaction successor session ids", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await seedSessionEntry({
+    entry: sessionStoreEntry("sess-compact-old"),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: "sess-compact-old",
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 3,
+  });
+  let deferredReset = false;
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+    const call = params as {
+      deferEmbeddedHookSessionReset?: (request: {
+        key: string;
+        agentId?: string;
+        reason: "new" | "reset";
+        commandSource: string;
+      }) => void;
+    };
+    deferredReset = typeof call.deferEmbeddedHookSessionReset === "function";
+    call.deferEmbeddedHookSessionReset?.({
+      key: "agent:main:main",
+      agentId: "main",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+    return {
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        tokensAfter: 80,
+        sessionId: "sess-compacted-successor",
+      },
+    };
+  });
+
+  const { ws } = await openClient();
+  const response = await rpcReq<{
+    compacted: boolean;
+    result?: { sessionId?: string };
+  }>(ws, "sessions.compact", { key: "main" });
+
+  expect(response.ok, JSON.stringify(response)).toBe(true);
+  expect(response.payload?.compacted).toBe(true);
+  expect(deferredReset).toBe(true);
+  const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+  expect(resetEntry?.sessionId).toBeTruthy();
+  expect(resetEntry?.sessionId).not.toBe("sess-compact-old");
+  expect(resetEntry?.sessionId).not.toBe("sess-compacted-successor");
+  expect(response.payload?.result?.sessionId).toBe(resetEntry?.sessionId);
+  ws.close();
+});
+
+test("sessions.compact drains hook reset requests after incomplete terminal compaction", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await seedSessionEntry({
+    entry: sessionStoreEntry("sess-compact-incomplete"),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: "sess-compact-incomplete",
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 3,
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+    const call = params as {
+      deferEmbeddedHookSessionReset?: (request: {
+        key: string;
+        agentId?: string;
+        reason: "new" | "reset";
+        commandSource: string;
+      }) => void | Promise<void>;
+    };
+    await call.deferEmbeddedHookSessionReset?.({
+      key: "agent:main:main",
+      agentId: "main",
+      reason: "new",
+      commandSource: "embedded-agent:hook",
+    });
+    return {
+      ok: true,
+      compacted: false,
+      reason: "already compact",
+    };
+  });
+
+  const { ws } = await openClient();
+  const response = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+  expect(response.ok, JSON.stringify(response)).toBe(true);
+  expect(response.payload?.compacted).toBe(false);
+  const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+  expect(resetEntry?.sessionId).toBeTruthy();
+  expect(resetEntry?.sessionId).not.toBe("sess-compact-incomplete");
+  ws.close();
+});
+
 test("sessions.reset waits for terminal compaction before replacing the session", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedSessionEntry({

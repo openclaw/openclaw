@@ -156,7 +156,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: outbound formatting capability profile.
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      4695,
+      // +1: compaction reset hook result contract exposed through the agent harness runtime.
+      // +1: canonical incognito session classifier for storage-safe plugin behavior.
+      4696,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

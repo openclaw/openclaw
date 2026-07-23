@@ -28,6 +28,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
+import type { DeferEmbeddedHookSessionReset } from "../compaction-hook-reset-api.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -140,6 +141,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   trajectorySessionFile?: string;
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
+  /** Run-owned queue for compaction-hook reset requests. */
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Signals that the attempt's own run-timeout watchdog is active. */

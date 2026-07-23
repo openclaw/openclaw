@@ -14,6 +14,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
+import { DEFAULT_TOOL_LOOP_DETECTION_CRITICAL_THRESHOLD } from "./tool-loop-detection-defaults.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -39,14 +40,13 @@ type LoopDetectionResult =
 const TOOL_CALL_HISTORY_SIZE = 30;
 const WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
-const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
-  criticalThreshold: CRITICAL_THRESHOLD,
+  criticalThreshold: DEFAULT_TOOL_LOOP_DETECTION_CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   detectors: {
     genericRepeat: true,

@@ -13,6 +13,10 @@ import {
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
 import type {
+  BundledEmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParams,
+} from "./agent-harness-runtime.js";
+import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "./provider-model-types.js";
@@ -180,6 +184,11 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<
       NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
     >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
+  });
+
+  it("keeps private reset queues off the public attempt params", () => {
+    expectTypeOf<EmbeddedRunAttemptParams>().not.toHaveProperty("deferEmbeddedHookSessionReset");
+    expectTypeOf<BundledEmbeddedRunAttemptParams>().toHaveProperty("deferEmbeddedHookSessionReset");
   });
 });
 

@@ -228,6 +228,8 @@ export function refreshQueuedFollowupSession(params: {
       const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
       if (nextSessionFile) {
         run.sessionFile = nextSessionFile;
+      } else {
+        run.sessionFile = "";
       }
     }
     if (shouldRewriteSelection) {

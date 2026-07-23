@@ -6,6 +6,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -64,6 +65,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
 >();
 const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
 const FOLLOWUP_TEST_SESSION_STORE_PATHS = new Set<string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -106,6 +108,20 @@ function requireMockCallArg(
     throw new Error(`expected mock call ${index}`);
   }
   return requireRecord(call[0], `mock call ${index} arg`);
+}
+
+function requireMockCallArgMatching(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+  predicate: (arg: Record<string, unknown>) => boolean,
+): Record<string, unknown> {
+  for (const [index, call] of mock.mock.calls.entries()) {
+    const arg = requireRecord(call[0], `mock call ${index} arg`);
+    if (predicate(arg)) {
+      return arg;
+    }
+  }
+  throw new Error(`expected ${label} mock call`);
 }
 
 function requireLastMockCallArg(
@@ -303,6 +319,8 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
       run.sessionId = params.nextSessionId!;
       if (params.nextSessionFile?.trim()) {
         run.sessionFile = params.nextSessionFile;
+      } else {
+        run.sessionFile = "";
       }
     }
     if (shouldRewriteSelection) {
@@ -397,6 +415,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
       release: async () => {},
     })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
+  }));
+  vi.doMock("../../agents/harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
   }));
   vi.doMock("../../agents/embedded-agent.js", () => ({
     abortEmbeddedAgentRun: vi.fn(async () => false),
@@ -529,6 +550,10 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ testing: cliBackendsTestingForTest } =
     await import("../../agents/cli-backends.test-support.js"));
   setFastFollowupCliBackendDeps();
+  ({
+    getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
+    setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
+  } = await import("../reply-payload.js"));
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
@@ -545,10 +570,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
     replyRunRegistry: replyRunRegistryForTest,
   } = await import("./reply-run-registry.js"));
   ({ testing: replyRunTestingForTest } = await import("./reply-run-registry.test-support.js"));
-  ({
-    getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
-    setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
-  } = await import("../reply-payload.js"));
 }
 
 function setFastFollowupCliBackendDeps(): void {
@@ -4548,6 +4569,417 @@ describe("createFollowupRunner compaction", () => {
     );
   });
 
+  it("keeps hook-reset sessions after followup auto-compaction returns stale metadata", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-compaction-reset-"), "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+      updatedAt: Date.now(),
+      compactionCount: 4,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        provider: string;
+        model: string;
+        run: (provider: string, model: string) => Promise<unknown>;
+      }) => ({
+        result: await params.run(params.provider, params.model),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }),
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+          agentId?: string;
+        }) => void;
+      }) => {
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          sessionFile: path.join(path.dirname(storePath), "session-reset.jsonl"),
+          updatedAt: Date.now(),
+          compactionCount: 0,
+        };
+        sessionStore.main = resetEntry;
+        replaceSessionEntrySync({ sessionKey: "main", storePath }, resetEntry);
+        args.onSessionResetCommitted?.({
+          key: "main",
+          sessionId: "session-reset",
+          reason: "new",
+          agentId: "agent-1",
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              sessionId: "session-stale-compacted",
+              sessionFile: path.join(path.dirname(storePath), "session-stale-compacted.jsonl"),
+              compactionCount: 1,
+              lastCallUsage: { input: 10_000, output: 3_000, total: 13_000 },
+            },
+          },
+        };
+      },
+    );
+
+    const onSessionMetadataChanges = vi.fn();
+    const runner = createFollowupRunner({
+      opts: {
+        onBlockReply: vi.fn(async () => {}),
+        onSessionMetadataChanges,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "openai/gpt-5.6",
+    });
+
+    const queuedNext = createQueuedRun({
+      prompt: "next",
+      run: {
+        sessionId: "session",
+        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+        provider: "openai",
+        model: "gpt-5.6",
+      },
+    });
+    const queueSettings: QueueSettings = { mode: "followup" };
+    enqueueFollowupRun("main", queuedNext, queueSettings);
+    const persistUsageSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session",
+          sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
+          messageProvider: undefined,
+          provider: "openai",
+          model: "gpt-5.6",
+        },
+      }),
+    );
+
+    expect(expectDefined(sessionStore.main, "sessionStore.main test invariant").sessionId).toBe(
+      "session-reset",
+    );
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(0);
+    expect(queuedNext.run.sessionId).toBe("session-reset");
+    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
+      await normalizeComparablePath(path.join(path.dirname(storePath), "session-reset.jsonl")),
+    );
+    expect(persistUsageSpy).not.toHaveBeenCalled();
+    expect(onSessionMetadataChanges).toHaveBeenCalledWith([
+      { sessionKey: "main", agentId: "agent-1", reason: "new" },
+    ]);
+  });
+
+  it("refreshes hook-reset sessions before followup fallback retries", async () => {
+    const storePath = path.join(
+      tempDirs.make("openclaw-followup-reset-fallback-"),
+      "sessions.json",
+    );
+    const initialSessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const resetSessionFile = path.join(path.dirname(storePath), "session-reset.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: initialSessionFile,
+      updatedAt: Date.now(),
+      compactionCount: 4,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("openai", "gpt-5.6");
+        return {
+          result: await params.run("anthropic", "claude-opus-4-6"),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          attempts: [],
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+          agentId?: string;
+        }) => void;
+      }) => {
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          sessionFile: resetSessionFile,
+          updatedAt: Date.now(),
+          compactionCount: 0,
+        };
+        sessionStore.main = resetEntry;
+        replaceSessionEntrySync({ sessionKey: "main", storePath }, resetEntry);
+        args.onSessionResetCommitted?.({
+          key: "main",
+          sessionId: "session-reset",
+          reason: "new",
+          agentId: "agent-1",
+        });
+        return {
+          payloads: [{ text: "retry" }],
+          meta: {},
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: [{ text: "final" }],
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            compactionCount: 1,
+            lastCallUsage: { input: 12_000, output: 1_000, total: 13_000 },
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "openai/gpt-5.6",
+    });
+
+    const persistUsageSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session",
+          sessionFile: initialSessionFile,
+          sessionKey: "main",
+          messageProvider: undefined,
+          provider: "openai",
+          model: "gpt-5.6",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(runEmbeddedAgentMock, 0).sessionId).toBe("session");
+    expect(requireMockCallArg(runEmbeddedAgentMock, 0).sessionFile).toBe(initialSessionFile);
+    expect(requireMockCallArg(runEmbeddedAgentMock, 1).sessionId).toBe("session-reset");
+    expect(requireMockCallArg(runEmbeddedAgentMock, 1).sessionFile).toBe(resetSessionFile);
+    expect(persistUsageSpy).toHaveBeenCalled();
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
+    persistUsageSpy.mockRestore();
+  });
+
+  it("discards earlier followup fallback compactions after a later hook reset", async () => {
+    const storePath = path.join(
+      tempDirs.make("openclaw-followup-reset-clears-compaction-"),
+      "sessions.json",
+    );
+    const initialSessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const resetSessionFile = path.join(path.dirname(storePath), "session-reset.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: initialSessionFile,
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await params.run("openai", "gpt-5.6");
+        return {
+          result: await params.run("anthropic", "claude-opus-4-6"),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          attempts: [],
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "retry" }],
+      meta: {
+        agentMeta: {
+          compactionCount: 1,
+          sessionId: "session-compacted",
+          sessionFile: path.join(path.dirname(storePath), "session-compacted.jsonl"),
+        },
+      },
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+          agentId?: string;
+        }) => void;
+      }) => {
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          sessionFile: resetSessionFile,
+          updatedAt: Date.now(),
+          compactionCount: 0,
+        };
+        sessionStore.main = resetEntry;
+        replaceSessionEntrySync({ sessionKey: "main", storePath }, resetEntry);
+        args.onSessionResetCommitted?.({
+          key: "main",
+          sessionId: "session-reset",
+          reason: "new",
+          agentId: "agent-1",
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: {
+            agentMeta: {
+              provider: "anthropic",
+              model: "claude-opus-4-6",
+              lastCallUsage: { input: 12_000, output: 1_000, total: 13_000 },
+            },
+          },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "openai/gpt-5.6",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session",
+          sessionFile: initialSessionFile,
+          sessionKey: "main",
+          messageProvider: undefined,
+          provider: "openai",
+          model: "gpt-5.6",
+        },
+      }),
+    );
+
+    const updatedEntry = expectDefined(sessionStore.main, "sessionStore.main test invariant");
+    expect(updatedEntry.sessionId).toBe("session-reset");
+    expect(updatedEntry.compactionCount).toBe(0);
+  });
+
+  it("clears stale transcript paths when hook-reset entries omit session files", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-followup-reset-no-file-"), "sessions.json");
+    const initialSessionFile = path.join(path.dirname(storePath), "session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: initialSessionFile,
+      updatedAt: Date.now(),
+      compactionCount: 4,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+        }) => void;
+      }) => {
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          updatedAt: Date.now(),
+          compactionCount: 0,
+        };
+        sessionStore.main = resetEntry;
+        replaceSessionEntrySync({ sessionKey: "main", storePath }, resetEntry);
+        args.onSessionResetCommitted?.({
+          key: "main",
+          sessionId: "session-reset",
+          reason: "new",
+        });
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    const queuedNext = createQueuedRun({
+      prompt: "next",
+      run: {
+        sessionId: "session",
+        sessionFile: initialSessionFile,
+      },
+    });
+    enqueueFollowupRun("main", queuedNext, { mode: "followup" });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionId: "session",
+          sessionFile: initialSessionFile,
+          sessionKey: "main",
+          messageProvider: undefined,
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent");
+    expect(call.sessionId).toBe("session");
+    expect(call.sessionFile).toBe(initialSessionFile);
+    expect(queuedNext.run.sessionId).toBe("session-reset");
+    expect(queuedNext.run.sessionFile).toBe("");
+  });
+
   it("does not count failed compaction end events in followup runs", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-failed-")),
@@ -4734,7 +5166,13 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
-    expect(requireMockCallArg(persistSpy, 0).preserveFreshTotalTokensOnStaleUsage).toBe(true);
+    expect(
+      requireMockCallArgMatching(
+        persistSpy,
+        "fresh-token preserving usage persistence",
+        (arg) => arg.preserveFreshTotalTokensOnStaleUsage === true,
+      ).preserveFreshTotalTokensOnStaleUsage,
+    ).toBe(true);
     persistSpy.mockRestore();
   });
 
@@ -5055,7 +5493,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    const persistCall = requireMockCallArg(persistSpy, 0);
+    const persistCall = requireMockCallArgMatching(
+      persistSpy,
+      "suppressed reply usage persistence",
+      (arg) => arg.storePath === storePath && arg.sessionKey === sessionKey,
+    );
     expect(persistCall.storePath).toBe(storePath);
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.modelUsed).toBe("claude-opus-4-6");
@@ -5113,7 +5555,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ),
     ).resolves.toBeUndefined();
 
-    const persistCall = requireMockCallArg(persistSpy, 0);
+    const persistCall = requireMockCallArgMatching(
+      persistSpy,
+      "queued config usage persistence",
+      (arg) => arg.storePath === storePath && arg.sessionKey === sessionKey,
+    );
     expect(persistCall.storePath).toBe(storePath);
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.cfg).toBe(cfg);

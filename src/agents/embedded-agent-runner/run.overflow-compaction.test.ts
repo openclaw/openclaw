@@ -3722,6 +3722,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runBeforeCompaction, 0, 1), {
       sessionKey: "test-key",
+      api: undefined,
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction), {
       messageCount: -1,
@@ -3731,6 +3732,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
       sessionKey: "test-key",
+      api: expect.objectContaining({
+        resetSession: expect.any(Function),
+      }),
     });
   });
 

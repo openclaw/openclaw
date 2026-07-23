@@ -6,6 +6,7 @@
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
+import { markBuiltinOpenClawAgentHarness } from "./builtin-openclaw-identity.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 
@@ -63,10 +64,9 @@ function buildRestrictedFinalizationAttempt(
     initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
   };
 }
-
 /** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
 export function createOpenClawAgentHarness(): AgentHarness {
-  return {
+  const harness: AgentHarness = {
     id: "openclaw",
     label: "OpenClaw embedded agent",
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
@@ -79,4 +79,5 @@ export function createOpenClawAgentHarness(): AgentHarness {
       return projectSettledTurnFinalizationAttemptResult(result);
     },
   };
+  return markBuiltinOpenClawAgentHarness(harness);
 }

@@ -6,11 +6,6 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-} from "../agent-bundle-mcp-tools.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
@@ -19,6 +14,10 @@ import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
+import {
+  createLiveToolFailureLoopGuard,
+  LiveToolFailureLoopError,
+} from "./live-tool-failure-loop-guard.js";
 import { log } from "./logger.js";
 import {
   createPostCompactionLoopGuard,
@@ -31,6 +30,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import { cleanupEmbeddedRunBundleMcpRuntime } from "./run/bundle-mcp-cleanup.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -72,6 +72,7 @@ export async function runPreparedEmbeddedLoop(
     startupStages,
     lifecycleGeneration,
     suspendForFailure,
+    deferEmbeddedHookSessionReset,
   } = input;
   const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
@@ -192,11 +193,18 @@ export async function runPreparedEmbeddedLoop(
     cfg: params.config,
     agentId: sessionAgentId,
   });
-  const postCompactionGuard = createPostCompactionLoopGuard({
-    enabled: resolvedLoopDetectionConfig?.enabled !== false,
+  const postCompactionGuard = createPostCompactionLoopGuard(
+    resolvedLoopDetectionConfig?.postCompactionGuard,
+    { enabled: resolvedLoopDetectionConfig?.enabled === true },
+  );
+  const liveToolFailureGuard = createLiveToolFailureLoopGuard(resolvedLoopDetectionConfig, {
+    enabled: resolvedLoopDetectionConfig?.enabled === true,
   });
   let postCompactionAbortController: AbortController | undefined;
-  let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+  let toolOutcomeAbortError:
+    | PostCompactionLoopPersistedError
+    | LiveToolFailureLoopError
+    | undefined;
   const attemptTerminalToolPresentation = {
     ordinal: -1,
     value: undefined as string | undefined,
@@ -215,11 +223,18 @@ export async function runPreparedEmbeddedLoop(
     if (observation.presentationOnly) {
       return;
     }
+    const liveFailureVerdict = liveToolFailureGuard.observe(observation);
+    if (liveFailureVerdict.shouldAbort) {
+      toolOutcomeAbortError ??= LiveToolFailureLoopError.fromVerdict(liveFailureVerdict);
+      laneTaskAbortController.abort(toolOutcomeAbortError);
+      postCompactionAbortController?.abort(toolOutcomeAbortError);
+      return;
+    }
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
-      postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
-      laneTaskAbortController.abort(postCompactionAbortError);
-      postCompactionAbortController?.abort(postCompactionAbortError);
+      toolOutcomeAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+      laneTaskAbortController.abort(toolOutcomeAbortError);
+      postCompactionAbortController?.abort(toolOutcomeAbortError);
     }
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
@@ -265,6 +280,7 @@ export async function runPreparedEmbeddedLoop(
       hookRunner,
       hookContext: hookCtx,
       sessionPromptState,
+      deferEmbeddedHookSessionReset,
     });
     let authRetryPending = false;
     let accumulatedReplayState = createEmbeddedRunReplayState();
@@ -331,7 +347,7 @@ export async function runPreparedEmbeddedLoop(
         resolveRuntimeFallbackReason,
         observeToolOutcome,
         allocateToolOutcomeOrdinal,
-        getPostCompactionAbortError: () => postCompactionAbortError,
+        getToolOutcomeAbortError: () => toolOutcomeAbortError,
         setPostCompactionAbortController: (controller) => {
           postCompactionAbortController = controller;
         },
@@ -360,6 +376,9 @@ export async function runPreparedEmbeddedLoop(
         lastRetryFailoverReason,
       });
       if (normalizedAttempt.action === "complete") {
+        if (toolOutcomeAbortError) {
+          throw toolOutcomeAbortError;
+        }
         return normalizedAttempt.result;
       }
       if (normalizedAttempt.action === "retry") {
@@ -679,36 +698,12 @@ export async function runPreparedEmbeddedLoop(
         await contextEngine.dispose?.();
       },
     });
-    if (params.cleanupBundleMcpOnRunEnd === true) {
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "bundle-mcp-retire",
-        log,
-        cleanup: async () => {
-          const onError = (errorLocal: unknown, sessionId: string) => {
-            log.warn(
-              `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
-            );
-          };
-          const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
-            sessionKey: params.sessionKey,
-            reason: "embedded-run-end",
-            // MCP App views hold bounded leases so their bridge can remain
-            // usable after a one-shot gateway run returns.
-            preserveActiveLeases: true,
-            onError,
-          });
-          if (!retiredBySessionKey) {
-            await retireSessionMcpRuntime({
-              sessionId: params.sessionId,
-              reason: "embedded-run-end",
-              preserveActiveLeases: true,
-              onError,
-            });
-          }
-        },
-      });
-    }
+    await cleanupEmbeddedRunBundleMcpRuntime({
+      enabled: params.cleanupBundleMcpOnRunEnd === true,
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      log,
+    });
   }
 }

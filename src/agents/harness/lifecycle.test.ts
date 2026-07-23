@@ -528,6 +528,46 @@ describe("AgentHarness lifecycle runner", () => {
     expect(harness["classify"]).toHaveBeenCalledWith(result, params);
   });
 
+  it("does not hand raw compaction reset queues to harness attempts", async () => {
+    const params = {
+      ...createAttemptParams(),
+      deferEmbeddedHookSessionReset: vi.fn(),
+    } as AgentHarnessAttemptParams & { deferEmbeddedHookSessionReset: unknown };
+    const result = createAttemptResult();
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => result);
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    };
+
+    await runAgentHarnessLifecycleAttempt(harness, params);
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    expect(runAttempt.mock.calls[0]?.[0]).not.toHaveProperty("deferEmbeddedHookSessionReset");
+  });
+
+  it("preserves raw compaction reset queues for the built-in OpenClaw harness", async () => {
+    const deferEmbeddedHookSessionReset = vi.fn();
+    const params = {
+      ...createAttemptParams(),
+      deferEmbeddedHookSessionReset,
+    } as AgentHarnessAttemptParams & { deferEmbeddedHookSessionReset: unknown };
+    const result = createAttemptResult();
+    const harness = createOpenClawAgentHarness();
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => result);
+    harness.runAttempt = runAttempt;
+
+    await runAgentHarnessLifecycleAttempt(harness, params);
+
+    expect(runAttempt).toHaveBeenCalledTimes(1);
+    expect(runAttempt.mock.calls[0]?.[0]).toHaveProperty(
+      "deferEmbeddedHookSessionReset",
+      deferEmbeddedHookSessionReset,
+    );
+  });
+
   it("preserves harness-supplied classification when no classify hook is registered", async () => {
     const params = createAttemptParams();
     const result = {

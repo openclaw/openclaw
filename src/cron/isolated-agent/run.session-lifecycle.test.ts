@@ -55,7 +55,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
   it("rejects a session that rotates during async setup", async () => {
     const sessionKey = "agent:main:main";
-    const initialSessionEntry = makeCronSessionEntry({ sessionId: "session-before-setup" });
+    const initialSessionEntry = makeCronSessionEntry({
+      sessionId: "session-before-setup",
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: inMemoryStorePath,
@@ -147,7 +149,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         if (abortSignal?.aborted) {
           lifecycleInterrupted.resolve();
         } else {
-          abortSignal?.addEventListener("abort", lifecycleInterrupted.resolve, { once: true });
+          abortSignal?.addEventListener("abort", lifecycleInterrupted.resolve, {
+            once: true,
+          });
         }
         await releaseRunner.promise;
         return {
@@ -273,7 +277,9 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
   it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
     const sessionKey = "agent:main:main";
-    const initialSessionEntry = makeCronSessionEntry({ sessionId: "persistent-session" });
+    const initialSessionEntry = makeCronSessionEntry({
+      sessionId: "persistent-session",
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         storePath: inMemoryStorePath,
@@ -336,6 +342,109 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       error: `CronSessionLifecycleClaimError: Session "${sessionKey}" changed while starting work. Retry.`,
       executionStarted: true,
     });
+  });
+
+  it("keeps hook-reset cron sessions after embedded runs return stale metadata", async () => {
+    const stableSessionKey = "agent:main:cron:budget-reset";
+    const runSessionKey = `${stableSessionKey}:run:session-before-reset`;
+    const initialSessionEntry = makeCronSessionEntry({
+      sessionId: "session-before-reset",
+      sessionFile: "/tmp/session-before-reset.jsonl",
+      compactionCount: 9,
+    });
+    const resetEntry = makeCronSessionEntry({
+      sessionId: "session-after-reset",
+      sessionFile: "sqlite:main:session-after-reset:/tmp/store.json",
+      compactionCount: 0,
+    });
+    const latestRows = new Map<string, SessionEntry>();
+    const cronSession = makeCronSession({
+      storePath: inMemoryStorePath,
+      store: {},
+      initialSessionEntry: undefined,
+      isNewSession: true,
+      sessionEntry: { ...initialSessionEntry },
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    loadSessionEntryMock.mockImplementation((_storePath: string, key: string) =>
+      latestRows.get(key),
+    );
+    let sessionEntryAfterResetCallback: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (runParams: {
+        sessionKey?: string;
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+        }) => void;
+      }) => {
+        expect(runParams.sessionKey).toBe(runSessionKey);
+        latestRows.set(runSessionKey, structuredClone(resetEntry) as SessionEntry);
+        runParams.onSessionResetCommitted?.({
+          key: runSessionKey,
+          sessionId: "session-after-reset",
+          reason: "new",
+        });
+        sessionEntryAfterResetCallback = cronSession.sessionEntry.sessionId;
+        return {
+          payloads: [{ text: "completed" }],
+          meta: {
+            agentMeta: {
+              sessionId: "session-stale-compacted",
+              sessionFile: "/tmp/session-stale-compacted.jsonl",
+              compactionCount: 10,
+              usage: { input: 1, output: 1 },
+              lastCallUsage: { input: 2, output: 2, total: 4 },
+            },
+          },
+        };
+      },
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        sessionKey: "cron:budget-reset",
+        job: makeIsolatedAgentJobFixture({
+          id: "budget-reset",
+          sessionTarget: "isolated",
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "ok",
+      sessionId: "session-after-reset",
+      sessionKey: runSessionKey,
+    });
+
+    expect(sessionEntryAfterResetCallback).toBe("session-after-reset");
+    expect(cronSession.sessionEntry).toMatchObject({
+      sessionId: "session-after-reset",
+      sessionFile: "sqlite:main:session-after-reset:/tmp/store.json",
+      compactionCount: 0,
+    });
+    expect(cronSession.sessionEntry.inputTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.outputTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokensFresh).toBeUndefined();
+    const stableSessionWrites = patchSessionEntryMock.mock.calls.filter(
+      (call) => (call[0] as { sessionKey: string }).sessionKey === stableSessionKey,
+    );
+    const finalStableWriteOptions = stableSessionWrites.at(-1)?.[2] as
+      | { fallbackEntry?: SessionEntry }
+      | undefined;
+    expect(finalStableWriteOptions?.fallbackEntry).toMatchObject({
+      sessionId: "session-after-reset",
+      sessionFile: "sqlite:main:session-after-reset:/tmp/store.json",
+      compactionCount: 0,
+    });
+    expect(finalStableWriteOptions?.fallbackEntry?.inputTokens).toBeUndefined();
+    expect(finalStableWriteOptions?.fallbackEntry?.outputTokens).toBeUndefined();
+    expect(finalStableWriteOptions?.fallbackEntry?.totalTokens).toBeUndefined();
+    expect(finalStableWriteOptions?.fallbackEntry?.totalTokensFresh).toBeUndefined();
   });
 
   it("releases a custom cron session lease before delete-after-run cleanup", async () => {

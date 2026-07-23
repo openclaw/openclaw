@@ -1,6 +1,7 @@
 /**
  * Guards against repeated tool-loop compactions that never make progress.
  */
+import type { ToolLoopDetectionConfig } from "../../config/types.tools.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 /**
@@ -44,13 +45,39 @@ type GuardState = {
   history: PostCompactionGuardObservation[];
 };
 
-/** Creates a stateful post-compaction loop detector for one embedded run. */
-export function createPostCompactionLoopGuard(options?: {
+type PostCompactionLoopGuardConfig = NonNullable<ToolLoopDetectionConfig["postCompactionGuard"]>;
+type PostCompactionLoopGuardOptions = {
   enabled?: boolean;
-}): PostCompactionLoopGuard {
+};
+
+function asPositiveInt(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return fallback;
+  }
+  return value;
+}
+
+function isLegacyOptions(
+  value: PostCompactionLoopGuardConfig | PostCompactionLoopGuardOptions | undefined,
+): value is PostCompactionLoopGuardOptions {
+  return value !== undefined && "enabled" in value && !("windowSize" in value);
+}
+
+/** Creates a stateful post-compaction loop detector for one embedded run. */
+export function createPostCompactionLoopGuard(
+  configOrOptions?: PostCompactionLoopGuardConfig | PostCompactionLoopGuardOptions,
+  options?: PostCompactionLoopGuardOptions,
+): PostCompactionLoopGuard {
+  let config: PostCompactionLoopGuardConfig | undefined;
+  let resolvedOptions = options;
+  if (isLegacyOptions(configOrOptions)) {
+    resolvedOptions ??= configOrOptions;
+  } else {
+    config = configOrOptions;
+  }
   const state: GuardState = {
-    enabled: options?.enabled ?? true,
-    windowSize: DEFAULT_WINDOW_SIZE,
+    enabled: resolvedOptions?.enabled ?? true,
+    windowSize: asPositiveInt(config?.windowSize, DEFAULT_WINDOW_SIZE),
     remainingAttempts: 0,
     history: [],
   };

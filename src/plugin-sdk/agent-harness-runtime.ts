@@ -20,6 +20,7 @@ import {
   type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import type { AgentHarnessAttemptParams as PublicAgentHarnessAttemptParams } from "../agents/harness/types.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import type { ImageContent } from "../llm/types.js";
@@ -68,8 +69,11 @@ export type {
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
-export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
+export type EmbeddedRunAttemptParams = PublicAgentHarnessAttemptParams;
+export type BundledEmbeddedRunAttemptParams = Omit<
+  CoreEmbeddedRunAttemptParams,
+  "trajectoryRecorder"
+>;
 export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
@@ -189,6 +193,7 @@ export {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
   runAgentHarnessGatewayQuestion,
+  type AgentHarnessQuestionGatewayCall,
 } from "../agents/harness/gateway-question.js";
 export {
   buildSkillWorkshopPromptSection,

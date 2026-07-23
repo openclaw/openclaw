@@ -25,5 +25,15 @@ export function resolveToolLoopDetectionConfig(params: {
     return agent;
   }
 
-  return { enabled: agent.enabled ?? global.enabled };
+  return {
+    enabled: agent.enabled ?? global.enabled,
+    criticalThreshold: agent.criticalThreshold ?? global.criticalThreshold,
+    postCompactionGuard:
+      agent.postCompactionGuard || global.postCompactionGuard
+        ? {
+            ...global.postCompactionGuard,
+            ...agent.postCompactionGuard,
+          }
+        : undefined,
+  };
 }

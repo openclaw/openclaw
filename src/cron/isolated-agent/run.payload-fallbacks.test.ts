@@ -5,12 +5,16 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallbackMock,
   isCliProviderMock,
+  loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
+  makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
   resolveCliRuntimeExecutionProviderMock,
   resolveAgentModelFallbacksOverrideMock,
+  resolveCronSessionMock,
   runCliAgentMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
@@ -209,6 +213,78 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     );
     expect(firstCliRequest?.suppressNextUserMessagePersistence).toBe(false);
     expect(secondCliRequest?.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("recreates the prompt recorder for fallback candidates after a hook reset", async () => {
+    const runSessionKey = "agent:default:cron:test:run:session-before-reset";
+    const cronSession = makeCronSession({
+      storePath: "/tmp/store.json",
+      sessionEntry: makeCronSessionEntry({
+        sessionId: "session-before-reset",
+        sessionFile: "/tmp/session-before-reset.jsonl",
+      }),
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    let resetCommitted = false;
+    loadSessionEntryMock.mockImplementation((_storePath: string, key: string) => {
+      if (key !== runSessionKey || !resetCommitted) {
+        return undefined;
+      }
+      return makeCronSessionEntry({
+        sessionId: "session-after-reset",
+        sessionFile: "sqlite:default:session-after-reset:/tmp/store.json",
+        compactionCount: 0,
+      });
+    });
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const firstResult = await run(provider, model);
+      const secondResult = await run("anthropic", "claude-sonnet-4-6");
+      return {
+        result: secondResult ?? firstResult,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        attempts: [],
+      };
+    });
+    runEmbeddedAgentMock
+      .mockImplementationOnce(async (request) => {
+        request.userTurnTranscriptRecorder?.markRuntimePersisted({
+          role: "user",
+          content: "test",
+        });
+        resetCommitted = true;
+        request.onSessionResetCommitted?.({
+          key: runSessionKey,
+          sessionId: "session-after-reset",
+          reason: "new",
+        });
+        return {
+          payloads: [],
+          meta: { agentMeta: {} },
+        };
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+        meta: { agentMeta: {} },
+      });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    const firstEmbeddedRequest = runEmbeddedAgentMock.mock.calls[0]?.[0];
+    const secondEmbeddedRequest = runEmbeddedAgentMock.mock.calls[1]?.[0];
+    expect(firstEmbeddedRequest?.userTurnTranscriptRecorder).toBeDefined();
+    expect(secondEmbeddedRequest?.userTurnTranscriptRecorder).toBeDefined();
+    expect(secondEmbeddedRequest?.userTurnTranscriptRecorder).not.toBe(
+      firstEmbeddedRequest?.userTurnTranscriptRecorder,
+    );
+    expect(firstEmbeddedRequest?.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondEmbeddedRequest?.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondEmbeddedRequest?.sessionId).toBe("session-after-reset");
+    expect(secondEmbeddedRequest?.sessionFile).toBe(
+      "sqlite:default:session-after-reset:/tmp/store.json",
+    );
   });
 
   it("forwards subagent fallbacks into the embedded runner for internal failover decisions", async () => {
