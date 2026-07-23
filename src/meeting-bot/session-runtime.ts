@@ -1,18 +1,19 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
-  TranscriptSourceLocator,
   TranscriptStartRequest,
   TranscriptsStartResult,
   TranscriptStopRequest,
   TranscriptsStopResult,
 } from "../transcripts/provider-types.js";
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
+import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
 import type {
   MeetingBrowserSessionView,
   MeetingSessionRuntimeHandles,
   MeetingSessionRuntimeJoinContext,
 } from "./session-runtime-types.js";
+import { evaluateMeetingSpeechReadiness } from "./session-speech-readiness.js";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type {
   MeetingBrowserHealth,
@@ -21,10 +22,7 @@ import type {
   MeetingSessionRecord,
   MeetingTranscriptSnapshot,
 } from "./session-types.js";
-import type {
-  MeetingDurableTranscriptBridge,
-  MeetingDurableTranscriptsOptions,
-} from "./transcripts-bridge.js";
+import type { MeetingDurableTranscriptsOptions } from "./transcripts-bridge.js";
 export type {
   MeetingBrowserSessionView,
   MeetingSessionRuntimeHandles,
@@ -140,8 +138,8 @@ export class MeetingSessionRuntime<
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => Partial<THealth>>();
+  readonly #durableTranscripts: MeetingSessionDurableTranscripts<TSession>;
   readonly #transcriptStore: MeetingSessionTranscriptStore<TSession>;
-  #durableTranscripts?: Promise<MeetingDurableTranscriptBridge<TSession> | undefined>;
 
   constructor(
     private readonly options: MeetingSessionRuntimeOptions<
@@ -162,10 +160,18 @@ export class MeetingSessionRuntime<
       hasBrowserTab: (session) => Boolean(this.options.getBrowser(session)?.tab),
       capture: async (session, captureOptions) =>
         await this.options.captureTranscript(session, captureOptions),
-      onLines: async (session, lines) => {
-        const bridge = await this.#getDurableTranscripts();
-        await bridge?.ingest(session, lines);
-      },
+      onLines: async (session, lines) => await this.#durableTranscripts.ingest(session, lines),
+    });
+    this.#durableTranscripts = new MeetingSessionDurableTranscripts({
+      config: options.durableTranscripts,
+      formatError: (error) => options.formatError(error),
+      isBrowserSession: (session) => options.isBrowserTransport(session.transport),
+      isTranscribeSession: (session) => options.isTranscribeMode(session.mode),
+      listSessions: () => [...this.#sessions.values()],
+      logger: options.logger,
+      logScope: options.logScope,
+      sameMeetingUrl: (left, right) => options.sameMeetingUrl(left, right),
+      transcriptStore: this.#transcriptStore,
     });
   }
 
@@ -203,28 +209,11 @@ export class MeetingSessionRuntime<
   }
 
   async startTranscriptSource(request: TranscriptStartRequest): Promise<TranscriptsStartResult> {
-    const bridge = await this.#getDurableTranscripts();
-    if (!bridge?.enabled) {
-      return { ok: false, error: "meeting transcripts are disabled" };
-    }
-    const session = this.#findTranscriptSourceSession(request.session.source);
-    if (!session) {
-      return {
-        ok: false,
-        error: "No active meeting session matches the transcript source.",
-      };
-    }
-    if (request.session.source.agentId !== session.agentId) {
-      return { ok: false, error: "meeting transcript source belongs to another agent" };
-    }
-    return await bridge.attach(session, request);
+    return await this.#durableTranscripts.startSource(request);
   }
 
   async stopTranscriptSource(request: TranscriptStopRequest): Promise<TranscriptsStopResult> {
-    const bridge = await this.#getDurableTranscripts();
-    return bridge
-      ? await bridge.detach(request)
-      : { ok: true, sessionId: request.sessionId, stoppedAt: new Date().toISOString() };
+    return await this.#durableTranscripts.stopSource(request);
   }
 
   isReusableSession(session: TSession, resolved: MeetingResolvedJoin<TTransport, TMode>): boolean {
@@ -471,7 +460,7 @@ export class MeetingSessionRuntime<
     }
     const speechInstructions = this.options.resolveSpeechInstructions(request);
     if (reusable) {
-      await this.#startDurableTranscripts(reusable);
+      await this.#durableTranscripts.start(reusable);
       await this.refreshBrowserHealth(reusable);
       this.#noteSession(reusable, this.options.messages.reusedSessionNote);
       reusable.updatedAt = nowIso();
@@ -516,7 +505,7 @@ export class MeetingSessionRuntime<
     }
 
     this.#sessions.set(session.id, session);
-    await this.#startDurableTranscripts(session);
+    await this.#durableTranscripts.start(session);
     const spoken = delegatedSpoken
       ? true
       : this.options.isTalkBackMode(resolved.mode) && speechInstructions
@@ -568,7 +557,7 @@ export class MeetingSessionRuntime<
       this.#transcriptStore.startFinalizing(session.id);
     }
     try {
-      await this.#stopDurableTranscripts(session, { allowFallback: firstAttempt });
+      await this.#durableTranscripts.stop(session, { allowFallback: firstAttempt });
       transcriptStopped = true;
       session.state = "ended";
       session.updatedAt = nowIso();
@@ -620,74 +609,6 @@ export class MeetingSessionRuntime<
   #meetingKey(transport: TTransport, url: string): string {
     const meeting = this.options.normalizeMeetingUrlForReuse(url) ?? url;
     return `${transport}:${meeting}`;
-  }
-
-  #findTranscriptSourceSession(source: TranscriptSourceLocator): TSession | undefined {
-    const agentId = source.agentId?.trim();
-    const meetingUrl = source.meetingUrl?.trim();
-    const sessionId = source.channelId?.trim();
-    if (!agentId || (!meetingUrl && !sessionId)) {
-      return undefined;
-    }
-    return [...this.#sessions.values()]
-      .filter((session) => session.state === "active")
-      .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
-      .find(
-        (session) =>
-          (!agentId || session.agentId === agentId) &&
-          (!sessionId || session.id === sessionId) &&
-          (!meetingUrl || this.options.sameMeetingUrl(session.url, meetingUrl)),
-      );
-  }
-
-  async #getDurableTranscripts(): Promise<MeetingDurableTranscriptBridge<TSession> | undefined> {
-    if (!this.options.durableTranscripts) {
-      return undefined;
-    }
-    this.#durableTranscripts ??= import("./transcripts-bridge.runtime.js")
-      .then(({ createMeetingDurableTranscriptBridge }) =>
-        createMeetingDurableTranscriptBridge<TSession>({
-          logger: this.options.logger,
-          options: this.options.durableTranscripts!,
-        }),
-      )
-      .catch((error: unknown) => {
-        this.options.logger.warn(
-          `${this.options.logScope} durable transcripts unavailable: ${this.options.formatError(error)}`,
-        );
-        return undefined;
-      });
-    return await this.#durableTranscripts;
-  }
-
-  async #startDurableTranscripts(session: TSession): Promise<void> {
-    if (!this.options.isBrowserTransport(session.transport)) {
-      return;
-    }
-    const bridge = await this.#getDurableTranscripts();
-    await bridge?.start(session, async () => await this.#transcriptStore.captureNotes(session));
-  }
-
-  async #stopDurableTranscripts(
-    session: TSession,
-    options: { allowFallback: boolean },
-  ): Promise<void> {
-    const finalCapture = async () =>
-      await this.#transcriptStore.captureNotes(session, { finalize: true });
-    const bridge = await this.#getDurableTranscripts();
-    if (bridge?.enabled) {
-      const handled = await bridge.stop(session, finalCapture);
-      if (handled) {
-        return;
-      }
-    }
-    if (options.allowFallback && this.options.isTranscribeMode(session.mode)) {
-      await finalCapture().catch((error: unknown) => {
-        this.options.logger.debug?.(
-          `${this.options.logScope} final transcript snapshot ignored: ${this.options.formatError(error)}`,
-        );
-      });
-    }
   }
 
   #inheritBrowserTabOwnership(params: {
@@ -812,55 +733,12 @@ export class MeetingSessionRuntime<
     reason?: TSpeechBlockedReason;
     message?: string;
   } {
-    const speech = this.options.messages.speech;
-    const browser = this.options.getBrowser(session);
-    if (!this.options.isTalkBackMode(session.mode) || !browser) {
-      return { ready: true };
-    }
-    if (!this.#isManagedBrowserSession(session)) {
-      return browser.hasAudioBridge
-        ? { ready: true }
-        : {
-            ready: false,
-            reason: speech.audioBridgeUnavailableReason,
-            message: speech.audioBridgeUnavailable,
-          };
-    }
-    const health = browser.health;
-    if (health?.manualActionRequired) {
-      return {
-        ready: false,
-        reason: (health.manualActionReason ??
-          speech.browserUnverifiedReason) as TSpeechBlockedReason,
-        message: health.manualActionMessage ?? speech.manualActionFallback,
-      };
-    }
-    if (health?.inCall === true) {
-      if (health.micMuted !== false) {
-        const muted = health.micMuted === true;
-        // Unknown is transiently blocked: omitted mic controls cannot prove talk-back readiness.
-        return {
-          ready: false,
-          reason: muted ? speech.microphoneMutedReason : speech.browserUnverifiedReason,
-          message: muted ? speech.microphoneMuted : speech.browserUnverified,
-        };
-      }
-      return browser.hasAudioBridge
-        ? { ready: true }
-        : {
-            ready: false,
-            reason: speech.audioBridgeUnavailableReason,
-            message: speech.audioBridgeUnavailable,
-          };
-    }
-    if (health?.inCall === false) {
-      return { ready: false, reason: speech.notInCallReason, message: speech.notInCall };
-    }
-    return {
-      ready: false,
-      reason: speech.browserUnverifiedReason,
-      message: speech.browserUnverified,
-    };
+    return evaluateMeetingSpeechReadiness({
+      browser: this.options.getBrowser(session),
+      managedBrowser: this.#isManagedBrowserSession(session),
+      speech: this.options.messages.speech,
+      talkBack: this.options.isTalkBackMode(session.mode),
+    });
   }
 
   #noteSession(session: TSession, note: string): void {
