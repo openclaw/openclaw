@@ -168,24 +168,6 @@ function resolveSandboxSession(params: {
   return { rawSessionKey, runtime, cfg };
 }
 
-function resolveSandboxWorkspaceInfoWorkdir(params: {
-  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
-  rawSessionKey: string;
-  scopeKey: string;
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  skillsWorkspaceDir: string;
-}): string | undefined {
-  return getSandboxBackendWorkdirResolver(params.cfg.backend)?.({
-    sessionKey: params.rawSessionKey,
-    scopeKey: params.scopeKey,
-    workspaceDir: params.workspaceDir,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    cfg: params.cfg,
-  });
-}
-
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -219,6 +201,16 @@ export async function resolveSandboxContext(params: {
     execOverrides: params.execOverrides,
     workspaceDir: params.workspaceDir,
   });
+
+  const containerWorkdir =
+    getSandboxBackendWorkdirResolver(cfg.backend)?.({
+      sessionKey: rawSessionKey,
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      cfg,
+    }) ?? DEFAULT_SANDBOX_WORKDIR;
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -345,17 +337,19 @@ export async function ensureSandboxWorkspaceForSession(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
-    cfg,
-    rawSessionKey,
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir,
-  });
+  const containerWorkdir =
+    getSandboxBackendWorkdirResolver(cfg.backend)?.({
+      sessionKey: rawSessionKey,
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      cfg,
+    }) ?? DEFAULT_SANDBOX_WORKDIR;
+
   return {
     workspaceDir,
-    ...(containerWorkdir ? { containerWorkdir } : {}),
+    containerWorkdir,
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
