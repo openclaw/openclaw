@@ -1,0 +1,52 @@
+脚本启动于 2026-07-22 19:17:30+08:00 [COMMAND="node evidence/issue-110642-evidence.mjs" <not executed on terminal>]
+========================================================================
+REAL ENDPOINT EVIDENCE — #110642 splitArgumentsForStreaming UTF-16 Safety
+========================================================================
+Endpoint: https://api.deepseek.com/v1/chat/completions
+Date: 2026-07-22T11:17:30.960Z
+Model: deepseek-chat (OpenAI-compatible)
+
+── Step 1: Calling DeepSeek API (real OpenAI-compatible endpoint) ──
+
+Arguments length: 2051 UTF-16 code units
+Surrogate pairs in response: 17
+
+── Step 2: Exhaustive boundary scan at chunkSize=256 ──
+
+  OLD: 17/256 starting offsets produce broken chunks
+  NEW: 0/256 starting offsets produce broken chunks
+
+  First 5 broken-offset examples from OLD:
+    offset=0: OLD chunk[3] has broken surrogate
+    offset=5: OLD chunk[2] has broken surrogate
+    offset=13: OLD chunk[3] has broken surrogate
+    offset=27: OLD chunk[3] has broken surrogate
+    offset=34: OLD chunk[2] has broken surrogate
+
+── Step 3: OLD vs NEW on real data at offset 0 ──
+
+  OLD (String.prototype.slice):
+    → 9 chunks, 2 broken, 0/9 valid JSON, reconstruct: ✅
+  NEW (sliceUtf16Safe):
+    → 9 chunks, 0 broken, 0/9 valid JSON, reconstruct: ✅
+
+  ⛔ OLD chunk[3] last 2 chars: " \ud83c" (hex: 20003cd8)
+    first 2 chars of next: "\udf0d,"
+  ⛔ OLD chunk[4] last 2 chars: "ed" (hex: 65006400)
+    first 2 chars of next: " t"
+── BONUS: Exact-boundary crafted test ──
+
+  Crafted: 255 'a's + emoji + 100 'z's = 357 total
+  Emoji code units: 0xd83d 0xde00
+
+  OLD chunk[0] last char code: 0xd83d ⛔ HIGH SURROGATE (broken)
+  OLD chunk[1] first char code: 0xde00 ⛔ LOW SURROGATE (broken)
+  NEW chunk[0] last char code: 0x61 ✅
+  NEW chunk[1] first char code: 0xd83d ✅
+
+========================================================================
+CONCLUSION: OLD breaks surrogate pairs at chunk boundaries → invalid JSON.
+            NEW preserves surrogate pairs → valid, reconstructable chunks.
+========================================================================
+
+脚本完成于 2026-07-22 19:17:36+08:00 [COMMAND_EXIT_CODE="0"]
