@@ -1376,7 +1376,11 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(dataUrlWithPlusBoundary, { mode: "tools" })).toBe(
       dataUrlWithPlusBoundary,
     );
-    const dataUrlWithAwsShapedPayload = `data:application/octet-stream;base64,${"Ab9+".repeat(10)}`;
+    const awsShapedPayload = Array.from(
+      { length: 40 },
+      (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
+    ).join("");
+    const dataUrlWithAwsShapedPayload = `data:application/octet-stream;base64,${awsShapedPayload}`;
     expect(redactSensitiveText(dataUrlWithAwsShapedPayload, { mode: "tools" })).toBe(
       dataUrlWithAwsShapedPayload,
     );

@@ -727,6 +727,10 @@ describe("diagnostic support export", () => {
       fakeJwtAwsSecretShapedSegment(),
       "signatureabcd123456",
     ].join(".");
+    const awsShapedDataUrl = `data:application/octet-stream;base64,${Array.from(
+      { length: 40 },
+      (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
+    ).join("")}`;
     const cases = [
       [
         "connect wss://support-user:support-password@gateway.example/ws?token=short-token&ok=1",
@@ -749,10 +753,7 @@ describe("diagnostic support export", () => {
         `aws padded secret ${fakeAwsSecretAccessKeyWithPadding()}`,
         "aws padded secret <redacted-aws-secret-key>",
       ],
-      [
-        `data data:application/octet-stream;base64,${"Ab9+".repeat(10)}`,
-        `data data:application/octet-stream;base64,${"Ab9+".repeat(10)}`,
-      ],
+      [`data ${awsShapedDataUrl}`, `data ${awsShapedDataUrl}`],
       [`jwt ${fakeJwt}`, "jwt <redacted-jwt>"],
       [`jwt ${jwtWithAwsSecretShapedSegment}`, "jwt <redacted-jwt>"],
       [`provider ${fakeFlyTokenWithAwsShapedBody()}`, "provider FlyV1 …tail"],

@@ -22,6 +22,11 @@ function fakeFlyTokenWithAwsShapedBody(): string {
   return `FlyV1 fm123_${fakeAwsCredentialWithPadding()}_${"tail".repeat(20)}`;
 }
 
+function fakeBase64LikePayload(length: number): string {
+  const chars = ["A", "b", "9", "+"] as const;
+  return Array.from({ length }, (_entry, index) => chars[index % chars.length] ?? "A").join("");
+}
+
 describe("redactSensitiveText token ordering", () => {
   it("masks AWS secret access keys containing padding characters", () => {
     const secret = fakeAwsCredentialWithPadding();
@@ -66,7 +71,7 @@ describe("redactSensitiveText token ordering", () => {
   });
 
   it("does not mask AWS-shaped chunks inside longer base64-like payloads", () => {
-    const payload = "Ab9+".repeat(512);
+    const payload = fakeBase64LikePayload(2048);
     expect(redactSensitiveText(`payload ${payload}`, { mode: "tools" })).toBe(`payload ${payload}`);
   });
 });
