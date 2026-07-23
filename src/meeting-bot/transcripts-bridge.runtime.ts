@@ -28,6 +28,7 @@ type ActiveCapture<TSession extends MeetingSessionRecord> = {
   finalCaptureError?: string;
   finalCaptureFailedAt?: string;
   initialized: boolean;
+  initializationWarned: boolean;
   polling: boolean;
   runCapture(task: () => Promise<void>): Promise<void>;
   session: TSession;
@@ -185,6 +186,7 @@ export function createMeetingDurableTranscriptBridge<
           closing: false,
           descriptor,
           initialized: false,
+          initializationWarned: false,
           polling: false,
           runCapture,
           session,
@@ -193,25 +195,34 @@ export function createMeetingDurableTranscriptBridge<
         captures.set(session.id, active);
         // Start and stop share runLifecycle(session.id), so teardown cannot mark
         // this published capture closing while initialization awaits.
-        try {
-          await store.writeSession(descriptor);
-          active.initialized = true;
-        } catch (error) {
-          params.logger.warn(
-            `[meeting-transcripts] could not start durable capture session=${session.id}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
+        const initialize = async () => {
+          if (active.initialized) {
+            return;
+          }
+          try {
+            await store.writeSession(descriptor);
+            active.initialized = true;
+            active.initializationWarned = false;
+          } catch (error) {
+            if (!active.initializationWarned) {
+              params.logger.warn(
+                `[meeting-transcripts] durable capture initialization pending session=${session.id}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+              active.initializationWarned = true;
+            }
+          }
+        };
         const timer = setInterval(() => {
-          // This is polling, not an edge-triggered notification: a skipped tick is
-          // followed within CAPTURE_INTERVAL_MS, and stop queues a final snapshot.
+          // polling covers both initialize() and capture, so session writes are
+          // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
           if (active.polling || active.closing) {
             return;
           }
           active.polling = true;
-          void active
-            .runCapture(capture)
+          void initialize()
+            .then(async () => await active.runCapture(capture))
             .catch((error: unknown) => reportCaptureError(session.id, error))
             .finally(() => {
               active.polling = false;
@@ -221,6 +232,7 @@ export function createMeetingDurableTranscriptBridge<
         active.timer = timer;
         active.polling = true;
         try {
+          await initialize();
           await active
             .runCapture(capture)
             .catch((error: unknown) => reportCaptureError(session.id, error));
