@@ -293,4 +293,28 @@ describe("Canvas tool", () => {
     );
     expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
   });
+
+  it("surfaces an explicit null eval result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({ payload: { result: null } });
+    const tool = createCanvasTool();
+
+    const result = await tool.execute("tool-call-1", {
+      action: "eval",
+      javaScript: "null",
+    });
+
+    expect(result.details).toEqual({ ok: true, result: null });
+  });
+
+  it("surfaces an empty-string eval error", async () => {
+    mocks.callGatewayTool.mockResolvedValue({ payload: { error: "" } });
+    const tool = createCanvasTool();
+
+    const result = await tool.execute("tool-call-1", {
+      action: "eval",
+      javaScript: "throw ''",
+    });
+
+    expect(result.details).toMatchObject({ ok: false });
+  });
 });

@@ -158,14 +158,26 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             required: true,
           });
           const raw = (await invoke("canvas.eval", { javaScript })) as {
-            payload?: { result?: string };
+            payload?: { result?: unknown; error?: string };
           };
+          // Surface eval errors when the runtime reports them.
+          // Use property presence so even an empty string error is observable.
+          if (raw?.payload != null && "error" in raw.payload) {
+            const error = typeof raw.payload.error === "string" ? raw.payload.error : undefined;
+            return jsonResult({ ok: false, ...(error !== undefined ? { error } : {}) });
+          }
+          const hasResult = raw?.payload != null && "result" in raw.payload;
           const result = raw?.payload?.result;
           if (typeof result === "string") {
             return {
               content: [{ type: "text", text: result }],
               details: { result },
             };
+          }
+          // Non-string results (number, object, explicit null, etc.) are
+          // still successful; surface them so the agent can inspect them.
+          if (hasResult) {
+            return jsonResult({ ok: true, result });
           }
           return jsonResult({ ok: true });
         }
