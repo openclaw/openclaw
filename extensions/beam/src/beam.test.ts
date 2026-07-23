@@ -100,11 +100,30 @@ describe("Beam payload validation", () => {
     expect(result).toEqual({ ok: true, value: sampleUpload() });
   });
 
-  it("rejects unknown fields and oversized transcript entries", () => {
+  it("accepts timezone-bearing ISO timestamps with four-digit low years", () => {
+    expect(parseBeamUpload(sampleUpload({ updatedAt: "0099-01-01T00:00:00Z" }))).toEqual({
+      ok: true,
+      value: sampleUpload({ updatedAt: "0099-01-01T00:00:00Z" }),
+    });
+  });
+
+  it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
     expect(parseBeamUpload(sampleUpload({ arbitrary: "junk" }))).toEqual({
       ok: false,
       error: "request body must be a closed Beam object",
     });
+    for (const updatedAt of [
+      "1",
+      "2026/07/20",
+      "2026-07-20T12:00:00",
+      "2026-02-30T12:00:00Z",
+      "2026-04-31T00:00:00Z",
+    ]) {
+      expect(parseBeamUpload(sampleUpload({ updatedAt }))).toEqual({
+        ok: false,
+        error: "updatedAt must be an ISO timestamp",
+      });
+    }
     expect(
       parseBeamUpload(sampleUpload({ items: [{ type: "userMessage", text: "x".repeat(6_001) }] })),
     ).toEqual({
@@ -206,7 +225,7 @@ describe("Beam session catalog", () => {
   it("lists newest sessions and reads paginated transcript items without mutation capabilities", async () => {
     const store = memoryStore();
     await store.put({
-      ...sampleUpload(),
+      ...sampleUpload({ truncated: true }),
       createdAt: 100,
       receivedAt: 200,
     });
@@ -243,9 +262,43 @@ describe("Beam session catalog", () => {
       limit: 1,
     });
     expect(transcript.items).toEqual([
+      expect.objectContaining({ type: "agentMessage", text: "Implemented and tested." }),
+    ]);
+    expect(transcript.items[0]).not.toHaveProperty("truncated");
+    expect(transcript.nextCursor).toEqual(expect.any(String));
+
+    const older = await catalog.read({
+      hostId: "gateway",
+      threadId: "0123456789abcdef0123456789abcdef",
+      limit: 1,
+      cursor: transcript.nextCursor,
+    });
+    expect(older.items).toEqual([
       expect.objectContaining({ type: "userMessage", text: "Please fix the upload flow." }),
     ]);
-    expect(transcript.nextCursor).toBe("1");
+    expect(older.nextCursor).toBeUndefined();
+
+    const current = store.values.get("0123456789abcdef0123456789abcdef");
+    if (!current) {
+      throw new Error("Beam test store lost the current session");
+    }
+    await store.put({
+      ...current,
+      items: [
+        ...current.items.slice(1),
+        { type: "agentMessage", text: "Appended after first page." },
+      ],
+      receivedAt: 200,
+    });
+
+    await expect(
+      catalog.read({
+        hostId: "gateway",
+        threadId: "0123456789abcdef0123456789abcdef",
+        limit: 1,
+        cursor: transcript.nextCursor,
+      }),
+    ).rejects.toThrow("stale Beam transcript cursor");
     expect(catalog.continueSession).toBeUndefined();
     expect(catalog.archive).toBeUndefined();
     expect(catalog.openTerminal).toBeUndefined();

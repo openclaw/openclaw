@@ -55,6 +55,38 @@ function optionalString(value: unknown, maxLength: number): string | undefined {
   return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
 }
 
+function isIsoTimestamp(value: string): boolean {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(
+      value,
+    );
+  if (!match || !Number.isFinite(Date.parse(value))) {
+    return false;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const offsetHour = Number(match[8] ?? 0);
+  const offsetMinute = Number(match[9] ?? 0);
+  if (hour > 23 || minute > 59 || second > 59 || offsetHour > 23 || offsetMinute > 59) {
+    return false;
+  }
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, second, 0);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day &&
+    calendar.getUTCHours() === hour &&
+    calendar.getUTCMinutes() === minute &&
+    calendar.getUTCSeconds() === second
+  );
+}
+
 export function parseBeamUpload(
   value: unknown,
 ): { ok: true; value: BeamUpload } | { ok: false; error: string } {
@@ -77,7 +109,7 @@ export function parseBeamUpload(
     return { ok: false, error: "title must be a non-empty string" };
   }
   const updatedAt = optionalString(value.updatedAt, 64);
-  if (!updatedAt || !Number.isFinite(Date.parse(updatedAt))) {
+  if (!updatedAt || !isIsoTimestamp(updatedAt)) {
     return { ok: false, error: "updatedAt must be an ISO timestamp" };
   }
   if (typeof value.completed !== "boolean") {

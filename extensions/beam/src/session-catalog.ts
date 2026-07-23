@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   SessionCatalogProvider,
   SessionCatalogTranscriptItem,
@@ -30,8 +31,55 @@ function transcriptItems(session: BeamStoredSession): SessionCatalogTranscriptIt
     type: item.type,
     text: item.text,
     timestamp: session.updatedAt,
-    ...(session.truncated ? { truncated: true } : {}),
   }));
+}
+
+type TranscriptCursor = { revision: string; end: number };
+
+function transcriptRevision(session: BeamStoredSession): string {
+  return createHash("sha256").update(JSON.stringify(session.items)).digest("base64url");
+}
+
+function encodeTranscriptCursor(cursor: TranscriptCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodeTranscriptCursor(value: string): TranscriptCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as TranscriptCursor).revision === "string" &&
+      /^[A-Za-z0-9_-]{43}$/.test((parsed as TranscriptCursor).revision) &&
+      typeof (parsed as TranscriptCursor).end === "number" &&
+      Number.isSafeInteger((parsed as TranscriptCursor).end) &&
+      (parsed as TranscriptCursor).end >= 0
+    ) {
+      return parsed as TranscriptCursor;
+    }
+  } catch {
+    // Reject malformed cursors below.
+  }
+  throw new Error("invalid Beam transcript cursor");
+}
+
+function transcriptPage(
+  items: SessionCatalogTranscriptItem[],
+  limit: number,
+  revision: string,
+  cursor?: TranscriptCursor,
+): { items: SessionCatalogTranscriptItem[]; nextCursor?: string } {
+  if (cursor && cursor.revision !== revision) {
+    throw new Error("stale Beam transcript cursor");
+  }
+  const end = Math.min(items.length, Math.max(0, cursor?.end ?? items.length));
+  const start = Math.max(0, end - limit);
+  return {
+    items: items.slice(start, end),
+    ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
+  };
 }
 
 export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvider {
@@ -78,18 +126,17 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       if (!session) {
         throw new Error(`unknown Beam session: ${params.threadId}`);
       }
-      const allItems = transcriptItems(session);
-      const offset = cursorOffset(params.cursor);
-      const limit = boundedLimit(params.limit);
-      const items = allItems.slice(offset, offset + limit);
+      const page = transcriptPage(
+        transcriptItems(session),
+        boundedLimit(params.limit),
+        transcriptRevision(session),
+        params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor),
+      );
       return {
         hostId: BEAM_HOST_ID,
         label: session.title,
         threadId: session.beamId,
-        items,
-        ...(offset + items.length < allItems.length
-          ? { nextCursor: String(offset + items.length) }
-          : {}),
+        ...page,
       };
     },
   };
