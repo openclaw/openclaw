@@ -36,7 +36,7 @@ const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 // agents_wait can use a 600s inner budget plus 30s handler grace. Keep the
 // app-server request guard outside that window so Codex receives the tool result.
-export const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;

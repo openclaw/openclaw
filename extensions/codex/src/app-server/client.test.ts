@@ -2,7 +2,6 @@
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
   CodexAppServerClient,
   isCodexAppServerApprovalRequest,
   isCodexAppServerIndeterminateTransportError,
@@ -10,6 +9,8 @@ import {
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
+
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];

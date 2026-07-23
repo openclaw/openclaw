@@ -355,7 +355,7 @@ export function reconcileOrphanedRestoredRuns(params: {
 }
 
 /** Resolves the completed subagent archive delay from config. */
-export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
+function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??

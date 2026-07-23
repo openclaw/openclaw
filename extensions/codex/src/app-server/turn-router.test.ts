@@ -1,12 +1,11 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
-  type CodexAppServerClient,
-} from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
+
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 type ClientHarness = ReturnType<typeof createClientHarness>;
 

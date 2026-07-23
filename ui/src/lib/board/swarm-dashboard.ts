@@ -43,7 +43,7 @@ function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySession
   return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
 }
 
-export function mergeSwarmSessionRows(
+function mergeSwarmSessionRows(
   childRows: readonly GatewaySessionRow[],
   currentRows: readonly GatewaySessionRow[],
 ): GatewaySessionRow[] {
@@ -57,7 +57,7 @@ export function mergeSwarmSessionRows(
   return [...merged.values()];
 }
 
-export async function hydrateSwarmSessionRows(params: {
+async function hydrateSwarmSessionRows(params: {
   sessions: SessionCapability;
   parentKey: string;
   currentRows: readonly GatewaySessionRow[];
@@ -237,4 +237,11 @@ export function withSwarmWidget(
       )
     : [...snapshot.widgets, widget];
   return { ...snapshot, tabs, widgets };
+}
+
+if (import.meta.env.MODE === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.swarmDashboardTestApi")] = {
+    hydrateSwarmSessionRows,
+    mergeSwarmSessionRows,
+  };
 }
