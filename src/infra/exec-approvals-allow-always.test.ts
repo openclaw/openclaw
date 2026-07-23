@@ -46,10 +46,11 @@ describe("resolveAllowAlwaysPatterns", () => {
       strictInlineEval: params.strictInlineEval,
       authorizationPlan: analysis.authorizationPlan,
     });
+    const entries = decision.kind === "patterns" ? decision.patterns : [];
     return {
       analysis,
-      persisted:
-        decision.kind === "patterns" ? decision.patterns.map((entry) => entry.pattern) : [],
+      entries,
+      persisted: entries.map((entry) => entry.pattern),
     };
   }
 
@@ -158,6 +159,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     command: string;
     expectPersisted: boolean;
     expectAllowlisted?: boolean;
+    changedCommand?: string;
   }) {
     const dir = makeTempDir();
     const touch = makeExecutable(dir, "touch");
@@ -166,7 +168,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     const marker = path.join(dir, "marker");
     const command = params.command.replaceAll("{marker}", marker);
 
-    const { persisted } = await resolvePersistedPatterns({
+    const { entries, persisted } = await resolvePersistedPatterns({
       command,
       dir,
       env,
@@ -174,19 +176,45 @@ describe("resolveAllowAlwaysPatterns", () => {
     });
     if (params.expectPersisted) {
       expect(persisted).toEqual([touch]);
+      expect(entries).toEqual([
+        {
+          pattern: touch,
+          argPattern: buildHashedArgPatternFromArgv([touch, marker]),
+        },
+      ]);
     } else {
       expect(persisted).toStrictEqual([]);
     }
 
     const second = await evaluateShellAllowlistWithAuthorization({
       command,
-      allowlist: [{ pattern: touch }],
+      allowlist: params.expectPersisted ? entries : [{ pattern: touch }],
       safeBins,
       cwd: dir,
       env,
       platform: process.platform,
     });
     expect(second.allowlistSatisfied).toBe(params.expectAllowlisted ?? params.expectPersisted);
+
+    if (params.changedCommand) {
+      const changed = await evaluateShellAllowlistWithAuthorization({
+        command: params.changedCommand.replaceAll("{marker}", marker),
+        allowlist: entries,
+        safeBins,
+        cwd: dir,
+        env,
+        platform: process.platform,
+      });
+      expect(changed.allowlistSatisfied).toBe(false);
+      expect(
+        requiresExecApproval({
+          ask: "on-miss",
+          security: "allowlist",
+          analysisOk: changed.analysisOk,
+          allowlistSatisfied: changed.allowlistSatisfied,
+        }),
+      ).toBe(true);
+    }
   }
 
   it("returns direct executable paths for non-shell segments", () => {
@@ -675,6 +703,62 @@ describe("resolveAllowAlwaysPatterns", () => {
       expectPersisted: false,
       expectAllowlisted: true,
     });
+  });
+
+  it("keeps generated positional carrier patterns bound to the carried argv", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const touch = makeExecutable(dir, "touch");
+    makeExecutable(dir, "sh");
+    const env = makePathEnv(dir);
+    const safeBins = resolveSafeBins(undefined);
+    const marker = path.join(dir, "marker");
+    const platform = "linux";
+    const analysis = analyzeArgvCommand({
+      argv: ["sh", "-c", '$0 "$1"', "touch", marker],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    const expectedArgPattern = buildHashedArgPatternFromArgv([touch, marker]);
+    expect(entries).toEqual([{ pattern: touch, argPattern: expectedArgPattern }]);
+
+    const allowed = evaluateExecAllowlist({
+      analysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(allowed.allowlistSatisfied).toBe(true);
+
+    const changedAnalysis = analyzeArgvCommand({
+      argv: ["sh", "-c", '$0 "$1"', "touch", path.join(dir, "other-marker")],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(changedAnalysis.ok).toBe(true);
+    const denied = evaluateExecAllowlist({
+      analysis: changedAnalysis,
+      allowlist: entries,
+      safeBins,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(denied.allowlistSatisfied).toBe(false);
   });
 
   it("rejects positional argv carriers when $0 is single-quoted", async () => {
