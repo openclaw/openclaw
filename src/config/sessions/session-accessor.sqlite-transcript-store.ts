@@ -18,10 +18,12 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
+  advanceTranscriptMutationAtInTransaction,
   deleteSqliteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
   ensureTranscriptSessionRoot,
   readTranscriptGenerationInTransaction,
+  readTranscriptMutationStateInTransaction,
   readNextTranscriptSeq,
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
@@ -350,8 +352,8 @@ export function replaceSqliteTranscriptEventsInTransaction(
 }
 
 // Text-only transcript repair: rewrites event_json for specific rows in place.
-// Preserves seq, created_at, and the sessions row (session_key/updated_at); only rotates the
-// transcript generation and reconciles the index so readers/search pick up the new text.
+// Preserves seq, created_at, session_key, and session activity recency; rotates the transcript
+// generation and rebuilds the index so readers/search pick up the new text.
 export function updateSqliteTranscriptEventJsonInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
@@ -374,7 +376,21 @@ export function updateSqliteTranscriptEventJsonInTransaction(
   rotateTranscriptGenerationInTransaction(database, sessionId);
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
-  touchTranscriptMutationInTransaction(database, sessionId);
+  // Minimally advance transcript_updated_at (prev+1), NOT to now. This is a one-time maintenance
+  // rewrite: bumping to now would reorder legacy sessions to the top of every recency view
+  // (sqlite-history.ts orders by transcript_updated_at). But the watermark must still change,
+  // because it is the in-flight projection-rebuild worker's stale-snapshot key
+  // (session-transcript-projection-rebuild.ts sourceSnapshotMatches) and seq is unchanged here;
+  // leaving it identical would let a concurrent worker apply a stale pre-rewrite index. A null
+  // watermark (session absent from recency views) has no recency to preserve, so touch to now.
+  const currentUpdatedAt = readTranscriptMutationStateInTransaction(database, sessionId).updatedAt;
+  if (currentUpdatedAt === null) {
+    touchTranscriptMutationInTransaction(database, sessionId);
+  } else {
+    advanceTranscriptMutationAtInTransaction(database, sessionId, currentUpdatedAt, {
+      strictly: true,
+    });
+  }
 }
 
 export function readTranscriptIdentityByEventId(

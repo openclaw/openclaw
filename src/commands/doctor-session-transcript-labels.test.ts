@@ -374,6 +374,23 @@ describe("doctor SQLite session transcript label migration", () => {
     const beforeSeqs = before.rows.map((row) => row.seq);
     const beforeMetadata = readRowMetadata();
 
+    // Pin an explicitly OLD activity timestamp so we can prove the maintenance rewrite preserves
+    // recency instead of jumping the session to repair-time.
+    const OLD_UPDATED_AT = 1_000_000;
+    runOpenClawAgentWriteTransaction((db) => {
+      db.db
+        .prepare(
+          "UPDATE sessions SET transcript_updated_at = ?, transcript_observed_at = ? WHERE session_id = ?",
+        )
+        .run(OLD_UPDATED_AT, OLD_UPDATED_AT - 1000, SESSION_ID);
+    }, databaseOptions);
+    const readUpdatedAt = () =>
+      (
+        database.db
+          .prepare("SELECT transcript_updated_at AS v FROM sessions WHERE session_id = ?")
+          .get(SESSION_ID) as { v: number }
+      ).v;
+
     await noteSessionTranscriptLabelHealth({
       cfg: CFG,
       env: state.env,
@@ -387,6 +404,9 @@ describe("doctor SQLite session transcript label migration", () => {
     // Surgical repair must not reset created_at. A whole-transcript replace would rewrite the
     // timestamp-less message rows to repair-time; this assertion locks the surgical path.
     expect(readRowMetadata()).toEqual(beforeMetadata);
+    // Recency preserved: the watermark advances minimally (prev+1) to invalidate in-flight
+    // projection snapshots, but must NOT jump to repair-time and reorder the session list.
+    expect(readUpdatedAt()).toBe(OLD_UPDATED_AT + 1);
     const legacyRowIndex = before.events.findIndex(
       (e) =>
         Boolean(e) &&

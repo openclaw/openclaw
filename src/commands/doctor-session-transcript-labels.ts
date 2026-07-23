@@ -27,11 +27,21 @@ const NOTE_TITLE = "Session transcript labels";
 // - PLAIN-TEXT blocks: exact-match only. No catch-all patterns.
 // - CHAT WINDOW pattern: kept as-is (dynamic label but distinctive pattern).
 //
-// RULE 1 (fence-gated generic label) ACCEPTED TRADEOFF: in the extreme tail, a user message
-// whose body contains an exact `<label> (untrusted metadata):` line immediately followed by
-// a ```json fence would have that label's parenthetical dropped. Accepted because it requires
-// authoring OpenClaw's internal trust-flag format verbatim before a JSON fence; the effect
-// is a minor historical-transcript edit; and enumerate-only matching would leave dynamic-label
+// ACCEPTED TRADEOFF (all rules): in the extreme tail, a user message whose body contains a line
+// that verbatim-matches an OpenClaw-internal legacy label gets rewritten to the current form.
+// - Fenced rules (1, 4-7) additionally require a following ```json fence, so they are self-limiting.
+//   Effect there is a minor label edit; the block stays visible.
+// - Unfenced rules (2, 3, 8) match a standalone line with no fence. Rules 3 and 8 rewrite to a
+//   current sentinel that the runtime stripper then removes (line + following window) on replay
+//   (strip-inbound-meta.ts). This is intentional and consistent with existing runtime behavior:
+//   the runtime ALREADY strips a user line that verbatim-matches a current sentinel; the migration
+//   only extends that to the old-label form in historical transcripts. Rule 2 rewrites to `Context:`,
+//   which the runtime strips only when followed by an <active_memory_plugin> tag, so a bare match is
+//   a cosmetic label edit.
+// Accepted because: the trigger requires authoring an exact internal label string as a standalone
+// line; these unfenced rules are REQUIRED to close the memory-lancedb re-capture leak (its capture
+// recognizers key on the same current labels: extensions/memory-lancedb/index.ts INBOUND_META_SENTINELS
+// + LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE); and enumerate-only matching would leave dynamic-label
 // blocks unmigrated.
 //
 // Trace of old emitters from src/auto-reply/reply/inbound-meta.ts (merge-base 7c896d78592e33f2f5fa1bb36ca588dcc3f96143):
