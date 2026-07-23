@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import { resolveSessionFilePath, resolveStorePath, validateSessionId } from "./paths.js";
 
 const tempDirs: string[] = [];
 
@@ -47,6 +47,22 @@ describe("resolveSessionFilePath cross-root reroot", () => {
     );
 
     expect(resolved).toBe(foreign);
+  });
+});
+
+describe("validateSessionId", () => {
+  it("throws a controlled Error instead of a TypeError for a non-string sessionId", () => {
+    // Regression for a malformed store entry whose sessionId is undefined:
+    // validateSessionId must not blow up with `Cannot read properties of
+    // undefined (reading 'trim')` (see issue #112355).
+    expect(() => validateSessionId(undefined as unknown as string)).toThrow(/Invalid session ID/);
+    expect(() => validateSessionId(undefined as unknown as string)).not.toThrow(TypeError);
+    expect(() => validateSessionId(null as unknown as string)).toThrow(/Invalid session ID/);
+    expect(() => validateSessionId(42 as unknown as string)).toThrow(/Invalid session ID/);
+  });
+
+  it("returns the trimmed id for a well-formed sessionId", () => {
+    expect(validateSessionId("  abc-123_ok  ")).toBe("abc-123_ok");
   });
 });
 
