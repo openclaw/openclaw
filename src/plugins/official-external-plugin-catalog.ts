@@ -380,7 +380,7 @@ function resolveHostedCatalogFeedUrl(raw: string): URL {
   return parsed;
 }
 
-function resolveOfficialExternalPluginCatalogProfileConfig(
+export function resolveOfficialExternalPluginCatalogProfileConfig(
   config?: OfficialExternalPluginCatalogProfileConfig,
 ): Required<OfficialExternalPluginCatalogProfileConfig> {
   return {
