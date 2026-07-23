@@ -73,6 +73,7 @@ import {
 } from "./rich-message.js";
 import {
   buildTelegramPlainFallbackPlan,
+  isTelegramEmptyContentError,
   isTelegramHtmlParseError,
   splitTelegramPlainTextChunks,
   warnTelegramRichBlocksDegradations,
@@ -1044,15 +1045,30 @@ async function sendMessageTelegramWithContext(
       if (!chunk) {
         continue;
       }
-      const { result: res, acceptedParams } = await sendTelegramTextChunk(
-        chunk,
-        buildTextParams(
-          index,
-          chunks.length,
-          index === chunks.length - 1,
-          options.replyToAlreadyUsed === true,
-        ),
-      );
+      let sent: Awaited<ReturnType<typeof sendTelegramTextChunk>>;
+      try {
+        sent = await sendTelegramTextChunk(
+          chunk,
+          buildTextParams(
+            index,
+            chunks.length,
+            index === chunks.length - 1,
+            options.replyToAlreadyUsed === true,
+          ),
+        );
+      } catch (err) {
+        // Parity with the reply funnel: a chunk Telegram rejects as empty has
+        // no visible content, so record no delivery for it instead of failing
+        // the whole outbound send.
+        if (isTelegramEmptyContentError(err)) {
+          sendLogger.warn(
+            `telegram ${context} chunk rejected as empty content; skipping: ${formatErrorMessage(err)}`,
+          );
+          continue;
+        }
+        throw err;
+      }
+      const { result: res, acceptedParams } = sent;
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
       await reportDelivery(messageId, res?.chat?.id ?? chatId, {

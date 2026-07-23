@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildTelegramPlainFallbackPlan } from "./rich-plain-fallback.js";
+import {
+  buildTelegramPlainFallbackPlan,
+  isTelegramEmptyContentError,
+} from "./rich-plain-fallback.js";
 
 function planFor(message: string) {
   return buildTelegramPlainFallbackPlan({
@@ -9,6 +12,23 @@ function planFor(message: string) {
     warn: () => {},
   });
 }
+
+describe("isTelegramEmptyContentError", () => {
+  it.each([
+    "Bad Request: message text is empty",
+    "Bad Request: text must be non-empty",
+    "Bad Request: RICH_MESSAGE_CONTENT_REQUIRED",
+  ])("classifies %s as an empty-content rejection", (message) => {
+    expect(isTelegramEmptyContentError(new Error(message))).toBe(true);
+  });
+
+  it("does not classify parse or structural rejections as empty content", () => {
+    expect(isTelegramEmptyContentError(new Error("Bad Request: can't parse entities"))).toBe(false);
+    expect(isTelegramEmptyContentError(new Error("Bad Request: RICH_MESSAGE_DEPTH_INVALID"))).toBe(
+      false,
+    );
+  });
+});
 
 describe("buildTelegramPlainFallbackPlan", () => {
   // Live-verified Bot API 10.2 structural rejections (2026-07-15).

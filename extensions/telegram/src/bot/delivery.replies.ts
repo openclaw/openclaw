@@ -285,10 +285,16 @@ async function deliverTextReply(params: {
           replyMarkup,
         },
       );
-      if (firstDeliveredMessageId == null) {
-        firstDeliveredMessageId = messageId;
+      // A render-to-empty chunk resolves undefined (silently skipped): only a
+      // delivered message updates first-delivered tracking and projects into
+      // prompt context, otherwise a skipped chunk would surface a phantom send.
+      if (messageId != null) {
+        if (firstDeliveredMessageId == null) {
+          firstDeliveredMessageId = messageId;
+        }
+        await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
       }
-      await params.progress.promptContext?.accept({ messageId, text: chunk.plainText });
+      return messageId;
     },
   });
   return firstDeliveredMessageId;
@@ -573,12 +579,17 @@ async function deliverMediaReply(params: {
               progress: createVoiceFallbackProgress(),
               quoteOnlyOnFirstChunk: true,
             });
-            if (firstDeliveredMessageId == null) {
-              firstDeliveredMessageId = fallbackMessageId;
+            // The text fallback only counts as a delivered reply when it
+            // actually reached Telegram; a render-to-empty fallback delivers
+            // nothing, so it must not mark delivered or mirror phantom text.
+            if (fallbackMessageId != null) {
+              if (firstDeliveredMessageId == null) {
+                firstDeliveredMessageId = fallbackMessageId;
+              }
+              visibleFallbackText = fallbackText;
+              markReplyApplied(params.progress, voiceFallbackReplyTo);
+              markDelivered(params.progress);
             }
-            visibleFallbackText = fallbackText;
-            markReplyApplied(params.progress, voiceFallbackReplyTo);
-            markDelivered(params.progress);
             continue;
           }
           if (isCaptionTooLong(voiceErr)) {
@@ -591,7 +602,7 @@ async function deliverMediaReply(params: {
             await sendVoiceMedia(noCaptionParams);
             const fallbackText = resolveVoiceFallbackText(params.reply);
             if (fallbackText?.trim()) {
-              await deliverTextReply({
+              const captionFallbackMessageId = await deliverTextReply({
                 bot: params.bot,
                 chatId: params.chatId,
                 runtime: params.runtime,
@@ -608,7 +619,11 @@ async function deliverMediaReply(params: {
                 progress: createVoiceFallbackProgress(),
                 quoteOnlyOnFirstChunk: true,
               });
-              visibleFallbackText = fallbackText;
+              // Voice already delivered. Adopt the caption text only if its
+              // separate send reached Telegram; the "" sentinel (render-to-empty
+              // skip) clears the sent-hook content below so a phantom reply.text
+              // is not mirrored alongside the voice message.
+              visibleFallbackText = captionFallbackMessageId != null ? fallbackText : "";
             }
             markReplyApplied(params.progress, replyToMessageId);
             continue;
@@ -1009,7 +1024,10 @@ export async function deliverReplies(params: {
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
-        if (mediaDelivery.visibleFallbackText) {
+        if (mediaDelivery.visibleFallbackText !== undefined) {
+          // A voice/caption text fallback ran: adopt its delivered text, or the
+          // "" sentinel (render-to-empty skip) which blanks the sent-hook
+          // content so an undelivered caption is not mirrored as reply.text.
           contentForSentHook = mediaDelivery.visibleFallbackText;
         }
       }
