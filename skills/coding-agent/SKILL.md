@@ -50,6 +50,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
 - Classify the source ref as trusted or untrusted before any checkout or worktree creation. Never materialize a contributor-controlled ref outside the repository's approved untrusted-PR sandbox/review workflow, and never launch a permission-bypassed worker in it.
 - For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
+- **Codex credential isolation:** Never launch Codex with the ambient `CODEX_HOME` (default `~/.codex`). Sharing the ambient home with OpenClaw's own ChatGPT OAuth causes `refresh_token_reused` failures that invalidate OpenClaw's provider auth. Always scope a worker-specific `CODEX_HOME` to Codex commands only (see [Codex credential isolation](#codex-credential-isolation)). Do not export `CODEX_HOME` into the OpenClaw Gateway environment.
 
 ## Mandatory Git preparation
 
@@ -104,6 +105,61 @@ Do not use openclaw system event or heartbeat.
 
 If no trustworthy route exists, say completion auto-notify is unavailable.
 
+## Codex credential isolation
+
+OpenClaw and Codex CLI both authenticate with ChatGPT OAuth. Sharing the
+ambient `CODEX_HOME` (default `~/.codex`) causes `refresh_token_reused` errors
+that invalidate OpenClaw's provider auth. To prevent this, every Codex worker
+must use a dedicated `CODEX_HOME` scoped only to its command.
+
+A dedicated `CODEX_HOME` isolates credentials **and all other Codex state**
+(`config.toml`, model/provider overrides, MCP servers, hooks, skills, plugins).
+The worker home starts as a clean profile — it does not inherit settings from
+the ambient `~/.codex`. If the user has non-auth Codex configuration that workers
+need, copy the relevant settings to the worker home after the one-time login
+below.
+
+### One-time setup per worker home
+
+```bash
+CODEX_HOME=~/.codex-openclaw-worker codex login
+```
+
+Complete a separate ChatGPT OAuth authorization, even when using the same
+ChatGPT account as OpenClaw. This creates an independent refresh-token cycle
+that does not collide with OpenClaw's own OAuth profile.
+
+### Migrating non-auth settings (optional)
+
+If the user has Codex configuration in `~/.codex` that workers also need
+(model/provider overrides, MCP servers, hooks, etc.), copy the relevant
+`config.toml` entries to the worker home:
+
+```bash
+mkdir -p ~/.codex-openclaw-worker
+cp ~/.codex/config.toml ~/.codex-openclaw-worker/config.toml 2>/dev/null || true
+```
+
+Only `config.toml` needs to be copied — do **not** copy `auth.json` or any
+credential files. The worker home must use its own separate OAuth login from
+the step above.
+
+### Preflight check
+
+Before launching a Codex worker, verify the worker home is authenticated:
+
+```bash
+CODEX_HOME=~/.codex-openclaw-worker codex login status
+```
+
+If the status check fails, prompt the user to run the one-time `codex login`
+above before proceeding.
+
+### Worker launch
+
+All Codex launch commands below include the `CODEX_HOME` prefix. Do not export
+`CODEX_HOME` into the Gateway environment — scope it only to the Codex command.
+
 ## Launch forms
 
 Write the worker prompt to a temp file first. This avoids shell quoting bugs when the required notification block contains quotes or newlines.
@@ -123,7 +179,7 @@ Use `$PROMPT` when launching from the same shell/session. If using a separate to
 Codex:
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:/path/isolated-worktree command:"CODEX_HOME=~/.codex-openclaw-worker codex exec - < \"$PROMPT\""
 ```
 
 Claude Code:
@@ -148,7 +204,7 @@ bash pty:true background:true workdir:/path/isolated-worktree command:"opencode 
 
 ## Scratch Codex
 
-Codex needs a trusted git repo. This throwaway scaffold is not project work and has no canonical remote, so the Git preparation block does not apply:
+Codex needs a trusted git repo. This throwaway scaffold is not project work and has no canonical remote, so the Git preparation block does not apply. The Codex credential isolation rules still apply — use a worker-scoped `CODEX_HOME`:
 
 ```bash
 SCRATCH=$(mktemp -d)
@@ -159,7 +215,7 @@ Build X.
 <notification block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
-bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:$SCRATCH command:"CODEX_HOME=~/.codex-openclaw-worker codex exec - < \"$PROMPT\""
 ```
 
 ## Process actions
