@@ -269,7 +269,8 @@ export class TranscriptsStore {
         continue;
       }
       const filePath = path.join(sessionDir, entry.name);
-      if (entry.isSymbolicLink() || !entry.isFile()) {
+      const stat = await fs.lstat(filePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
         throw new Error(
           `legacy transcript artifacts require migration before writing ${sessionDir}; run openclaw doctor --fix`,
         );

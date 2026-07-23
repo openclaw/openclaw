@@ -142,10 +142,11 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   let identityVerified = false;
   const metadataArtifact = artifacts.find(({ canonicalName }) => canonicalName === "metadata.json");
   if (metadataArtifact) {
-    if (metadataArtifact.entry.isSymbolicLink() || !metadataArtifact.entry.isFile()) {
+    const metadataPath = path.join(sessionDir, metadataArtifact.entry.name);
+    const metadataStat = await fs.lstat(metadataPath);
+    if (metadataStat.isSymbolicLink() || !metadataStat.isFile()) {
       return false;
     }
-    const metadataPath = path.join(sessionDir, metadataArtifact.entry.name);
     let handle;
     try {
       handle = await fs.open(metadataPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
@@ -176,14 +177,16 @@ export async function hasAliasedCanonicalTranscriptExportPathOwner(
   const pending = new Set(JSON.parse(owner.export_pending_json) as string[]);
   let verifiedArtifactCount = 0;
   for (const { entry, canonicalName } of artifacts) {
-    if (entry.isSymbolicLink() || !entry.isFile()) {
+    const artifactPath = path.join(sessionDir, entry.name);
+    const stat = await fs.lstat(artifactPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
       return false;
     }
     if (pending.has(canonicalName)) {
       return false;
     }
     const expectedHash = manifest[canonicalName];
-    if (!expectedHash || (await sha256File(path.join(sessionDir, entry.name))) !== expectedHash) {
+    if (!expectedHash || (await sha256File(artifactPath)) !== expectedHash) {
       return false;
     }
     verifiedArtifactCount += 1;

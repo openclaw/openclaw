@@ -3,33 +3,110 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { isRecordedCanonicalTranscriptExport } from "./state-migrations.meeting-transcripts-files.js";
+import {
+  hasMatchingRecordedTranscriptArtifact,
+  isRecordedCanonicalTranscriptExport,
+} from "./state-migrations.meeting-transcripts-files.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 
+type MeetingTranscriptExportOwnership = {
+  selector: string;
+  sessionId: string;
+  startedAt: string;
+  manifest: Record<string, string>;
+  pending: ReadonlySet<string>;
+};
+
 type MeetingTranscriptMigrationDetectionState = {
-  exportOwnership: Map<string, { manifest: Record<string, string>; pending: ReadonlySet<string> }>;
+  exportOwnership: Map<string, MeetingTranscriptExportOwnership>;
+  exportOwnershipByFoldedSelector: Map<string, MeetingTranscriptExportOwnership[]>;
   pendingImportCount: number;
 };
+
+const TRANSCRIPT_ARTIFACT_NAMES = new Set([
+  "metadata.json",
+  "summary.json",
+  "summary.md",
+  "transcript.jsonl",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function hasLegacyArtifactsSync(directory: string): boolean {
-  for (const name of ["metadata.json", "summary.json", "summary.md", "transcript.jsonl"]) {
-    try {
-      const stat = fs.lstatSync(path.join(directory, name));
-      if (stat.isSymbolicLink() || !stat.isFile()) {
-        throw new Error(`legacy transcript source must be a regular file: ${directory}`);
-      }
-      return true;
-    } catch (error) {
-      if (!(isRecord(error) && error.code === "ENOENT")) {
-        throw error;
-      }
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  let found = false;
+  for (const entry of entries) {
+    if (!TRANSCRIPT_ARTIFACT_NAMES.has(entry.name.toLowerCase())) {
+      continue;
     }
+    const stat = fs.lstatSync(path.join(directory, entry.name));
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`legacy transcript source must be a regular file: ${directory}`);
+    }
+    found = true;
   }
-  return false;
+  return found;
+}
+
+export function resolveMeetingTranscriptExportOwnership(params: {
+  state: MeetingTranscriptMigrationDetectionState;
+  selector: string;
+  sessionDir: string;
+  sourceRoot: string;
+}): MeetingTranscriptExportOwnership | undefined {
+  const exact = params.state.exportOwnership.get(params.selector);
+  if (exact) {
+    return exact;
+  }
+  const folded = params.state.exportOwnershipByFoldedSelector.get(params.selector.toLowerCase());
+  if (!folded || folded.length === 0) {
+    return undefined;
+  }
+  try {
+    const metadataEntries = fs
+      .readdirSync(params.sessionDir, { withFileTypes: true })
+      .filter((entry) => entry.name.toLowerCase() === "metadata.json");
+    if (metadataEntries.length > 0) {
+      if (metadataEntries.length !== 1) {
+        return undefined;
+      }
+      const metadataPath = path.join(params.sessionDir, metadataEntries[0]!.name);
+      const stat = fs.lstatSync(metadataPath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        return undefined;
+      }
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+        sessionId?: unknown;
+        startedAt?: unknown;
+      };
+      const matches = folded.filter(
+        (ownership) =>
+          metadata.sessionId === ownership.sessionId && metadata.startedAt === ownership.startedAt,
+      );
+      return matches.length === 1 ? matches[0] : undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  const manifestMatches = folded.filter((ownership) => {
+    try {
+      const canonicalDir = path.join(params.sourceRoot, ownership.selector);
+      const canonicalStat = fs.statSync(canonicalDir);
+      const observedStat = fs.statSync(params.sessionDir);
+      if (canonicalStat.dev !== observedStat.dev || canonicalStat.ino !== observedStat.ino) {
+        return false;
+      }
+      return hasMatchingRecordedTranscriptArtifact({
+        sessionDir: params.sessionDir,
+        manifest: ownership.manifest,
+      });
+    } catch {
+      return false;
+    }
+  });
+  return manifestMatches.length === 1 ? manifestMatches[0] : undefined;
 }
 
 export function detectLegacyMeetingTranscripts(params: {
@@ -76,7 +153,12 @@ export function detectLegacyMeetingTranscripts(params: {
       }
     }
     const hasSource = sourceSelectors.some((selector) => {
-      const ownership = databaseState.exportOwnership.get(selector);
+      const ownership = resolveMeetingTranscriptExportOwnership({
+        state: databaseState,
+        selector,
+        sessionDir: path.join(sourceDir, selector),
+        sourceRoot: sourceDir,
+      });
       return (
         !ownership ||
         !isRecordedCanonicalTranscriptExport({
@@ -104,7 +186,11 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
 }): MeetingTranscriptMigrationDetectionState {
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   if (!fs.existsSync(databasePath)) {
-    return { exportOwnership: new Map(), pendingImportCount: 0 };
+    return {
+      exportOwnership: new Map(),
+      exportOwnershipByFoldedSelector: new Map(),
+      pendingImportCount: 0,
+    };
   }
   const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
@@ -116,24 +202,30 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
         .all()
         .map((row) => String(row.name)),
     );
-    const exportOwnership = new Map<
-      string,
-      { manifest: Record<string, string>; pending: ReadonlySet<string> }
-    >();
+    const exportOwnership = new Map<string, MeetingTranscriptExportOwnership>();
+    const exportOwnershipByFoldedSelector = new Map<string, MeetingTranscriptExportOwnership[]>();
     if (tables.has("meeting_transcript_sessions")) {
       const rows = database
         .prepare(
-          "SELECT selector, export_manifest_json, export_pending_json FROM meeting_transcript_sessions",
+          "SELECT session_id, started_at, selector, export_manifest_json, export_pending_json FROM meeting_transcript_sessions",
         )
         .all();
       for (const row of rows) {
         const selector = String(row.selector);
         const parsed = JSON.parse(String(row.export_manifest_json)) as unknown;
         if (isRecord(parsed)) {
-          exportOwnership.set(selector, {
+          const ownership = {
+            selector,
+            sessionId: String(row.session_id),
+            startedAt: String(row.started_at),
             manifest: parsed as Record<string, string>,
             pending: new Set(JSON.parse(String(row.export_pending_json)) as string[]),
-          });
+          } satisfies MeetingTranscriptExportOwnership;
+          exportOwnership.set(selector, ownership);
+          const foldedSelector = selector.toLowerCase();
+          const foldedOwners = exportOwnershipByFoldedSelector.get(foldedSelector) ?? [];
+          foldedOwners.push(ownership);
+          exportOwnershipByFoldedSelector.set(foldedSelector, foldedOwners);
         }
       }
     }
@@ -146,6 +238,7 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
       : undefined;
     return {
       exportOwnership,
+      exportOwnershipByFoldedSelector,
       pendingImportCount: typeof pendingRow?.count === "number" ? pendingRow.count : 0,
     };
   } finally {

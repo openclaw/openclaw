@@ -261,6 +261,56 @@ describe("meeting transcript Doctor migration", () => {
       await expect(store.readSession("2026-07-01/capital")).resolves.toMatchObject({
         sessionId: "capital",
       });
+      const upper = (await store.readSession("2026-07-01/Capital"))!;
+      const lower = (await store.readSession("2026-07-01/capital"))!;
+      const upperArtifacts = await store.materializeSessionArtifacts(upper, "metadata");
+      await store.materializeSessionArtifacts(lower, "metadata");
+      await fs.rename(
+        upperArtifacts.sessionDir,
+        path.join(stateDir, "transcripts", "2026-07-01", "CAPITAL"),
+      );
+      expect(
+        detectLegacyMeetingTranscripts({
+          stateDir,
+          env: databaseEnv(stateDir),
+          doctorOnlyStateMigrations: true,
+        }),
+      ).toMatchObject({ hasLegacy: false });
+    },
+  );
+
+  it.runIf(process.platform !== "win32" && process.platform !== "darwin")(
+    "does not assign a case-distinct legacy directory to an existing SQLite session",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+        env: databaseEnv(stateDir),
+      });
+      await store.writeSession({
+        sessionId: "Capital",
+        source: { providerId: "manual-transcript" },
+        startedAt: "2026-07-01T09:00:00.000Z",
+      });
+      await seedLegacySession({ stateDir, sessionId: "capital" });
+      const detected = detectLegacyMeetingTranscripts({
+        stateDir,
+        env: databaseEnv(stateDir),
+        doctorOnlyStateMigrations: true,
+      });
+
+      const result = await migrateLegacyMeetingTranscripts({
+        detected,
+        env: databaseEnv(stateDir),
+        stateDir,
+      });
+
+      expect(result.warnings).toEqual([]);
+      await expect(store.readSession("2026-07-01/Capital")).resolves.toMatchObject({
+        sessionId: "Capital",
+      });
+      await expect(store.readSession("2026-07-01/capital")).resolves.toMatchObject({
+        sessionId: "capital",
+      });
     },
   );
 
@@ -367,20 +417,12 @@ describe("meeting transcript Doctor migration", () => {
         path.join(externalDir, "transcript.jsonl"),
         path.join(partialDir, "transcript.jsonl"),
       );
-      const detected = detectLegacyMeetingTranscripts({
-        stateDir,
-        doctorOnlyStateMigrations: true,
-      });
-
-      const result = await migrateLegacyMeetingTranscripts({
-        detected,
-        env: databaseEnv(stateDir),
-        stateDir,
-        now: () => Date.parse("2026-07-02T00:00:00.000Z"),
-      });
-
-      expect(result.changes).toEqual([]);
-      expect(result.warnings.join("\n")).toContain("regular file");
+      expect(() =>
+        detectLegacyMeetingTranscripts({
+          stateDir,
+          doctorOnlyStateMigrations: true,
+        }),
+      ).toThrow("regular file");
       await expect(fs.readFile(path.join(partialDir, "summary.md"), "utf8")).resolves.toBe(
         "keep me\n",
       );
@@ -815,5 +857,59 @@ describe("meeting transcript Doctor migration", () => {
         entry.startsWith("transcripts.exports-recovered-"),
       ),
     ).toBe(true);
+  });
+
+  it("resolves a case-renamed export directory by metadata identity", async () => {
+    const stateDir = tempDirs.make("openclaw-meeting-transcripts-doctor-");
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+      env: databaseEnv(stateDir),
+    });
+    const session = {
+      sessionId: "Capital",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-07-02T10:00:00.000Z",
+    };
+    await store.writeSession(session);
+    await store.appendUtteranceForSession(session, { text: "case-stable transcript" });
+    const artifacts = await store.materializeSessionArtifacts(session, "transcript");
+    const renamedDir = path.join(stateDir, "transcripts", "2026-07-02", "capital");
+    await fs.rename(artifacts.sessionDir, renamedDir);
+    await fs.rename(path.join(renamedDir, "metadata.json"), path.join(renamedDir, "METADATA.JSON"));
+
+    expect(
+      detectLegacyMeetingTranscripts({
+        stateDir,
+        env: databaseEnv(stateDir),
+        doctorOnlyStateMigrations: true,
+      }),
+    ).toMatchObject({ hasLegacy: false });
+    await fs.rm(path.join(renamedDir, "METADATA.JSON"));
+    const metadataLessDetected = detectLegacyMeetingTranscripts({
+      stateDir,
+      env: databaseEnv(stateDir),
+      doctorOnlyStateMigrations: true,
+    });
+    expect(metadataLessDetected.hasLegacy).toBe(!fsSync.existsSync(artifacts.sessionDir));
+    await fs.writeFile(
+      path.join(renamedDir, "METADATA.JSON"),
+      `${JSON.stringify(session, null, 2)}\n `,
+    );
+    const detected = detectLegacyMeetingTranscripts({
+      stateDir,
+      env: databaseEnv(stateDir),
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.hasLegacy).toBe(true);
+
+    const recovered = await migrateLegacyMeetingTranscripts({
+      detected,
+      env: databaseEnv(stateDir),
+      stateDir,
+    });
+    expect(recovered.warnings).toEqual([]);
+    expect(recovered.changes.join("\n")).toContain("modified meeting transcript export");
+    await expect(store.readSession("2026-07-02/Capital")).resolves.toMatchObject({
+      sessionId: "Capital",
+    });
   });
 });

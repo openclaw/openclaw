@@ -18,7 +18,10 @@ import { sha256Hex } from "./crypto-digest.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import { migrationDb } from "./state-migrations.meeting-transcripts-database.js";
-import { readMeetingTranscriptMigrationDetectionState } from "./state-migrations.meeting-transcripts-detection.js";
+import {
+  readMeetingTranscriptMigrationDetectionState,
+  resolveMeetingTranscriptExportOwnership,
+} from "./state-migrations.meeting-transcripts-detection.js";
 import {
   archiveLegacyMeetingTranscriptSnapshots,
   archiveDivergentMeetingTranscriptExport,
@@ -506,10 +509,15 @@ export async function migrateLegacyMeetingTranscripts(params: {
     });
     const legacyRelativeDirs: string[] = [];
     const partialRelativeDirs: string[] = [];
-    const divergentExportDirs: string[] = [];
+    const divergentExportDirs: Array<{ relativeDir: string; ownerSelector: string }> = [];
     for (const relativeDir of relativeDirs) {
       const selector = relativeDir.split(path.sep).join("/");
-      const ownership = detectionState.exportOwnership.get(selector);
+      const ownership = resolveMeetingTranscriptExportOwnership({
+        state: detectionState,
+        selector,
+        sessionDir: path.join(detected.sourceDir, relativeDir),
+        sourceRoot: detected.sourceDir,
+      });
       if (
         ownership &&
         isRecordedCanonicalTranscriptExport({
@@ -521,7 +529,7 @@ export async function migrateLegacyMeetingTranscripts(params: {
         continue;
       }
       if (ownership) {
-        divergentExportDirs.push(relativeDir);
+        divergentExportDirs.push({ relativeDir, ownerSelector: ownership.selector });
       } else if (!sessionRelativeDirSet.has(relativeDir)) {
         partialRelativeDirs.push(relativeDir);
       } else {
@@ -560,8 +568,8 @@ export async function migrateLegacyMeetingTranscripts(params: {
       const recoveryRoot = `${detected.sourceDir}.exports-recovered-${new Date(now)
         .toISOString()
         .replace(/[:.]/g, "-")}`;
-      for (const relativeDir of divergentExportDirs) {
-        const session = await store.readSession(relativeDir.split(path.sep).join("/"));
+      for (const { relativeDir, ownerSelector } of divergentExportDirs) {
+        const session = await store.readSession(ownerSelector);
         if (!session) {
           throw new Error(`divergent transcript export has no SQLite owner: ${relativeDir}`);
         }

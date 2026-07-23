@@ -64,21 +64,43 @@ export function isRecordedCanonicalTranscriptExport(params: {
 }): boolean {
   const entries = fsSync.readdirSync(params.sessionDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(entry.name)) {
+    const canonicalName = entry.name.toLowerCase();
+    if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(canonicalName)) {
       continue;
     }
-    if (entry.isSymbolicLink() || !entry.isFile()) {
+    const filePath = path.join(params.sessionDir, entry.name);
+    const stat = fsSync.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
       return false;
     }
-    const expectedHash = params.manifest[entry.name];
+    const expectedHash = params.manifest[canonicalName];
     if (
-      params.pending?.has(entry.name) !== true &&
-      (!expectedHash || sha256FileSync(path.join(params.sessionDir, entry.name)) !== expectedHash)
+      params.pending?.has(canonicalName) !== true &&
+      (!expectedHash || sha256FileSync(filePath) !== expectedHash)
     ) {
       return false;
     }
   }
   return true;
+}
+
+export function hasMatchingRecordedTranscriptArtifact(params: {
+  sessionDir: string;
+  manifest: Readonly<Record<string, string>>;
+}): boolean {
+  for (const entry of fsSync.readdirSync(params.sessionDir, { withFileTypes: true })) {
+    const canonicalName = entry.name.toLowerCase();
+    const expectedHash = params.manifest[canonicalName];
+    if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(canonicalName) || !expectedHash) {
+      continue;
+    }
+    const filePath = path.join(params.sessionDir, entry.name);
+    const stat = fsSync.lstatSync(filePath);
+    if (!stat.isSymbolicLink() && stat.isFile() && sha256FileSync(filePath) === expectedHash) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function validateMeetingTranscriptRoot(
@@ -360,12 +382,19 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
 }
 
 async function hasLegacyTranscriptArtifacts(directory: string): Promise<boolean> {
-  for (const name of TRANSCRIPT_EXPORT_FILE_NAMES) {
-    if (await optionalRegularFile(path.join(directory, name))) {
-      return true;
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  let found = false;
+  for (const entry of entries) {
+    if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(entry.name.toLowerCase())) {
+      continue;
     }
+    const stat = await fs.lstat(path.join(directory, entry.name));
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`legacy transcript source must be a regular file: ${directory}`);
+    }
+    found = true;
   }
-  return false;
+  return found;
 }
 
 async function listLegacyMeetingTranscriptDirs(
@@ -440,12 +469,16 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
       sourceDirs.add(sourceDir);
     }
     const destinationDir = path.join(params.recoveryRoot, relativeDir);
-    for (const name of TRANSCRIPT_EXPORT_FILE_NAMES) {
-      const source = path.join(sourceDir, name);
-      if (!(await optionalRegularFile(source))) {
+    for (const entry of await fs.readdir(sourceDir, { withFileTypes: true })) {
+      if (!TRANSCRIPT_EXPORT_FILE_NAMES.has(entry.name.toLowerCase())) {
         continue;
       }
-      const destination = path.join(destinationDir, name);
+      const source = path.join(sourceDir, entry.name);
+      const stat = await fs.lstat(source);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(`legacy transcript source must be a regular file: ${sourceDir}`);
+      }
+      const destination = path.join(destinationDir, entry.name);
       try {
         await fs.lstat(destination);
         throw new Error(`partial transcript recovery destination already exists: ${destination}`);
