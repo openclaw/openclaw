@@ -39,8 +39,9 @@ const EXPECTED: Record<string, { mode: "markdown" | "plaintext"; why: string }> 
   signal: { mode: "markdown", why: "send-path markdownToSignalText" },
   slack: { mode: "markdown", why: "native mrkdwn/Block Kit payloads" },
   whatsapp: { mode: "markdown", why: "send-path markdownToWhatsApp" },
-  qqbot: { mode: "markdown", why: "msg_type 2 markdown on enabled accounts" },
-  // No markdown render mechanism: plaintext default is correct.
+  // No markdown render mechanism, or per-account rendering that no channel-wide
+  // mode can serve safely: plaintext default is correct.
+  qqbot: { mode: "plaintext", why: "markdown is per-account (markdownSupport); false sends raw msg_type 0" },
   googlechat: { mode: "plaintext", why: "no markdown render mechanism" },
   "nextcloud-talk": { mode: "plaintext", why: "no markdownDialect, no send-path render" },
   "synology-chat": { mode: "plaintext", why: "no markdown render mechanism" },
@@ -66,16 +67,37 @@ function readChannelSource(channel: string): string {
   return parts.join("\n");
 }
 
+/**
+ * Drop comment lines and inline trailing comments before scanning, so a
+ * declaration named only in prose (a code comment or example) never counts as
+ * a real declaration. Line-based: skips block/line comment lines and cuts
+ * anything after an inline `//`.
+ */
+function codeLines(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trimStart();
+      return !trimmed.startsWith("//") && !trimmed.startsWith("*") && !trimmed.startsWith("/*");
+    })
+    .map((line) => {
+      const inlineComment = line.indexOf("//");
+      return inlineComment === -1 ? line : line.slice(0, inlineComment);
+    })
+    .join("\n");
+}
+
 function declaresApprovalCapability(source: string): boolean {
-  return /approvalCapability\b/.test(source) || /createChannelApprovalAuth\b/.test(source);
+  const code = codeLines(source);
+  return /approvalCapability\b/.test(code) || /createChannelApprovalAuth\b/.test(code);
 }
 
 function declaresMarkdownApprovalText(source: string): boolean {
-  return /approvalText:\s*"markdown"/.test(source);
+  return /approvalText:\s*"markdown"/.test(codeLines(source));
 }
 
 function rendersMarkdown(source: string): boolean {
-  return /markdownDialect:\s*"markdown"/.test(source);
+  return /markdownDialect:\s*"markdown"/.test(codeLines(source));
 }
 
 const channelDirs = fs

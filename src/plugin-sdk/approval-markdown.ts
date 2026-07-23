@@ -18,33 +18,27 @@
  * to plaintext, declared through `approvalText` on its approval capability.
  * There is no implicit pass-through: handing canonical markdown to a transport
  * that will not render it is how approvers end up reading literal backticks.
+ *
+ * This file is the lightweight contract only — the mode type and its default.
+ * It is imported by the channel registry (`approvals.ts`), which sits on hot
+ * gateway/config/command startup paths, so it must stay free of heavy imports.
+ * The downgrade implementation lives in `approval-markdown.runtime.ts` because
+ * it pulls in the markdown parser and is only needed on the async send path.
  */
-import { stripMarkdown } from "../shared/text/strip-markdown.js";
 
 /** How a channel handles the canonical approval markdown subset. */
 export type ChannelApprovalTextMode = "markdown" | "plaintext";
 
-/** Mode assumed when a channel declares nothing. Safe for every transport. */
-export const DEFAULT_APPROVAL_TEXT_MODE: ChannelApprovalTextMode = "plaintext";
-
 /**
- * Project canonical approval markdown down to plaintext.
+ * Mode assumed when a channel declares nothing. Safe for every transport: it
+ * never sends raw markers.
  *
- * Content-lossless, not byte-identical: the projection trims the message's
- * outer edges, so a prompt consisting of nothing but a fence would lose that
- * fence's surrounding whitespace. Fenced content in the body of a prompt — the
- * shape every approval builder emits, since the command fence is always
- * followed by the host and id block — survives exactly.
- *
- * Both options are pinned deliberately and must not become caller-configurable:
- *
- *  - `plain-text` mode, because the speech projection collapses repeated
- *    punctuation and punctuation-only lines, which would silently rewrite a
- *    pending shell command inside its own fence.
- *  - `label-and-url` links, because label-only projection hides a link's
- *    destination from the person being asked to approve it. That is a security
- *    property of an approval prompt, not a formatting preference.
+ * This is an intentional opt-in default (RFC 0002), and it does change behavior
+ * for an existing third-party channel that renders markdown but has not yet
+ * declared `approvalText`: its forwarded approval text downgrades to plaintext
+ * on upgrade until it opts in. That trade is deliberate — plaintext can only
+ * ever lose rendering, never leak literal `**`/fences to an approver, which is
+ * the failure mode that matters when the person is being asked to approve a
+ * shell command. Channels that render markdown opt in explicitly.
  */
-export function downgradeApprovalMarkdownToPlaintext(text: string): string {
-  return stripMarkdown(text, { mode: "plain-text", linkStyle: "label-and-url" });
-}
+export const DEFAULT_APPROVAL_TEXT_MODE: ChannelApprovalTextMode = "plaintext";

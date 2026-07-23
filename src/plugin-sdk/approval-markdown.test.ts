@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { downgradeApprovalMarkdownToPlaintext } from "./approval-markdown.js";
+import { downgradeApprovalMarkdownToPlaintext } from "./approval-markdown.runtime.js";
 
 const APPROVAL_ID = "a7a8b519-2311-4dcd-bccf-d6ca1d737969";
 const PENDING_COMMAND = 'curl -sS -o /dev/null -w "%{http_code}" https://example.com';

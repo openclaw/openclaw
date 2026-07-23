@@ -13,7 +13,7 @@ import type {
 } from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { downgradeApprovalMarkdownToPlaintext } from "../plugin-sdk/approval-markdown.js";
+import { downgradeApprovalMarkdownToPlaintext } from "../plugin-sdk/approval-markdown.runtime.js";
 import {
   buildApprovalResolvedReplyPayload,
   buildPluginApprovalResolvedReplyPayload,

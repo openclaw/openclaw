@@ -108,11 +108,11 @@ function resolveNativeDeliveryState(params: {
 }
 
 function createQQBotApprovalCapability(): ChannelApprovalCapability {
+  // No approvalText declaration: QQBot markdown rendering is per-account
+  // (markdownSupport), and markdownSupport:false accounts send raw msg_type 0
+  // text. A channel-wide "markdown" mode would leave literal fences on those
+  // accounts, so the plaintext default is the only safe channel-wide choice.
   return createChannelApprovalCapability({
-    // QQBot renders markdown on markdown-enabled accounts (msg_type 2). When
-    // native approvals fall back to forwarder delivery, keep the canonical
-    // subset so fenced commands still render instead of being stripped.
-    approvalText: "markdown",
     authorizeActorAction: ({ cfg, accountId, senderId, approvalKind }) =>
       authorizeQQBotApprovalAction({ cfg, accountId, senderId, approvalKind }),
 
