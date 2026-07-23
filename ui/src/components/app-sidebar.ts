@@ -7,7 +7,6 @@ import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
-import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
@@ -44,11 +43,9 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import {
-  LOBSTER_LOGO_VISIT_EVENT,
   lobsterPetSeed,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
-  type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionCreatorFilter } from "./session-owner-chip.ts";
@@ -78,7 +75,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
 
   @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
-  @state() private logoVisit: LobsterLogoVisitDetail | null = null;
 
   constructor() {
     super();
@@ -114,8 +110,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         };
       },
     );
-    // The footer pet announces logo stand-in phases through this bubbling event.
-    this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
   }
 
   private createNarrationSubscriptions(): SubscriptionsController {
@@ -217,13 +211,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   protected override firstUpdated() {
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
   }
-
-  private readonly handleLogoVisit = (event: Event) => {
-    const detail = (event as CustomEvent<LobsterLogoVisitDetail>).detail;
-    // A lookless visit is a logo scare: the brand mark hides (the img gets
-    // the --vacated class) but no stand-in crab renders in its place.
-    this.logoVisit = detail.phase === "out" ? null : detail;
-  };
 
   startSessionDrag(session: SidebarRecentSession): void {
     this.sessionOrganizer.startSessionDrag(session);
@@ -431,7 +418,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   </div>
                 </openclaw-tooltip>`
               : nothing}
-            ${renderAppSidebarFooterBar(this, this.logoVisit)}
+            ${renderAppSidebarFooterBar(this)}
           </div>
         </div>
         ${this.sidebarMenus.renderCustomizeMenu()} ${this.sidebarMenus.renderMoreMenu()}

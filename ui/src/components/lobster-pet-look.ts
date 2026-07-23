@@ -448,7 +448,6 @@ export function renderLobsterPetScene(args: {
   look: LobsterPetLook;
   mode: LobsterPetMode;
   presence: "out" | "in" | "leaving";
-  logoPerched: boolean;
   shellVisible: boolean;
   visitsEnabled: boolean;
   dismissed: boolean;
@@ -583,9 +582,7 @@ export function renderLobsterPetScene(args: {
       </div>
     `;
   };
-  // While the pet is upstairs playing logo, the ledge stays empty - one
-  // crab, two homes, never both at once.
-  const showSprites = args.presence !== "out" && !args.logoPerched;
+  const showSprites = args.presence !== "out";
   // The shell may outlive the visit while it fades, but dismissal and the
   // visits setting silence it like everything else.
   const showShell = args.shellVisible && args.visitsEnabled && !args.dismissed;
