@@ -384,6 +384,10 @@ function installControlUiMockGateway(input: {
     setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     setMethodResponse: (method: string, payload: unknown) => void;
+    setSessionSharingPolicy: (policy: {
+      allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
+      hasMultipleSessionSharingIdentities: boolean;
+    }) => void;
     socketCount: () => number;
     socketUrls: () => string[];
   };
