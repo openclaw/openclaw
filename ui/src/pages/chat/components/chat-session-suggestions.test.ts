@@ -80,4 +80,21 @@ describe("chat session suggestions", () => {
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("Pending");
   });
+
+  it("does not expose resolution actions to members", () => {
+    const onResolve = vi.fn();
+    container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatSessionSuggestions({
+        suggestions: [suggestion],
+        role: "member",
+        busyIds: new Set(),
+        onResolve,
+      }),
+      container,
+    );
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toContain("Pending");
+  });
 });

@@ -199,7 +199,7 @@ describe("session suggestion handlers", () => {
     },
   );
 
-  it("allows a member to edit but rejects a viewer resolution", async () => {
+  it("allows only owners and admins to resolve suggestions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntry(
         { agentId: "main", sessionKey },
@@ -232,7 +232,13 @@ describe("session suggestion handlers", () => {
         { sessionKey, id, resolution: "edit" },
         client("member", "Member"),
       );
-      expect(member.responses[0]?.[0]).toBe(true);
+      expect(member.responses[0]?.[0]).toBe(false);
+      const owner = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id, resolution: "edit" },
+        client("owner", "Owner"),
+      );
+      expect(owner.responses[0]?.[0]).toBe(true);
       expect(mocks.handleChatSend).not.toHaveBeenCalled();
     });
   });

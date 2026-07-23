@@ -36,7 +36,7 @@ export function renderChatSessionSuggestions(props: {
   if (props.suggestions.length === 0) {
     return nothing;
   }
-  const canResolve = props.role === "owner" || props.role === "admin" || props.role === "member";
+  const canResolve = props.role === "owner" || props.role === "admin";
   return html`
     <div class="session-suggestions" aria-live="polite">
       ${props.suggestions.map((suggestion) => {

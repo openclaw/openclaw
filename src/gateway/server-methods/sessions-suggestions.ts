@@ -363,11 +363,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const role = resolveSessionSharingRole({ client, target });
-    if (role === "viewer") {
+    if (role !== "owner" && role !== "admin") {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session participant required"),
+        errorShape(ErrorCodes.INVALID_REQUEST, "session owner or operator.admin required"),
       );
       return;
     }
