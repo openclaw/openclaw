@@ -188,6 +188,13 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     exactFlags: new Set(["-e"]),
     joinedFlagDenyExact: new Set(["-encoding"]),
     joinedFlagDenyPrefixes: ["-encoding="],
+    shortClusterFlags: [
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set(["n", "p"]),
+      },
+    ],
   },
   {
     names: ["scala", "scala-cli"],
@@ -212,7 +219,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   {
     names: ["raku", "perl6"],
     exactFlags: new Set(["-e"]),
-    joinedExactFlags: new Set(),
+    joinedExactFlags: new Set(["-e"]),
     shortClusterFlags: [
       {
         label: "-e",

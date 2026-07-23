@@ -75,6 +75,8 @@ describe("exec inline eval detection", () => {
     { argv: ["guile", "-c", '(system "id")'], expected: "guile -c" },
     { argv: ["groovy", "-e", '"id".execute()'], expected: "groovy -e" },
     { argv: ["groovy", '-e"id".execute()'], expected: "groovy -e" },
+    { argv: ["groovy", "-ne", '["id"].execute()'], expected: "groovy -e" },
+    { argv: ["groovy", "-pe", '["id"].execute()'], expected: "groovy -e" },
     { argv: ["groovy", '-encoding:["id"].execute()'], expected: "groovy -e" },
     { argv: ["scala", "-e", 'sys.process.Process("id").!'], expected: "scala -e" },
     {
@@ -132,6 +134,7 @@ describe("exec inline eval detection", () => {
     { argv: ["clojure", "-e", '(clojure.java.shell/sh "id")'], expected: "clojure -e" },
     { argv: ["clj", "--eval", "(println 1)"], expected: "clj --eval" },
     { argv: ["raku", "-e", "run 'id'"], expected: "raku -e" },
+    { argv: ["raku", "-e say 1"], expected: "raku -e" },
     { argv: ["raku", "-ne", "run 'id'"], expected: "raku -e" },
     { argv: ["perl6", "-e", "run 'id'"], expected: "perl6 -e" },
     { argv: ["perl6", "-pe", "run 'id'"], expected: "perl6 -e" },
@@ -256,7 +259,6 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["clojure", "-M", "-m", "app.main"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["clojure", "-e(println 1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["raku", "script.raku"])).toBeNull();
-    expect(detectInterpreterInlineEvalArgv(["raku", "-e say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ghc", "Main.hs"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ghc", "-exclude-module", "Debug.Trace"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["erl", "-sname", "node"])).toBeNull();

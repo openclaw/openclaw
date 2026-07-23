@@ -1616,6 +1616,11 @@ $0 \\"$1\\"" touch {marker}`,
       second: 'groovy \'-encoding:["sh", "-c", "id > {marker}"].execute()\'',
     },
     {
+      executable: "groovy",
+      first: "groovy -ne 'println line'",
+      second: 'groovy -pe \'["sh", "-c", "id > {marker}"].execute()\'',
+    },
+    {
       executable: "scala",
       first: "scala -e 'println(1)'",
       second: "scala -e 'sys.process.Process(\"sh -c id > {marker}\").!'",
@@ -1644,6 +1649,11 @@ $0 \\"$1\\"" touch {marker}`,
       executable: "raku",
       first: "raku -e 'say 1'",
       second: 'raku -e \'run "sh", "-c", "id > {marker}"\'',
+    },
+    {
+      executable: "raku",
+      first: "raku '-esay 1'",
+      second: 'raku \'-erun "sh", "-c", "id > {marker}"\'',
     },
     {
       executable: "raku",
