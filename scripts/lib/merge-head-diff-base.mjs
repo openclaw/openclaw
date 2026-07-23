@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
+const MERGE_DIFF_GIT_TIMEOUT_MS = 30_000;
 
 /** Resolve the git base ref to use when diffing a merge head. */
 export function resolveMergeHeadDiffBase({
@@ -40,6 +41,8 @@ function listCommitParents({ ref, cwd, maxBuffer }) {
       stdio: ["ignore", "pipe", "ignore"],
       encoding: "utf8",
       maxBuffer,
+      timeout: MERGE_DIFF_GIT_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     }).trim();
     return output.split(/\s+/u).slice(1);
   } catch {
@@ -54,6 +57,8 @@ function resolveCommit({ ref, cwd, maxBuffer }) {
       stdio: ["ignore", "pipe", "ignore"],
       encoding: "utf8",
       maxBuffer,
+      timeout: MERGE_DIFF_GIT_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     }).trim();
   } catch {
     return "";
