@@ -247,6 +247,54 @@ describe("session sharing handlers", () => {
     });
   });
 
+  it("drops a session flipped to draft during the list await from a non-owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:mid-await-draft";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-mid-await",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      const outsider = identifiedClient("outsider@example.com");
+      // The awaited model-catalog step flips the session to draft after the
+      // pre-await draft filter ran, exercising the final fresh-target filter.
+      const listWith = async (client: GatewayClient) => {
+        await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+        invalidateSessionSharingSnapshot(sessionKey);
+        const responses: Parameters<RespondFn>[] = [];
+        await sessionReadHandlers["sessions.list"]?.({
+          params: { agentId: "main" },
+          client,
+          context: {
+            ...context(vi.fn()),
+            loadGatewayModelCatalog: async () => {
+              await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
+                visibility: "draft",
+              }));
+              invalidateSessionSharingSnapshot(sessionKey);
+              return [];
+            },
+          } as unknown as GatewayRequestContext,
+          respond: (...response: Parameters<RespondFn>) => responses.push(response),
+        } as never);
+        return (responses[0]?.[1] as { sessions?: Array<{ key: string }> } | undefined)?.sessions;
+      };
+
+      // Non-owner must not receive the now-draft row (no preview/metadata leak).
+      expect((await listWith(outsider))?.some((session) => session.key === sessionKey)).toBe(false);
+      // The owner still sees their own draft.
+      expect(
+        (await listWith(identifiedClient("owner@example.com")))?.some(
+          (session) => session.key === sessionKey,
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("lists profile ids and authorizes a selected profile as a member", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:profile-member";
