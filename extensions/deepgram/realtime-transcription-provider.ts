@@ -247,10 +247,13 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
     autoSelectOrder: 35,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.DEEPGRAM_API_KEY),
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        normalizeOptionalString(process.env.DEEPGRAM_API_KEY),
+      ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.DEEPGRAM_API_KEY;
+      const apiKey = config.apiKey || normalizeOptionalString(process.env.DEEPGRAM_API_KEY);
       if (!apiKey) {
         throw new Error("Deepgram API key missing");
       }

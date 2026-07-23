@@ -88,6 +88,38 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     );
   });
 
+  it("rejects a whitespace-only DEEPGRAM_API_KEY in createSession", () => {
+    vi.stubEnv("DEEPGRAM_API_KEY", "   ");
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    expect(() => provider.createSession({ providerConfig: {} })).toThrow(
+      "Deepgram API key missing",
+    );
+  });
+
+  describe("isConfigured", () => {
+    it("reports not configured when DEEPGRAM_API_KEY is unset", () => {
+      const provider = buildDeepgramRealtimeTranscriptionProvider();
+      expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+    });
+
+    it("reports configured when DEEPGRAM_API_KEY is set", () => {
+      vi.stubEnv("DEEPGRAM_API_KEY", "dg-key");
+      const provider = buildDeepgramRealtimeTranscriptionProvider();
+      expect(provider.isConfigured({ providerConfig: {} })).toBe(true);
+    });
+
+    it("reports not configured when DEEPGRAM_API_KEY is whitespace only", () => {
+      vi.stubEnv("DEEPGRAM_API_KEY", "   ");
+      const provider = buildDeepgramRealtimeTranscriptionProvider();
+      expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+    });
+
+    it("reports configured via provider config apiKey", () => {
+      const provider = buildDeepgramRealtimeTranscriptionProvider();
+      expect(provider.isConfigured({ providerConfig: { apiKey: "dg-key" } })).toBe(true);
+    });
+  });
+
   it.each(["not a url", "ftp://files.example.com"])("rejects invalid endpoint %s", (baseUrl) => {
     const provider = buildDeepgramRealtimeTranscriptionProvider();
     expect(() => provider.createSession({ providerConfig: { apiKey: "dg-key", baseUrl } })).toThrow(
