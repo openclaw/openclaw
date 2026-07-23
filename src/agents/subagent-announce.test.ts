@@ -336,6 +336,33 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("adds a stable child suffix to plugin completion labels", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:loop-guard-worker",
+      childRunId: "run-plugin-label",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      label: "plugin:loop-guard",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: {
+        key: "agent:main:subagent:loop-guard-worker",
+        label: "plugin:loop-guard:loop-guard-worker",
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",

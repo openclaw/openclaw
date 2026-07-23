@@ -338,6 +338,8 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `toolsAlsoAllow` adds exact, uniquely owned tools registered by the calling plugin to the worker's normal tool surface. The runtime rejects core tools and names shared with another plugin. Profiles and operator tool policies still apply, including explicit allowlists and denies.
 
+    `requesterSessionKey`, `expectsCompletionMessage`, and `approvalGrant` are reserved for bundled or trusted official plugins. Untrusted plugins can run subagents, but cannot bind completion delivery or approval capabilities to arbitrary requester sessions.
+
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
   </Accordion>

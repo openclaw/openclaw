@@ -234,6 +234,8 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted plugin-subagent, run-scoped approval capability for native harnesses. */
+  approvalGrant?: unknown;
   /** Trusted in-process subagent-completion handoff; never derived from public input. */
   trustedInternalHandoff?: boolean;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */

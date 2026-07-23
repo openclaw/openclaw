@@ -14,6 +14,10 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
 
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(async () => []),
+}));
+
 const overview: SystemAgentOverview = {
   defaultAgentId: "main",
   defaultModel: "openai/gpt-5.5",

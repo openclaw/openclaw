@@ -960,6 +960,7 @@ export function runAgentAttempt(params: {
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: params.opts.toolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
+    approvalGrant: params.opts.approvalGrant,
     trustedInternalHandoff: params.opts.trustedInternalHandoff,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,

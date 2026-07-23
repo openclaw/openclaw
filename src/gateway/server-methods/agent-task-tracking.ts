@@ -158,8 +158,10 @@ export async function registerPluginSubagentRunFromGateway(params: {
   runId: string;
   childSessionKey: string;
   task: string;
+  requesterSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   pluginId?: string;
+  expectsCompletionMessage?: boolean;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
   if (!childSessionKey) {
@@ -169,18 +171,19 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cfg: params.cfg,
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
+  const requesterSessionKey = params.requesterSessionKey?.trim() || ownerSessionKey;
   const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
   registerSubagentRun({
     runId: params.runId,
     childSessionKey,
     controllerSessionKey: ownerSessionKey,
-    requesterSessionKey: ownerSessionKey,
+    requesterSessionKey,
     requesterOrigin: params.requesterOrigin,
-    requesterDisplayKey: "main",
+    requesterDisplayKey: requesterSessionKey === ownerSessionKey ? "main" : requesterSessionKey,
     task: params.task,
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
-    expectsCompletionMessage: false,
+    expectsCompletionMessage: params.expectsCompletionMessage === true,
     spawnMode: "run",
   });
 }

@@ -79,6 +79,26 @@ function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimeLoader.load();
 }
 
+function resolveSubagentCompletionLabel(params: {
+  label: string;
+  childSessionKey: string;
+}): string {
+  const label = params.label.trim();
+  if (!label.startsWith("plugin:")) {
+    return label;
+  }
+  const suffix =
+    params.childSessionKey
+      .trim()
+      .split(":")
+      .findLast(Boolean)
+      ?.replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24) || "subagent";
+  const maxBaseLength = Math.max(1, 512 - suffix.length - 1);
+  return `${label.slice(0, maxBaseLength)}:${suffix}`;
+}
+
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
@@ -613,7 +633,13 @@ export async function runSubagentAnnounceFlow(params: {
       try {
         await subagentAnnounceDeps.callGateway({
           method: "sessions.patch",
-          params: { key: params.childSessionKey, label: params.label },
+          params: {
+            key: params.childSessionKey,
+            label: resolveSubagentCompletionLabel({
+              label: params.label,
+              childSessionKey: params.childSessionKey,
+            }),
+          },
           timeoutMs: 10_000,
         });
       } catch {
