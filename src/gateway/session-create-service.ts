@@ -326,16 +326,6 @@ export async function createGatewaySession(params: {
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
-  if (params.visibility && !isSessionVisibilityAllowed(params.cfg, params.visibility)) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `session visibility is disabled: ${params.visibility}`,
-        { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility } },
-      ),
-    };
-  }
   if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
     return {
       ok: false,
@@ -764,6 +754,8 @@ export async function createGatewaySession(params: {
         storePath: target.storePath,
       },
       async ({ existingEntry, sessionEntries }) => {
+        // This callback owns generated and explicit keys alike; no existing row
+        // is the canonical signal that this request will actually create one.
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
           !authorizedHarnessCreation &&
@@ -801,6 +793,20 @@ export async function createGatewaySession(params: {
             error: errorShape(
               ErrorCodes.INVALID_REQUEST,
               "catalog session target requires a new session",
+            ),
+          };
+        }
+        if (
+          params.visibility &&
+          existingEntry === undefined &&
+          !isSessionVisibilityAllowed(params.cfg, params.visibility)
+        ) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `session visibility is disabled: ${params.visibility}`,
+              { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility } },
             ),
           };
         }

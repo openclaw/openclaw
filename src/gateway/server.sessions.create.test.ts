@@ -614,6 +614,19 @@ test("sessions.create preserves keyed draft adoption idempotency", async () => {
     },
   });
 
+  testState.sessionConfig = { sharing: { drafts: false } };
+  const retriedAfterPolicyChange = await directSessionReq<{
+    sessionId: string;
+    entry: { visibility?: string };
+  }>("sessions.create", { agentId: "main", key, visibility: "draft" });
+  expect(retriedAfterPolicyChange).toMatchObject({
+    ok: true,
+    payload: {
+      sessionId: first.payload?.sessionId,
+      entry: { visibility: "draft" },
+    },
+  });
+
   const mismatch = await directSessionReq("sessions.create", {
     agentId: "main",
     key,
