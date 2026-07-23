@@ -56,7 +56,7 @@ This audited record covers the complete v2026.6.33..496c84bf6159bd09ce2c2a261c35
 - **PR #103793** Thanks @yetval.
 - **PR #94016** Related #94008. Thanks @sheyanmin and @thomasthelen-kibeauftragter.
 - **PR #112406** Thanks @vincentkoc.
-- **PR #107938** Thanks @steipete.
+- **PR #107938**.
 ## 2026.6.33
 
 ### Highlights
