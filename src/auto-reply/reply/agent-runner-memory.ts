@@ -1551,7 +1551,8 @@ export async function runMemoryFlushIfNeeded(params: {
           replyOperation: params.replyOperation,
           onSessionResetCommitted: (commit) => {
             memoryFlushResetCommitted = true;
-            memoryFlushResetPreviousSessionId = params.followupRun.run.sessionId;
+            const previousSessionId = params.followupRun.run.sessionId;
+            memoryFlushResetPreviousSessionId = previousSessionId;
             params.opts?.onSessionMetadataChanges?.([
               {
                 sessionKey: commit.key,
@@ -1559,6 +1560,7 @@ export async function runMemoryFlushIfNeeded(params: {
                 reason: commit.reason,
               },
             ]);
+            refreshMemoryFlushSessionState(previousSessionId);
           },
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {

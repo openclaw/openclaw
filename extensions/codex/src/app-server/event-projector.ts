@@ -6,7 +6,7 @@ import {
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
-  type EmbeddedRunAttemptParams,
+  type BundledEmbeddedRunAttemptParams as EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
   type MessagingToolSend,

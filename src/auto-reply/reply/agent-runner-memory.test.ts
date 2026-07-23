@@ -143,6 +143,8 @@ type ModelFallbackParams = {
 type EmbeddedAgentParams = {
   provider?: string;
   model?: string;
+  sessionId?: string;
+  sessionFile?: string;
   thinkLevel?: string;
   agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
@@ -554,6 +556,109 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.compactionCount).toBe(0);
     expect(persisted.memoryFlushCompactionCount).toBe(0);
     expect(persisted.memoryFlushFailureCount).toBe(0);
+  });
+
+  it("refreshes memory-flush state before fallback retries after a hook reset", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const initialSessionFile = path.join(rootDir, "session.jsonl");
+    const resetSessionFile = path.join(rootDir, "session-reset.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: initialSessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 5,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: {
+        run: (provider: string, model: string) => Promise<EmbeddedAgentRunResult>;
+      }) => {
+        await params.run("openai", "gpt-5.6");
+        return {
+          result: await params.run("anthropic", "claude-opus-4-6"),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          attempts: [],
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "new" | "reset";
+          agentId?: string;
+        }) => void;
+      }) => {
+        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+        const resetEntry: SessionEntry = {
+          sessionId: "session-reset",
+          sessionFile: resetSessionFile,
+          updatedAt: Date.now(),
+          totalTokens: 0,
+          compactionCount: 0,
+        };
+        sessionStore[sessionKey] = resetEntry;
+        await writeTestSessionStore(storePath, sessionKey, resetEntry);
+        params.onSessionResetCommitted?.({
+          key: sessionKey,
+          sessionId: "session-reset",
+          reason: "new",
+          agentId: "main",
+        });
+        return {
+          payloads: [{ type: "error", text: "first candidate failed" } as ReplyPayload],
+          meta: {},
+        };
+      },
+    );
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const followupRun = createTestFollowupRun({
+      sessionId: "session",
+      sessionFile: initialSessionFile,
+      sessionKey,
+    });
+    const result = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { memoryFlush: {} },
+          },
+        },
+      },
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(requireEmbeddedAgentCall(0).sessionId).toBe("session");
+    expect(requireEmbeddedAgentCall(0).sessionFile).toBe(initialSessionFile);
+    expect(requireEmbeddedAgentCall(1).sessionId).toBe("session-reset");
+    expect(requireEmbeddedAgentCall(1).sessionFile).toBe(resetSessionFile);
+    expect(followupRun.run.sessionId).toBe("session-reset");
+    expect(followupRun.run.sessionFile).toBe(resetSessionFile);
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: sessionKey,
+      previousSessionId: "session",
+      nextSessionId: "session-reset",
+      nextSessionFile: resetSessionFile,
+    });
   });
 
   it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {
