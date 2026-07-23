@@ -599,14 +599,14 @@ describe("qa suite planning helpers", () => {
   });
 
   it("targets the selected adapter account in scenario startup config patches", () => {
-    const scenarios = [readQaScenarioById("thread-reply-override")];
+    const scenarios = [readQaScenarioById("whatsapp-access-control-dm-open")];
 
-    expect(collectQaSuiteGatewayConfigPatch(scenarios, "matrix-alt")).toEqual({
+    expect(collectQaSuiteGatewayConfigPatch(scenarios, "whatsapp-alt")).toEqual({
       channels: {
-        matrix: {
+        whatsapp: {
           accounts: {
-            "matrix-alt": {
-              threadReplies: "always",
+            "whatsapp-alt": {
+              dmPolicy: "open",
             },
           },
         },
