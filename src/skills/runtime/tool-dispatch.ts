@@ -12,7 +12,6 @@ import {
 import {
   collectExplicitDenylist,
   collectExplicitAllowlist,
-  filterRuntimeMaterializationAllowlistEntries,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   replaceWithEffectiveToolAllowlist,
@@ -131,7 +130,6 @@ export function resolveSkillDispatchTools(params: {
     inheritedToolPolicy,
   ];
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
-  const explicitToolAllowlist = collectExplicitAllowlist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const beforeToolCallHookContext = params.skillCommand
@@ -173,7 +171,7 @@ export function resolveSkillDispatchTools(params: {
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
-    pluginToolAllowlist: explicitToolAllowlist,
+    pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     inheritedToolAllowlist,
@@ -210,25 +208,7 @@ export function resolveSkillDispatchTools(params: {
     }),
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    const inheritedRuntimeToolAllowlist = filterRuntimeMaterializationAllowlistEntries({
-      entries: explicitToolAllowlist,
-      policies: [
-        profilePolicyWithAlsoAllow,
-        providerProfilePolicyWithAlsoAllow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
-        groupPolicy,
-        senderPolicy,
-        sandboxPolicy,
-        subagentPolicy,
-        inheritedToolPolicy,
-      ],
-    });
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered, {
-      preserveRuntimeToolAllowlistEntries: inheritedRuntimeToolAllowlist,
-    });
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, policyFiltered, (tool) =>
     getPluginToolMeta(tool),

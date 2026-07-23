@@ -815,38 +815,4 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       { name: "exec" },
     ]);
   });
-
-  it("filters runtime selectors through gateway deny before child inheritance", () => {
-    resolveGatewayScopedTools({
-      cfg: {
-        gateway: {
-          tools: {
-            deny: ["bundle-mcp"],
-          },
-        },
-        tools: {
-          subagents: {
-            tools: {
-              allow: [
-                "read",
-                "sessions_spawn",
-                "bundle-mcp",
-                "probe__search",
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      sessionKey: "agent:main:subagent:worker",
-      surface: "loopback",
-    });
-
-    const args = readCreateToolsArgs();
-    // gateway.tools.deny: ["bundle-mcp"] denies the umbrella that all MCP tools
-    // map to, so probe__search is also blocked — the security guarantee holds.
-    expect(args.inheritedToolAllowlist).toEqual([
-      "read",
-      "sessions_spawn",
-    ]);
-  });
 });

@@ -81,6 +81,37 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
   });
 
+  it("intersects overlapping configured and inherited MCP globs", async () => {
+    const agentId = `bundled-glob-intersection-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    const storePath = createSessionStorePath("openclaw-bundled-glob-intersection", agentId);
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["*__search"],
+      },
+    });
+    const tools = [makeTool("probe__search"), makeTool("probe__delete"), makeTool("other__search")];
+    for (const tool of tools) {
+      setPluginToolMeta(tool, { pluginId: "bundle-mcp", optional: false });
+    }
+
+    const filtered = applyFinalPolicy({
+      bundledTools: tools,
+      config: {
+        session: { store: storePath },
+        tools: { allow: ["probe__*"] },
+      },
+      sessionKey,
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["probe__search"]);
+  });
+
   it("filters bundled tools through inherited subagent allowlists", async () => {
     // Inherited allowlists are persisted by session key; use a real temp store
     // so parsing and lookup match production policy application.
