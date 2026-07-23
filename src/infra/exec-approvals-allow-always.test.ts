@@ -1611,9 +1611,19 @@ $0 \\"$1\\"" touch {marker}`,
       second: "groovy '-e\"sh -c id > {marker}\".execute()'",
     },
     {
+      executable: "groovy",
+      first: "groovy '-encoding:println 1'",
+      second: 'groovy \'-encoding:["sh", "-c", "id > {marker}"].execute()\'',
+    },
+    {
       executable: "scala",
       first: "scala -e 'println(1)'",
       second: "scala -e 'sys.process.Process(\"sh -c id > {marker}\").!'",
+    },
+    {
+      executable: "scala",
+      first: "scala --execute-script 'println(1)'",
+      second: "scala --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
     },
     {
       executable: "clojure",

@@ -75,7 +75,56 @@ describe("exec inline eval detection", () => {
     { argv: ["guile", "-c", '(system "id")'], expected: "guile -c" },
     { argv: ["groovy", "-e", '"id".execute()'], expected: "groovy -e" },
     { argv: ["groovy", '-e"id".execute()'], expected: "groovy -e" },
+    { argv: ["groovy", '-encoding:["id"].execute()'], expected: "groovy -e" },
     { argv: ["scala", "-e", 'sys.process.Process("id").!'], expected: "scala -e" },
+    {
+      argv: ["scala", "--script-snippet", 'sys.process.Process("id").!'],
+      expected: "scala --script-snippet",
+    },
+    {
+      argv: ["scala", "--execute-script", 'sys.process.Process("id").!'],
+      expected: "scala --execute-script",
+    },
+    {
+      argv: ["scala", "--execute-sc=println(1)"],
+      expected: "scala --execute-sc",
+    },
+    {
+      argv: ["scala", "--execute-scala-script=println(1)"],
+      expected: "scala --execute-scala-script",
+    },
+    {
+      argv: ["scala", "--scala-snippet=println(1)"],
+      expected: "scala --scala-snippet",
+    },
+    {
+      argv: ["scala", "--execute-scala=println(1)"],
+      expected: "scala --execute-scala",
+    },
+    {
+      argv: ["scala", "--java-snippet", "class Main {}"],
+      expected: "scala --java-snippet",
+    },
+    {
+      argv: ["scala", "--execute-java=class Main {}"],
+      expected: "scala --execute-java",
+    },
+    {
+      argv: ["scala", "--markdown-snippet", "```scala\nprintln(1)\n```"],
+      expected: "scala --markdown-snippet",
+    },
+    {
+      argv: ["scala", "--md-snippet=```scala\nprintln(1)\n```"],
+      expected: "scala --md-snippet",
+    },
+    {
+      argv: ["scala", "--execute-markdown", "```scala\nprintln(1)\n```"],
+      expected: "scala --execute-markdown",
+    },
+    {
+      argv: ["scala", "--execute-md=```scala\nprintln(1)\n```"],
+      expected: "scala --execute-md",
+    },
     { argv: ["clojure", "-e", '(clojure.java.shell/sh "id")'], expected: "clojure -e" },
     { argv: ["clj", "--eval", "(println 1)"], expected: "clj --eval" },
     { argv: ["raku", "-e", "run 'id'"], expected: "raku -e" },
@@ -165,6 +214,9 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["groovy", "script.groovy"])).toBeNull();
     expect(
       detectInterpreterInlineEvalArgv(["groovy", "-encoding", "UTF-8", "script.groovy"]),
+    ).toBeNull();
+    expect(
+      detectInterpreterInlineEvalArgv(["groovy", "-encoding=UTF-8", "script.groovy"]),
     ).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["scala", "script.scala"])).toBeNull();
     expect(

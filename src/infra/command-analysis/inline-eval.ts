@@ -22,6 +22,7 @@ type InterpreterFlagSpec = {
   rawPrefixFlags?: readonly PrefixFlagSpec[];
   joinedExactFlags?: ReadonlySet<string>;
   joinedRawExactFlags?: ReadonlyMap<string, string>;
+  joinedFlagDenyExact?: ReadonlySet<string>;
   joinedFlagDenyPrefixes?: readonly string[];
   prefixFlags?: readonly PrefixFlagSpec[];
   shortClusterFlags?: readonly ShortClusterFlagSpec[];
@@ -175,8 +176,31 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     joinedExactFlags: new Set(),
   },
   { names: ["guile"], exactFlags: new Set(["-c"]), joinedExactFlags: new Set() },
-  { names: ["groovy"], exactFlags: new Set(["-e"]), joinedFlagDenyPrefixes: ["-encoding"] },
-  { names: ["scala"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  {
+    names: ["groovy"],
+    exactFlags: new Set(["-e"]),
+    joinedFlagDenyExact: new Set(["-encoding"]),
+    joinedFlagDenyPrefixes: ["-encoding="],
+  },
+  {
+    names: ["scala"],
+    exactFlags: new Set([
+      "-e",
+      "--script-snippet",
+      "--execute-script",
+      "--execute-sc",
+      "--execute-scala-script",
+      "--scala-snippet",
+      "--execute-scala",
+      "--java-snippet",
+      "--execute-java",
+      "--markdown-snippet",
+      "--md-snippet",
+      "--execute-markdown",
+      "--execute-md",
+    ]),
+    joinedExactFlags: new Set(),
+  },
   { names: ["clojure", "clj"], exactFlags: new Set(["-e", "--eval"]), joinedExactFlags: new Set() },
   {
     names: ["raku", "perl6"],
@@ -372,7 +396,10 @@ function matchJoinedExactFlag(
   token: string,
   lower: string,
 ): string | null {
-  if (spec.joinedFlagDenyPrefixes?.some((prefix) => lower.startsWith(prefix)) === true) {
+  if (
+    spec.joinedFlagDenyExact?.has(lower) === true ||
+    spec.joinedFlagDenyPrefixes?.some((prefix) => lower.startsWith(prefix)) === true
+  ) {
     return null;
   }
   for (const flag of spec.exactFlags) {
