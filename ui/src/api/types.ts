@@ -24,6 +24,12 @@ export type ChannelsPairingListResult =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
 export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
+export type SessionVisibility =
+  import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
+export type SessionSharingRole =
+  import("../../../packages/gateway-protocol/src/index.js").SessionSharingRole;
+export type SessionMembersListResult =
+  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
