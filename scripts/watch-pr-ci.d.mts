@@ -19,7 +19,7 @@ export interface RollupCheck {
 
 export interface RollupPayload {
   state?: string;
-  contexts?: { nodes?: RollupCheck[] };
+  contexts?: { totalCount?: number; nodes?: RollupCheck[] };
 }
 
 export interface RollupClassification {
