@@ -64,4 +64,21 @@ describe("Teams meeting node-host prerequisite deadline", () => {
     );
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a timed-out profiler separately from a missing audio device", async () => {
+    const timeoutError = Object.assign(new Error("spawnSync system_profiler ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    spawnSyncMock.mockReturnValueOnce({
+      ...successfulProbe,
+      status: null,
+      stdout: "",
+      error: timeoutError,
+    });
+
+    await expect(handleTeamsMeetingsNodeHostCommand(setupParams())).rejects.toThrow(
+      "Microsoft Teams meeting audio prerequisite check timed out on the node.",
+    );
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+  });
 });

@@ -520,17 +520,17 @@ function readSetupCommand(params: Record<string, unknown>, name: string): string
   return value as string[];
 }
 
+function isSpawnSyncTimeout(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ETIMEDOUT";
+}
+
 export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHostOptions) {
   const probeCommand = (command: string, timeoutMs: number): "found" | "missing" | "timed-out" => {
     const result = spawnSync("/bin/sh", ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", command], {
       encoding: "utf8",
       timeout: timeoutMs,
     });
-    if (
-      result.error instanceof Error &&
-      "code" in result.error &&
-      result.error.code === "ETIMEDOUT"
-    ) {
+    if (isSpawnSyncTimeout(result.error)) {
       return "timed-out";
     }
     return result.status === 0 ? "found" : "missing";
@@ -552,6 +552,9 @@ export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHo
       encoding: "utf8",
       timeout: commandTimeout(),
     });
+    if (isSpawnSyncTimeout(result.error)) {
+      throw new Error(`${options.meetingLabel} audio prerequisite check timed out on the node.`);
+    }
     const stderr =
       result.stderr ??
       (result.error
