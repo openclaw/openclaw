@@ -483,6 +483,19 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
 }
 
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
+function beginsNewMediaRoot(candidate: string): boolean {
+  return (
+    hasHttpUrlPrefix(candidate) ||
+    FILE_URL_PREFIX_RE.test(candidate) ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("/") ||
+    candidate.startsWith("~") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../") ||
+    candidate.startsWith("\\\\")
+  );
+}
+
 export function splitMediaFromOutput(
   raw: string,
   options: SplitMediaFromOutputOptions = {},
@@ -605,6 +618,29 @@ export function splitMediaFromOutput(
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
         looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
+      if (
+        !unwrapped &&
+        parts.length > 1 &&
+        /\s/.test(payloadValue) &&
+        looksLikeLocalPath &&
+        !parts
+          .slice(1)
+          .some((part) => beginsNewMediaRoot(normalizeMediaSource(cleanCandidate(part))))
+      ) {
+        // A single local path with spaces splits on whitespace into fragments that
+        // each look path-like, so the loop above over-counts them as separate media.
+        // When no fragment after the first begins a new absolute path or URL, this is
+        // one spaced path (e.g. a Windows profile path, or "/home/u/my folder/a.png"),
+        // so collapse it back rather than emit fragments.
+        const spacedPath = normalizeMediaSource(cleanCandidate(payloadValue));
+        if (isValidMedia(spacedPath, { allowSpaces: true, allowBareFilename: true })) {
+          media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedPath);
+          hasValidMedia = true;
+          foundMediaToken = true;
+          validCount = 1;
+          invalidParts.length = 0;
+        }
+      }
       if (
         !unwrapped &&
         validCount === 1 &&

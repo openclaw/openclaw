@@ -5,6 +5,21 @@ import { splitMediaFromOutput } from "./parse.js";
 type SplitMediaFromOutputOptions = NonNullable<Parameters<typeof splitMediaFromOutput>[1]>;
 
 describe("splitMediaFromOutput", () => {
+  it("keeps an unquoted local path with spaces as one media item (#112421)", () => {
+    expectParsedMediaOutputCase("MEDIA:/home/user/my folder/shot.png", {
+      mediaUrls: ["/home/user/my folder/shot.png"],
+    });
+    expectParsedMediaOutputCase("MEDIA:C:\\Users\\First Last\\workspace\\shot.png", {
+      mediaUrls: ["C:\\Users\\First Last\\workspace\\shot.png"],
+    });
+  });
+
+  it("still splits genuinely separate absolute media on one line", () => {
+    expectParsedMediaOutputCase("MEDIA:/home/user/a.png /home/user/b.png", {
+      mediaUrls: ["/home/user/a.png", "/home/user/b.png"],
+    });
+  });
+
   function expectParsedMediaOutputCase(
     input: string,
     expected: {
