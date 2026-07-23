@@ -168,14 +168,14 @@ describe("Matrix IndexedDB persistence", () => {
   });
 
   it("returns false without warning when the snapshot does not exist yet", async () => {
-    const restored = await restoreIdbFromDisk(path.join(tmpDir, "missing-snapshot.json"));
+    const restored = await restoreIdbFromDisk(path.join(tmpDir, "crypto-idb-snapshot.json"));
 
     expect(restored).toBe(false);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("handles concurrent persist operations in SQLite state", async () => {
-    const snapshotPath = path.join(tmpDir, "concurrent-persist.json");
+    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
     await seedDatabase({
       name: cryptoDatabaseName,
       storeName: "sessions",

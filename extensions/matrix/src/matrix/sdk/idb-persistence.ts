@@ -258,13 +258,24 @@ function resolveDefaultIdbSnapshotPath(): string {
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
+// Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
 export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean> {
   const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
   const storageRootDir = path.dirname(resolvedPath);
+  let callbackStarted = false;
   try {
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
-      const storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+      callbackStarted = true;
+      let storedSnapshotJson: string | null;
+      try {
+        storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+      } catch (err) {
+        if (fs.existsSync(resolvedPath)) {
+          throwLegacySnapshotMigrationRequired();
+        }
+        throw err;
+      }
       throwIfLegacySnapshotNeedsDoctor(resolvedPath, storedSnapshotJson);
       if (!storedSnapshotJson) {
         return false;
@@ -284,7 +295,7 @@ export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean
     if (err instanceof MatrixIdbSnapshotMigrationRequiredError) {
       throw err;
     }
-    if (fs.existsSync(resolvedPath)) {
+    if (!callbackStarted && fs.existsSync(resolvedPath)) {
       throwLegacySnapshotMigrationRequired();
     }
     LogService.warn("IdbPersistence", "Failed to restore IndexedDB snapshot from SQLite:", err);
@@ -293,10 +304,12 @@ export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean
 }
 
 export async function persistIdbToDisk(params?: {
+  // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
   snapshotPath?: string;
   databasePrefix?: string;
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
+  let callbackStarted = false;
   try {
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
@@ -304,8 +317,17 @@ export async function persistIdbToDisk(params?: {
       snapshotPath,
       MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
       async () => {
+        callbackStarted = true;
         const storageRootDir = path.dirname(snapshotPath);
-        const storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+        let storedSnapshotJson: string | null;
+        try {
+          storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+        } catch (err) {
+          if (fs.existsSync(snapshotPath)) {
+            throwLegacySnapshotMigrationRequired();
+          }
+          throw err;
+        }
         throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
         if (snapshot.length === 0) {
@@ -330,7 +352,7 @@ export async function persistIdbToDisk(params?: {
     if (err instanceof MatrixIdbSnapshotMigrationRequiredError) {
       throw err;
     }
-    if (fs.existsSync(snapshotPath)) {
+    if (!callbackStarted && fs.existsSync(snapshotPath)) {
       throwLegacySnapshotMigrationRequired();
     }
     LogService.warn("IdbPersistence", "Failed to persist IndexedDB snapshot:", err);

@@ -47,10 +47,12 @@ async function migrateLegacyMatrixIdbSnapshotLocked(params: {
 }): Promise<void> {
   const snapshot = readLegacyMatrixIdbSnapshotStateUnlocked(params.storageRootDir);
   if (!snapshot) {
+    const archived = await archiveLegacyMatrixIdbSnapshot(params);
     params.warnings.push(
-      `Matrix IndexedDB snapshot legacy source is invalid for ${params.storageRootDir}; archived without import`,
+      archived
+        ? `Matrix IndexedDB snapshot legacy source is invalid for ${params.storageRootDir}; archived without import`
+        : `Matrix IndexedDB snapshot legacy source is invalid for ${params.storageRootDir}; left active because archival failed`,
     );
-    await archiveLegacyMatrixIdbSnapshot(params);
     return;
   }
   const snapshotJson = JSON.stringify(snapshot);
@@ -73,10 +75,11 @@ async function migrateLegacyMatrixIdbSnapshotLocked(params: {
     return;
   }
   if (persisted && !snapshotContentMatches(persisted, snapshot)) {
-    params.notices.push(
-      `Kept the canonical Matrix IndexedDB snapshot in SQLite and archived a differing legacy source for ${params.storageRootDir}`,
-    );
-    await archiveLegacyMatrixIdbSnapshot(params);
+    if (await archiveLegacyMatrixIdbSnapshot(params)) {
+      params.notices.push(
+        `Kept the canonical Matrix IndexedDB snapshot in SQLite and archived a differing legacy source for ${params.storageRootDir}`,
+      );
+    }
     return;
   }
   if (!persisted) {
@@ -120,16 +123,18 @@ async function archiveLegacyMatrixIdbSnapshot(params: {
   storageRootDir: string;
   changes: string[];
   warnings: string[];
-}): Promise<void> {
+}): Promise<boolean> {
   const sourcePath = path.join(params.storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
   const timestamp = new Date().toISOString().replaceAll(":", "-");
   const archivePath = `${sourcePath}.migrated-${timestamp}-${randomUUID()}`;
   try {
     await fs.rename(sourcePath, archivePath);
     params.changes.push(`Archived Matrix IndexedDB snapshot legacy source -> ${archivePath}`);
+    return true;
   } catch (err) {
     params.warnings.push(
       `Failed archiving Matrix IndexedDB snapshot legacy source: ${String(err)}`,
     );
+    return false;
   }
 }
