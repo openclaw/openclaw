@@ -45,6 +45,13 @@ export function assertSqliteIntegrity(
   return { integrityCheck };
 }
 
+/** Require bounded structural and referential checks for latency-sensitive processes. */
+export function assertSqliteFastIntegrity(database: DatabaseSync, databaseLabel: string): "ok" {
+  const quickCheck = runSqliteCheck(database, databaseLabel, "quick_check");
+  runSqliteForeignKeyCheck(database, databaseLabel);
+  return quickCheck;
+}
+
 /** Require table and associated index consistency before trusting indexed reads. */
 export function assertSqliteTableIntegrity(
   database: DatabaseSync,

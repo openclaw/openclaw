@@ -2,10 +2,11 @@
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
+} from "../agents/harness/native-hook-relay-bridge-client.js";
+import {
   renderNativeHookRelayUnavailableResponse,
   type NativeHookRelayProcessResponse,
-} from "../agents/harness/native-hook-relay.js";
-import { callGateway } from "../gateway/call.js";
+} from "../agents/harness/native-hook-relay-wire.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
@@ -28,7 +29,7 @@ type NativeHookRelayCliDeps = {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   invokeBridge?: typeof invokeNativeHookRelayBridge;
-  callGateway?: typeof callGateway;
+  callGateway?: typeof import("../gateway/call.js").callGateway;
 };
 
 type NativeHookRelayDeadline = {
@@ -54,7 +55,6 @@ export async function runNativeHookRelayCli(
   const stdout = deps.stdout ?? process.stdout;
   const stderr = deps.stderr ?? process.stderr;
   const invokeBridge = deps.invokeBridge ?? invokeNativeHookRelayBridge;
-  const callGatewayFn = deps.callGateway ?? callGateway;
   const provider = readRequiredOption(opts.provider, "provider");
   const relayId = readRequiredOption(opts.relayId, "relay-id");
   const generation = opts.generation?.trim() || undefined;
@@ -126,6 +126,7 @@ export async function runNativeHookRelayCli(
     }
 
     try {
+      const callGatewayFn = deps.callGateway ?? (await import("../gateway/call.js")).callGateway;
       const response = await withNativeHookRelayDeadline(
         deadline,
         callGatewayFn<NativeHookRelayProcessResponse>({

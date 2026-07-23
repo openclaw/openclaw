@@ -3,13 +3,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -43,6 +37,12 @@ import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 import {
+  invokeNativeHookRelayBridge,
+  isNativeHookRelayBridgeStaleRegistrationError,
+  isRetryableNativeHookRelayBridgeLookupError,
+  NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+} from "./native-hook-relay-bridge-client.js";
+import {
   clearNativeHookRelayBridgeRecordsForTests,
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
@@ -51,21 +51,29 @@ import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
+import {
+  NATIVE_HOOK_RELAY_EVENTS,
+  readNativeHookRelayEvent,
+  readNativeHookRelayProvider,
+  renderNativeHookRelayUnavailableResponse,
+  type NativeHookRelayEvent,
+  type NativeHookRelayProcessResponse,
+  type NativeHookRelayProvider,
+} from "./native-hook-relay-wire.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-const NATIVE_HOOK_RELAY_EVENTS = [
-  "pre_tool_use",
-  "post_tool_use",
-  "permission_request",
-  "before_agent_finalize",
-] as const;
-
-const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
-
-export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
-export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
+export type {
+  NativeHookRelayEvent,
+  NativeHookRelayProcessResponse,
+  NativeHookRelayProvider,
+} from "./native-hook-relay-wire.js";
+export {
+  invokeNativeHookRelayBridge,
+  isNativeHookRelayBridgeStaleRegistrationError,
+  renderNativeHookRelayUnavailableResponse,
+};
 
 type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
@@ -87,13 +95,6 @@ type NativeHookRelayInvocation = {
   toolUseId?: string;
   rawPayload: JsonValue;
   receivedAt: string;
-};
-
-export type NativeHookRelayProcessResponse = {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
 type NativeHookRelayRegistration = {
@@ -171,12 +172,6 @@ type InvokeNativeHookRelayParams = {
   requireGeneration?: boolean;
 };
 
-type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
-  registrationTimeoutMs?: number;
-  stateDbPath?: string;
-  timeoutMs?: number;
-};
-
 type NativeHookRelayInvocationMetadata = Partial<
   Pick<
     NativeHookRelayInvocation,
@@ -232,11 +227,7 @@ const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
 const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
 const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
-const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
-const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
 const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
-const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
-  "native hook relay bridge stale registration";
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
@@ -861,89 +852,6 @@ async function resolveNativeHookRelayPreToolUseApproval(
   };
 }
 
-export async function invokeNativeHookRelayBridge(
-  params: InvokeNativeHookRelayBridgeParams,
-): Promise<NativeHookRelayProcessResponse> {
-  const provider = readNativeHookRelayProvider(params.provider);
-  const relayId = readNonEmptyString(params.relayId, "relayId");
-  const event = readNativeHookRelayEvent(params.event);
-  const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
-  const registrationTimeoutMs = normalizePositiveInteger(params.registrationTimeoutMs, timeoutMs);
-  const startedAt = Date.now();
-  let lastError: unknown = new Error("native hook relay bridge not found");
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const record = readNativeHookRelayBridgeRecord(relayId, params.stateDbPath);
-      if (Date.now() > record.expiresAtMs) {
-        throw new Error("native hook relay bridge expired");
-      }
-      return await invokeNativeHookRelayBridgeRecord({
-        record,
-        timeoutMs: Math.max(1, timeoutMs - (Date.now() - startedAt)),
-        payload: {
-          provider,
-          relayId,
-          event,
-          generation: params.generation,
-          rawPayload: params.rawPayload,
-        },
-      });
-    } catch (error) {
-      lastError = error;
-      if (
-        error instanceof Error &&
-        error.message === "native hook relay bridge not found" &&
-        Date.now() - startedAt >= registrationTimeoutMs
-      ) {
-        break;
-      }
-      if (
-        !isRetryableNativeHookRelayBridgeLookupError({
-          error,
-          elapsedMs: Date.now() - startedAt,
-        })
-      ) {
-        break;
-      }
-      await delay(
-        Math.min(NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS, timeoutMs - (Date.now() - startedAt)),
-      );
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
-}
-
-export function renderNativeHookRelayUnavailableResponse(params: {
-  provider: unknown;
-  event: unknown;
-  preToolUseUnavailable?: unknown;
-  message?: string;
-}): NativeHookRelayProcessResponse {
-  const provider = readNativeHookRelayProvider(params.provider);
-  const event = readNativeHookRelayEvent(params.event);
-  const adapter = getNativeHookRelayProviderAdapter(provider);
-  const message = params.message?.trim() || "Native hook relay unavailable";
-  if (event === "pre_tool_use") {
-    // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
-      return adapter.renderNoopResponse(event);
-    }
-    return adapter.renderPreToolUseBlockResponse(message);
-  }
-  if (event === "permission_request") {
-    return adapter.renderPermissionDecisionResponse("deny", message);
-  }
-  return adapter.renderNoopResponse(event);
-}
-
-export function isNativeHookRelayBridgeStaleRegistrationError(error: unknown): boolean {
-  return (
-    error instanceof Error && error.message === NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR
-  );
-}
-
 function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {
   invocations.push({
     ...invocation,
@@ -1273,17 +1181,6 @@ function writeNativeHookRelayBridgeJson(
   res.end(body);
 }
 
-function readNativeHookRelayBridgeRecord(
-  relayId: string,
-  stateDbPath?: string,
-): NativeHookRelayBridgeRecord {
-  const record = readNativeHookRelayBridgeRecordIfExists(relayId, stateDbPath);
-  if (!record) {
-    throw new Error("native hook relay bridge not found");
-  }
-  return record;
-}
-
 function readNativeHookRelayBridgeRecordIfExists(
   relayId: string,
   stateDbPath?: string,
@@ -1294,116 +1191,6 @@ function readNativeHookRelayBridgeRecordIfExists(
     log.debug("failed to read native hook relay bridge record", { error, relayId });
   }
   return undefined;
-}
-
-async function invokeNativeHookRelayBridgeRecord(params: {
-  record: NativeHookRelayBridgeRecord;
-  timeoutMs: number;
-  payload: InvokeNativeHookRelayParams;
-}): Promise<NativeHookRelayProcessResponse> {
-  return postNativeHookRelayBridgeRecord(params);
-}
-
-function postNativeHookRelayBridgeRecord(params: {
-  record: NativeHookRelayBridgeRecord;
-  timeoutMs: number;
-  payload: InvokeNativeHookRelayParams;
-}): Promise<NativeHookRelayProcessResponse> {
-  const body = JSON.stringify(params.payload);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const resolveOnce = (value: NativeHookRelayProcessResponse) => {
-      if (!settled) {
-        settled = true;
-        resolve(value);
-      }
-    };
-    const rejectOnce = (error: unknown) => {
-      if (!settled) {
-        settled = true;
-        reject(toErrorObject(error, "Non-Error rejection"));
-      }
-    };
-    const req = httpRequest(
-      {
-        hostname: params.record.hostname,
-        method: "POST",
-        path: "/invoke",
-        port: params.record.port,
-        timeout: params.timeoutMs,
-        headers: {
-          authorization: `Bearer ${params.record.token}`,
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        let responseText = "";
-        let responseBytes = 0;
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          const chunkText = typeof chunk === "string" ? chunk : String(chunk);
-          responseBytes += Buffer.byteLength(chunkText);
-          if (responseBytes > MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES) {
-            rejectOnce(new Error("native hook relay bridge response too large"));
-            res.destroy();
-            return;
-          }
-          responseText += chunkText;
-        });
-        res.on("error", rejectOnce);
-        res.on("end", () => {
-          if (settled) {
-            return;
-          }
-          try {
-            const parsed = JSON.parse(responseText) as
-              | { ok: true; result: NativeHookRelayProcessResponse }
-              | { ok: false; error?: string };
-            if (parsed.ok) {
-              resolveOnce(parsed.result);
-              return;
-            }
-            rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));
-          } catch (error) {
-            rejectOnce(error);
-          }
-        });
-      },
-    );
-    req.on("timeout", () => {
-      req.destroy(new Error("native hook relay bridge timed out"));
-    });
-    req.on("error", rejectOnce);
-    req.end(body);
-  });
-}
-
-function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "ENOENT" ||
-    code === "ECONNREFUSED" ||
-    code === "EAGAIN" ||
-    (error instanceof Error && error.message === "native hook relay bridge not found")
-  );
-}
-
-function isRetryableNativeHookRelayBridgeLookupError(params: {
-  error: unknown;
-  elapsedMs: number;
-}): boolean {
-  return (
-    isRetryableNativeHookRelayBridgeError(params.error) ||
-    (params.elapsedMs < NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS &&
-      isNativeHookRelayBridgeStaleRegistrationError(params.error))
-  );
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(0, ms));
-  });
 }
 
 async function processNativeHookRelayInvocation(params: {
@@ -2238,14 +2025,9 @@ function resolveOpenClawCliExecutable(): string {
     cwd: process.cwd(),
   });
   if (packageRoot) {
-    for (const candidate of [
-      path.join(packageRoot, "openclaw.mjs"),
-      path.join(packageRoot, "dist", "entry.js"),
-      path.join(packageRoot, "scripts", "run-node.mjs"),
-    ]) {
-      if (existsSync(candidate)) {
-        return candidate;
-      }
+    const executable = resolvePackageRootHookRelayExecutable(packageRoot);
+    if (executable) {
+      return executable;
     }
   }
   const argvEntry = process.argv[1];
@@ -2256,6 +2038,22 @@ function resolveOpenClawCliExecutable(): string {
     }
   }
   throw new Error("Cannot resolve OpenClaw CLI executable path for native hook relay");
+}
+
+function resolvePackageRootHookRelayExecutable(packageRoot: string): string | undefined {
+  // Codex kills a timed-out command process directly. Prefer the built entry
+  // so that process is the relay itself, not a launcher parent that can leave
+  // the relay alive after the timeout.
+  for (const candidate of [
+    path.join(packageRoot, "dist", "entry.js"),
+    path.join(packageRoot, "openclaw.mjs"),
+    path.join(packageRoot, "scripts", "run-node.mjs"),
+  ]) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function normalizeAllowedEvents(
@@ -2291,25 +2089,6 @@ function shellQuoteArg(value: string, platform: NodeJS.Platform): string {
     return `"${value.replaceAll('"', '\\"')}"`;
   }
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function readNativeHookRelayProvider(value: unknown): NativeHookRelayProvider {
-  if (value === "codex") {
-    return value;
-  }
-  throw new Error("unsupported native hook relay provider");
-}
-
-function readNativeHookRelayEvent(value: unknown): NativeHookRelayEvent {
-  if (
-    value === "pre_tool_use" ||
-    value === "post_tool_use" ||
-    value === "permission_request" ||
-    value === "before_agent_finalize"
-  ) {
-    return value;
-  }
-  throw new Error("unsupported native hook relay event");
 }
 
 function readNonEmptyString(value: unknown, name: string): string {
@@ -2444,6 +2223,9 @@ export const testing = {
   getNativeHookRelayBridgeRecordForTests(relayId: string): Record<string, unknown> | undefined {
     const record = readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
+  },
+  resolvePackageRootHookRelayExecutableForTests(packageRoot: string): string | undefined {
+    return resolvePackageRootHookRelayExecutable(packageRoot);
   },
   isNativeHookRelayBridgeLookupRetryableForTests(error: unknown, elapsedMs = 0): boolean {
     return isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs });
