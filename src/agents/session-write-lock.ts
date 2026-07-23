@@ -276,9 +276,15 @@ function releaseAllLocksSync(): void {
 async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
   let released = 0;
   for (const held of SESSION_LOCKS.heldEntries()) {
+    // Cap the watchdog's force-release threshold to the default max hold time
+    // instead of using the lock metadata's maxHoldMs (which can be up to ~17
+    // minutes for long agent timeouts). When a run terminates abnormally during
+    // tool execution and the lock is held by the same process, the in-memory
+    // lock persists until the watchdog fires. A 17-minute wait makes the
+    // session effectively dead to new messages. (#100872)
     const maxHoldMs =
       typeof held.metadata.maxHoldMs === "number"
-        ? held.metadata.maxHoldMs
+        ? Math.min(held.metadata.maxHoldMs, DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS)
         : DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS;
     const heldForMs = nowMs - held.acquiredAt;
     if (heldForMs <= maxHoldMs) {
