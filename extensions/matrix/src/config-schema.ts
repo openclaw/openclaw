@@ -64,8 +64,6 @@ const matrixFreshnessSchema = z
     scope: z.enum(["room", "thread-aware"]).optional(),
     draftHoldbackMs: z.number().int().min(0).optional(),
     model: z.string().optional(),
-    minRoomMembers: z.number().int().positive().optional(),
-    minAgentMembers: z.number().int().positive().optional(),
     allowedFinalActions: z.array(matrixFreshnessFinalActionSchema).optional(),
     aiDeterminesFinalAction: z.boolean().optional(),
     finalAction: matrixFreshnessFinalActionSchema.optional(),

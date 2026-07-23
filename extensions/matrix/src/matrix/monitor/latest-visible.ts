@@ -58,6 +58,14 @@ function isRedactedEvent(event: MatrixRawEvent): boolean {
   return Boolean(event.unsigned?.redacted_because);
 }
 
+function resolveRedactionTargetEventId(event: MatrixRawEvent): string | undefined {
+  const eventRedacts = normalizeOptionalString(event.redacts);
+  if (eventRedacts) {
+    return eventRedacts;
+  }
+  return normalizeOptionalString(event.content?.redacts);
+}
+
 function toIdSet(values?: Iterable<string | null | undefined>): Set<string> {
   const out = new Set<string>();
   if (!values) {
@@ -169,6 +177,13 @@ export function evaluateMatrixFreshnessObservation(params: {
   }
   if (params.event.type === EventType.Reaction) {
     return { action: "ignore", reason: "reaction-noise", eventId };
+  }
+  if (params.event.type === EventType.RoomRedaction) {
+    const targetEventId = resolveRedactionTargetEventId(params.event);
+    if (targetEventId && protectedEventIds.has(targetEventId)) {
+      return { action: "recheck", reason: "protected-target-redaction", eventId };
+    }
+    return { action: "ignore", reason: "transport-noise", eventId };
   }
   if (params.event.type !== EventType.RoomMessage) {
     return { action: "ignore", reason: "transport-noise", eventId };

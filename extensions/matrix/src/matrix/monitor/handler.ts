@@ -40,7 +40,7 @@ import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
 } from "openclaw/plugin-sdk/reply-payload";
-import { getReplyFromConfig, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -54,6 +54,7 @@ import type {
   ReplyToMode,
 } from "../../types.js";
 import {
+  listNormalizedMatrixAccountIds,
   resolveMatrixAccountAllowlistConfig,
   resolveMatrixAccountConfig,
 } from "../account-config.js";
@@ -443,7 +444,15 @@ function resolveMatrixAllowBotsMode(value?: boolean | "mentions"): MatrixAllowBo
   return "off";
 }
 
-function resolveMatrixParticipationAgents(cfg: CoreConfig): ParticipationAgentIdentity[] {
+function resolveMatrixParticipationAgents(params: {
+  cfg: CoreConfig;
+  core: PluginRuntime;
+  currentAccountId: string;
+  currentAgentId: string;
+  roomId: string;
+  log?: (message: string) => void;
+}): ParticipationAgentIdentity[] {
+  const cfg = params.cfg;
   const rawAgents = (
     cfg as {
       agents?: {
@@ -458,18 +467,64 @@ function resolveMatrixParticipationAgents(cfg: CoreConfig): ParticipationAgentId
   if (!Array.isArray(rawAgents)) {
     return [];
   }
-  return rawAgents
-    .map((entry) => ({
-      agentId: typeof entry.id === "string" ? entry.id.trim() : "",
-      aliases: [
-        ...(typeof entry.name === "string" ? [entry.name] : []),
-        ...(Array.isArray(entry.groupChat?.mentionPatterns)
-          ? entry.groupChat.mentionPatterns.filter(
-              (value): value is string => typeof value === "string",
-            )
-          : []),
-      ],
-    }))
+  const routeAccountIds = new Set<string>(
+    listNormalizedMatrixAccountIds(cfg).filter(
+      (accountId) => resolveMatrixAccountConfig({ cfg, accountId }).enabled !== false,
+    ),
+  );
+  routeAccountIds.add(params.currentAccountId);
+  const routedAgentAccountIds = new Map<string, string>();
+  routedAgentAccountIds.set(params.currentAgentId, params.currentAccountId);
+  for (const accountId of routeAccountIds) {
+    try {
+      const route = params.core.channel.routing.resolveAgentRoute({
+        cfg,
+        channel: "matrix",
+        accountId,
+        peer: {
+          kind: "channel",
+          id: params.roomId,
+        },
+      });
+      if (route.agentId?.trim()) {
+        routedAgentAccountIds.set(route.agentId.trim(), accountId);
+      }
+    } catch (err) {
+      params.log?.(
+        `matrix participation route sampling failed account=${accountId}: ${String(err)}`,
+      );
+    }
+  }
+  const rawAgentById = new Map(
+    rawAgents
+      .map((entry) => [typeof entry.id === "string" ? entry.id.trim() : "", entry] as const)
+      .filter(([agentId]) => agentId),
+  );
+  return Array.from(routedAgentAccountIds)
+    .map(([agentIdValue, accountId]) => {
+      const entry = rawAgentById.get(agentIdValue);
+      const aliases = typeof entry?.name === "string" ? [entry.name] : [];
+      let mentionRegexes: RegExp[] = [];
+      try {
+        mentionRegexes = params.core.channel.mentions.buildMentionRegexes(cfg, agentIdValue, {
+          provider: "matrix",
+          conversationId: params.roomId,
+          providerPolicy: resolveMatrixAccountConfig({ cfg, accountId }).mentionPatterns,
+        });
+      } catch (err) {
+        params.log?.(
+          `matrix participation mention regex build failed agent=${agentIdValue}: ${String(err)}`,
+        );
+      }
+      const identity: ParticipationAgentIdentity = { agentId: agentIdValue };
+      if (aliases.length > 0) {
+        identity.aliases = aliases;
+      }
+      if (mentionRegexes.length > 0) {
+        identity.mentionRegexes = mentionRegexes;
+      }
+      return identity;
+    })
     .filter((entry) => entry.agentId);
 }
 
@@ -643,6 +698,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const recordLatestVisibleNoiseIfFreshnessEnabled = async () => {
+        if (accountConfig?.freshness?.enabled !== true) {
+          return;
+        }
+        latestVisibleTracker.recordPending(roomId, event);
+      };
+      if (eventType === EventType.RoomRedaction) {
+        await recordLatestVisibleNoiseIfFreshnessEnabled();
+        return;
+      }
+
       const isPollEvent = isPollEventType(eventType);
       const isReactionEvent = eventType === EventType.Reaction;
       const locationContent = event.content as LocationMessageEventContent;
@@ -661,6 +727,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         `matrix: inbound event room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
       if (event.unsigned?.redacted_because) {
+        await recordLatestVisibleNoiseIfFreshnessEnabled();
         return;
       }
       const senderId = event.sender;
@@ -1229,35 +1296,23 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
         const freshnessConfig = accountConfig?.freshness;
-        const configuredFreshnessAgents =
-          isRoom && freshnessConfig?.enabled === true
-            ? resolveMatrixParticipationAgents(liveCfg)
+        const participationConfig = accountConfig?.participation;
+        const policyParticipationAgents =
+          isRoom && participationConfig?.enabled === true
+            ? resolveMatrixParticipationAgents({
+                cfg: liveCfg,
+                core,
+                currentAccountId: _route.accountId,
+                currentAgentId: _route.agentId,
+                roomId,
+                log: logVerboseMessage,
+              })
             : [];
-        let freshnessRoomMemberCount: number | undefined;
-        if (
-          isRoom &&
-          freshnessConfig?.enabled === true &&
-          typeof freshnessConfig.minRoomMembers === "number"
-        ) {
-          try {
-            freshnessRoomMemberCount = (await client.getJoinedRoomMembers(roomId)).length;
-          } catch (err) {
-            logVerboseMessage(
-              `matrix freshness member count unavailable room=${roomId}: ${String(err)}`,
-            );
-          }
-        }
         const freshnessEnabled =
           isRoom &&
           freshnessConfig?.enabled === true &&
-          historyLimit > 0 &&
           !hasControlCommandInMessage &&
-          !shouldBypassMention &&
-          (typeof freshnessConfig.minAgentMembers !== "number" ||
-            configuredFreshnessAgents.length >= freshnessConfig.minAgentMembers) &&
-          (typeof freshnessConfig.minRoomMembers !== "number" ||
-            (freshnessRoomMemberCount !== undefined &&
-              freshnessRoomMemberCount >= freshnessConfig.minRoomMembers));
+          !shouldBypassMention;
         const recordSkippedRoomHistory = () => {
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
@@ -1286,11 +1341,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             roomHistoryTracker.recordPending(roomId, pendingEntry, historyThreadId);
           }
         };
-        const participationConfig = accountConfig?.participation;
         const availableParticipationAgents =
-          isRoom && participationConfig?.enabled === true
-            ? resolveMatrixParticipationAgents(core.config.current() as CoreConfig)
-            : [];
+          isRoom && participationConfig?.enabled === true ? policyParticipationAgents : [];
         const participationEnabled =
           isRoom &&
           participationConfig?.enabled === true &&
@@ -2336,11 +2388,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         const revised = await reviseMatrixFinalReplyWithFreshness({
           cfg,
+          config: freshnessConfig,
+          agentId: _route.agentId,
           ctxPayload: ctxPayload as Record<string, unknown>,
           draftText: payload.text,
           latestPendingHistory: state.latestPendingHistory,
-          onModelSelected,
-          replyResolver: getReplyFromConfig,
+          log: logVerboseMessage,
         });
         return revised;
       };

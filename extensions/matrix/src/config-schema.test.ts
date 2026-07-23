@@ -192,8 +192,6 @@ describe("MatrixConfigSchema SecretInput", () => {
         scope: "thread-aware",
         draftHoldbackMs: 250,
         model: "openai/gpt-5.1-mini",
-        minRoomMembers: 3,
-        minAgentMembers: 2,
         allowedFinalActions: ["revise", "suppress", "send-as-is"],
         aiDeterminesFinalAction: true,
         finalAction: "revise",
@@ -213,6 +211,21 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it.each(["minRoomMembers", "minAgentMembers"])(
+    "rejects retired Matrix draft freshness field %s",
+    (field) => {
+      const result = MatrixConfigSchema.safeParse({
+        homeserver: "https://matrix.example.org",
+        accessToken: "token",
+        freshness: {
+          enabled: true,
+          [field]: 2,
+        },
+      });
+      expect(result.success).toBe(false);
+    },
+  );
 
   it("rejects invalid Matrix draft freshness final actions", () => {
     const result = MatrixConfigSchema.safeParse({

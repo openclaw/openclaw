@@ -8,6 +8,7 @@ import type { MatrixParticipationStrategy } from "../../types.js";
 export type ParticipationAgentIdentity = {
   agentId: string;
   aliases?: readonly string[];
+  mentionRegexes?: readonly RegExp[];
 };
 
 export type ParticipationDirective = {
@@ -57,6 +58,40 @@ function resolveAliases(agent: ParticipationAgentIdentity): string[] {
   return unique([agent.agentId, ...(agent.aliases ?? [])].map(normalizeText));
 }
 
+function regexMatches(regex: RegExp, text: string): boolean {
+  regex.lastIndex = 0;
+  const matched = regex.test(text);
+  regex.lastIndex = 0;
+  return matched;
+}
+
+function matchesAgentMention(agent: ParticipationAgentIdentity, text: string): boolean {
+  if (
+    resolveAliases(agent).some((alias) =>
+      new RegExp(`(^|[^a-z0-9_@])${escapeRegex(alias)}([^a-z0-9_]|$)`, "i").test(text),
+    )
+  ) {
+    return true;
+  }
+  return (agent.mentionRegexes ?? []).some((regex) => regexMatches(regex, text));
+}
+
+function startsWithAgentMention(agent: ParticipationAgentIdentity, text: string): boolean {
+  if (
+    resolveAliases(agent).some((alias) =>
+      new RegExp(`^@?${escapeRegex(alias)}(?:[,:!?]|\\s|$)`, "i").test(text),
+    )
+  ) {
+    return true;
+  }
+  return (agent.mentionRegexes ?? []).some((regex) => {
+    regex.lastIndex = 0;
+    const match = regex.exec(text);
+    regex.lastIndex = 0;
+    return match?.index === 0;
+  });
+}
+
 export function findParticipationMentionedAgents(params: {
   text: string;
   availableAgents: readonly ParticipationAgentIdentity[];
@@ -67,11 +102,7 @@ export function findParticipationMentionedAgents(params: {
   }
   const matched: string[] = [];
   for (const agent of params.availableAgents) {
-    if (
-      resolveAliases(agent).some((alias) =>
-        new RegExp(`(^|[^a-z0-9_@])${escapeRegex(alias)}([^a-z0-9_]|$)`, "i").test(text),
-      )
-    ) {
+    if (matchesAgentMention(agent, text)) {
       matched.push(agent.agentId);
     }
   }
@@ -174,9 +205,7 @@ export function parseParticipationDirectiveDeterministic(params: {
     /\b(?:reply|respond|weigh in|answer|take this|handle this|check this)\b/.test(normalized) ||
     mentionedAgentIds.some((agentId) => {
       const agent = params.availableAgents.find((entry) => entry.agentId === agentId);
-      return resolveAliases(agent ?? { agentId }).some((alias) =>
-        new RegExp(`^@?${escapeRegex(alias)}(?:[,:!?]|\\s|$)`, "i").test(normalized),
-      );
+      return startsWithAgentMention(agent ?? { agentId }, normalized);
     })
   ) {
     return {

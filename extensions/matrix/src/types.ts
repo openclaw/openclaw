@@ -131,10 +131,6 @@ export type MatrixFreshnessConfig = {
   draftHoldbackMs?: number;
   /** Optional model override for AI final-action selection. */
   model?: string;
-  /** Minimum joined room members required before freshness activates. */
-  minRoomMembers?: number;
-  /** Minimum configured agent members required before freshness activates. */
-  minAgentMembers?: number;
   /** Allowed AI-selected final actions. Defaults to all final actions. */
   allowedFinalActions?: MatrixFreshnessFinalAction[];
   /** Let AI choose suppress/revise/send-as-is in auto mode. Default: false. */

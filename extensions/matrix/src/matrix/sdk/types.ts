@@ -12,6 +12,7 @@ export type MatrixRawEvent = {
   type: string;
   origin_server_ts: number;
   content: Record<string, unknown>;
+  redacts?: string;
   unsigned?: {
     age?: number;
     "m.relations"?: Record<string, unknown>;

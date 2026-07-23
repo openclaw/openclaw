@@ -36,6 +36,21 @@ function createEvent(params: {
   };
 }
 
+function createRedactionEvent(params: {
+  eventId: string;
+  targetEventId: string;
+  targetInContent?: boolean;
+}): MatrixRawEvent {
+  return {
+    event_id: params.eventId,
+    sender: "@mod:example.org",
+    type: EventType.RoomRedaction,
+    origin_server_ts: 1,
+    content: params.targetInContent ? { redacts: params.targetEventId } : {},
+    ...(params.targetInContent ? {} : { redacts: params.targetEventId }),
+  };
+}
+
 describe("resolveMatrixFreshnessProtectedEventIds", () => {
   it("includes thread roots and reply targets for future latest-visible checks", () => {
     expect(
@@ -131,6 +146,31 @@ describe("evaluateMatrixFreshnessObservation", () => {
         draftScope: resolveMatrixDraftFreshnessScope({}),
         protectedEventIds: ["$replyTarget"],
         event: createEvent({ eventId: "$replyTarget", redacted: true }),
+      }),
+    ).toMatchObject({ action: "recheck", reason: "protected-target-redaction" });
+  });
+
+  it("rechecks when a raw redaction targets a protected event", () => {
+    expect(
+      evaluateMatrixFreshnessObservation({
+        draftScope: resolveMatrixDraftFreshnessScope({}),
+        protectedEventIds: ["$replyTarget"],
+        event: createRedactionEvent({
+          eventId: "$redaction",
+          targetEventId: "$replyTarget",
+        }),
+      }),
+    ).toMatchObject({ action: "recheck", reason: "protected-target-redaction" });
+
+    expect(
+      evaluateMatrixFreshnessObservation({
+        draftScope: resolveMatrixDraftFreshnessScope({}),
+        protectedEventIds: ["$replyTarget"],
+        event: createRedactionEvent({
+          eventId: "$content-redaction",
+          targetEventId: "$replyTarget",
+          targetInContent: true,
+        }),
       }),
     ).toMatchObject({ action: "recheck", reason: "protected-target-redaction" });
   });

@@ -47,17 +47,17 @@ const resolveMatrixMentionsForBodyMock = vi.hoisted(() =>
     };
   }),
 );
-const getReplyFromConfigMock = vi.hoisted(() =>
+const prepareSimpleCompletionModelForAgentMock = vi.hoisted(() =>
+  vi.fn(async () => ({ model: {}, auth: {} })),
+);
+const completeWithPreparedSimpleCompletionModelMock = vi.hoisted(() =>
   vi.fn(async () => ({ text: "revised final reply" })),
 );
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: getReplyFromConfigMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
+  completeWithPreparedSimpleCompletionModel: completeWithPreparedSimpleCompletionModelMock,
+  prepareSimpleCompletionModelForAgent: prepareSimpleCompletionModelForAgentMock,
+}));
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
@@ -131,7 +131,10 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
-  getReplyFromConfigMock.mockReset().mockResolvedValue({ text: "revised final reply" });
+  prepareSimpleCompletionModelForAgentMock.mockReset().mockResolvedValue({ model: {}, auth: {} });
+  completeWithPreparedSimpleCompletionModelMock
+    .mockReset()
+    .mockResolvedValue({ text: "revised final reply" });
 });
 
 afterEach(() => {
@@ -739,11 +742,30 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("suppresses room dispatch when deterministic participation targets another agent", async () => {
+    const resolveAgentRoute = vi.fn((params: { accountId?: string }) =>
+      params.accountId === "sentinel"
+        ? {
+            agentId: "sentinel",
+            channel: "matrix",
+            accountId: "sentinel",
+            sessionKey: "agent:sentinel:main",
+            mainSessionKey: "agent:sentinel:main",
+            matchedBy: "binding.account" as const,
+          }
+        : {
+            agentId: "ops",
+            channel: "matrix",
+            accountId: "ops",
+            sessionKey: "agent:ops:main",
+            mainSessionKey: "agent:ops:main",
+            matchedBy: "binding.account" as const,
+          },
+    );
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountConfig: { participation: { enabled: true, strategy: "deterministic" } },
       cfg: {
-        channels: { matrix: {} },
+        channels: { matrix: { accounts: { ops: {}, sentinel: {} } } },
         agents: {
           list: [
             { id: "ops", groupChat: { mentionPatterns: ["ops"] } },
@@ -754,6 +776,7 @@ describe("matrix monitor handler pairing account scope", () => {
       roomsConfig: {
         "!room:example.org": { requireMention: false },
       },
+      resolveAgentRoute: resolveAgentRoute as never,
     });
 
     await handler(
@@ -767,12 +790,82 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
+  it("fails open when deterministic participation targets an unroutable agent", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountConfig: { participation: { enabled: true, strategy: "deterministic" } },
+      cfg: {
+        channels: { matrix: { accounts: { ops: {} } } },
+        agents: {
+          list: [
+            { id: "ops", groupChat: { mentionPatterns: ["ops"] } },
+            { id: "forge", groupChat: { mentionPatterns: ["forge"] } },
+          ],
+        },
+      },
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$participation-unroutable",
+        body: "forge, handle this",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("preserves regex mention patterns when deterministic participation targets this agent", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      accountConfig: { participation: { enabled: true, strategy: "deterministic" } },
+      cfg: {
+        channels: { matrix: { accounts: { ops: {} } } },
+        agents: {
+          list: [
+            {
+              id: "worker",
+              name: "Worker",
+              groupChat: { mentionPatterns: [String.raw`\bops\b`] },
+            },
+          ],
+        },
+      },
+      mentionRegexes: [/\bops\b/i],
+      resolveAgentRoute: () => ({
+        agentId: "worker",
+        channel: "matrix",
+        accountId: "ops",
+        sessionKey: "agent:worker:main",
+        mainSessionKey: "agent:worker:main",
+        matchedBy: "binding.account" as const,
+      }),
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$participation-regex",
+        body: "ops, handle this",
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
   it("allows room dispatch when deterministic participation targets this agent", async () => {
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
       accountConfig: { participation: { enabled: true, strategy: "deterministic" } },
       cfg: {
-        channels: { matrix: {} },
+        channels: { matrix: { accounts: { ops: {}, sentinel: {} } } },
         agents: {
           list: [
             { id: "ops", groupChat: { mentionPatterns: ["ops"] } },
@@ -780,10 +873,11 @@ describe("matrix monitor handler pairing account scope", () => {
           ],
         },
       },
+      accountId: "sentinel",
       resolveAgentRoute: () => ({
         agentId: "sentinel",
         channel: "matrix",
-        accountId: "ops",
+        accountId: "sentinel",
         sessionKey: "agent:sentinel:main",
         mainSessionKey: "agent:sentinel:main",
         matchedBy: "binding.account" as const,
@@ -807,6 +901,13 @@ describe("matrix monitor handler pairing account scope", () => {
   async function runMatrixFreshnessScenario(params: {
     mode: "revise" | "send-as-is" | "suppress";
     finalText?: string;
+    historyLimit?: number;
+    triggerRelatesTo?: {
+      rel_type?: string;
+      event_id?: string;
+      "m.in_reply_to"?: { event_id?: string };
+    };
+    interveningEvent?: MatrixRawEvent;
   }) {
     type DeliverFn = (payload: { text?: string }, info: { kind: string }) => Promise<void>;
     let capturedDeliver: DeliverFn | undefined;
@@ -829,7 +930,7 @@ describe("matrix monitor handler pairing account scope", () => {
     });
     const { handler } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
-      historyLimit: 10,
+      historyLimit: params.historyLimit ?? 10,
       accountConfig: {
         freshness: {
           enabled: true,
@@ -858,16 +959,21 @@ describe("matrix monitor handler pairing account scope", () => {
 
     const firstDone = handler(
       "!room:example.org",
-      createMatrixTextMessageEvent({ eventId: "$fresh-trigger", body: "initial question" }),
+      createMatrixTextMessageEvent({
+        eventId: "$fresh-trigger",
+        body: "initial question",
+        ...(params.triggerRelatesTo ? { relatesTo: params.triggerRelatesTo } : {}),
+      }),
     );
     await captured;
     await handler(
       "!room:example.org",
-      createMatrixTextMessageEvent({
-        eventId: "$fresh-new",
-        sender: "@new:example.org",
-        body: "new context before the draft posts",
-      }),
+      params.interveningEvent ??
+        createMatrixTextMessageEvent({
+          eventId: "$fresh-new",
+          sender: "@new:example.org",
+          body: "new context before the draft posts",
+        }),
     );
 
     deliverMatrixRepliesMock.mockClear();
@@ -882,6 +988,46 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("suppresses stale Matrix final replies when freshness mode is suppress", async () => {
     await runMatrixFreshnessScenario({ mode: "suppress" });
+
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps freshness active when Matrix room history is disabled", async () => {
+    await runMatrixFreshnessScenario({ mode: "suppress", historyLimit: 0 });
+
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("redrafts with latest-visible context when Matrix room history is disabled", async () => {
+    await runMatrixFreshnessScenario({
+      mode: "revise",
+      historyLimit: 0,
+      finalText: "old draft",
+    });
+
+    const completionParams = requireRecord(
+      callArg(completeWithPreparedSimpleCompletionModelMock, 0, 0, "freshness completion params"),
+      "freshness completion params",
+    );
+    expect(JSON.stringify(completionParams.context)).toContain(
+      "new context before the draft posts",
+    );
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("feeds Matrix redactions into freshness tracking", async () => {
+    await runMatrixFreshnessScenario({
+      mode: "suppress",
+      historyLimit: 0,
+      interveningEvent: {
+        event_id: "$redact-reply-target",
+        sender: "@moderator:example.org",
+        type: EventType.RoomRedaction,
+        origin_server_ts: Date.now(),
+        content: {},
+        redacts: "$fresh-trigger",
+      },
+    });
 
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
   });
@@ -901,13 +1047,16 @@ describe("matrix monitor handler pairing account scope", () => {
   it("redrafts stale Matrix final replies when freshness mode is revise", async () => {
     await runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
 
-    expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    const freshCtx = requireRecord(
-      callArg(getReplyFromConfigMock, 0, 0, "freshness reply ctx"),
-      "freshness reply ctx",
+    expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledTimes(1);
+    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
+    const completionParams = requireRecord(
+      callArg(completeWithPreparedSimpleCompletionModelMock, 0, 0, "freshness completion params"),
+      "freshness completion params",
     );
-    expect(String(freshCtx.BodyForAgent)).toContain("new context before the draft posts");
-    expect(String(freshCtx.BodyForAgent)).toContain("old draft");
+    expect(JSON.stringify(completionParams.context)).toContain(
+      "new context before the draft posts",
+    );
+    expect(JSON.stringify(completionParams.context)).toContain("old draft");
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     const deliverParams = requireRecord(
       callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),

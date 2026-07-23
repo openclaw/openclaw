@@ -23,6 +23,7 @@ type MatrixDispatchInboundMessage = (params: {
   queuedFinal: boolean;
   counts: { final: number; block: number; tool: number };
 }>;
+type ResolveAgentRouteMock = (...args: unknown[]) => unknown;
 
 const DEFAULT_ROUTE = {
   agentId: "ops",
@@ -75,7 +76,7 @@ type MatrixHandlerTestHarnessOptions = {
   shouldHandleTextCommands?: () => boolean;
   hasControlCommand?: MatrixMonitorHandlerParams["core"]["channel"]["text"]["hasControlCommand"];
   resolveMarkdownTableMode?: () => string;
-  resolveAgentRoute?: () => typeof DEFAULT_ROUTE;
+  resolveAgentRoute?: ResolveAgentRouteMock;
   resolveStorePath?: () => string;
   recordInboundSession?: (...args: unknown[]) => Promise<void>;
   formatAgentEnvelope?: ({ body }: { body: string }) => string;
@@ -106,7 +107,7 @@ type MatrixHandlerTestHarness = {
   handler: ReturnType<typeof createMatrixRoomMessageHandler>;
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   recordInboundSession: (...args: unknown[]) => Promise<void>;
-  resolveAgentRoute: () => typeof DEFAULT_ROUTE;
+  resolveAgentRoute: ResolveAgentRouteMock;
   runPrepared: MatrixRunPreparedMock;
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
@@ -288,7 +289,7 @@ export function createMatrixHandlerTestHarness(
           resolveMarkdownTableMode: options.resolveMarkdownTableMode ?? (() => "preserve"),
         },
         routing: {
-          resolveAgentRoute,
+          resolveAgentRoute: resolveAgentRoute as never,
         },
         mentions: {
           buildMentionRegexes: () => options.mentionRegexes ?? [],
