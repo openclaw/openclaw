@@ -51,7 +51,7 @@ describe("ssrf pinning", () => {
     );
   });
 
-  it("keeps automatic pinned lookups on IPv4 when both address families are available", async () => {
+  it("keeps single-address lookups on IPv4 while exposing both families to Happy Eyeballs", async () => {
     const lookup = createPinnedLookup({
       hostname: "api.anthropic.com",
       addresses: ["160.79.104.10", "2607:6bc0::10"],
@@ -89,7 +89,10 @@ describe("ssrf pinning", () => {
         }
       });
     });
-    expect(all).toEqual([{ address: "160.79.104.10", family: 4 }]);
+    expect(all).toEqual([
+      { address: "160.79.104.10", family: 4 },
+      { address: "2607:6bc0::10", family: 6 },
+    ]);
 
     await expect(lookupWithOptions({ family: 6 })).resolves.toEqual({
       address: "2607:6bc0::10",

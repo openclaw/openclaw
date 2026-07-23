@@ -524,10 +524,14 @@ export function createPinnedLookup(params: {
         : {};
     const requestedFamily =
       typeof options === "number" ? options : typeof opts.family === "number" ? opts.family : 0;
+    // Single-address lookups stay IPv4-only when possible, while Happy Eyeballs
+    // receives every validated family so it can fall back when IPv4 is unreachable.
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : automaticRecords;
+        : opts.all
+          ? records
+          : automaticRecords;
     const usable = candidates.length > 0 ? candidates : automaticRecords;
     if (opts.all) {
       cb(null, usable as LookupAddress[]);
