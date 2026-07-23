@@ -83,10 +83,7 @@ describe("createOpenClawTools Gateway caller identity", () => {
       agentChannel: "discord",
       agentTo: "channel:123",
       agentAccountId: "delivery-account",
-      scheduledToolPolicy: {
-        ownerSessionKey: "agent:main:discord:channel:creator",
-        ownerAccountId: "creator-account",
-      },
+      gatewayCallerAccountId: "creator-account",
     });
     await tool.execute("tool-call-scheduled", {});
 

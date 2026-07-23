@@ -122,6 +122,8 @@ export function createOpenClawTools(
     agentChannel?: GatewayMessageChannel;
     runId?: string;
     agentAccountId?: string;
+    /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
+    gatewayCallerAccountId?: string;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
@@ -264,8 +266,7 @@ export function createOpenClawTools(
   });
   // Scheduled turns keep delivery routing live, but Gateway authorization remains bound to the
   // authenticated creator account captured in the immutable scheduled authority envelope.
-  const gatewayCallerAccountId =
-    options?.scheduledToolPolicy?.ownerAccountId ?? options?.agentAccountId;
+  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge

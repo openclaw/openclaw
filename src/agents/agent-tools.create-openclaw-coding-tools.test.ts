@@ -908,7 +908,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("wraps plugin-only tools with trusted caller routing context", async () => {
+  it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
     let observedIdentity: unknown;
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
@@ -934,6 +934,10 @@ describe("createOpenClawCodingTools", () => {
         messageChannel: "discord",
         messageTo: "channel:123",
         agentAccountId: "work",
+        scheduledToolPolicy: {
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "creator",
+        },
         messageThreadId: "42",
         includeCoreTools: false,
         runtimeToolAllowlist: ["file_fetch"],
@@ -952,7 +956,7 @@ describe("createOpenClawCodingTools", () => {
         sessionKey: "agent:main:telegram:direct:alice",
         turnSourceChannel: "discord",
         turnSourceTo: "channel:123",
-        turnSourceAccountId: "work",
+        turnSourceAccountId: "creator",
         turnSourceThreadId: "42",
       });
     } finally {
@@ -1003,6 +1007,25 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
       "turn-capability-1",
     );
+  });
+
+  it("separates scheduled Gateway authority from the live delivery account", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      agentAccountId: "delivery",
+      scheduledToolPolicy: {
+        ownerSessionKey: "agent:main:discord:group:ops",
+        ownerAccountId: "creator",
+      },
+    });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+    });
   });
 
   it("forwards auth profiles to plugin-only tool construction", () => {
