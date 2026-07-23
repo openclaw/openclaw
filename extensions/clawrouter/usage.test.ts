@@ -218,7 +218,7 @@ describe("ClawRouter usage", () => {
         timeoutMs: 5000,
         fetchGuard: mockFetchGuard(new Response(body)),
       }),
-    ).rejects.toThrow(TypeError);
+    ).rejects.toThrow("ClawRouter usage: malformed JSON response");
   });
 
   it("cancels non-OK usage response body before throwing", async () => {
