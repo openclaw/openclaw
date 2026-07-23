@@ -57,6 +57,7 @@ import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
 } from "../worker-environments/service-contract.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -81,7 +82,15 @@ export type GatewayClient = {
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
   isDeviceTokenAuth?: boolean;
+  /** Temporary legacy migration session closed when normal enforcement resumes. */
+  isControlUiDeviceAuthMigrationSession?: boolean;
+  /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
+  isControlUiDeviceAuthMigration?: boolean;
   internal?: {
+    /** Marks the server-constructed client used by trusted in-process dispatch. */
+    syntheticClient?: true;
+    /** Trusted session creation provenance; never accepted from Gateway wire params. */
+    sessionCreation?: TrustedSessionCreation;
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     cronRunContinuation?: boolean;
@@ -223,6 +232,13 @@ export type GatewayRequestContext = {
   hasConnectedClientsForDevice?: (deviceId: string) => boolean;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
+  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
+  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
@@ -308,6 +324,12 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
 };
 
+/** Commit-time guard captured by the pre-dispatch session participation check. */
+export type SessionMutationAuthorization = {
+  assertCurrent: () => void;
+  assertTargetCurrent: (target: { sessionKey: string; agentId?: string }) => void;
+};
+
 /** Normalized method invocation options passed to registered handlers. */
 export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
@@ -316,6 +338,7 @@ export type GatewayRequestHandlerOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  sessionMutationAuthorization?: SessionMutationAuthorization;
 };
 
 /** Single gateway method implementation. */

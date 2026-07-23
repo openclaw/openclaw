@@ -1588,6 +1588,9 @@ export async function prepareSlackMessage(params: {
       commandBody,
       inboundHistory,
     },
+    sessionTranscript: {
+      historyLimit: isRoomish ? ctx.historyLimit : dmHistoryLimit,
+    },
     access: {
       mentions: {
         canDetectMention: isRoomish,

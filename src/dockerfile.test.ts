@@ -379,7 +379,9 @@ describe("Dockerfile", () => {
   it("keeps build-stage workspace packages readable by non-root live tests", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const sourceCopyIndex = dockerfile.indexOf("COPY . .");
-    const readabilityIndex = dockerfile.indexOf("RUN chmod -R a+rX /app");
+    const readabilityIndex = dockerfile.indexOf(
+      "RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +",
+    );
     const buildIndex = dockerfile.indexOf("pnpm build:docker");
 
     expect(sourceCopyIndex).toBeGreaterThan(-1);
@@ -461,10 +463,6 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
     expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
     expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
-    expect(workflow).toContain('${GHCR_IMAGE}:latest-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:latest-browser"');
-    expect(workflow).toContain('${GHCR_IMAGE}:main-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:main-browser"');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -493,17 +491,19 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
-  it("publishes beta Docker tags without advancing latest aliases", async () => {
+  it("validates release tags before immutable Docker publication", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
-    expect(workflow).toContain("Existing stable or beta release tag to backfill");
+    expect(workflow).toContain("Existing stable, extended-stable, or beta release tag");
     expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
-    expect(workflow).toContain("(-beta\\.[1-9][0-9]*)?");
+    expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
-    expect(workflow.split("do not advance latest/main aliases from those flows")).toHaveLength(3);
-    expect(workflow.split('"$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9]+)?$')).toHaveLength(3);
+    expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
+    expect(workflow).not.toContain("needs.resolve_release_policy.outputs.default_aliases");
+    expect(workflow).not.toContain("needs.resolve_release_policy.outputs.slim_aliases");
+    expect(workflow).not.toContain("needs.resolve_release_policy.outputs.browser_aliases");
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {

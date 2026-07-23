@@ -43,6 +43,7 @@ import {
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
 import { resolveCatalogOfficialExternalInstallPlan } from "../plugins/official-external-install-trust.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
@@ -757,7 +758,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   ] = { loadConfigForInstall };
 }
 
-export async function runPluginInstallCommand(params: {
+type RunPluginInstallCommandParams = {
   raw: string;
   opts: InstallSafetyOverrides & {
     acknowledgeClawHubRisk?: boolean;
@@ -771,7 +772,17 @@ export async function runPluginInstallCommand(params: {
   invalidateRuntimeCache?: boolean;
   clawManaged?: boolean;
   runtime?: RuntimeEnv;
-}) {
+};
+
+export async function runPluginInstallCommand(params: RunPluginInstallCommandParams) {
+  assertConfigWriteAllowedInCurrentMode();
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginInstallCommandUnlocked(params),
+  );
+}
+
+async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
 
   const runtime = params.runtime ?? defaultRuntime;

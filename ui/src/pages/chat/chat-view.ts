@@ -18,6 +18,7 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -32,16 +33,17 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { renderChatViewNotices } from "./chat-view-notices.ts";
-import {
-  handleChatAttachmentDrop,
-  isEditableDropTarget,
-  isFileDrag,
-} from "./components/chat-attachments.ts";
+import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import {
+  inlineChatImageFromEvent,
+  openInlineChatImage,
+  renderChatImageLightbox,
+} from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
 import {
@@ -74,7 +76,12 @@ import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 
-export { resetChatViewState } from "./chat-view-state.ts";
+type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
+};
 
 export type ChatProps = {
   transcript: ChatTranscriptController;
@@ -101,14 +108,13 @@ export type ChatProps = {
   observerStartedAt?: number;
   observerLastReadAt?: number;
   onObserverAsk?: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>;
+  onObserverVisibilityChange?: (visible: boolean) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
-  historyPagination?: {
-    loading: boolean;
-  };
+  historyPagination?: { loading: boolean };
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -116,9 +122,11 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  queuedOutboxCount?: number;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
@@ -130,12 +138,12 @@ export type ChatProps = {
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
   connected: boolean;
+  offline?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
   canSend: boolean;
   disabledReason: string | null;
-  disabledActionLabel?: string | null;
-  onDisabledAction?: (() => void) | null;
+  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
@@ -178,6 +186,10 @@ export type ChatProps = {
   getAttachments?: () => ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
+  imageLightbox?: ImageLightboxItem | null;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onCloseImage?: () => void;
   showNewMessages?: boolean;
   onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
@@ -231,19 +243,9 @@ export type ChatProps = {
   basePath?: string;
   gatewayUrl?: string;
   composerControls?: TemplateResult | typeof nothing;
-  replyTarget?: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  } | null;
+  replyTarget?: ChatReplyTarget | null;
   onClearReply?: () => void;
-  onSetReply?: (target: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  }) => void;
+  onSetReply?: (target: ChatReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
@@ -261,6 +263,14 @@ export type ChatProps = {
   onExpandPullRequests?: () => void;
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
+
+function isImageLightboxEvent(event: Event): boolean {
+  return event
+    .composedPath()
+    .some(
+      (target) => target instanceof HTMLElement && target.localName === "openclaw-image-lightbox",
+    );
+}
 
 export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -280,34 +290,21 @@ export function renderChat(props: ChatProps) {
     pending: props.sideChatPending ?? null,
     hidden: props.sideChatHidden === true,
   };
-  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
-  let chatSection: HTMLElement | null = null;
-  // Nested dragenter/dragleave events must stay balanced so crossing transcript
-  // children does not flicker the pane-level file drop affordance.
-  let attachmentDragDepth = 0;
-  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (active) {
-      if (!canCompose || !isFileDrag(event.dataTransfer)) {
-        return;
+  const openImage = props.onOpenImage
+    ? (item: ImageLightboxItem, requestVersion?: number) => {
+        if (requestVersion === undefined) {
+          props.onOpenImage?.(item);
+        } else {
+          props.onOpenImage?.(item, requestVersion);
+        }
       }
-      attachmentDragDepth += 1;
-    } else {
-      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
-    }
-    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
-  };
-  const clearAttachmentDropActive = (event: DragEvent) => {
-    attachmentDragDepth = 0;
-    const target = event.currentTarget;
-    if (target instanceof HTMLElement) {
-      target.removeAttribute("data-attachment-drop-active");
-    }
-  };
-
+    : undefined;
+  const openImmediateImage = props.onOpenImage
+    ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
+    : undefined;
+  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
+  const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
+  let chatSection: HTMLElement | null = null;
   const thread = renderChatThread(
     {
       paneId: props.paneId,
@@ -320,6 +317,7 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
@@ -353,6 +351,8 @@ export function renderChat(props: ChatProps) {
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: openImage,
       onRequestUpdate: requestUpdate,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
@@ -380,10 +380,11 @@ export function renderChat(props: ChatProps) {
     sessionKey: props.sessionKey,
     currentAgentId: props.currentAgentId,
     connected: props.connected,
+    offline: props.offline,
+    queuedOutboxCount: props.queuedOutboxCount,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
-    disabledActionLabel: props.disabledActionLabel,
-    onDisabledAction: props.onDisabledAction,
+    disabledBanner: props.disabledBanner,
     runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
@@ -472,40 +473,19 @@ export function renderChat(props: ChatProps) {
             }
           : {},
       )}
-      @drop=${(event: DragEvent) => {
-        // Text/URL drops stay native only inside editable controls; anywhere
-        // else they are cancelled so a dropped link cannot navigate the app
-        // away. Session drags are handled by the parent chat page either way.
-        if (!isFileDrag(event.dataTransfer)) {
-          if (!isEditableDropTarget(event)) {
-            event.preventDefault();
-          }
-          return;
-        }
-        event.preventDefault();
-        clearAttachmentDropActive(event);
-        if (canCompose) {
-          handleChatAttachmentDrop(event, props);
-        }
-      }}
-      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
-      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
-      @dragover=${(event: DragEvent) => {
-        if (!isFileDrag(event.dataTransfer)) {
-          if (!isEditableDropTarget(event)) {
-            event.preventDefault();
-            if (event.dataTransfer) {
-              event.dataTransfer.dropEffect = "none";
-            }
-          }
-          return;
-        }
-        event.preventDefault();
-        if (event.dataTransfer) {
-          event.dataTransfer.dropEffect = canCompose ? "copy" : "none";
-        }
-      }}
+      @drop=${attachmentDropHandlers.onDrop}
+      @dragenter=${attachmentDropHandlers.onDragenter}
+      @dragleave=${attachmentDropHandlers.onDragleave}
+      @click=${(event: Event) => openInlineChatImage(event, openImmediateImage)}
+      @dragover=${attachmentDropHandlers.onDragover}
       @keydown=${(event: KeyboardEvent) => {
+        if (isImageLightboxEvent(event)) {
+          return;
+        }
+        if ((event.key === "Enter" || event.key === " ") && inlineChatImageFromEvent(event)) {
+          openInlineChatImage(event, openImmediateImage);
+          return;
+        }
         if (event.key === "Escape" && props.replyTarget && !event.defaultPrevented) {
           event.preventDefault();
           props.onClearReply?.();
@@ -617,6 +597,7 @@ export function renderChat(props: ChatProps) {
                       .planStatus=${props.planStatus ?? null}
                       .pullRequests=${props.pullRequests ?? []}
                       .onAsk=${props.onObserverAsk}
+                      .onVisibilityChange=${props.onObserverVisibilityChange}
                     ></openclaw-chat-observer-hud>
                   `
                 : nothing}
@@ -649,12 +630,14 @@ export function renderChat(props: ChatProps) {
                     .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
                     .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
+                    .onOpenImage=${props.onOpenImage ? openImmediateImage : null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
                   ></openclaw-chat-detail-panel> `
               : nothing}
           </div>
         </div>
       </div>
+      ${renderChatImageLightbox(props.imageLightbox, props.onCloseImage)}
     </section>
   `;
 }

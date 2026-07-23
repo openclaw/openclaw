@@ -404,7 +404,7 @@ async function projectVerifiedExecutionFingerprint(
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectInferenceRoute(config, route.agentId);
+  const projection = await projectInferenceRoute(config, route.agentId, deps);
   return {
     route: projection.route
       ? (() => {
@@ -851,6 +851,7 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
   const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     binding.execution.agentId,
+    deps,
   );
   if (
     !currentRoute ||

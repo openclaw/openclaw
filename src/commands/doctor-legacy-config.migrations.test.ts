@@ -863,13 +863,12 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
-  it("preserves configured CLI backends and agent-local models.json providers", () => {
+  it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
     const result = repairStaleAgentModelRefs(
       {
         agents: {
           defaults: {
             model: "my-cli/model",
-            cliBackends: { "my-cli": { command: "my-cli" } },
           },
           list: [
             { id: "worker", model: "agent-local/model" },
@@ -878,7 +877,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       } as OpenClawConfig,
       {
-        pluginProviderIds: new Set(["anthropic"]),
+        pluginProviderIds: new Set(["anthropic", "my-cli"]),
         persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
       },
     );

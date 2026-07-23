@@ -1644,6 +1644,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           bodyForAgent: bodyText,
           inboundHistory: inboundHistory && inboundHistory.length > 0 ? inboundHistory : undefined,
         },
+        sessionTranscript: { historyLimit: isRoom ? historyLimit : 0 },
         access: {
           ...(isRoom
             ? {

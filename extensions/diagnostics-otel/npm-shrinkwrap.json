@@ -765,9 +765,9 @@
       }
     },
     "node_modules/import-in-the-middle": {
-      "version": "3.3.1",
-      "resolved": "https://registry.npmjs.org/import-in-the-middle/-/import-in-the-middle-3.3.1.tgz",
-      "integrity": "sha512-0rymlHSFLwZ0ixx8DaQkoIyZojJPY2a0K2nEYslhKJ6jIYO/m0IcCb7iQsFPmS7WmKwISZiIrv5Icstrw/CmqA==",
+      "version": "3.3.2",
+      "resolved": "https://registry.npmjs.org/import-in-the-middle/-/import-in-the-middle-3.3.2.tgz",
+      "integrity": "sha512-jTd2FfOgOWOdgjkHuk/1Ms8VKFXkPs15ymYBETw1sAOrO/dY3XeGVRWir9qBbw7pXr0T2eTFwfCZ+N02HmiNGA==",
       "license": "Apache-2.0",
       "dependencies": {
         "cjs-module-lexer": "^2.2.0",

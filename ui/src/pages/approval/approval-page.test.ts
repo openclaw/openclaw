@@ -75,6 +75,7 @@ function createGateway(client: GatewayBrowserClient, connected = true) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -190,6 +191,35 @@ describe("ApprovalPage", () => {
     });
     expect(page.querySelector("h1")?.textContent).toBe("Approved here");
     expect(document.activeElement).toBe(page.querySelector("h1"));
+  });
+
+  it("renders reviewer-only plugin detail in a preformatted block", async () => {
+    const approval = pendingApproval({
+      id: "plugin:approval-1",
+      urlPath: "/approve/plugin%3Aapproval-1",
+      presentation: {
+        kind: "plugin",
+        title: "Claude native tool: Bash",
+        description: '{"command":"printf …"}',
+        detail: '{"command":"printf \\\"line one\\nline two\\\""}',
+        severity: "warning",
+        pluginId: "claude-cli",
+        toolName: "Bash",
+        agentId: "main",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
+      approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
+    );
   });
 
   it("keeps the selected decision named while a resolution is in flight", async () => {

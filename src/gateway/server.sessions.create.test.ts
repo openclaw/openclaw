@@ -15,6 +15,7 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   agentCommand,
@@ -758,12 +759,16 @@ test.each([undefined, "main"])(
 
     const created = await directSessionReq<{
       key?: string;
-      entry?: { parentSessionKey?: string };
+      entry?: { parentSessionKey?: string; spawnDepth?: number };
     }>("sessions.create", { agentId: "main" });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    // Auto-parented operator sessions must stay spawn-capable roots: without the
+    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
+    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
 
@@ -778,7 +783,7 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   const created = await directSessionReq<{
     key?: string;
-    entry?: { parentSessionKey?: string };
+    entry?: { parentSessionKey?: string; spawnDepth?: number };
   }>("sessions.create", {
     agentId: "main",
     parentSessionKey: "agent:main:explicit-parent",
@@ -786,6 +791,9 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+  // Operator creations with a parent (UI forks/threads) are still roots: only a
+  // declared spawnDepth marks spawn lineage.
+  expect(created.payload?.entry?.spawnDepth).toBe(0);
 
   const reused = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -796,6 +804,42 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create persists declared spawn lineage for spawn-owned creations", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": sessionStoreEntry("sess-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string; spawnDepth?: number };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:main",
+    spawnDepth: 2,
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.spawnDepth).toBe(2);
+});
+
+test("sessions.create rejects spawnDepth without parentSessionKey", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    spawnDepth: 1,
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    message: "spawnDepth requires parentSessionKey",
+  });
 });
 
 test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
@@ -1400,6 +1444,190 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   });
 });
 
+test("sessions.create stamps trusted operator provenance and records created", async () => {
+  await createSessionStoreDir();
+  const profileId = "profile-session-creator";
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      createdVia?: string;
+      createdActor?: { type: string; id?: string };
+      createdAt?: number;
+    };
+  }>(
+    "sessions.create",
+    { agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId,
+          displayName: "Test Operator",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    createdVia: "operator",
+    createdActor: { type: "human", id: profileId },
+    createdAt: expect.any(Number),
+  });
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  expect(listSessionStateEventsSince(key, "main", 0, 20).events).toContainEqual(
+    expect.objectContaining({
+      kind: "created",
+      actorType: "human",
+      actorId: profileId,
+      summary: "session created",
+    }),
+  );
+
+  const synthetic = await directSessionReq<{
+    entry?: { createdVia?: string; createdActor?: unknown; createdAt?: number };
+  }>(
+    "sessions.create",
+    { agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: { syntheticClient: true },
+      } as never,
+    },
+  );
+  expect(synthetic.payload?.entry).toMatchObject({
+    createdVia: "operator",
+    createdAt: expect.any(Number),
+  });
+  expect(synthetic.payload?.entry?.createdActor).toBeUndefined();
+
+  const hinted = await directSessionReq<{
+    entry?: { createdVia?: string; createdActor?: unknown };
+  }>(
+    "sessions.create",
+    { agentId: "main" },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          syntheticClient: true,
+          sessionCreation: {
+            via: "spawn",
+            actor: { type: "agent", id: "agent:main:main" },
+          },
+        },
+      } as never,
+    },
+  );
+  expect(hinted.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+  });
+});
+
+test("sessions.create reset-in-place preserves the node creation stamp", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("existing-main", {
+        createdVia: "channel",
+        createdActor: { type: "human", id: "telegram:42" },
+        createdAt: 1234,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{ entry?: Record<string, unknown> }>(
+    "sessions.create",
+    { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        authenticatedUserProfile: {
+          profileId: "profile-resetter",
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } as never,
+    },
+  );
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject({
+    createdVia: "channel",
+    createdActor: { type: "human", id: "telegram:42" },
+    createdAt: 1234,
+  });
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+    createdVia: "channel",
+    createdActor: { type: "human", id: "telegram:42" },
+    createdAt: 1234,
+  });
+});
+
+test("sessions.create adopting an existing key does not restamp node provenance", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:dashboard:adopted": sessionStoreEntry("existing-adopted", {
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+        createdAt: 4321,
+      }),
+    },
+  });
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "adopted-run", status: "started" });
+  });
+
+  try {
+    const adopted = await directSessionReq<{
+      entry?: Record<string, unknown>;
+      runStarted?: boolean;
+    }>(
+      "sessions.create",
+      { key: "agent:main:dashboard:adopted", agentId: "main", message: "adopted follow-up" },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          authenticatedUserProfile: {
+            profileId: "profile-adopter",
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+        } as never,
+      },
+    );
+
+    expect(adopted.ok).toBe(true);
+    // Post-create work (the nested initial chat.send) still runs on adoption.
+    expect(adopted.payload?.runStarted).toBe(true);
+    expect(chatSend).toHaveBeenCalledTimes(1);
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:dashboard:adopted", storePath }),
+    ).toMatchObject({
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: 4321,
+    });
+    // Adoption is not a node creation: no `created` event may enter the journal.
+    expect(
+      listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
+        (event) => event.kind === "created",
+      ),
+    ).toEqual([]);
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();
 
@@ -1568,7 +1796,7 @@ test("sessions.create stores selected global sessions in the requested agent sto
     "sessions.changed",
     expect.objectContaining({ sessionKey: "global", agentId: "work", reason: "create" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true },
+    { dropIfSlow: true, agentId: "work", sessionKeys: ["global"] },
   );
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
@@ -1787,6 +2015,7 @@ test("sessions.create forks the parent transcript into the new session", async (
     entry?: {
       sessionFile?: string;
       parentSessionKey?: string;
+      forkSource?: { sessionKey: string; sessionId: string };
       forkedFromParent?: boolean;
       totalTokens?: number;
       totalTokensFresh?: boolean;
@@ -1799,6 +2028,10 @@ test("sessions.create forks the parent transcript into the new session", async (
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.forkSource).toEqual({
+    sessionKey: "agent:main:main",
+    sessionId: parent.sessionId,
+  });
   expect(created.payload?.entry?.forkedFromParent).toBe(true);
   expect(created.payload?.entry?.totalTokens).toBeUndefined();
   expect(created.payload?.entry?.totalTokensFresh).toBe(false);
@@ -1844,8 +2077,16 @@ test("sessions.create forks the parent transcript into the new session", async (
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
     sessionId: created.payload?.sessionId,
     sessionFile: forkedSessionFile,
-    forkedFromParent: true,
+    forkSource: {
+      sessionKey: "agent:main:main",
+      sessionId: parent.sessionId,
+    },
   });
+  expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("forkedFromParent");
+  const listed = await directSessionReq<{
+    sessions?: Array<{ key: string; forkedFromParent?: boolean }>;
+  }>("sessions.list", {});
+  expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
   testState.sessionConfig = undefined;
 });
 
@@ -2071,6 +2312,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
       entry?: {
         parentSessionKey?: string;
         sessionFile?: string;
+        forkSource?: { sessionKey: string; sessionId: string };
         forkedFromParent?: boolean;
       };
     }>("sessions.create", {
@@ -2081,6 +2323,10 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
+    expect(created.payload?.entry?.forkSource).toEqual({
+      sessionKey: "agent:work:main",
+      sessionId: parent.sessionId,
+    });
     expect(created.payload?.entry?.forkedFromParent).toBe(true);
     const forkedSessionFile = requireNonEmptyString(
       created.payload?.entry?.sessionFile,

@@ -241,6 +241,7 @@ export const OpenClawSchemaShape = {
             })
             .optional(),
           sidebarLiveActivity: z.boolean().optional(),
+          showAdvancedSettings: z.boolean().optional(),
         })
         .optional(),
     })

@@ -43,6 +43,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { isImageMediaFact, resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -51,9 +52,9 @@ import {
 } from "../../routing/session-key.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
+  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -162,6 +163,73 @@ type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
 const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
+function buildPersistedMediaImageLayout(params: {
+  ctx: MsgContext;
+  media: readonly MediaFact[];
+  ctxMediaCount: number;
+  imageOrder?: readonly ("inline" | "offloaded")[];
+  imageSourceIndexes?: readonly (number | undefined)[];
+}): NonNullable<UserTurnInput["mediaImageLayout"]> | undefined {
+  const describedAttachmentIndexes = new Set(
+    params.ctx.MediaUnderstanding?.flatMap((output) =>
+      output.kind === "image.description" ? [output.attachmentIndex] : [],
+    ) ?? [],
+  );
+  const suppressedFactIndexes: number[] = [];
+  const imageFactIndexes: number[] = [];
+  for (const [factIndex, fact] of params.media.entries()) {
+    if (!isImageMediaFact(fact)) {
+      continue;
+    }
+    imageFactIndexes.push(factIndex);
+    if (
+      (factIndex < params.ctxMediaCount && describedAttachmentIndexes.has(factIndex)) ||
+      fact.hydrationSuppressed === true
+    ) {
+      suppressedFactIndexes.push(factIndex);
+    }
+  }
+  if (imageFactIndexes.length === 0) {
+    return undefined;
+  }
+  const suppressed = new Set(suppressedFactIndexes);
+  const used = new Set<number>();
+  const unsuppressedFactCount = imageFactIndexes.filter((index) => !suppressed.has(index)).length;
+  const canInferByPosition = unsuppressedFactCount === (params.imageOrder?.length ?? 0);
+  const takeNextFactIndex = (): number | undefined =>
+    imageFactIndexes.find((index) => !suppressed.has(index) && !used.has(index));
+  const slots = (params.imageOrder ?? []).map((kind, index) => {
+    const sourceIndex = params.imageSourceIndexes?.[index];
+    const sourceFact = sourceIndex === undefined ? undefined : params.media[sourceIndex];
+    const factIndex =
+      sourceIndex !== undefined
+        ? sourceFact &&
+          isImageMediaFact(sourceFact) &&
+          !suppressed.has(sourceIndex) &&
+          !used.has(sourceIndex)
+          ? sourceIndex
+          : undefined
+        : canInferByPosition
+          ? takeNextFactIndex()
+          : undefined;
+    if (factIndex !== undefined) {
+      used.add(factIndex);
+    }
+    return factIndex === undefined ? { kind } : { kind, factIndex };
+  });
+  for (const factIndex of imageFactIndexes) {
+    if (!suppressed.has(factIndex) && !used.has(factIndex)) {
+      slots.push({ kind: "offloaded", factIndex });
+    }
+  }
+  if (slots.length === 0 && suppressedFactIndexes.length === 0) {
+    return undefined;
+  }
+  return {
+    slots,
+    ...(suppressedFactIndexes.length > 0 ? { suppressedFactIndexes } : {}),
+  };
+}
 
 function hasResolvedThinkingCatalogEntry(params: {
   catalog?: readonly ThinkingCatalogEntry[];
@@ -932,6 +1000,7 @@ export async function runPreparedReply(
     queuedBody: string;
     transcriptBody: string;
     transcriptCommandBody: string;
+    media?: MediaFact[];
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
@@ -964,6 +1033,7 @@ export async function runPreparedReply(
       sourceReplyDeliveryMode,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
+      media: opts?.media,
     });
   };
   const skillResult = isFastTestRuntimeEnv()
@@ -998,6 +1068,7 @@ export async function runPreparedReply(
     queuedBody,
     transcriptBody,
     transcriptCommandBody,
+    media: promptMedia,
     currentInboundContext,
   } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
@@ -1376,6 +1447,7 @@ export async function runPreparedReply(
           queuedBody,
           transcriptBody,
           transcriptCommandBody,
+          media: promptMedia,
           currentInboundContext,
         } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
@@ -1462,7 +1534,15 @@ export async function runPreparedReply(
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
+  const ctxMediaForPersistence = resolveMediaFacts(ctx);
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
+  const mediaImageLayout = buildPersistedMediaImageLayout({
+    ctx,
+    media: userTurnMediaForPersistence,
+    ctxMediaCount: ctxMediaForPersistence.length,
+    imageOrder: currentTurnImages.imageOrder,
+    imageSourceIndexes: currentTurnImages.imageSourceIndexes,
+  });
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
@@ -1514,6 +1594,7 @@ export async function runPreparedReply(
             : {}),
           ...(transport ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
+          ...(mediaImageLayout ? { mediaImageLayout } : {}),
           // Persist the message's own arrival timestamp so the single
           // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
           // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
@@ -1577,6 +1658,7 @@ export async function runPreparedReply(
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
+    media: promptMedia,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,

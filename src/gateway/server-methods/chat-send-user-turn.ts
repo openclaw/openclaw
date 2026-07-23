@@ -1,6 +1,6 @@
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { projectMediaFacts } from "../../media/media-facts.js";
+import { projectMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { SavedMedia } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -17,6 +17,7 @@ import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedChatSendAttachments = Extract<
@@ -92,11 +93,38 @@ export function applyChatSendManagedMediaFields(
   }
 }
 
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
-  return savedMedia.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType,
-  }));
+function buildChatSendUserTurnMedia(
+  savedMedia: SavedMedia[],
+  offloadedRefs: OffloadedRef[],
+): NonNullable<UserTurnInput["media"]> {
+  const offloadedRefsById = new Map(offloadedRefs.map((ref) => [ref.id, ref] as const));
+  return savedMedia.map((entry) => {
+    const offloadedRef = offloadedRefsById.get(entry.id);
+    return {
+      path: entry.path,
+      ...(offloadedRef
+        ? {
+            // Every offload keeps its claim-check alias so persisted marker
+            // ownership survives; only non-images skip native image hydration.
+            url: offloadedRef.mediaRef,
+            ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
+          }
+        : {}),
+      contentType: entry.contentType,
+    };
+  });
+}
+
+function buildChatSendPromptMedia(
+  attachments: PreparedChatSendAttachments,
+): MediaFact[] | undefined {
+  if (!attachments.imageOrder.includes("offloaded")) {
+    return undefined;
+  }
+  const media = attachments.offloadedRefs
+    .filter((ref) => ref.mimeType.startsWith("image/"))
+    .map((ref) => ({ path: ref.path, url: ref.mediaRef, contentType: ref.mimeType }));
+  return media.length > 0 ? media : undefined;
 }
 
 function buildChatSendMessageContext(params: {
@@ -167,6 +195,7 @@ function buildChatSendMessageContext(params: {
           body: commandBody,
         },
     MessageSid: params.clientRunId,
+    SessionCreation: resolveOperatorSessionCreation(params.client),
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
     ...(!isOperatorUiClient(params.clientInfo)
       ? {
@@ -237,10 +266,21 @@ export function prepareChatSendUserTurn(params: {
       ? getPersistedMediaForTranscript()
       : Promise.resolve([]);
   userTurn.setInputPromise(
-    preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia).then((media) => ({
-      ...userTurn.baseInput,
-      ...(media.length > 0 ? { media } : {}),
-    })),
+    preparedUserTurnMediaPromise
+      .then((media) => buildChatSendUserTurnMedia(media, attachments.offloadedRefs))
+      .then((media) => ({
+        ...userTurn.baseInput,
+        ...(media.length > 0 ? { media } : {}),
+        ...(media.length > 0 && attachments.imageOrder.length > 0
+          ? {
+              mediaImageLayout: {
+                // persistInboundImagesForTranscript emits image facts in this exact order,
+                // then appends non-images, so image slot ordinals are fact ordinals.
+                slots: attachments.imageOrder.map((kind, factIndex) => ({ kind, factIndex })),
+              },
+            }
+          : {}),
+      })),
   );
   const pluginBoundMediaFieldsPromise =
     attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
@@ -273,5 +313,6 @@ export function prepareChatSendUserTurn(params: {
       : attachments.parsedImages.length > 0
         ? attachments.parsedImages
         : undefined,
+    replyOptionMedia: buildChatSendPromptMedia(attachments),
   };
 }

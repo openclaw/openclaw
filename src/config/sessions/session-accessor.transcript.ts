@@ -348,7 +348,7 @@ function normalizeManualCompactTranscriptLines(
         next = { ...next, appendParentId: targetId };
       }
     }
-    if (next.type === "compaction" && typeof next.id === "string") {
+    if ((next.type === "compaction" || next.type === "reset") && typeof next.id === "string") {
       const firstKeptEntryId = next.firstKeptEntryId;
       if (typeof firstKeptEntryId === "string" && firstKeptEntryId !== next.id) {
         const tree = scanSessionTranscriptTree([...normalizedRecords, next]);

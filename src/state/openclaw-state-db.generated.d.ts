@@ -256,6 +256,19 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawCronRefs {
+  agent_id: string;
+  created_at_ms: number;
+  declaration_key: string;
+  error: string | null;
+  job_json: string;
+  manifest_id: string;
+  scheduler_job_id: string | null;
+  schema_version: string;
+  status: string;
+  updated_at_ms: number;
+}
+
 export interface ClawInstalls {
   added_at_ms: number;
   agent_config_digest: string;
@@ -275,6 +288,20 @@ export interface ClawInstalls {
   status: string;
   updated_at_ms: number;
   workspace: string;
+}
+
+export interface ClawMcpServerRefs {
+  agent_id: string;
+  config_digest: string;
+  created_at_ms: number;
+  error: string | null;
+  independent_owner: Generated<number>;
+  name: string;
+  origin: string;
+  relationship: string;
+  schema_version: string;
+  status: string;
+  updated_at_ms: number;
 }
 
 export interface ClawPackageRefs {
@@ -756,6 +783,47 @@ export interface MediaBlobs {
   updated_at: number;
 }
 
+export interface MeetingTranscriptSessions {
+  created_at_ms: number;
+  export_key: string;
+  export_manifest_json: Generated<string>;
+  export_pending_json: Generated<string>;
+  metadata_json: string | null;
+  next_utterance_seq: Generated<number>;
+  provider_id: string;
+  selector: string;
+  session_id: string;
+  session_slug: string;
+  source_json: string;
+  started_at: string;
+  stopped_at: string | null;
+  title: string | null;
+  updated_at_ms: number;
+}
+
+export interface MeetingTranscriptSummaries {
+  generated_at: string | null;
+  markdown: string | null;
+  session_id: string;
+  session_started_at: string;
+  summary_json: string | null;
+  utterance_count: number;
+}
+
+export interface MeetingTranscriptUtterances {
+  ended_at: string | null;
+  final: number | null;
+  metadata_json: string | null;
+  sequence: number;
+  session_id: string;
+  session_started_at: string;
+  speaker_id: string | null;
+  speaker_label: string | null;
+  started_at: string | null;
+  text: string;
+  utterance_id: string | null;
+}
+
 export interface MigrationRuns {
   finished_at: number | null;
   id: string;
@@ -874,6 +942,15 @@ export interface OperatorApprovals {
   status: string;
   terminal_reason: string | null;
   updated_at_ms: number;
+}
+
+export interface OutboundMediaProvenance {
+  created_at_ms: number;
+  kind: string;
+  realpath: string;
+  sha256: string;
+  size_bytes: number;
+  version: number;
 }
 
 export interface PluginBindingApprovals {
@@ -1412,7 +1489,9 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  claw_cron_refs: ClawCronRefs;
   claw_installs: ClawInstalls;
+  claw_mcp_server_refs: ClawMcpServerRefs;
   claw_package_refs: ClawPackageRefs;
   claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
@@ -1443,6 +1522,9 @@ export interface DB {
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
+  meeting_transcript_sessions: MeetingTranscriptSessions;
+  meeting_transcript_summaries: MeetingTranscriptSummaries;
+  meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;
@@ -1451,6 +1533,7 @@ export interface DB {
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
+  outbound_media_provenance: OutboundMediaProvenance;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

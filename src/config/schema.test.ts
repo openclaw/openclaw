@@ -4,13 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import {
-  DiscordConfigSchema,
-  SlackConfigSchema,
-  TelegramConfigSchema,
-} from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -662,42 +658,6 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts progress commentary for shared progress streaming config", () => {
-    expect(
-      DiscordConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
-
-    expect(
-      TelegramConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
-
-    expect(
-      SlackConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
-  });
-
-  it("rejects retired Discord subagent progress config", () => {
-    expect(DiscordConfigSchema.safeParse({ subagentProgress: true }).success).toBe(false);
-    expect(DiscordConfigSchema.safeParse({ subagentProgress: { enabled: true } }).success).toBe(
-      false,
-    );
-  });
-
   it("keeps per-agent model overrides limited to model selection", () => {
     const result = OpenClawSchema.safeParse({
       agents: {
@@ -1036,9 +996,40 @@ describe("config schema", () => {
     const tokenChild = lookup?.children.find((child) => child.key === "token");
     expect(tokenChild?.path).toBe("gateway.auth.token");
     expect(tokenChild?.hint?.sensitive).toBe(true);
+    expect(tokenChild?.hint?.advanced).toBe(false);
     expect(tokenChild?.hintPath).toBe("gateway.auth.token");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("materializes resolved common and advanced tiers in schema hints", () => {
+    expect(baseSchema.uiHints["gateway.port"]?.advanced).toBe(false);
+    expect(baseSchema.uiHints["gateway.reload.mode"]?.advanced).toBe(true);
+    expect(baseSchema.uiHints["agents.defaults.workspace"]?.advanced).toBe(false);
+    expect(baseSchema.uiHints["agents.defaults.compaction.timeoutSeconds"]?.advanced).toBe(true);
+  });
+
+  it("preserves explicit common hints on numeric leaves while defaulting tuning advanced", () => {
+    const hints = applyResolvedConfigTierHints(
+      {
+        type: "object",
+        properties: {
+          custom: {
+            type: "object",
+            properties: {
+              visibleCount: { type: "integer" },
+              tuningMs: { type: "integer" },
+            },
+          },
+        },
+      },
+      {
+        custom: { advanced: false },
+        "custom.visibleCount": { advanced: false },
+      },
+    );
+    expect(hints["custom.visibleCount"]?.advanced).toBe(false);
+    expect(hints["custom.tuningMs"]?.advanced).toBe(true);
   });
 
   it("looks up root config schema children without returning the full schema tree", () => {

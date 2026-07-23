@@ -662,9 +662,9 @@
       }
     },
     "node_modules/p-queue": {
-      "version": "9.3.1",
-      "resolved": "https://registry.npmjs.org/p-queue/-/p-queue-9.3.1.tgz",
-      "integrity": "sha512-POWdiIPmsUPGwb4FeQ4OBg46aqmcInSWe45CKDsGHiOBiVQM9chqfQTuqhuTzcg2Vz9faTI65at0KkVyVEiCHw==",
+      "version": "9.3.2",
+      "resolved": "https://registry.npmjs.org/p-queue/-/p-queue-9.3.2.tgz",
+      "integrity": "sha512-pCsnA4piiqkrwAJ555Xh/lc717SijJrTBr96P1q6BRnUdm2XPB4v91oiXVAUr5HbIbXW4D8kIslfJUE28Rud6A==",
       "license": "MIT",
       "dependencies": {
         "eventemitter3": "^5.0.4",

@@ -173,6 +173,9 @@ function withSuiteTempDirs<
   if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
     deps.removeTempDir = deferSuiteTempDirCleanup;
   }
+  if (!deps.readCodexCliActiveApiKey) {
+    deps.readCodexCliActiveApiKey = () => null;
+  }
   return deps;
 }
 
@@ -448,11 +451,16 @@ describe("detectSetupInference", () => {
     expect(detection.candidates).toHaveLength(2);
     expect(detection.candidates[0]).toMatchObject({
       kind: "claude-cli",
+      brandId: "claude",
       recommended: false,
       icon: "https://cdn.example.com/claude.svg",
       website: "https://claude.example.com/download",
     });
-    expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
+    expect(detection.candidates[1]).toMatchObject({
+      kind: "codex-cli",
+      brandId: "openai",
+      recommended: false,
+    });
     expect(detection.setupComplete).toBe(false);
     expect(detection.recommendedInstalls).toHaveLength(9);
     expect(detection.workspace.length).toBeGreaterThan(0);
@@ -522,6 +530,7 @@ describe("detectSetupInference", () => {
       expect.objectContaining({ kind: "claude-cli" }),
       {
         kind: "provider-auto:local-model",
+        brandId: "local",
         label: "Local Server",
         detail: "qwen-tool at http://127.0.0.1:9999",
         modelRef: "local/qwen-tool",
@@ -610,14 +619,17 @@ describe("detectSetupInference", () => {
     expect(listSetupInferenceManualProviders(choices)).toEqual([
       {
         id: "alpha-api-key",
+        brandId: "alpha",
         label: "Alpha API key",
       },
       {
         id: "github-copilot",
+        brandId: "github-copilot",
         label: "GitHub Copilot",
       },
       {
         id: "zeta-api-key",
+        brandId: "zeta",
         label: "Zeta API key",
         hint: "Direct key",
         icon: "https://cdn.example.com/zeta.svg",
@@ -696,6 +708,7 @@ describe("detectSetupInference", () => {
     expect(listSetupInferenceAuthOptions(choices)).toEqual([
       {
         id: "openai",
+        brandId: "openai",
         label: "ChatGPT Login",
         hint: "Browser sign-in",
         groupLabel: "OpenAI",
@@ -706,6 +719,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "openrouter-oauth",
+        brandId: "openrouter",
         label: "OpenRouter OAuth",
         groupLabel: "OpenRouter",
         kind: "oauth",
@@ -713,6 +727,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "xai-oauth",
+        brandId: "xai",
         label: "xAI OAuth",
         groupLabel: "xAI (Grok)",
         kind: "device-code",
@@ -720,6 +735,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "google-gemini-cli",
+        brandId: "google-gemini-cli",
         label: "Gemini CLI OAuth",
         groupLabel: "Google",
         kind: "oauth",
@@ -727,6 +743,7 @@ describe("detectSetupInference", () => {
       },
       {
         id: "github-copilot",
+        brandId: "github-copilot",
         label: "GitHub Copilot",
         kind: "device-code",
         featured: false,
@@ -1745,9 +1762,6 @@ describe("activateSetupInference", () => {
       agents: {
         defaults: {
           model: "claude-cli/claude-opus-4-8",
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
         },
       },
     } satisfies OpenClawConfig;
@@ -3631,6 +3645,163 @@ describe("activateSetupInference", () => {
         expect(result.error).not.toContain("bad-groq-key");
       }
       expect(readAuthProfileStoreForTest(agentDir).profiles["groq:default"]).toBeUndefined();
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("registers an active Codex API key only after its isolated live test succeeds", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(initialConfig);
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams & { agentDir?: string }) => {
+      const profileId = params.authProfileId;
+      expect(profileId).toMatch(/^openai:setup-/);
+      expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId!]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "codex-api-key",
+      });
+      return successfulRun("openai", "gpt-5.6-sol", params);
+    });
+
+    try {
+      const result = await activateSetupInference({
+        kind: "codex-cli",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          readCodexCliActiveApiKey: () => ({
+            type: "api_key",
+            provider: "openai",
+            key: "codex-api-key",
+          }),
+          ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+            cfg,
+            required: true,
+            installed: true,
+            status: "installed" as const,
+          })) as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+      const profileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
+      expect(profileId).toMatch(/^openai:setup-/);
+      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId!]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "codex-api-key",
+      });
+      expect(configHarness.current()).toMatchObject({
+        auth: {
+          profiles: {
+            [profileId!]: { provider: "openai", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: { model: `openai/gpt-5.6-sol@${profileId}` },
+        },
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("prefers usable Codex OAuth without registering a discovered API key", async () => {
+    const readCodexCliActiveApiKey = vi.fn(() => null);
+    const configHarness = createConfigTransformHarness();
+    const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6-sol"));
+
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readCodexCliActiveApiKey,
+        ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+          cfg,
+          required: true,
+          installed: true,
+          status: "installed" as const,
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(readCodexCliActiveApiKey).toHaveBeenCalledWith({ allowKeychainPrompt: true });
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+    expect(configHarness.current().auth).toBeUndefined();
+  });
+
+  it("redacts and does not register a Codex API key after a failed live test", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+
+    try {
+      const result = await activateSetupInference({
+        kind: "codex-cli",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          readCodexCliActiveApiKey: () => ({
+            type: "api_key",
+            provider: "openai",
+            key: "rejected-codex-key",
+          }),
+          ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+            cfg,
+            required: true,
+            installed: true,
+            status: "installed" as const,
+          })) as never,
+          runEmbeddedAgent: vi.fn(async () => {
+            throw new Error("401 rejected rejected-codex-key");
+          }) as never,
+          transformConfigWithPendingPluginInstalls: vi.fn() as never,
+          refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: false, status: "auth" });
+      if (!result.ok) {
+        expect(result.error).toContain("401 rejected [redacted]");
+        expect(result.error).not.toContain("rejected-codex-key");
+      }
+      expect(readAuthProfileStoreForTest(agentDir).profiles).toEqual({});
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }
@@ -5789,11 +5960,7 @@ describe("verifySetupInference", () => {
     const result = await verifySetupInferenceConfig({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
-          },
+          defaults: {},
           list: [
             {
               id: "ops",
@@ -5888,7 +6055,6 @@ describe("verifySetupInference", () => {
         agents: {
           defaults: {
             model: "claude-cli/claude-opus-4-8@claude-cli:locked",
-            cliBackends: { "claude-cli": { command: "claude" } },
           },
         },
       },
@@ -5940,7 +6106,7 @@ describe("verifySetupInference", () => {
         order: { [testCase.profileProvider]: [testCase.profileId] },
       },
       agents: {
-        defaults: { cliBackends: { "google-gemini-cli": { command: "gemini" } } },
+        defaults: {},
         list: [
           {
             id: "ops",

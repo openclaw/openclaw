@@ -208,6 +208,8 @@ export async function applySessionPatchProjection<
   TFailure extends SessionPatchProjectionFailure,
 >(params: {
   agentId?: string;
+  /** Revalidates request-scoped authorization after the writer slot is held. */
+  assertCurrent?: () => void;
   storePath: string;
   resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
   project: (
@@ -239,7 +241,15 @@ export async function applySessionPatchProjection<
     removals: candidateKeys
       .filter((sessionKey) => sessionKey !== target.primaryKey)
       .map((sessionKey) => ({ sessionKey })),
-    upserts: [{ sessionKey: target.primaryKey, entry: projected.entry }],
+    upserts: [
+      {
+        sessionKey: target.primaryKey,
+        buildEntry: () => {
+          params.assertCurrent?.();
+          return projected.entry;
+        },
+      },
+    ],
     skipMaintenance: true,
   });
   return { ...projected, entry: structuredClone(projected.entry) };

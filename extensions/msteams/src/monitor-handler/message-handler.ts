@@ -904,6 +904,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         rawBody,
         commandBody,
       },
+      sessionTranscript: { historyLimit: isRoomish ? historyLimit : 0 },
       access: {
         mentions: {
           canDetectMention: !isDirectMessage,

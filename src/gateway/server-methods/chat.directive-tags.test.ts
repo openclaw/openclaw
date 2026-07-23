@@ -169,36 +169,38 @@ const TINY_PNG_BASE64 =
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
+    mockState.loadSessionEntryCalls.push({ rawKey, opts });
+    const canonicalKey =
+      typeof mockState.sessionEntry.canonicalKey === "string"
+        ? mockState.sessionEntry.canonicalKey
+        : rawKey || "main";
+    const entry = mockState.sessionMissing
+      ? undefined
+      : {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          ...mockState.sessionEntry,
+        };
+    return {
+      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
+      cfg: {
+        ...mockState.config,
+        session: {
+          ...(mockState.config.session as Record<string, unknown> | undefined),
+          mainKey: mockState.mainSessionKey,
+        },
+      },
+      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      store: entry ? { [canonicalKey]: entry } : {},
+      entry,
+      canonicalKey,
+    };
+  };
   return {
     ...original,
-    loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
-      mockState.loadSessionEntryCalls.push({ rawKey, opts });
-      const canonicalKey =
-        typeof mockState.sessionEntry.canonicalKey === "string"
-          ? mockState.sessionEntry.canonicalKey
-          : rawKey || "main";
-      const entry = mockState.sessionMissing
-        ? undefined
-        : {
-            sessionId: mockState.sessionId,
-            sessionFile: mockState.transcriptPath,
-            ...mockState.sessionEntry,
-          };
-      return {
-        ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-        cfg: {
-          ...mockState.config,
-          session: {
-            ...(mockState.config.session as Record<string, unknown> | undefined),
-            mainKey: mockState.mainSessionKey,
-          },
-        },
-        storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        store: entry ? { [canonicalKey]: entry } : {},
-        entry,
-        canonicalKey,
-      };
-    },
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
   };
 });
 
@@ -5254,7 +5256,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         | undefined;
       expect(mockState.lastDispatchImages).toBeUndefined();
       expect(mockState.lastDispatchImageOrder).toBeUndefined();
-      expect(mockState.lastDispatchCtx?.Body).toBe("summarize this");
+      expect(mockState.lastDispatchCtx?.Body).toBe(
+        "summarize this\n[media attached: media://inbound/saved-media]",
+      );
       expect(mockState.savedMediaCalls[0]?.contentType).toBe("application/pdf");
       expect(mockState.savedMediaCalls[0]?.subdir).toBe("inbound");
       expect(typeof mockState.savedMediaCalls[0]?.size).toBe("number");
@@ -5633,7 +5637,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     });
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
@@ -5809,7 +5813,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     });
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
     expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
@@ -5874,11 +5878,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
     expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
-    // Non-image offloads MUST NOT inject a media://URI into the prompt body —
-    // they ride through ctx.MediaPaths so buildInboundMediaNote prepends the
-    // real path, avoiding duplicate media markers.
-    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
-    expect(mockState.lastDispatchCtx?.BodyForAgent).not.toContain("media://");
+    // Non-image offloads retain their claim-check line while the staged path
+    // also travels structurally for media tools and transcript persistence.
+    expect(mockState.lastDispatchCtx?.Body).toContain(
+      "[media attached: media://inbound/saved-media]",
+    );
+    expect(mockState.lastDispatchCtx?.BodyForAgent).toContain(
+      "[media attached: media://inbound/saved-media]",
+    );
     expect(mockState.lastDispatchImages).toBeUndefined();
     // Marker replaces the implicit "relative-path no-op" coupling in
     // get-reply.ts with an explicit skip contract.
@@ -5937,7 +5944,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
     expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.Body).toContain(
+      "[media attached: media://inbound/saved-media]",
+    );
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 

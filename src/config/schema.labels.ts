@@ -614,7 +614,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
-  "agents.defaults.cliBackends": "CLI Backends",
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.provider": "Compaction Provider",
@@ -744,6 +743,10 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.threadBindings.maxAgeHours": "Thread Binding Max Age (hours)",
   "session.threadBindings.spawnSessions": "Thread-Bound Session Spawns",
   "session.threadBindings.defaultSpawnContext": "Thread Spawn Context",
+  "session.sharing": "Session Sharing Modes",
+  "session.sharing.readOnly": "Allow Read-only Sessions",
+  "session.sharing.suggest": "Allow Suggest Sessions",
+  "session.sharing.drafts": "Allow Draft Sessions",
   "session.maintenance": "Session Maintenance",
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",

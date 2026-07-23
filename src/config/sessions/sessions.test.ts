@@ -19,6 +19,7 @@ import {
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { loadSessionEntry } from "./session-accessor.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
@@ -451,6 +452,28 @@ describe("session store writer queue", () => {
     expect(store["agent:main:null"]).toBeUndefined();
     expect(store["agent:main:string"]).toBeUndefined();
     expect(store["agent:main:array"]).toBeUndefined();
+  });
+
+  it("round-trips durable session creation and lineage fields", async () => {
+    const key = "agent:main:lineage-roundtrip";
+    const entry: SessionEntry = {
+      sessionId: "lineage-roundtrip-session",
+      updatedAt: 200,
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-1" },
+      createdAt: 100,
+      forkSource: {
+        sessionKey: "agent:main:source",
+        sessionId: "source-session",
+        entryId: "source-entry",
+      },
+      previousSessionId: "previous-generation",
+    };
+    const { storePath } = await makeTmpStore();
+
+    await saveSessionStore(storePath, { [key]: entry }, { skipMaintenance: true });
+
+    expect(loadSessionStore(storePath, { skipCache: true })[key]).toEqual(entry);
   });
 
   it("strips malformed pending final-delivery fields on load", async () => {
@@ -1115,6 +1138,64 @@ describe("session store writer queue", () => {
     );
     expect(merged.model).toBe("gpt-5.4");
     expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("builds a deterministic session creation stamp", () => {
+    expect(
+      buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: "agent:main:requester" },
+        now: 123,
+      }),
+    ).toEqual({
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:requester" },
+      createdAt: 123,
+    });
+  });
+
+  it("keeps session creation and fork ancestry fields write-once", () => {
+    const existing: SessionEntry = {
+      sessionId: "session-write-once",
+      updatedAt: 100,
+      createdVia: "channel",
+      createdActor: { type: "human", id: "sender-1" },
+      createdAt: 50,
+      forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
+    };
+
+    expect(
+      mergeSessionEntry(existing, {
+        createdVia: undefined,
+        createdActor: { type: "system", id: "replacement" },
+        createdAt: 200,
+        forkSource: undefined,
+      }),
+    ).toMatchObject({
+      createdVia: "channel",
+      createdActor: { type: "human", id: "sender-1" },
+      createdAt: 50,
+      forkSource: { sessionKey: "agent:main:parent", sessionId: "parent-session" },
+    });
+  });
+
+  it("fills absent session creation and fork ancestry fields", () => {
+    expect(
+      mergeSessionEntry(
+        { sessionId: "session-fill", updatedAt: 100 },
+        {
+          createdVia: "internal",
+          createdActor: { type: "system" },
+          createdAt: 75,
+          forkSource: { sessionKey: "agent:main:source", sessionId: "source-session" },
+        },
+      ),
+    ).toMatchObject({
+      createdVia: "internal",
+      createdActor: { type: "system" },
+      createdAt: 75,
+      forkSource: { sessionKey: "agent:main:source", sessionId: "source-session" },
+    });
   });
 
   it("rewrites generated sessionFile paths when session id changes", () => {

@@ -180,6 +180,8 @@ export type OpenClawConfig = {
       chatMessageMaxWidth?: string;
       /** Show live agent activity beneath running Control UI sidebar sessions. */
       sidebarLiveActivity?: boolean;
+      /** Expand advanced settings in schema-driven Control UI forms. */
+      showAdvancedSettings?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */

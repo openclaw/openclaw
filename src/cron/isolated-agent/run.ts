@@ -739,14 +739,33 @@ async function prepareCronRunContext(params: {
     storePath,
     sessionKey,
     fallbackEntry,
+    resetBoundaryReason,
     update,
   }: {
     storePath: string;
     sessionKey: string;
     fallbackEntry: SessionEntry;
+    resetBoundaryReason?: "cron-stale";
     update: (entry: SessionEntry | undefined) => SessionEntry;
   }) => {
-    const { patchSessionEntry } = await loadSessionAccessorRuntime();
+    const { applySessionEntryLifecycleMutation, patchSessionEntry } =
+      await loadSessionAccessorRuntime();
+    if (resetBoundaryReason) {
+      await applySessionEntryLifecycleMutation({
+        activeSessionKey: sessionKey,
+        agentId,
+        storePath,
+        upserts: [
+          {
+            sessionKey,
+            resetBoundaryReason,
+            buildEntry: ({ currentEntry }) => update(currentEntry),
+          },
+        ],
+        skipMaintenance: true,
+      });
+      return;
+    }
     // Guarded replace: the updater sees the freshest persisted row (or
     // undefined pre-creation) so cron lifecycle claims reject stale owners.
     await patchSessionEntry(

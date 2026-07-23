@@ -23,6 +23,8 @@ import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts"
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
+// Grace window before offline presentation appears; reconnects never wait.
+const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 function sameSelfUser(
   left: ApplicationGatewaySnapshot["selfUser"],
@@ -54,6 +56,7 @@ export function createApplicationGateway(
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     connected: false,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -67,6 +70,8 @@ export function createApplicationGateway(
   // transport drops render as "reconnecting" (shell + banner) instead of
   // kicking the operator back to the login gate.
   let everConnected = false;
+  let stopped = true;
+  let offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
@@ -90,8 +95,31 @@ export function createApplicationGateway(
       listener(snapshot);
     }
   };
+  const clearOfflineIndicatorTimer = () => {
+    if (offlineIndicatorTimer !== null) {
+      globalThis.clearTimeout(offlineIndicatorTimer);
+      offlineIndicatorTimer = null;
+    }
+  };
+  const scheduleOfflineIndicator = () => {
+    if (stopped || snapshot.connected || snapshot.offlineStable || offlineIndicatorTimer !== null) {
+      return;
+    }
+    offlineIndicatorTimer = globalThis.setTimeout(() => {
+      offlineIndicatorTimer = null;
+      if (!stopped && !snapshot.connected) {
+        setSnapshot({ ...snapshot, offlineStable: true });
+      }
+    }, OFFLINE_INDICATOR_DELAY_MS);
+  };
   const setSnapshot = (next: ApplicationGatewaySnapshot) => {
-    snapshot = next;
+    if (next.connected) {
+      clearOfflineIndicatorTimer();
+      snapshot = next.offlineStable ? { ...next, offlineStable: false } : next;
+    } else {
+      snapshot = next;
+      scheduleOfflineIndicator();
+    }
     notify();
   };
   const publishEventLog = () => {
@@ -131,6 +159,7 @@ export function createApplicationGateway(
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
+    stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
     const nextConnection = { ...connection, ...connectionOverrides };
     const hasRequestedSessionKey = requestedSessionKey !== undefined;
@@ -253,8 +282,8 @@ export function createApplicationGateway(
       ...snapshot,
       client: nextClient,
       connected: false,
-      // Keep the shell mounted while a fresh client attempts (event-gap
-      // recovery, banner "retry now") when a session already existed.
+      // Keep the shell mounted while a fresh client attempts event-gap
+      // recovery or a manual retry when a session already existed.
       reconnecting: everConnected,
       hello: null,
       selfUser: null,
@@ -289,6 +318,8 @@ export function createApplicationGateway(
     },
     start: () => connect(),
     stop: () => {
+      stopped = true;
+      clearOfflineIndicatorTimer();
       stopClientEvents?.();
       stopClientEvents = undefined;
       client?.stop();
@@ -298,6 +329,7 @@ export function createApplicationGateway(
         ...snapshot,
         client: null,
         connected: false,
+        offlineStable: false,
         reconnecting: false,
         hello: null,
         selfUser: null,

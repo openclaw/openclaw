@@ -36,6 +36,7 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
@@ -48,7 +49,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
-  "sessions.patch": async ({ params, respond, context, client }) => {
+  "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
@@ -160,6 +161,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       }
       return await applySessionPatchProjection({
         agentId: target.agentId,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
         storePath,
         resolveTarget: ({ entries }) => {
           const store = Object.fromEntries(
@@ -310,7 +312,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.pluginPatch": async ({ params, respond, context, client }) => {
+  "sessions.pluginPatch": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
     ) {
@@ -371,6 +379,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       namespace,
       value: params.value,
       unset: params.unset === true,
+      assertCurrent: sessionMutationAuthorization?.assertCurrent,
     });
     if (!patched.ok) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patched.error));
@@ -382,7 +391,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason: "plugin-patch",
     });
   },
-  "sessions.reset": async ({ params, respond, context }) => {
+  "sessions.reset": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -399,6 +408,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       ...(p.agentId ? { agentId: p.agentId } : {}),
       reason,
       commandSource: "gateway:sessions.reset",
+      creation: resolveOperatorSessionCreation(client),
+      assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

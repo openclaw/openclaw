@@ -866,29 +866,34 @@ function mergeRuntimeExternalProfileState(params: {
 /** Apply an auth store update inside the SQLite write lock. */
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  stateDir?: string;
   saveOptions?: SaveAuthProfileStoreOptions;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   let publishRuntimeSnapshots: (() => void) | undefined;
   let store: AuthProfileStore;
   try {
-    store = runAuthProfileWriteTransaction(params.agentDir, (database) => {
-      const loadedStore = loadAuthProfileStoreForAgent(params.agentDir, {
-        database,
-        readOnly: true,
-        syncExternalCli: false,
-      });
-      const shouldSave = params.updater(loadedStore);
-      if (shouldSave) {
-        publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
-          loadedStore,
-          params.agentDir,
-          params.saveOptions,
+    store = runAuthProfileWriteTransaction(
+      params.agentDir,
+      (database) => {
+        const loadedStore = loadAuthProfileStoreForAgent(params.agentDir, {
           database,
-        );
-      }
-      return loadedStore;
-    });
+          readOnly: true,
+          syncExternalCli: false,
+        });
+        const shouldSave = params.updater(loadedStore);
+        if (shouldSave) {
+          publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
+            loadedStore,
+            params.agentDir,
+            params.saveOptions,
+            database,
+          );
+        }
+        return loadedStore;
+      },
+      { stateDir: params.stateDir },
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`auth profile store update failed: ${message}`, {

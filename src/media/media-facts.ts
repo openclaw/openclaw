@@ -1,6 +1,7 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
-import { kindFromMime } from "@openclaw/media-core/mime";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
 /** One ordered runtime attachment; array position is its alignment identity. */
 export type MediaFact = {
@@ -11,11 +12,81 @@ export type MediaFact = {
   transcribed?: boolean;
   messageId?: string;
   workspaceDir?: string;
+  // Declared field, not a symbol: suppression must survive every fact copy or
+  // reprojection boundary; described images otherwise rehydrate or count failed.
+  // Structured persistence may retain it; legacy Media* projections never emit it.
+  hydrationSuppressed?: boolean;
 };
 
 export type MediaFactInput = {
   [Key in keyof MediaFact]?: MediaFact[Key] | null;
 };
+
+const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
+
+/** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
+export function attachRuntimePromptMediaFacts<T extends object>(
+  message: T,
+  media: readonly MediaFact[],
+  imageOrder?: readonly PromptImageOrderEntry[],
+): T {
+  const normalized = normalizeMediaFacts(media);
+  if (imageOrder?.length) {
+    Object.defineProperty(normalized, "imageOrder", { value: [...imageOrder] });
+  }
+  Object.defineProperty(message, RUNTIME_PROMPT_MEDIA_FACTS, {
+    configurable: true,
+    value: normalized,
+  });
+  return message;
+}
+
+export function readRuntimePromptMediaFacts(message: object): MediaFact[] | undefined {
+  const media = (message as Record<PropertyKey, unknown>)[RUNTIME_PROMPT_MEDIA_FACTS];
+  return Array.isArray(media) ? (media as MediaFact[]) : undefined;
+}
+
+export function readRuntimePromptImageOrder(message: object): PromptImageOrderEntry[] | undefined {
+  const imageOrder = (
+    readRuntimePromptMediaFacts(message) as
+      | (MediaFact[] & { imageOrder?: PromptImageOrderEntry[] })
+      | undefined
+  )?.imageOrder;
+  return Array.isArray(imageOrder) ? (imageOrder as PromptImageOrderEntry[]) : undefined;
+}
+
+/** Returns whether a fact can produce native image input. */
+export function isImageMediaFact(fact: MediaFactInput): boolean {
+  if (fact.kind && fact.kind !== "unknown") {
+    return fact.kind === "image" || fact.kind === "sticker";
+  }
+  const contentType = normalizeOptionalString(fact.contentType);
+  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
+  if (
+    normalizedContentType &&
+    normalizedContentType !== "application/octet-stream" &&
+    normalizedContentType !== "binary/octet-stream"
+  ) {
+    const mimeKind = kindFromMime(normalizedContentType);
+    if (mimeKind) {
+      return mimeKind === "image";
+    }
+    // Legacy channel-mode projections persist bare kinds as MediaType; honor
+    // them, and fall through to filename inference for other unknown strings.
+    if (normalizedContentType === "image" || normalizedContentType === "sticker") {
+      return true;
+    }
+    if (
+      normalizedContentType === "audio" ||
+      normalizedContentType === "video" ||
+      normalizedContentType === "document"
+    ) {
+      return false;
+    }
+  }
+  const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
+  return kindFromMime(mimeTypeFromFilePath(pathValue)) === "image";
+}
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   kind?: MediaKind;
@@ -47,7 +118,7 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
 ): MediaFact {
   const workspaceDir = normalizeOptionalString(media.workspaceDir) ?? defaults.workspaceDir;
   const contentType = normalizeOptionalString(media.contentType);
-  return {
+  const normalized: MediaFact = {
     path: normalizeOptionalString(media.path),
     url: normalizeOptionalString(media.url),
     contentType,
@@ -55,7 +126,9 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     transcribed: media.transcribed === true || defaults.transcribed?.(media, index) === true,
     messageId: normalizeOptionalString(media.messageId) ?? defaults.messageId,
     ...(workspaceDir ? { workspaceDir } : {}),
+    ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
+  return normalized;
 }
 
 /** True when a consumer must use the already-staged legacy path projection. */
@@ -122,6 +195,7 @@ export function resolveMediaFacts(source: MediaFactSource): MediaFact[] {
         workspaceDir:
           normalizeOptionalString(fact?.workspaceDir) ??
           normalizeOptionalString(source.MediaWorkspaceDir),
+        hydrationSuppressed: fact?.hydrationSuppressed,
       },
       index,
     );

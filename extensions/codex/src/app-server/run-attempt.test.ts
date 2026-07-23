@@ -74,6 +74,7 @@ import {
   mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
@@ -657,6 +658,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     const sandbox = {
       enabled: true,
@@ -752,6 +754,7 @@ describe("runCodexAppServerAttempt", () => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
+      setCodexTestModelSupportsTools(params, true);
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
         agents: {
@@ -2839,6 +2842,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
     const {
@@ -2948,6 +2952,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -2978,6 +2983,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -3106,6 +3112,7 @@ describe("runCodexAppServerAttempt", () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("memory_get")]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -3192,6 +3199,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.config = {
       agents: {
@@ -3259,6 +3267,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    setCodexTestModelSupportsTools(params, true);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setAgentWorkspaceForTest(params, workspaceDir);
 
@@ -3576,6 +3585,73 @@ describe("runCodexAppServerAttempt", () => {
     expect(onToolResult).toHaveBeenNthCalledWith(2, {
       text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
     });
+  });
+
+  it("captures the complete mirrored branch through a settled tool-result boundary", async () => {
+    const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
+    const sessionId = "session-settled-finalization-context";
+    const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
+    const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    attachSqliteSessionTarget(params, storePath, sessionId);
+    params.prompt = "Send the update to Alice.";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "tool-settled",
+          command: "echo sent-to-alice",
+          cwd: workspaceDir,
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "tool-settled",
+          command: "echo sent-to-alice",
+          cwd: workspaceDir,
+          processId: 42,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "sent-to-alice\n",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+
+    expect(result.settledTurnFinalizationContext).toMatchObject({
+      source: "openclaw-transcript",
+      messages: [
+        expect.objectContaining({ role: "user" }),
+        expect.objectContaining({ role: "assistant" }),
+        expect.objectContaining({ role: "toolResult", toolCallId: "tool-settled" }),
+      ],
+    });
+    expect(Object.isFrozen(result.settledTurnFinalizationContext?.messages)).toBe(true);
   });
 
   it("preserves every command failure from official app-server events", async () => {
@@ -3992,6 +4068,7 @@ describe("runCodexAppServerAttempt", () => {
     const pngBase64 =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
     params.model = createCodexTestModel("codex", ["text", "image"]);
+    setCodexTestModelSupportsTools(params, false);
     params.images = [
       {
         type: "image",
@@ -5468,6 +5545,7 @@ describe("runCodexAppServerAttempt", () => {
     delete params.authProfileId;
     params.agentDir = agentDir;
     params.config = {
+      ...params.config,
       agents: {
         defaults: {
           compaction: {
@@ -6064,13 +6142,16 @@ describe("runCodexAppServerAttempt", () => {
       return {};
     });
     const clientFactory = vi.fn(async () => harness.client);
-    const params = {
-      ...createParams(sessionFile, workspaceDir),
-      provider: "anthropic",
-      modelId: "claude-opus-4-6",
-      model: createCodexTestModel("anthropic"),
-      config: { tools: { exec: { mode: "auto" } } },
-    } as EmbeddedRunAttemptParams;
+    testing.setOpenClawCodingToolsFactoryForTests(() => []);
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "anthropic";
+    params.modelId = "claude-opus-4-6";
+    params.model = createCodexTestModel("anthropic");
+    setCodexTestModelSupportsTools(params, false);
+    params.config = {
+      ...params.config,
+      tools: { ...params.config?.tools, exec: { mode: "auto" } },
+    } as EmbeddedRunAttemptParams["config"];
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: {

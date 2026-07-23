@@ -225,7 +225,7 @@ describe("OpenClaw configured-model planner", () => {
   it("plans through the configured default agent CLI route with native tools disabled", async () => {
     const config: OpenClawConfig = {
       agents: {
-        defaults: { cliBackends: { "claude-cli": { command: "claude" } } },
+        defaults: {},
         list: [
           {
             id: "ops",

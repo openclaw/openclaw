@@ -54,7 +54,7 @@ describe("dead config keys", () => {
     "agents.defaults.videoGenerationModel",
     "agents.defaults.musicGenerationModel",
     "agents.defaults.promptOverlays",
-    "agents.defaults.cliBackends.custom.sessionArg",
+    "agents.defaults.cliBackends",
     "agents.defaults.heartbeat.ackMaxChars",
     "agents.defaults.heartbeat.includeReasoning",
     "agents.defaults.heartbeat.includeSystemPromptSection",
@@ -114,9 +114,6 @@ describe("dead config keys", () => {
     "memory.qmd.mcporter",
     "memory.qmd.update",
     "memory.search.cache.maxEntries",
-    "agents.defaults.cliBackends.codex.reliability.outputLimits",
-    "agents.defaults.cliBackends.codex.reliability.watchdog.fresh.noOutputTimeoutMs",
-    "agents.defaults.cliBackends.codex.reliability.watchdog.resume.noOutputTimeoutMs",
     "agents.defaults.runRetries",
     "agents.entries.test.memory.search.chunking",
     "agents.entries.test.runRetries",
@@ -190,11 +187,12 @@ describe("dead config keys", () => {
     "logging.redactSensitive",
     "commands.useAccessGroups",
     "gateway.controlUi.allowInsecureAuth",
-    "gateway.controlUi.dangerouslyDisableDeviceAuth",
     "discovery.wideArea.enabled",
     "cloudWorkers.profiles.default.lifetime",
     "mcp.servers.docs.workingDirectory",
     "nodeHost.mcp.servers.docs.workingDirectory",
+    "models.providers.custom.models.0.compat.requiresMistralToolIds",
+    "models.providers.custom.models.0.compat.nativeWebSearchTool",
   ] as const)("rejects retired tuning knob %s", (fullPath) => {
     const segments = fullPath.split(".");
     const key = segments.pop() ?? "";
