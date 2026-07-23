@@ -17,6 +17,7 @@ export type SessionCreateParams = {
   label?: string;
   model?: string;
   thinkingLevel?: string;
+  incognito?: boolean;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;

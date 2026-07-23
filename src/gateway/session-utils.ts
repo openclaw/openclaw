@@ -79,7 +79,6 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
-  getSessionStoreCacheVersion,
   isConfiguredSessionStoreAgentId,
   isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
@@ -102,12 +101,14 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
+  isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
@@ -417,7 +418,6 @@ type SessionListRowContextProvider = () => SessionListRowContext;
 
 type SingleRowChildSessionCandidateCacheEntry = {
   store: Record<string, SessionEntry>;
-  storeVersion: number;
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
@@ -483,15 +483,13 @@ function getSingleRowChildSessionCandidates(params: {
   if (!params.store) {
     return new Map();
   }
-  const storeVersion = getSessionStoreCacheVersion(params.storePath);
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached && cached.store === params.store && cached.storeVersion === storeVersion) {
+  if (cached?.store === params.store) {
     return cached.childSessionCandidatesByParentKey;
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
     store: params.store,
-    storeVersion,
     childSessionCandidatesByParentKey,
   });
   return childSessionCandidatesByParentKey;
@@ -1019,7 +1017,8 @@ export function loadSessionEntryReadOnly(
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns both the freshest entry and the exact persisted key that owns it. */
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -1545,6 +1544,21 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     (isAgentScopedSentinelSessionKey(canonicalKey) || !parseAgentSessionKey(key))
       ? normalizeAgentId(requestedAgentId)
       : resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  if (isIncognitoSessionKey(canonicalKey)) {
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+    // Session resolution may receive arbitrary stale keys; only creation/write
+    // owners may materialize the process-lifetime incognito database.
+    const store = loadGatewaySessionLookupStore(storePath, params.clone, agentId, {
+      readOnly: true,
+    });
+    return {
+      agentId,
+      storePath,
+      canonicalKey,
+      storeKeys: [canonicalKey],
+      store,
+    };
+  }
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,
@@ -2254,6 +2268,8 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
+    visibility: entry ? (entry.visibility ?? "shared") : undefined,
+    incognito: entry?.incognito,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     // The live registry controller takes precedence over the persisted spawner.
     controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,

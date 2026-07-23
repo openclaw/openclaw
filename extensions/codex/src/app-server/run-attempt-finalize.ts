@@ -290,6 +290,7 @@ export async function finalizeCodexAttempt(
     result.agentHarnessResultClassification = undefined;
   }
   const attemptSucceeded = turnSucceeded && result.agentHarnessResultClassification === undefined;
+  terminalState.turnSucceeded = turnSucceeded;
   terminalState.sharedAbortAllowedAfterTerminalOutcome = shouldKeepCodexSharedAbortOpen({
     trigger: params.trigger,
     result,

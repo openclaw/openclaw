@@ -20,11 +20,9 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
+import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
 import "../../../components/tooltip.ts";
-import {
-  handleMarkdownCodeBlockCopy,
-  markdownFileLinkFromEvent,
-} from "../../../components/markdown.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -69,7 +67,7 @@ import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
-import { renderChatDivider } from "./chat-divider.ts";
+import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import {
   dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -1292,6 +1290,9 @@ function renderChatThreadContents(
   const renderItem = guardChatRenderItems(state, (item) => {
     if (item.kind === "divider") {
       return renderChatDivider(item, props.onOpenSessionCheckpoints);
+    }
+    if (item.kind === "notice") {
+      return renderChatNotice(item);
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {

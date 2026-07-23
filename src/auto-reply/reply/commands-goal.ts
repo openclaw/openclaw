@@ -7,11 +7,11 @@ import {
   clearSessionGoal,
   createSessionGoal,
   formatSessionGoalStatus,
-  getSessionEntry,
   getSessionGoal,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
+import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {

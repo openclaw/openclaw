@@ -313,7 +313,12 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       });
 
       expect(
-        claimHeartbeatOutcomeForRun({ agentId: "main", sessionKey, runId: "user-run" }),
+        claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId: "user-run",
+        }),
       ).toMatchObject({
         outcome: "progress",
         summary: "Deployment completed; smoke test pending.",

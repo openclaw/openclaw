@@ -56,6 +56,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private agentId = "";
   @state() private folder = "";
   @state() private worktree = false;
+  @state() private incognito = false;
   @state() private worktreeName = "";
   @state() private baseRef = "";
   @state() private repository: DraftRepositoryState = { kind: "idle" };
@@ -152,23 +153,26 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const snapshot = gateway.snapshot;
+    const connected = snapshot.phase === "connected";
     const firstBind = this.gatewaySource === null;
     const gatewayUrlChanged = !firstBind && this.gatewayUrl !== gateway.connection.gatewayUrl;
     const identityChanged =
       !firstBind && (this.gatewaySource !== gateway || this.gatewayClient !== snapshot.client);
-    const connectionChanged = !firstBind && this.gatewayConnected !== snapshot.connected;
-    const becameConnected = snapshot.connected && (identityChanged || !this.gatewayConnected);
+    const connectionChanged = !firstBind && this.gatewayConnected !== connected;
+    const becameConnected = connected && (identityChanged || !this.gatewayConnected);
     const recoveryScopeBecameReady =
-      snapshot.connected &&
-      snapshot.client?.recoveryScopeReady === true &&
-      !this.gatewayRecoveryScopeReady;
-    const recoveryScope = resolveScope(snapshot, this.gatewayRecoveryScope, firstBind);
+      connected && snapshot.client?.recoveryScopeReady === true && !this.gatewayRecoveryScopeReady;
+    const recoveryScope = resolveScope(
+      { client: snapshot.client, connected },
+      this.gatewayRecoveryScope,
+      firstBind,
+    );
     this.gatewaySource = gateway;
     this.gatewayClient = snapshot.client;
     this.gatewayUrl = gateway.connection.gatewayUrl;
     this.gatewayRecoveryScope = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = connected;
     if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
       this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
     }
@@ -187,7 +191,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         this.pendingCloud.reset();
         this.submissionOutcomeUnknown = false;
       }
-      if (snapshot.connected && snapshot.client?.recoveryScopeReady) {
+      if (connected && snapshot.client?.recoveryScopeReady) {
         this.restorePendingCloudRecovery(this.gatewayUrl, this.gatewayRecoveryScope);
       }
     }
@@ -229,6 +233,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.folder = "";
     this.folderSelectedByUser = false;
     this.worktree = false;
+    this.incognito = false;
     this.worktreeName = "";
     this.baseRefEditGeneration += 1;
     this.nodes = [];
@@ -448,6 +453,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.folder = "";
     this.folderSelectedByUser = false;
     this.worktree = false;
+    this.incognito = false;
     this.worktreeName = "";
     this.baseRef = "";
     this.repository = { kind: "idle" };
@@ -462,6 +468,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agentId = this.pendingCloud.agentId;
       this.cloudProfileId = this.pendingCloud.profileId;
       this.worktree = true;
+      this.incognito = this.pendingCloud.createParams?.incognito === true;
       // Show the staged repo (not the agent workspace) while the draft is locked.
       this.folder = this.pendingCloud.createParams?.cwd ?? "";
       this.pendingCloud.restored = false;
@@ -513,6 +520,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentId = recovery.agentId;
     this.cloudProfileId = recovery.profileId;
     this.worktree = true;
+    this.incognito = recovery.createParams?.incognito === true;
     // Show the staged repo (not the agent workspace) while the draft is locked.
     this.folder = recovery.createParams?.cwd ?? "";
     this.message = recovery.message;
@@ -524,7 +532,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.nodesHydrated = false;
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
-    if (!snapshot?.connected || !client || !this.isAdmin()) {
+    if (snapshot?.phase !== "connected" || !client || !this.isAdmin()) {
       this.nodes = [];
       this.nodesHydrated = true;
       return;
@@ -581,7 +589,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
-    if (!snapshot?.connected || !client) {
+    if (snapshot?.phase !== "connected" || !client) {
       return;
     }
     this.repository = { kind: "checking", repoRoot };
@@ -680,7 +688,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
       (!message && !hasAttachments) ||
-      !gateway?.snapshot.connected ||
+      gateway?.snapshot.phase !== "connected" ||
       !gateway.snapshot.client
     ) {
       return false;
@@ -780,6 +788,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         message: cloudProfileId ? "" : message,
         model: this.modelControl.selected,
         thinkingLevel: this.modelControl.thinkingLevel,
+        incognito: this.incognito,
         attachments: cloudProfileId ? undefined : apiAttachments,
         worktree: this.worktree,
         baseRef: this.baseRef,
@@ -800,6 +809,7 @@ class NewSessionPage extends OpenClawLightDomElement {
               gatewayUrl: submissionGatewayUrl,
               recoveryScope: submissionRecoveryScope,
               createParams,
+              persistent: !this.incognito,
             })
         : undefined;
       if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
@@ -867,6 +877,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           gatewayUrl: submissionGatewayUrl,
           recoveryScope: submissionRecoveryScope,
           recoveryPhase,
+          persistRecovery: this.pendingCloud.persistent,
           recovering: pendingCloud,
           isCurrent: isSubmissionCurrent,
           ownsRecovery: ownsSubmissionRecovery,
@@ -1167,7 +1178,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     const snapshot = this.context?.gateway.snapshot;
     const client = snapshot?.client;
     const target = this.browserTarget;
-    if (!snapshot?.connected || !client || !target) {
+    if (snapshot?.phase !== "connected" || !client || !target) {
       return;
     }
     // Exec-only nodes still accept a typed cwd; never probe an unsupported fs.listDir.
@@ -1357,6 +1368,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.message,
+          incognito: this.incognito,
           modelControl: this.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           submitting: this.submitting,
@@ -1364,6 +1376,11 @@ class NewSessionPage extends OpenClawLightDomElement {
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
               this.message = message;
+            }
+          },
+          onToggleIncognito: () => {
+            if (!this.submitting && !this.pendingCloud.sessionKey) {
+              this.incognito = !this.incognito;
             }
           },
           onSubmit: () => void this.submit(),

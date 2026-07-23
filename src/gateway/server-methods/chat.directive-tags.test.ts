@@ -1452,6 +1452,49 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("resolves per-sender global agent aliases to the canonical agent main session", async () => {
+    await createTranscriptFixture("openclaw-chat-send-per-sender-global-alias-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { scope: "per-sender" },
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "global",
+      requestParams: { agentId: "main" },
+      idempotencyKey: "idem-per-sender-global-alias",
+      expectBroadcast: false,
+    });
+
+    const [ok] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(true);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      SessionKey: "agent:main:main",
+      AgentId: "main",
+    });
+    expect(mockState.loadSessionEntryCalls.length).toBeGreaterThan(0);
+    expect(mockState.loadSessionEntryCalls).toEqual(
+      expect.arrayContaining([
+        {
+          rawKey: "agent:main:main",
+          opts: { agentId: "main" },
+        },
+      ]),
+    );
+    expect(mockState.loadSessionEntryCalls).not.toEqual(
+      expect.arrayContaining([
+        {
+          rawKey: "global",
+          opts: { agentId: "main" },
+        },
+      ]),
+    );
+  });
+
   it("registers selected-agent global aliases under the canonical abort key", async () => {
     await createTranscriptFixture("openclaw-chat-send-global-alias-abort-key-");
     mockState.config = {

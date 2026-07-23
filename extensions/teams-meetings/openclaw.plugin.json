@@ -3,7 +3,7 @@
   "name": "Microsoft Teams meetings",
   "description": "Join Microsoft Teams meetings as a Chrome browser guest.",
   "icon": "https://cdn.simpleicons.org/microsoftteams",
-  "enabledByDefault": false,
+  "enabledByDefault": true,
   "commandAliases": [{ "name": "teamsmeetings" }],
   "activation": {
     "onStartup": true,

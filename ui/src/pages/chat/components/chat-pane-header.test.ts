@@ -194,6 +194,13 @@ describe("chat pane header", () => {
     expect(container.querySelector('wa-dropdown-item[value="copy-path"]')).not.toBeNull();
   });
 
+  it("shows an incognito indicator for in-memory threads", () => {
+    const { container } = mount({ session: row({ incognito: true }) });
+    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
+      "Incognito thread",
+    );
+  });
+
   it("hides one branch and lists multiple branches with the active tip marked", () => {
     const one = mount({
       branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
