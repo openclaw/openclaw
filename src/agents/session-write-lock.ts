@@ -12,6 +12,7 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
+import { retryAsync } from "../infra/retry.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import {
   SessionWriteLockStaleError,
@@ -40,6 +41,12 @@ export type SessionLockInspection = {
   staleReasons: string[];
   removable: boolean;
   removed: boolean;
+  /**
+   * The lock file could not be read (transient IO errors persisted across retries), so its
+   * contents were never inspected. Staleness is unknown rather than false, and the lock is
+   * never removable; it is reported so operators can see why contention persists.
+   */
+  unreadable: boolean;
 };
 
 export type SessionLockOwnerProcessArgsReader = (pid: number) => string[] | null;
@@ -403,6 +410,53 @@ function parseLockPayload(raw: string): LockFilePayload | null {
     payload.maxHoldMs = parsed.maxHoldMs;
   }
   return payload;
+}
+
+// A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on a lock read must
+// not be mistaken for a stale lock: a null payload reads as missing-pid and,
+// past the mtime grace, `cleanStaleLockFiles` removes the file with no
+// content-identity guard — deleting a valid, live-held lock and breaking session
+// mutual exclusion. Cleanup retries, then fails closed (never removes) if the
+// read still cannot complete. The fs-safe acquire path already throws on these
+// codes, so only the cleanup removal decision needs this guard.
+const TRANSIENT_LOCK_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
+const TRANSIENT_LOCK_READ_ERRNOS = new Set([-11, -4]);
+const TRANSIENT_LOCK_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
+
+function isTransientLockReadError(error: unknown): boolean {
+  const fsError = error as NodeJS.ErrnoException | undefined;
+  if (fsError?.code && TRANSIENT_LOCK_READ_CODES.has(fsError.code)) {
+    return true;
+  }
+  if (typeof fsError?.errno === "number" && TRANSIENT_LOCK_READ_ERRNOS.has(fsError.errno)) {
+    return true;
+  }
+  return error instanceof Error && TRANSIENT_LOCK_READ_MESSAGE.test(error.message);
+}
+
+// `unreadable` means a transient IO error persisted across retries, so cleanup
+// could not inspect the lock and must not treat it as stale.
+type LockPayloadCleanupRead =
+  | { status: "read"; payload: LockFilePayload | null }
+  | { status: "unreadable" };
+
+async function readLockPayloadForCleanup(lockPath: string): Promise<LockPayloadCleanupRead> {
+  try {
+    const raw = await retryAsync(() => fs.readFile(lockPath, "utf8"), {
+      attempts: 3,
+      minDelayMs: 50,
+      maxDelayMs: 50,
+      shouldRetry: (err) => isTransientLockReadError(err),
+    });
+    return { status: "read", payload: parseLockPayload(raw) };
+  } catch (error) {
+    // A malformed/empty file is still a successful read (payload null,
+    // reclaimable once old); only an unreadable transient IO error fails closed.
+    if (isTransientLockReadError(error)) {
+      return { status: "unreadable" };
+    }
+    return { status: "read", payload: null };
+  }
 }
 
 async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
@@ -854,7 +908,29 @@ export async function cleanStaleLockFiles(params: {
       setImmediate(resolve);
     });
     const lockPath = path.join(sessionsDir, entry.name);
-    const payload = await readLockPayload(lockPath);
+    const cleanupRead = await readLockPayloadForCleanup(lockPath);
+    if (cleanupRead.status === "unreadable") {
+      // Fail closed: a lock we could not read is not proof of staleness. Leave it for a
+      // later sweep rather than deleting a possibly-live holder's lock — but still report
+      // it, or the retained lock becomes contention with no operator-visible cause.
+      locks.push({
+        lockPath,
+        pid: null,
+        pidAlive: false,
+        createdAt: null,
+        ageMs: null,
+        stale: false,
+        staleReasons: [],
+        removable: false,
+        removed: false,
+        unreadable: true,
+      });
+      params.log?.warn?.(
+        `session lock file unreadable, preserved: ${lockPath} (transient read errors persisted)`,
+      );
+      continue;
+    }
+    const payload = cleanupRead.payload;
     const inspected = inspectLockPayloadForSession({
       payload,
       staleMs,
@@ -869,6 +945,7 @@ export async function cleanStaleLockFiles(params: {
       ...inspected,
       removable,
       removed: false,
+      unreadable: false,
     };
 
     if (removeStale && removable) {

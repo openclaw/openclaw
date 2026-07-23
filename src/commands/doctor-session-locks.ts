@@ -41,6 +41,10 @@ function formatAge(ageMs: number | null): string {
 }
 
 function formatLockLine(lock: SessionLockInspection): string {
+  if (lock.unreadable) {
+    // Nothing was inspected, so pid/age/stale would all report placeholder values as fact.
+    return `- ${shortenHomePath(lock.lockPath)} unreadable (transient read errors persisted) [preserved]`;
+  }
   const pidStatus =
     lock.pid === null ? "pid=missing" : `pid=${lock.pid} (${lock.pidAlive ? "alive" : "dead"})`;
   const ageStatus = `age=${formatAge(lock.ageMs)}`;
@@ -68,12 +72,24 @@ export async function detectStaleSessionLocks(params?: {
       removeStale: false,
       readOwnerProcessArgs: params?.readOwnerProcessArgs,
     });
-    staleLocks.push(...result.locks.filter((lock) => lock.stale));
+    // Unreadable locks are preserved rather than removed, so they need the same operator
+    // surfacing as stale ones — otherwise the retained lock causes contention silently.
+    staleLocks.push(...result.locks.filter((lock) => lock.stale || lock.unreadable));
   }
   return staleLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath));
 }
 
 export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthFinding {
+  if (lock.unreadable) {
+    return {
+      checkId: SESSION_LOCKS_CHECK_ID,
+      severity: "warning",
+      message: `Unreadable session lock file: ${shortenHomePath(lock.lockPath)} (transient read errors persisted)`,
+      path: lock.lockPath,
+      fixHint:
+        'OpenClaw preserved this lock because it could not be read; check filesystem health and permissions, then re-run "openclaw doctor".',
+    };
+  }
   const fixHint = lock.removable
     ? 'Run "openclaw doctor --fix" to remove this stale lock file automatically.'
     : isReportOnlyStaleLock(lock)
@@ -89,11 +105,13 @@ export function sessionLockToHealthFinding(lock: SessionLockInspection): HealthF
 }
 
 export function sessionLockToRepairEffect(lock: SessionLockInspection): HealthRepairEffect {
-  const action = lock.removable
-    ? "would-remove-stale-session-lock"
-    : isReportOnlyStaleLock(lock)
-      ? "would-preserve-report-only-stale-session-lock"
-      : "would-preserve-mtime-gated-stale-session-lock";
+  const action = lock.unreadable
+    ? "would-preserve-unreadable-session-lock"
+    : lock.removable
+      ? "would-remove-stale-session-lock"
+      : isReportOnlyStaleLock(lock)
+        ? "would-preserve-report-only-stale-session-lock"
+        : "would-preserve-mtime-gated-stale-session-lock";
   return {
     kind: "state",
     action,
@@ -141,6 +159,7 @@ export async function noteSessionLockHealth(params?: {
 
   const staleCount = allLocks.filter((lock) => lock.stale).length;
   const removedCount = allLocks.filter((lock) => lock.removed).length;
+  const unreadableCount = allLocks.filter((lock) => lock.unreadable).length;
   const lines: string[] = [
     `- Found ${allLocks.length} session lock file${allLocks.length === 1 ? "" : "s"}.`,
     ...allLocks.toSorted((a, b) => a.lockPath.localeCompare(b.lockPath)).map(formatLockLine),
@@ -149,6 +168,11 @@ export async function noteSessionLockHealth(params?: {
   if (staleCount > 0 && !shouldRepair) {
     lines.push(`- ${staleCount} lock file${staleCount === 1 ? " is" : "s are"} stale.`);
     lines.push('- Run "openclaw doctor --fix" to remove stale lock files automatically.');
+  }
+  if (unreadableCount > 0) {
+    lines.push(
+      `- ${unreadableCount} lock file${unreadableCount === 1 ? " was" : "s were"} unreadable and left in place; check filesystem health if session writes stay blocked.`,
+    );
   }
   if (shouldRepair && removedCount > 0) {
     lines.push(

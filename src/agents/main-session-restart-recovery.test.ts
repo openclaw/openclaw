@@ -342,6 +342,7 @@ function cleanedLockForPath(lockPath: string): SessionLockInspection {
     staleReasons: ["dead-pid"],
     removable: true,
     removed: true,
+    unreadable: false,
   };
 }
 

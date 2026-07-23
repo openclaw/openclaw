@@ -110,6 +110,84 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 
+  it("reports a preserved unreadable lock in repair mode instead of hiding it", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, "unreadable.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 120_000).toISOString() }),
+      "utf8",
+    );
+    const staleDate = new Date(Date.now() - 120_000);
+    await fs.utimes(lockPath, staleDate, staleDate);
+
+    const realReadFile = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(((
+      target: Parameters<typeof fs.readFile>[0],
+      ...rest: unknown[]
+    ) => {
+      if (String(target) === lockPath) {
+        return Promise.reject(Object.assign(new Error("EAGAIN"), { code: "EAGAIN", errno: -11 }));
+      }
+      return (realReadFile as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as typeof fs.readFile);
+
+    try {
+      await noteSessionLockHealth({
+        shouldRepair: true,
+        staleMs: 30_000,
+        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+      });
+
+      const [message] = firstNoteCall();
+      // Sustained EAGAIN means cleanup never inspected the lock: it must be kept AND
+      // surfaced, and must not claim pid/age/stale facts it never read.
+      expect(message).toContain("unreadable (transient read errors persisted) [preserved]");
+      expect(message).toContain("1 lock file was unreadable and left in place");
+      expect(message).not.toContain("[removed]");
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("surfaces an unreadable lock as a health finding and a preserve effect", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, "unreadable.jsonl.lock");
+    await fs.writeFile(lockPath, JSON.stringify({ pid: process.pid }), "utf8");
+    const staleDate = new Date(Date.now() - 120_000);
+    await fs.utimes(lockPath, staleDate, staleDate);
+
+    const realReadFile = fs.readFile.bind(fs);
+    const spy = vi.spyOn(fs, "readFile").mockImplementation(((
+      target: Parameters<typeof fs.readFile>[0],
+      ...rest: unknown[]
+    ) => {
+      if (String(target) === lockPath) {
+        return Promise.reject(Object.assign(new Error("EAGAIN"), { code: "EAGAIN", errno: -11 }));
+      }
+      return (realReadFile as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as typeof fs.readFile);
+
+    try {
+      const detected = await detectStaleSessionLocks({ staleMs: 30_000 });
+      expect(detected).toHaveLength(1);
+      expect(detected[0]?.unreadable).toBe(true);
+
+      const finding = sessionLockToHealthFinding(detected[0]!);
+      expect(finding.message).toContain("Unreadable session lock file");
+      expect(finding.fixHint).toContain("could not be read");
+
+      expect(sessionLockToRepairEffect(detected[0]!).action).toBe(
+        "would-preserve-unreadable-session-lock",
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("detects stale locks without removing them for structured lint", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });

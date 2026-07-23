@@ -381,6 +381,99 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("retries a transient read during cleanup so a live lock is not wrongly removed", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      // Valid, live OpenClaw-owned lock whose mtime is old enough that a
+      // payload-less read would fall into the mtime removal grace and delete it.
+      await writeCurrentProcessLock(lockPath);
+      const staleDate = new Date(Date.now() - 120_000);
+      await fs.utimes(lockPath, staleDate, staleDate);
+
+      const realReadFile = fs.readFile.bind(fs);
+      let injectedTransient = false;
+      const spy = vi.spyOn(fs, "readFile").mockImplementation(((
+        target: Parameters<typeof fs.readFile>[0],
+        ...rest: unknown[]
+      ) => {
+        if (!injectedTransient && readFilePathToString(target) === lockPath) {
+          injectedTransient = true;
+          return Promise.reject(Object.assign(new Error("EAGAIN"), { code: "EAGAIN", errno: -11 }));
+        }
+        return (realReadFile as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+      }) as typeof fs.readFile);
+
+      try {
+        const result = await cleanStaleLockFiles({
+          sessionsDir: root,
+          staleMs: 60_000,
+          removeStale: true,
+          readOwnerProcessArgs: () => ["openclaw"],
+        });
+
+        // The transient error path was exercised, and the retry recovered the
+        // live payload so the lock was preserved (without the retry the null
+        // payload would fall into the mtime grace and be removed).
+        expect(injectedTransient).toBe(true);
+        expect(result.cleaned).toEqual([]);
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it("does not remove a live lock when transient reads exhaust retries during cleanup", async () => {
+    await withTempSessionLockFile(async ({ root }) => {
+      const lockPath = path.join(root, "sessions.jsonl.lock");
+      await writeCurrentProcessLock(lockPath);
+      const staleDate = new Date(Date.now() - 120_000);
+      await fs.utimes(lockPath, staleDate, staleDate);
+
+      const realReadFile = fs.readFile.bind(fs);
+      let transientReads = 0;
+      const spy = vi.spyOn(fs, "readFile").mockImplementation(((
+        target: Parameters<typeof fs.readFile>[0],
+        ...rest: unknown[]
+      ) => {
+        if (readFilePathToString(target) === lockPath) {
+          transientReads += 1;
+          return Promise.reject(Object.assign(new Error("EAGAIN"), { code: "EAGAIN", errno: -11 }));
+        }
+        return (realReadFile as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+      }) as typeof fs.readFile);
+
+      try {
+        const result = await cleanStaleLockFiles({
+          sessionsDir: root,
+          staleMs: 60_000,
+          removeStale: true,
+          readOwnerProcessArgs: () => ["openclaw"],
+        });
+
+        // Every read attempt failed transiently, so cleanup could not inspect the
+        // lock and must leave it rather than delete a possibly-live holder's lock.
+        expect(transientReads).toBeGreaterThanOrEqual(3);
+        expect(result.cleaned).toEqual([]);
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+
+        // The preserved lock must still be reported, or it becomes contention with
+        // no operator-visible cause. Staleness is unknown, not false-but-inspected.
+        expect(result.locks).toHaveLength(1);
+        expect(result.locks[0]).toMatchObject({
+          lockPath,
+          unreadable: true,
+          removable: false,
+          removed: false,
+          stale: false,
+          staleReasons: [],
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it("reclaims malformed lock files once they are old enough", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       await fs.writeFile(lockPath, "{}", "utf8");
