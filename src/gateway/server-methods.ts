@@ -935,6 +935,12 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  // Best-effort pre-dispatch participation gate. Session ownership/visibility are
+  // usability features, not a security boundary (docs/concepts/multi-user.md,
+  // SECURITY.md), so this check is intentionally not commit-bound to the resolved
+  // instance: a concurrent reset/recreate can still race an in-flight mutation.
+  // Sharing-membership writes re-verify the instance in their own transaction;
+  // real isolation is separate agents/hosts.
   const sessionMutationError = authorizeSessionMutation({
     client: client ?? null,
     method: req.method,
