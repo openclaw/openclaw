@@ -181,6 +181,9 @@ export async function activateCodexAttemptTurn(
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+    // queueMessage resolves only after Codex echoes the steered userMessage completion.
+    // Gateway-owned turns rely on that boundary before finalizing adoption.
+    supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
