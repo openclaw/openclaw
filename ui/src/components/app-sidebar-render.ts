@@ -191,8 +191,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             <button
               type="button"
               class="sidebar-footer-bar__identity"
-              aria-label=${t("profilePage.identity.openSettings", { name: selfLabel })}
-              @click=${() => host.onNavigate?.("profile", { hash: "#settings-profile-identity" })}
+              aria-haspopup="menu"
+              aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
+              aria-label=${t("profilePage.identity.menuButtonLabel", { name: selfLabel })}
+              @click=${(event: MouseEvent) =>
+                host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
             >
               <openclaw-viewer-avatar
                 .user=${{ ...selfUser, watchedSessions: [] }}

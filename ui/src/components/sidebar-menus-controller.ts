@@ -22,7 +22,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
+import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
 import {
   isSidebarRouteActive,
@@ -62,6 +62,7 @@ interface SidebarMenusControllerState {
   sessionSortMenuPosition: { x: number; y: number } | null;
   agentMenuPosition: { x: number; bottom: number } | null;
   agentMenuFilter: string;
+  identityMenuPosition: { x: number; bottom: number } | null;
 }
 
 interface SidebarMenusControllerHost
@@ -116,9 +117,10 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   sessionSortMenuPosition: { x: number; y: number } | null = null;
-  // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   agentMenuPosition: { x: number; bottom: number } | null = null;
   agentMenuFilter = "";
+  // Anchored by its bottom edge so the footer menu grows upward regardless of height.
+  identityMenuPosition: { x: number; bottom: number } | null = null;
 
   private customizeMenuTrigger: HTMLElement | null = null;
   private moreMenuTrigger: HTMLElement | null = null;
@@ -127,6 +129,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   private sessionGroupMenuTrigger: HTMLElement | null = null;
   private sessionSortMenuTrigger: HTMLElement | null = null;
   private agentMenuTrigger: HTMLElement | null = null;
+  private identityMenuTrigger: HTMLElement | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -171,7 +174,8 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       this.catalogMenu.isOpen ||
       this.sessionGroupMenu ||
       this.sessionSortMenuPosition ||
-      this.agentMenuPosition,
+      this.agentMenuPosition ||
+      this.identityMenuPosition,
     );
     this.closeCustomizeMenu();
     this.closeMoreMenu();
@@ -180,6 +184,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.closeAgentMenu();
+    this.closeIdentityMenu();
     return hadTransientMenu;
   }
 
@@ -379,6 +384,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.closeSessionMenu();
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
+    this.closeIdentityMenu();
     this.agentMenuTrigger = trigger;
     this.updateState("agentMenuFilter", "");
     this.updateState("agentMenuPosition", {
@@ -392,6 +398,30 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.agentMenuTrigger = null;
     this.updateState("agentMenuPosition", null);
     this.updateState("agentMenuFilter", "");
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  toggleIdentityMenu(trigger: HTMLElement) {
+    if (this.identityMenuPosition) {
+      this.closeIdentityMenu();
+      return;
+    }
+    const menuWidth = 240;
+    const rect = trigger.getBoundingClientRect();
+    this.dismissTransientMenus();
+    this.identityMenuTrigger = trigger;
+    this.updateState("identityMenuPosition", {
+      x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+      bottom: Math.max(8, window.innerHeight - rect.top + 4),
+    });
+  }
+
+  closeIdentityMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.identityMenuTrigger;
+    this.identityMenuTrigger = null;
+    this.updateState("identityMenuPosition", null);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -453,10 +483,6 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       filter: this.agentMenuFilter,
       pinnedAgentIds: this.host.pinnedAgentIds,
       connected: this.host.connected,
-      canPairDevice: this.host.canPairDevice,
-      basePath: this.host.basePath,
-      gatewayVersion: this.host.gatewayVersion,
-      themeMode: this.host.themeMode,
       agentUnreadCount: (agentId) => this.host.agentUnreadCount(agentId),
       agentApprovalCount: (agentId) =>
         this.host.sessionData.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ??
@@ -472,6 +498,26 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
           return;
         }
         this.closeAgentMenu({ restoreFocus });
+      },
+      onNavigate: (routeId, options) => this.host.onNavigate?.(routeId, options),
+    });
+  }
+
+  renderIdentityMenu() {
+    const position = this.identityMenuPosition;
+    const trigger = this.identityMenuTrigger;
+    return renderSidebarIdentityMenu({
+      position,
+      canPairDevice: this.host.canPairDevice,
+      basePath: this.host.basePath,
+      gatewayVersion: this.host.gatewayVersion,
+      themeMode: this.host.themeMode,
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus) => {
+        if (this.identityMenuPosition !== position) {
+          return;
+        }
+        this.closeIdentityMenu({ restoreFocus });
       },
       onNavigate: (routeId, options) => this.host.onNavigate?.(routeId, options),
       onPairMobile: () => this.host.onPairMobile?.(),
