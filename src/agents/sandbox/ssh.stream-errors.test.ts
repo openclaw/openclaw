@@ -100,4 +100,80 @@ describe("SSH sandbox stream errors", () => {
       expect(ssh.kill).toHaveBeenCalledOnce();
     },
   );
+
+  it("rejects an upload whose children never transfer data after the idle timeout", async () => {
+    const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-timeout-test-"));
+    tempDirs.push(localDir);
+    const tar = createMockChildProcess();
+    const ssh = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(tar as unknown as ChildProcess)
+      .mockReturnValueOnce(ssh as unknown as ChildProcess);
+
+    await expect(
+      uploadDirectoryToSshTarget({
+        session: fakeSession(),
+        localDir,
+        remoteDir: "/remote/workspace",
+        idleTimeoutMs: 25,
+      }),
+    ).rejects.toThrow(/stalled/);
+    expect(tar.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(ssh.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  });
+
+  it("rejects an upload that stalls after initial progress", async () => {
+    const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-stall-test-"));
+    tempDirs.push(localDir);
+    const tar = createMockChildProcess();
+    const ssh = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(tar as unknown as ChildProcess)
+      .mockReturnValueOnce(ssh as unknown as ChildProcess);
+
+    const upload = uploadDirectoryToSshTarget({
+      session: fakeSession(),
+      localDir,
+      remoteDir: "/remote/workspace",
+      idleTimeoutMs: 25,
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+    // A first chunk flows (banner/early progress) and then the pipeline goes
+    // silent; the idle watchdog must still bound the upload.
+    tar.stdout.write("early-progress");
+
+    await expect(upload).rejects.toThrow(/stalled/);
+    expect(tar.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+    expect(ssh.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  });
+
+  it("does not kill a slow upload that keeps transferring data", async () => {
+    const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-progress-test-"));
+    tempDirs.push(localDir);
+    const tar = createMockChildProcess();
+    const ssh = createMockChildProcess();
+    spawnMock
+      .mockReturnValueOnce(tar as unknown as ChildProcess)
+      .mockReturnValueOnce(ssh as unknown as ChildProcess);
+
+    const upload = uploadDirectoryToSshTarget({
+      session: fakeSession(),
+      localDir,
+      remoteDir: "/remote/workspace",
+      idleTimeoutMs: 50,
+    });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+    // Transfer steadily for well beyond one idle window before closing cleanly.
+    const progress = setInterval(() => tar.stdout.write("chunk"), 10);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 200);
+    });
+    clearInterval(progress);
+    tar.emit("close", 0);
+    ssh.emit("close", 0);
+
+    await expect(upload).resolves.toBeUndefined();
+    expect(tar.kill).not.toHaveBeenCalled();
+    expect(ssh.kill).not.toHaveBeenCalled();
+  });
 });

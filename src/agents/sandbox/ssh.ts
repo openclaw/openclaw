@@ -753,6 +753,8 @@ export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
   "done",
 ].join("\n");
 
+const SSH_UPLOAD_IDLE_TIMEOUT_MS = 30_000;
+
 /** Stream a local directory to the remote sandbox with tar over ssh. */
 export async function uploadDirectoryToSshTarget(params: {
   session: SshSandboxSession;
@@ -760,6 +762,8 @@ export async function uploadDirectoryToSshTarget(params: {
   remoteDir: string;
   remoteRootDir?: string;
   signal?: AbortSignal;
+  /** Maximum time the pipeline may transfer no data before it is killed. */
+  idleTimeoutMs?: number;
 }): Promise<void> {
   await assertSafeUploadSymlinks(params.localDir);
   const remoteCommand = buildRemoteCommand([
@@ -797,12 +801,33 @@ export async function uploadDirectoryToSshTarget(params: {
     let tarCode = 0;
     let sshCode = 0;
     let settled = false;
+    const idleTimeoutMs = params.idleTimeoutMs ?? SSH_UPLOAD_IDLE_TIMEOUT_MS;
+    // An SSH peer that accepts TCP but never completes the banner (or a
+    // connection that stalls mid-transfer) leaves both children alive forever
+    // while transferring no data. Bound only that no-progress phase: every
+    // byte read from tar resets the watchdog, so slow-but-alive uploads of
+    // large workspaces are never cut off.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearIdleWatchdog = () => {
+      if (idleTimer !== undefined) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+    };
+    const armIdleWatchdog = () => {
+      clearIdleWatchdog();
+      idleTimer = setTimeout(() => {
+        fail(new Error(`SSH directory upload stalled: no data transferred for ${idleTimeoutMs}ms`));
+      }, idleTimeoutMs);
+    };
+    armIdleWatchdog();
 
     const fail = (error: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearIdleWatchdog();
       for (const child of [tar, ssh]) {
         try {
           child.kill("SIGKILL");
@@ -815,6 +840,7 @@ export async function uploadDirectoryToSshTarget(params: {
 
     tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
     tar.stderr.on("error", fail);
+    tar.stdout.on("data", armIdleWatchdog);
     tar.stdout.on("error", fail);
     ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
     ssh.stdout.on("error", fail);
@@ -841,6 +867,7 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       settled = true;
+      clearIdleWatchdog();
       if (tarCode !== 0) {
         reject(
           new Error(
