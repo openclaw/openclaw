@@ -148,7 +148,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
       // +1: channel-owned setup contract factory.
       // +18: generic schema primitives needed by plugin-owned channel config schemas.
-      4696,
+      // +2: shared Teams reply-style and TTS schema leaves.
+      4698,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -158,7 +159,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: settled-turn full-attempt projector.
       // +1: channel-owned setup contract factory.
       // +4: generic channel schema shape builders.
-      2846,
+      // +1: plugin-owned sensitive-schema registration.
+      2847,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
