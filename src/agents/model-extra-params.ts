@@ -7,6 +7,16 @@ type ModelExtraParamSources = {
   agentParams?: Record<string, unknown>;
 };
 
+// These model-scoped values are promoted into the agent run contract before harness selection.
+// Native harnesses receive them as typed run controls rather than raw provider request fields.
+const AGENT_RUNTIME_MODEL_PARAM_KEYS = new Set([
+  "fastAutoOnSeconds",
+  "fastMode",
+  "fast_auto_on_seconds",
+  "fast_mode",
+  "thinking",
+]);
+
 function legacyModelKey(provider: string, modelId: string): string | undefined {
   const rawKey = `${provider.trim()}/${modelId.trim()}`;
   const canonicalKey = modelKey(provider, modelId);
@@ -34,12 +44,19 @@ export function resolveModelExtraParamSources(params: {
   return { defaultParams, modelParams, agentParams };
 }
 
-/** Returns whether embedded OpenClaw would apply authored request parameters. */
+/** Returns whether embedded OpenClaw would apply authored provider request parameters. */
 export function hasModelExtraParams(
   params: Parameters<typeof resolveModelExtraParamSources>[0],
 ): boolean {
   const sources = resolveModelExtraParamSources(params);
-  return [sources.defaultParams, sources.modelParams, sources.agentParams].some(
-    (source) => source !== undefined && Object.keys(source).length > 0,
+  if (
+    [sources.defaultParams, sources.agentParams].some(
+      (source) => source !== undefined && Object.keys(source).length > 0,
+    )
+  ) {
+    return true;
+  }
+  return Object.keys(sources.modelParams ?? {}).some(
+    (key) => !AGENT_RUNTIME_MODEL_PARAM_KEYS.has(key),
   );
 }
