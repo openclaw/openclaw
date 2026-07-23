@@ -1087,7 +1087,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
         });
         writeAcpSessionMetaForMigration({
           sessionKey: canonicalSessionKey,
-          sessionId: normalizedEntry.sessionId,
+          lifecycleRevision: normalizedEntry.lifecycleRevision,
           meta: normalizedEntry.acp,
           env,
           now,

@@ -372,7 +372,7 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("ignores SQLite ACP metadata rows for replaced session ids", async () => {
+  it("ignores SQLite ACP metadata rows from an older lifecycle revision", async () => {
     await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
@@ -383,6 +383,7 @@ describe("ACP session metadata SQLite store", () => {
         sessionKey,
         entry: {
           sessionId: "sess-new",
+          lifecycleRevision: "revision-new",
           updatedAt: 100,
         },
       });
@@ -390,7 +391,7 @@ describe("ACP session metadata SQLite store", () => {
       writeAcpSessionMetaForMigration({
         databasePath,
         sessionKey,
-        sessionId: "sess-old",
+        lifecycleRevision: "revision-old",
         meta: {
           backend: "acpx",
           agent: "codex",
@@ -407,7 +408,7 @@ describe("ACP session metadata SQLite store", () => {
       writeAcpSessionMetaForMigration({
         databasePath,
         sessionKey,
-        sessionId: "sess-new",
+        lifecycleRevision: "revision-new",
         meta: {
           backend: "acpx",
           agent: "codex",
@@ -437,13 +438,14 @@ describe("ACP session metadata SQLite store", () => {
         sessionKey: canonicalKey,
         entry: {
           sessionId: "sess-acp",
+          lifecycleRevision: "revision-acp",
           updatedAt: 100,
         },
       });
       writeAcpSessionMetaForMigration({
         databasePath,
         sessionKey: legacyKey,
-        sessionId: "sess-acp",
+        lifecycleRevision: "revision-acp",
         meta: {
           backend: "acpx",
           agent: "codex",
@@ -458,7 +460,7 @@ describe("ACP session metadata SQLite store", () => {
         repairAcpSessionMetaKeyForMigration({
           databasePath,
           sessionKey: canonicalKey,
-          entry: { sessionId: "sess-acp" },
+          entry: { lifecycleRevision: "revision-acp" },
           now: () => 200,
         }),
       ).toBe(true);
@@ -467,7 +469,7 @@ describe("ACP session metadata SQLite store", () => {
         readAcpSessionMetaForEntry({
           databasePath,
           sessionKey: legacyKey,
-          entry: { sessionId: "sess-acp" },
+          entry: { lifecycleRevision: "revision-acp" },
         }),
       ).toBeUndefined();
       expect(

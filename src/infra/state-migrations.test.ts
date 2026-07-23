@@ -1431,14 +1431,14 @@ describe("state migrations", () => {
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: canonicalKey,
-          entry: { sessionId },
+          entry: { lifecycleRevision: undefined },
           env,
         })?.runtimeSessionName,
       ).toBe(runtimeSessionName);
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: legacyKey,
-          entry: { sessionId },
+          entry: { lifecycleRevision: undefined },
           env,
         }),
       ).toBeUndefined();
@@ -1627,14 +1627,14 @@ describe("state migrations", () => {
     expect(
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:desk",
-        entry: { sessionId: "voice-main" },
+        entry: { lifecycleRevision: undefined },
         env,
       })?.runtimeSessionName,
     ).toBe("voice-runtime");
     expect(
       readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:main",
-        entry: { sessionId: "voice-main" },
+        entry: { lifecycleRevision: undefined },
         env,
       }),
     ).toBeUndefined();

@@ -118,13 +118,15 @@ function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
 
 function bindAcpSessionMeta(params: {
   sessionKey: string;
-  sessionId?: string;
+  lifecycleRevision?: string;
   meta: SessionAcpMeta;
   updatedAt: number;
 }): Insertable<AcpSessionsTable> {
   return {
     session_key: params.sessionKey,
-    session_id: params.sessionId ?? null,
+    // Kept in the existing column for schema neutrality. The value fences ACP
+    // metadata to one lifecycle window even when reset retains the session id.
+    session_id: params.lifecycleRevision ?? null,
     backend: params.meta.backend,
     agent: params.meta.agent,
     runtime_session_name: params.meta.runtimeSessionName,
@@ -153,10 +155,9 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
 
 function acpSessionRowMatchesEntry(
   row: AcpSessionRow,
-  entry: Pick<SessionEntry, "sessionId"> | undefined,
+  entry: Pick<SessionEntry, "lifecycleRevision"> | undefined,
 ): boolean {
-  // Rows tied to a specific sessionId are stale after the JSON session entry rotates.
-  return row.session_id == null || row.session_id === entry?.sessionId;
+  return row.session_id == null || row.session_id === entry?.lifecycleRevision;
 }
 
 export function readAcpSessionMeta(params: {
@@ -188,7 +189,7 @@ export function readAcpSessionMeta(params: {
 
 export function readAcpSessionMetaForEntry(params: {
   sessionKey: string;
-  entry: Pick<SessionEntry, "sessionId"> | undefined;
+  entry: Pick<SessionEntry, "lifecycleRevision"> | undefined;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
@@ -221,7 +222,7 @@ function selectAcpSessionRows(options: OpenClawStateDatabaseOptions = {}): AcpSe
 
 export function writeAcpSessionMetaForMigration(params: {
   sessionKey: string;
-  sessionId?: string;
+  lifecycleRevision?: string;
   meta: SessionAcpMeta;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
@@ -233,7 +234,7 @@ export function writeAcpSessionMetaForMigration(params: {
   }
   const row = bindAcpSessionMeta({
     sessionKey,
-    sessionId: params.sessionId,
+    lifecycleRevision: params.lifecycleRevision,
     meta: params.meta,
     updatedAt: params.now?.() ?? Date.now(),
   });
@@ -248,7 +249,7 @@ export function writeAcpSessionMetaForMigration(params: {
 export function repairAcpSessionMetaKeyForMigration(params: {
   sessionKey: string;
   candidateSessionKeys?: Iterable<string | null | undefined>;
-  entry?: Pick<SessionEntry, "sessionId">;
+  entry?: Pick<SessionEntry, "lifecycleRevision">;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
   now?: () => number;
@@ -639,7 +640,7 @@ export async function upsertAcpSessionMeta(params: {
         database.db,
         bindAcpSessionMeta({
           sessionKey: persisted.sessionKey,
-          sessionId: persisted.entry.sessionId,
+          lifecycleRevision: persisted.entry.lifecycleRevision,
           meta: metaToPersist,
           updatedAt,
         }),
