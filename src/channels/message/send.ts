@@ -16,6 +16,7 @@ import {
   type DeliverOutboundPayloadsParams,
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
+import { emitRuntimeReplyActivityLease } from "../../infra/runtime-activity-emitter.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
@@ -271,6 +272,7 @@ export async function withDurableMessageSendContext<T>(
             deliveryIntent = intent;
             const durableIntent = toDurableMessageIntent(intent, rendered);
             ctx.intent = durableIntent;
+            emitRuntimeReplyActivityLease({ intent: durableIntent, session: params.session });
             onDeliveryIntent?.(durableIntent);
           },
         });
