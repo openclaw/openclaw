@@ -1283,7 +1283,9 @@ describe("infra runtime", () => {
       }
     });
 
-    it("emits SIGUSR1 if deferral check throws", async () => {
+    // #104064: an inspection failure means active-work state is unknown;
+    // fail closed by deferring instead of emitting (old behavior emitted).
+    it("defers restart if deferral check throws", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR1", handler);
@@ -1293,6 +1295,33 @@ describe("infra runtime", () => {
         });
         scheduleGatewaySigusr1Restart({ delayMs: 0 });
         await vi.advanceTimersByTimeAsync(0);
+        // Must NOT emit — state is unknown, so fail closed
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("emits restart after deferral check recovers from error", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      let callCount = 0;
+      try {
+        setPreRestartDeferralCheck(() => {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error("boom");
+          }
+          return 0;
+        });
+        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        await vi.advanceTimersByTimeAsync(0);
+        // First check threw: no emission
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        // Next poll interval: check returns 0, emit restart
+        await vi.advanceTimersByTimeAsync(500);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
       } finally {
         process.removeListener("SIGUSR1", handler);

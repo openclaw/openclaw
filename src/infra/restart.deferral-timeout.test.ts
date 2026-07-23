@@ -214,10 +214,14 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).not.toHaveBeenCalled();
   });
 
-  it("handles getPendingCount error by restarting immediately", () => {
+  // #104064: an inspection exception means active-work state is unknown;
+  // fail closed by entering the deferred poll and retrying instead of
+  // emitting a restart (the old fail-open behavior).
+  it("defers restart when initial getPendingCount throws", () => {
     const hooks: RestartDeferralHooks = {
       onCheckError: vi.fn(),
       onReady: vi.fn(),
+      onDeferring: vi.fn(),
     };
 
     deferGatewayRestartUntilIdle({
@@ -228,6 +232,71 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     });
 
     expect(hooks.onCheckError).toHaveBeenCalledOnce();
+    // Must enter deferred state, not emit a restart
+    expect(hooks.onDeferring).toHaveBeenCalled();
     expect(hooks.onReady).not.toHaveBeenCalled();
+  });
+
+  it("retries on the next poll after initial getPendingCount throws, then emits when zero", async () => {
+    let callCount = 0;
+    const hooks: RestartDeferralHooks = {
+      onCheckError: vi.fn(),
+      onReady: vi.fn(),
+      onDeferring: vi.fn(),
+    };
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => {
+        callCount++;
+        if (callCount === 1) {
+          throw new Error("transient");
+        }
+        return 0;
+      },
+      hooks,
+    });
+
+    // Initial inspection threw: deferred, no restart
+    expect(hooks.onCheckError).toHaveBeenCalledOnce();
+    expect(hooks.onReady).not.toHaveBeenCalled();
+
+    // Next poll succeeds with zero: emit restart
+    await vi.advanceTimersByTimeAsync(500);
+    expect(hooks.onReady).toHaveBeenCalledOnce();
+  });
+
+  it("preserves active poll when polling getPendingCount throws", async () => {
+    let callCount = 0;
+    const hooks: RestartDeferralHooks = {
+      onCheckError: vi.fn(),
+      onReady: vi.fn(),
+    };
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => {
+        callCount++;
+        if (callCount <= 2) {
+          return 1; // initial + first poll: pending
+        }
+        if (callCount === 3) {
+          throw new Error("transient"); // second poll: throw
+        }
+        return 0; // third poll: drained
+      },
+      hooks,
+    });
+
+    // First poll: still pending
+    await vi.advanceTimersByTimeAsync(500);
+    expect(hooks.onReady).not.toHaveBeenCalled();
+
+    // Second poll: throws — poll must remain active
+    await vi.advanceTimersByTimeAsync(500);
+    expect(hooks.onCheckError).toHaveBeenCalledOnce();
+    expect(hooks.onReady).not.toHaveBeenCalled();
+
+    // Third poll: zero — restart emitted
+    await vi.advanceTimersByTimeAsync(500);
+    expect(hooks.onReady).toHaveBeenCalledOnce();
   });
 });
