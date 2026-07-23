@@ -168,7 +168,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
 
           pruneOldRestarts(record, now);
-          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
+          // Pending restarts still count towards the hourly budget to prevent
+          // infinite restart loops on permanently stuck channels.
+          if (record.restartsThisHour.length >= maxRestartsPerHour) {
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
             );
@@ -179,11 +181,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
+          // Always record the restart attempt (even for pending restarts)
+          // so the hourly budget is correctly tracked.
           if (!continuingPendingRestart) {
             record.lastRestartAt = now;
-            record.restartsThisHour.push({ at: now });
-            restartRecords.set(key, record);
           }
+          record.restartsThisHour.push({ at: now });
+          restartRecords.set(key, record);
 
           try {
             if (status.running) {
