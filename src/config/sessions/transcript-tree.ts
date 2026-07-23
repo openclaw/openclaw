@@ -204,7 +204,7 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
       isSessionTranscriptLeafControl(entry) &&
       (!isKnownLeafReference(explicitTreeEntry.leafId) ||
         !isKnownLeafReference(explicitTreeEntry.appendParentId));
-    if (invalidLeafControl) {
+    if (invalidLeafControl && explicitTreeEntry) {
       hasInvalidLeafControl = true;
       invalidLeafControlIds.add(explicitTreeEntry.id);
       const rawParentId = (entry as TranscriptRecord).parentId as string | null;
