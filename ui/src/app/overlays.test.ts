@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { UPDATE_HANDOFF_POLL_MS, UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
@@ -751,6 +752,78 @@ describe("application update overlays", () => {
       expect(statusRequests).toBe(2);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+    } finally {
+      overlays.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
+    vi.useFakeTimers();
+    let statusRequests = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      if (method === "update.run") {
+        return Promise.resolve({
+          ok: true,
+          handoff: { status: "started" },
+          result: {
+            status: "skipped",
+            reason: UPDATE_HANDOFF_STARTED_REASON,
+          },
+        });
+      }
+      if (method === "update.status") {
+        statusRequests += 1;
+        return Promise.resolve({
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "1.0.0" } },
+          },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(gatewayClient);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      harness.update({
+        connected: true,
+        hello: {
+          server: { version: "1.0.0" },
+          snapshot: {
+            updateAvailable: {
+              currentVersion: "1.0.0",
+              latestVersion: "2.0.0",
+              channel: "stable",
+            },
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+
+      await overlays.runUpdate();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+      expect(overlays.snapshot.updateStatusBanner).toBeNull();
+
+      harness.update({ connected: false });
+      harness.update({ connected: true });
+      await flushMicrotasks();
+      expect(statusRequests).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(UPDATE_HANDOFF_POLL_MS);
+      await flushMicrotasks();
+
+      expect(statusRequests).toBe(2);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: expect.stringContaining("Expected v2.0.0, running v1.0.0"),
+      });
     } finally {
       overlays.dispose();
       vi.useRealTimers();
