@@ -82,4 +82,19 @@ describe("redactSensitiveText token ordering", () => {
     const dataUrl = `data:application/octet-stream;base64,${fakeBase64LikePayload(40)}`;
     expect(redactSensitiveText(dataUrl, { mode: "tools" })).toBe(dataUrl);
   });
+
+  it("masks encoded AWS secret access key aliases", () => {
+    const secret = fakeAwsCredentialWithPadding();
+    const output = redactSensitiveText(
+      [
+        `https://x.test/?Secret%41ccessKey=${secret}`,
+        `body=ok&aws%53ecretAccessKey=${secret}`,
+      ].join("\n"),
+      { mode: "tools" },
+    );
+
+    expect(output).not.toContain(secret);
+    expect(output).toContain("Secret%41ccessKey=");
+    expect(output).toContain("aws%53ecretAccessKey=");
+  });
 });

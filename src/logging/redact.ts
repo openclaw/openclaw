@@ -38,6 +38,7 @@ const STANDALONE_ASSIGNMENT_SECRET_KEYS = String.raw`access_token|refresh_token|
 const BODY_SECRET_KEYS = new Set([
   "access_token",
   "auth_token",
+  "awssecretaccesskey",
   "aws_secret_access_key",
   "hook_token",
   "refresh_token",
@@ -58,6 +59,7 @@ const BODY_SECRET_KEYS = new Set([
   "x_amz_signature",
   "x_amz_security_token",
   "secret",
+  "secretaccesskey",
   "credential",
   "private_key",
   "authorization",
