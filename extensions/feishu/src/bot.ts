@@ -84,6 +84,7 @@ import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+import { bindFeishuSourceMessageRun, recallFeishuSourceMessage } from "./source-message-recall.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -99,6 +100,54 @@ import {
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+function combineFeishuAbortSignals(
+  first: AbortSignal | undefined,
+  second: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!first || first === second) {
+    return second;
+  }
+  if (!second) {
+    return first;
+  }
+  return AbortSignal.any([first, second]);
+}
+
+function createFeishuTypingTargetMissingHandler(params: {
+  channelRuntime: ReturnType<typeof getFeishuRuntime>["channel"];
+  accountId: string;
+  sourceMessageId: string;
+  typingTargetMessageId?: string;
+  log: (...args: unknown[]) => void;
+}): ((messageId: string) => void) | undefined {
+  // Feishu reaction-create requires the target to still exist and not be
+  // recalled. Code 231003 on the exact inbound source therefore withdraws
+  // that source's work authorization; unrelated thread/typing targets do not.
+  if (params.typingTargetMessageId !== params.sourceMessageId) {
+    return undefined;
+  }
+  let logged = false;
+  return (messageId: string) => {
+    if (messageId !== params.sourceMessageId) {
+      return;
+    }
+    const result = recallFeishuSourceMessage({
+      channelRuntime: params.channelRuntime,
+      accountId: params.accountId,
+      messageId,
+    });
+    if (!logged) {
+      logged = true;
+      params.log(
+        result.recorded
+          ? `feishu[${params.accountId}]: source message missing during typing ${messageId} ` +
+              `(abortedRuns=${result.abortedRuns}, alreadyRecalled=${result.alreadyRecalled})`
+          : `feishu[${params.accountId}]: source message missing during typing ${messageId} ignored without runtime context`,
+      );
+    }
+  };
+}
 
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
@@ -295,6 +344,7 @@ export async function handleFeishuMessage(params: {
   accountId?: string;
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
+  sourceMessageIds?: readonly string[];
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
 }): Promise<void> {
   const {
@@ -308,6 +358,7 @@ export async function handleFeishuMessage(params: {
     accountId,
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
+    sourceMessageIds,
     turnAdoptionLifecycle,
   } = params;
 
@@ -682,10 +733,30 @@ export async function handleFeishuMessage(params: {
     }
   }
 
+  let sourceMessageRun: ReturnType<typeof bindFeishuSourceMessageRun> = undefined;
   try {
     const core = {
       channel: channelRuntime?.inbound ? channelRuntime : getFeishuRuntime().channel,
     } as ReturnType<typeof getFeishuRuntime>;
+    sourceMessageRun = bindFeishuSourceMessageRun({
+      channelRuntime: core.channel,
+      accountId: account.accountId,
+      messageIds: [ctx.messageId, ...(sourceMessageIds ?? [])],
+    });
+    if (sourceMessageRun?.abortSignal.aborted) {
+      log(`feishu[${account.accountId}]: skipping recalled message ${ctx.messageId}`);
+      return;
+    }
+    const recallAwareTurnLifecycle =
+      turnAdoptionLifecycle && sourceMessageRun
+        ? {
+            ...turnAdoptionLifecycle,
+            abortSignal: combineFeishuAbortSignals(
+              turnAdoptionLifecycle.abortSignal,
+              sourceMessageRun.abortSignal,
+            )!,
+          }
+        : turnAdoptionLifecycle;
     const pairing = createChannelPairingController({
       core,
       channel: "feishu",
@@ -1518,7 +1589,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const broadcastSettlement = createFeishuBroadcastIngressSettlement({
-        lifecycle: turnAdoptionLifecycle,
+        lifecycle: recallAwareTurnLifecycle,
         replayClaim: broadcastClaim.kind === "claimed" ? broadcastClaim.handle : undefined,
         onReplayCommitError: (err) =>
           error(
@@ -1649,6 +1720,14 @@ export async function handleFeishuMessage(params: {
                 requiredMentionTargets,
                 messageCreateTimeMs,
                 sessionKey: agentSessionKey,
+                abortSignal: sourceMessageRun?.abortSignal,
+                onTypingTargetMissing: createFeishuTypingTargetMissingHandler({
+                  channelRuntime: core.channel,
+                  accountId: account.accountId,
+                  sourceMessageId: ctx.messageId,
+                  typingTargetMessageId,
+                  log,
+                }),
               });
 
             log(
@@ -1679,6 +1758,10 @@ export async function handleFeishuMessage(params: {
                   replyOptions: {
                     ...replyOptions,
                     ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                    abortSignal: combineFeishuAbortSignals(
+                      lane.lifecycle.abortSignal,
+                      sourceMessageRun?.abortSignal,
+                    ),
                   },
                 }),
               },
@@ -1722,7 +1805,13 @@ export async function handleFeishuMessage(params: {
                   delivery: {
                     deliver: async () => ({ visibleReplySent: false }),
                   },
-                  replyOptions: bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                  replyOptions: {
+                    ...bindIngressLifecycleToReplyOptions(lane.lifecycle),
+                    abortSignal: combineFeishuAbortSignals(
+                      lane.lifecycle.abortSignal,
+                      sourceMessageRun?.abortSignal,
+                    ),
+                  },
                 }),
               },
             });
@@ -1818,6 +1907,14 @@ export async function handleFeishuMessage(params: {
           requiredMentionTargets,
           messageCreateTimeMs,
           sessionKey: route.sessionKey,
+          abortSignal: sourceMessageRun?.abortSignal,
+          onTypingTargetMissing: createFeishuTypingTargetMissingHandler({
+            channelRuntime: core.channel,
+            accountId: account.accountId,
+            sourceMessageId: ctx.messageId,
+            typingTargetMessageId,
+            log,
+          }),
         });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
@@ -1861,8 +1958,8 @@ export async function handleFeishuMessage(params: {
             delivery,
             replyOptions: {
               ...replyOptions,
-              ...(turnAdoptionLifecycle
-                ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
+              ...(recallAwareTurnLifecycle
+                ? bindIngressLifecycleToReplyOptions(recallAwareTurnLifecycle)
                 : {}),
             },
           }),
@@ -1886,6 +1983,8 @@ export async function handleFeishuMessage(params: {
     if (turnAdoptionLifecycle) {
       throw err;
     }
+  } finally {
+    sourceMessageRun?.dispose();
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

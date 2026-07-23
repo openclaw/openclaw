@@ -1,4 +1,5 @@
 // Feishu tests cover bot.broadcast plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
@@ -8,6 +9,7 @@ import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { recallFeishuSourceMessage } from "./source-message-recall.js";
 
 const {
   builtInboundContextCalls,
@@ -19,10 +21,10 @@ const {
   mockResolveStorePath,
 } = vi.hoisted(() => ({
   builtInboundContextCalls: [] as Array<Record<string, unknown>>,
-  mockCreateFeishuReplyDispatcher: vi.fn((_params?: unknown) => ({
+  mockCreateFeishuReplyDispatcher: vi.fn((params?: { abortSignal?: AbortSignal }) => ({
     dispatcherOptions: {},
     delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: {},
+    replyOptions: { abortSignal: params?.abortSignal } as { abortSignal?: AbortSignal },
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
   mockCreateFeishuClient: vi.fn(),
@@ -117,6 +119,7 @@ describe("broadcast dispatch", () => {
       enqueueSystemEvent: vi.fn(),
     },
     channel: {
+      runtimeContexts: createPluginRuntimeMock().channel.runtimeContexts,
       routing: {
         resolveAgentRoute: (params: unknown) => mockResolveAgentRoute(params),
       },
@@ -260,12 +263,14 @@ describe("broadcast dispatch", () => {
       lastRoutePolicy: "session",
       matchedBy: "default",
     });
-    mockCreateFeishuReplyDispatcher.mockReturnValue({
-      dispatcherOptions: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-      replyOptions: {},
-      ensureNoVisibleReplyFallback: vi.fn(),
-    });
+    mockCreateFeishuReplyDispatcher.mockImplementation(
+      (params?: { abortSignal?: AbortSignal }) => ({
+        dispatcherOptions: {},
+        delivery: { deliver: vi.fn(async () => undefined) },
+        replyOptions: { abortSignal: params?.abortSignal },
+        ensureNoVisibleReplyFallback: vi.fn(),
+      }),
+    );
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
@@ -371,6 +376,48 @@ describe("broadcast dispatch", () => {
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");
+  });
+
+  it("aborts every in-flight broadcast agent when the source message is recalled", async () => {
+    const abortSignals: AbortSignal[] = [];
+    let recallResult: ReturnType<typeof recallFeishuSourceMessage> | undefined;
+    let releaseDispatches: () => void = () => {};
+    const bothDispatchesStarted = new Promise<void>((resolve) => {
+      releaseDispatches = resolve;
+    });
+    const waitForRecall = async (params: { replyOptions?: { abortSignal?: AbortSignal } }) => {
+      const abortSignal = params.replyOptions?.abortSignal;
+      if (!abortSignal) {
+        throw new Error("expected recall-aware broadcast abort signal");
+      }
+      abortSignals.push(abortSignal);
+      if (abortSignals.length === 2) {
+        recallResult = recallFeishuSourceMessage({
+          channelRuntime: runtimeStub.channel,
+          accountId: "default",
+          messageId: "msg-broadcast-recalled",
+        });
+        releaseDispatches();
+      }
+      await bothDispatchesStarted;
+      return { queuedFinal: false, counts: { final: 0 } };
+    };
+    mockDispatchReply.mockImplementation(waitForRecall);
+
+    await handleFeishuMessage({
+      cfg: createBroadcastConfig(),
+      event: createBroadcastEvent({
+        messageId: "msg-broadcast-recalled",
+        text: "cancel this @bot",
+        botMentioned: true,
+      }),
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(recallResult).toMatchObject({ abortedRuns: 1, recorded: true });
+    expect(abortSignals).toHaveLength(2);
+    expect(abortSignals.every((signal) => signal.aborted)).toBe(true);
   });
 
   it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {

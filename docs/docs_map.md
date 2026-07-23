@@ -389,6 +389,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H3: Bot does not respond in group chats
   - H3: Bot does not receive messages
+  - H3: Recalled messages still trigger replies
   - H3: QR setup does not react in the Feishu mobile app
   - H3: App Secret leaked
   - H2: Advanced configuration

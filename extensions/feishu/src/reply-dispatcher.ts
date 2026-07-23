@@ -153,6 +153,8 @@ type CreateFeishuReplyDispatcherParams = {
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
   sessionKey?: string;
+  abortSignal?: AbortSignal;
+  onTypingTargetMissing?: (messageId: string) => void | Promise<void>;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -194,6 +196,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
     typing: {
       start: async () => {
+        if (params.abortSignal?.aborted) {
+          return;
+        }
         // Check if typing indicator is enabled (default: true)
         if (!(account.config.typingIndicator ?? true)) {
           return;
@@ -221,6 +226,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           messageId: typingTargetMessageId,
           accountId,
           runtime: params.runtime,
+          onMessageNotFound: params.onTypingTargetMissing,
         });
       },
       stop: async () => {
@@ -322,10 +328,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const flushStreamingCardUpdate = (combined: string) => {
     partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      if (streaming?.isActive()) {
+      if (!params.abortSignal?.aborted && streaming?.isActive()) {
         await streaming.update(combined);
       }
     });
@@ -379,6 +388,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const startStreaming = () => {
     if (
+      params.abortSignal?.aborted ||
       !streamingEnabled ||
       streamingStartPromise ||
       streaming ||
@@ -417,6 +427,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           header: cardHeader,
           note: cardNote,
         });
+        if (params.abortSignal?.aborted) {
+          await streaming.discard();
+          streaming = null;
+          streamingStartPromise = null;
+          return;
+        }
         streamingStartBackoffUntilByAccount.delete(account.accountId);
       } catch (error) {
         rememberStreamingStartFailure(account.accountId);
@@ -449,7 +465,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
+      if (params.abortSignal?.aborted) {
+        if (streaming?.isActive()) {
+          await streaming.discard();
+        }
+        return;
+      }
       await partialUpdateQueue;
+      if (params.abortSignal?.aborted) {
+        if (streaming?.isActive()) {
+          await streaming.discard();
+        }
+        return;
+      }
       if (streaming?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(reasoningText, streamText);
@@ -536,6 +564,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }),
     );
     for (const [index, chunk] of chunks.entries()) {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
       const mentions = [
         ...(paramsLocal.chunkMentions ?? []),
         ...(index === 0 ? (paramsLocal.firstChunkMentions ?? []) : []),
@@ -553,12 +584,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     let sentFallbackText = false;
     await sendMediaWithLeadingCaption({
       mediaUrls,
       caption: "",
       send: async ({ mediaUrl }) => {
+        if (params.abortSignal?.aborted) {
+          return;
+        }
         const result = await sendMediaFeishu({
           cfg,
           to: sendTarget,
@@ -570,6 +607,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
         markVisibleReplySent();
+        if (params.abortSignal?.aborted) {
+          return;
+        }
         if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
           sentFallbackText = true;
           await sendChunkedTextReply({
@@ -596,6 +636,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         options?.fallbackText === undefined
           ? undefined
           : async ({ mediaUrl }) => {
+              if (params.abortSignal?.aborted) {
+                return;
+              }
               const fallbackText = await buildFeishuMediaFallbackText({
                 text: sentFallbackText ? undefined : options.fallbackText,
                 mediaUrl,
@@ -625,7 +668,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const ensureNoVisibleReplyFallback = async (reason: string): Promise<boolean> => {
     await idleSideEffectsPromise;
-    if (visibleReplySent) {
+    if (visibleReplySent || params.abortSignal?.aborted) {
       return false;
     }
     if (skippedFinalReason === "silent") {
@@ -653,7 +696,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
-      await closeStreaming(options);
+      if (params.abortSignal?.aborted) {
+        await discardStreamingPreview();
+      } else {
+        await closeStreaming(options);
+      }
       typingCallbacks?.onIdle?.();
     });
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
@@ -676,6 +723,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
     },
     onReplyStart: async () => {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
       if (!replyLifecycleStateInitialized) {
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
@@ -709,6 +759,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload: ReplyPayload, info) => {
+      if (params.abortSignal?.aborted) {
+        return;
+      }
       if (info?.kind === "final") {
         skippedFinalReason = null;
       }
@@ -773,6 +826,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
       if (shouldDiscardStreamingPreview) {
         await discardStreamingPreview();
+        if (params.abortSignal?.aborted) {
+          return;
+        }
       }
 
       if (shouldDeliverText) {
@@ -816,12 +872,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           if (streamingStartPromise) {
             await streamingStartPromise;
           }
+          if (params.abortSignal?.aborted) {
+            return;
+          }
         }
 
         if (info?.kind === "final" && useStreamingCard) {
           startStreaming();
           if (streamingStartPromise) {
             await streamingStartPromise;
+          }
+          if (params.abortSignal?.aborted) {
+            return;
           }
         }
 
@@ -896,7 +958,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       }
 
-      if (hasMedia) {
+      if (hasMedia && !params.abortSignal?.aborted) {
         await sendMediaReplies(
           payload,
           hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
@@ -911,12 +973,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     dispatcherOptions,
     delivery,
     replyOptions: {
+      abortSignal: params.abortSignal,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
-            if (!payload.text) {
+            if (params.abortSignal?.aborted || !payload.text) {
               return;
             }
             const cleaned = stripReasoningTagsFromText(payload.text, {
@@ -935,7 +998,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onReasoningStream: reasoningPreviewEnabled
         ? (payload: ReplyPayload) => {
-            if (!payload.text) {
+            if (params.abortSignal?.aborted || !payload.text) {
               return;
             }
             startStreaming();
@@ -950,7 +1013,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             args?: Record<string, unknown>;
             detailMode?: "explain" | "raw";
           }) => {
-            if (!isChannelProgressDraftWorkToolName(payload.name)) {
+            if (params.abortSignal?.aborted || !isChannelProgressDraftWorkToolName(payload.name)) {
               return;
             }
             const statusLineLocal = formatChannelProgressDraftLineForEntry(
@@ -972,16 +1035,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onAssistantMessageStart: streamingEnabled
         ? () => {
+            if (params.abortSignal?.aborted) {
+              return;
+            }
             updateStreamingStatusLine("", { startIfNeeded: false });
           }
         : undefined,
       onCompactionStart: streamingEnabled
         ? () => {
+            if (params.abortSignal?.aborted) {
+              return;
+            }
             updateStreamingStatusLine("📦 **Compacting context...**");
           }
         : undefined,
       onCompactionEnd: streamingEnabled
         ? () => {
+            if (params.abortSignal?.aborted) {
+              return;
+            }
             updateStreamingStatusLine("");
           }
         : undefined,
