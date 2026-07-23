@@ -359,6 +359,32 @@ export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
 }
 
+/** Window/tab title, markers leftmost because tabs truncate from the right.
+ * Offline replaces the approval count (a stale queue is not actionable) and
+ * carries the pending-outbox total; titles already ending in the brand
+ * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+export function formatDocumentTitle(options: {
+  context: string;
+  attentionCount?: number;
+  offline?: boolean;
+  queuedCount?: number;
+}): string {
+  const base = options.context.endsWith("OpenClaw")
+    ? options.context
+    : `${options.context} — OpenClaw`;
+  if (options.offline) {
+    const queued =
+      options.queuedCount && options.queuedCount > 0
+        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
+        : "";
+    return `(${t("common.offline")}${queued}) ${base}`;
+  }
+  if (options.attentionCount && options.attentionCount > 0) {
+    return `(${options.attentionCount}) ${base}`;
+  }
+  return base;
+}
+
 /**
  * Sidebar item label inside the settings takeover. The config route is titled
  * "Settings" globally (gear tooltip, palette) but reads "General" next to its

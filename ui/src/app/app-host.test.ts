@@ -3,7 +3,8 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
+import type { AgentsListResult, GatewayAgentRow, GatewaySessionRow } from "../api/types.ts";
+import type { RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -44,6 +45,16 @@ type ShellInitializationState = {
     snapshot: { client: GatewayBrowserClient | null; connected: boolean },
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
+};
+
+type ShellDocumentTitleState = {
+  activeSessionKey: string;
+  outboxStoreRuntime: {
+    summarizeStoredChatOutboxes: () => { total: number };
+  } | null;
+  routeState: { routeId?: RouteId };
+  runtime?: { context: ApplicationContext };
+  syncDocumentTitle: () => void;
 };
 
 type ShellServerPreferencesState = {
@@ -344,6 +355,109 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell document title", () => {
+  function createShell(context?: ApplicationContext): ShellDocumentTitleState {
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellDocumentTitleState;
+    if (context) {
+      shell.runtime = { context };
+    }
+    return shell;
+  }
+
+  function createContext(options: {
+    connected?: boolean;
+    approvalCount?: number;
+    sessions?: GatewaySessionRow[] | null;
+  }): ApplicationContext {
+    return {
+      gateway: {
+        snapshot: { connected: options.connected ?? true },
+        connection: { gatewayUrl: "ws://gateway.test" },
+      },
+      agents: { state: { agentsList: null } },
+      overlays: {
+        snapshot: { approvalQueue: Array.from({ length: options.approvalCount ?? 0 }) },
+      },
+      sessions: {
+        state: { result: options.sessions ? { sessions: options.sessions } : null },
+      },
+    } as unknown as ApplicationContext;
+  }
+
+  it("keeps the boot title before a route commits", () => {
+    const shell = createShell();
+    document.title = "OpenClaw Control";
+
+    shell.routeState = {};
+    shell.syncDocumentTitle();
+    expect(document.title).toBe("OpenClaw Control");
+  });
+
+  it("uses the route title for a connected route", () => {
+    const shell = createShell(createContext({ sessions: null }));
+    shell.routeState = { routeId: "usage" };
+    shell.syncDocumentTitle();
+    expect(document.title).toBe("Usage — OpenClaw");
+  });
+
+  it("uses the active session's derived title for chat", () => {
+    const session: GatewaySessionRow = {
+      key: "agent:main:dashboard:quarterly-launch",
+      kind: "direct",
+      updatedAt: 1,
+      derivedTitle: "Quarterly launch plan",
+    };
+    const shell = createShell(createContext({ sessions: [session] }));
+    shell.routeState = { routeId: "chat" };
+    shell.activeSessionKey = session.key;
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Quarterly launch plan — OpenClaw");
+  });
+
+  it("prefixes the pending approval count", () => {
+    const shell = createShell(createContext({ approvalCount: 2 }));
+    shell.routeState = { routeId: "usage" };
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("(2) Usage — OpenClaw");
+  });
+
+  it("shows offline instead of a stale approval count", () => {
+    const shell = createShell(createContext({ connected: false, approvalCount: 2 }));
+    shell.routeState = { routeId: "usage" };
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("(Offline) Usage — OpenClaw");
+  });
+
+  it("includes stored chat outbox messages in the offline marker", () => {
+    const shell = createShell(createContext({ connected: false }));
+    shell.routeState = { routeId: "usage" };
+    shell.outboxStoreRuntime = {
+      summarizeStoredChatOutboxes: () => ({ total: 3 }),
+    };
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("(Offline · 3 queued) Usage — OpenClaw");
+  });
+
+  it("uses the meaningful custodian label without a brand suffix", () => {
+    const shell = createShell(createContext({}));
+    shell.routeState = { routeId: "custodian" };
+
+    shell.syncDocumentTitle();
+
+    expect(document.title).toBe("Ask OpenClaw");
   });
 });
 

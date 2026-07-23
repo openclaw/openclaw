@@ -20,7 +20,11 @@ import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
 import { workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
@@ -53,6 +57,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import "../lib/toast.ts";
@@ -557,6 +562,16 @@ class OpenClawShell extends OpenClawLightDomElement {
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
   }
 
+  private storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
+    const gatewaySnapshot = context.gateway.snapshot;
+    return {
+      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
+      assistantAgentId: gatewaySnapshot.assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: gatewaySnapshot.hello,
+    };
+  }
+
   constructor() {
     super();
     this.subscriptions
@@ -615,6 +630,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       .watch(
         () => this.context?.overlays,
         (overlays, notify) => overlays.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -1273,7 +1292,39 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
   }
 
+  /** Keep the tab/window title on the active destination. Runs after every
+   * render so route changes and locale switches both refresh it; before the
+   * first committed route the static boot title from index.html stays. */
+  private syncDocumentTitle() {
+    const routeId = this.routeState.routeId;
+    const context = this.context;
+    if (!routeId || !context) {
+      return;
+    }
+    let primaryContext = titleForRoute(routeId);
+    if (routeId === "chat" && this.activeSessionKey) {
+      const row = context.sessions.state.result?.sessions.find(
+        (session) => session.key === this.activeSessionKey,
+      );
+      primaryContext = resolveSessionDisplayName(this.activeSessionKey, row) || primaryContext;
+    } else if (routeId === "custodian") {
+      primaryContext = t("nav.askOpenClaw");
+    }
+    const title = formatDocumentTitle({
+      context: primaryContext,
+      attentionCount: context.overlays.snapshot.approvalQueue.length,
+      offline: !context.gateway.snapshot.connected,
+      queuedCount:
+        this.outboxStoreRuntime?.summarizeStoredChatOutboxes(this.storedOutboxScopeHost(context))
+          .total ?? 0,
+    });
+    if (document.title !== title) {
+      document.title = title;
+    }
+  }
+
   override updated() {
+    this.syncDocumentTitle();
     const context = this.context;
     if (!context) {
       return;
@@ -1528,12 +1579,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return nothing;
     }
     const gatewaySnapshot = context.gateway.snapshot;
-    const outboxScopeHost = {
-      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
-      assistantAgentId: gatewaySnapshot.assistantAgentId,
-      agentsList: context.agents.state.agentsList,
-      hello: gatewaySnapshot.hello,
-    };
+    const outboxScopeHost = this.storedOutboxScopeHost(context);
     const outboxStoreRuntime = this.outboxStoreRuntime;
     const storedOutboxes = outboxStoreRuntime
       ? outboxStoreRuntime.summarizeStoredChatOutboxes(outboxScopeHost)
