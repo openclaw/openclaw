@@ -973,6 +973,7 @@ describe("matrix monitor handler pairing account scope", () => {
       event_id?: string;
       "m.in_reply_to"?: { event_id?: string };
     };
+    finalPayload?: { text?: string } & Record<string, unknown>;
     interveningEvent?: MatrixRawEvent;
     injectDuringFirstRevision?: MatrixRawEvent;
   }) {
@@ -983,6 +984,7 @@ describe("matrix monitor handler pairing account scope", () => {
     ) => Promise<{ text?: string } | null>;
     let capturedDeliver: DeliverFn | undefined;
     let capturedBeforeDeliver: BeforeDeliverFn | undefined;
+    let capturedDispatcherOptions: Record<string, unknown> | undefined;
     let resolveCaptured: (() => void) | undefined;
     const captured = new Promise<void>((resolve) => {
       resolveCaptured = resolve;
@@ -1014,6 +1016,7 @@ describe("matrix monitor handler pairing account scope", () => {
       },
       createReplyDispatcherWithTyping: (options: Record<string, unknown> | undefined) => {
         if (!capturedDeliver) {
+          capturedDispatcherOptions = options;
           capturedDeliver = options?.deliver as DeliverFn | undefined;
           capturedBeforeDeliver = options?.beforeDeliver as BeforeDeliverFn | undefined;
           resolveCaptured?.();
@@ -1061,7 +1064,9 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     deliverMatrixRepliesMock.mockClear();
-    const finalPayload = { text: params.finalText ?? "original final reply" };
+    const finalPayload = params.finalPayload ?? {
+      text: params.finalText ?? "original final reply",
+    };
     const deliveryPayload =
       capturedBeforeDeliver !== undefined
         ? await capturedBeforeDeliver(finalPayload, { kind: "final" })
@@ -1071,7 +1076,7 @@ describe("matrix monitor handler pairing account scope", () => {
     }
     releaseFirstDispatch?.();
     await firstDone;
-    return { dispatchInboundMessage };
+    return { dispatchInboundMessage, dispatcherOptions: capturedDispatcherOptions };
   }
 
   it("suppresses stale Matrix final replies when freshness mode is suppress", async () => {
@@ -1340,8 +1345,13 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("sends stale Matrix final replies unchanged when freshness mode is send-as-is", async () => {
-    await runMatrixFreshnessScenario({ mode: "send-as-is" });
+    const { dispatcherOptions } = await runMatrixFreshnessScenario({ mode: "send-as-is" });
 
+    const beforeDeliverOptions = requireRecord(
+      dispatcherOptions?.beforeDeliverOptions,
+      "beforeDeliver options",
+    );
+    expect(beforeDeliverOptions.timeoutMs).toBe(14_000);
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     const deliverParams = requireRecord(
       callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
@@ -1371,6 +1381,30 @@ describe("matrix monitor handler pairing account scope", () => {
     );
     const replies = requireArray(deliverParams.replies, "delivered replies");
     expect(requireRecord(replies[0], "delivered reply").text).toBe("revised final reply");
+  });
+
+  it("preserves Matrix final reply payload fields when freshness revise changes text", async () => {
+    await runMatrixFreshnessScenario({
+      mode: "revise",
+      finalPayload: {
+        text: "old draft",
+        mediaUrl: "file:///tmp/proof.png",
+        replyToId: "$reply-target",
+        channelData: { matrix: { formatted: true } },
+      },
+    });
+
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(requireRecord(replies[0], "delivered reply")).toMatchObject({
+      text: "revised final reply",
+      mediaUrl: "file:///tmp/proof.png",
+      replyToId: "$reply-target",
+      channelData: { matrix: { formatted: true } },
+    });
   });
 
   it("rechecks freshness after asynchronous revision work", async () => {
@@ -1417,6 +1451,36 @@ describe("matrix monitor handler pairing account scope", () => {
     prepareSimpleCompletionModelForAgentMock.mockRejectedValueOnce(new Error("prep boom"));
 
     await runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
+
+    const deliverParams = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),
+      "deliver replies params",
+    );
+    const replies = requireArray(deliverParams.replies, "delivered replies");
+    expect(requireRecord(replies[0], "delivered reply").text).toBe("old draft");
+  });
+
+  it("sends the original final reply when Matrix freshness revision exceeds its fail-open deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveCompletionStarted: (() => void) | undefined;
+      const completionStarted = new Promise<void>((resolve) => {
+        resolveCompletionStarted = resolve;
+      });
+      completeWithPreparedSimpleCompletionModelMock.mockImplementationOnce(async () => {
+        resolveCompletionStarted?.();
+        return await new Promise<never>(() => {
+          // Never resolves; the Matrix freshness fail-open deadline should release delivery.
+        });
+      });
+
+      const scenario = runMatrixFreshnessScenario({ mode: "revise", finalText: "old draft" });
+      await completionStarted;
+      await vi.advanceTimersByTimeAsync(12_001);
+      await scenario;
+    } finally {
+      vi.useRealTimers();
+    }
 
     const deliverParams = requireRecord(
       callArg(deliverMatrixRepliesMock, 0, 0, "deliver replies params"),

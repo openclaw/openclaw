@@ -49,6 +49,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   CoreConfig,
   MatrixConfig,
+  MatrixFreshnessFinalAction,
   MatrixRoomConfig,
   MatrixStreamingMode,
   ReplyToMode,
@@ -144,6 +145,8 @@ const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS = 2;
+const MATRIX_FRESHNESS_BEFORE_DELIVER_TIMEOUT_MS = 14_000;
+const MATRIX_FRESHNESS_MODEL_FAIL_OPEN_TIMEOUT_MS = 12_000;
 
 const loadMatrixSendModule = createLazyRuntimeModule(() => import("../send.js"));
 
@@ -2368,6 +2371,44 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         before: ReturnType<typeof refreshDraftFreshnessState>,
         after: ReturnType<typeof refreshDraftFreshnessState>,
       ) => freshnessStateSignature(before) !== freshnessStateSignature(after);
+      const runMatrixFreshnessModelStage = async <T>(stage: {
+        deadlineAtMs: number;
+        fallback: T;
+        label: string;
+        task: () => Promise<T>;
+      }): Promise<{ failedOpen: boolean; value: T }> => {
+        const remainingMs = stage.deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          logVerboseMessage(
+            `matrix freshness ${stage.label} skipped after fail-open deadline elapsed`,
+          );
+          return { failedOpen: true, value: stage.fallback };
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            stage.task().then((value) => ({ failedOpen: false, value })),
+            new Promise<{ failedOpen: boolean; value: T }>((resolve) => {
+              timer = setTimeout(() => {
+                logVerboseMessage(
+                  `matrix freshness ${stage.label} exceeded fail-open deadline; sending original draft`,
+                );
+                resolve({ failedOpen: true, value: stage.fallback });
+              }, remainingMs);
+              timer.unref?.();
+            }),
+          ]);
+        } catch (err) {
+          logVerboseMessage(
+            `matrix freshness ${stage.label} failed before delivery; sending original draft: ${String(err)}`,
+          );
+          return { failedOpen: true, value: stage.fallback };
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
+      };
       const resolveFreshnessFinalPayload = async (
         payload: ReplyPayload,
       ): Promise<ReplyPayload | null> => {
@@ -2381,21 +2422,33 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         const draftEventId = draftStream?.eventId();
         let state = refreshDraftFreshnessState(draftEventId);
+        const freshnessDeadlineAtMs = Date.now() + MATRIX_FRESHNESS_MODEL_FAIL_OPEN_TIMEOUT_MS;
         for (let attempt = 0; attempt <= MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS; attempt += 1) {
           if (!state.roomChangedSinceDraftStart) {
             return payload;
           }
-          const selectedAction = await chooseMatrixFinalFreshnessAction({
-            allowedActions: freshnessAllowedFinalActions,
-            cfg,
-            config: freshnessConfig,
-            ctxPayload: ctxPayload as Record<string, unknown>,
-            draftText: payload.text,
-            mode: freshnessMode,
-            state,
-            agentId: _route.agentId,
-            log: logVerboseMessage,
-          });
+          const selectedActionResult =
+            await runMatrixFreshnessModelStage<MatrixFreshnessFinalAction>({
+              deadlineAtMs: freshnessDeadlineAtMs,
+              fallback: "send-as-is",
+              label: "action selection",
+              task: async () =>
+                await chooseMatrixFinalFreshnessAction({
+                  allowedActions: freshnessAllowedFinalActions,
+                  cfg,
+                  config: freshnessConfig,
+                  ctxPayload: ctxPayload as Record<string, unknown>,
+                  draftText: payload.text,
+                  mode: freshnessMode,
+                  state,
+                  agentId: _route.agentId,
+                  log: logVerboseMessage,
+                }),
+            });
+          if (selectedActionResult.failedOpen) {
+            return payload;
+          }
+          const selectedAction = selectedActionResult.value;
           const stateAfterActionSelection = refreshDraftFreshnessState(draftEventId);
           if (freshnessStateAdvanced(state, stateAfterActionSelection)) {
             state = stateAfterActionSelection;
@@ -2426,16 +2479,26 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           if (finalAction === "suppress") {
             return null;
           }
-          const revised = await reviseMatrixFinalReplyWithFreshness({
-            cfg,
-            config: freshnessConfig,
-            agentId: _route.agentId,
-            ctxPayload: ctxPayload as Record<string, unknown>,
-            draftText: payload.text,
-            fallbackPayload: payload,
-            latestPendingHistory: state.latestPendingHistory,
-            log: logVerboseMessage,
+          const revisionResult = await runMatrixFreshnessModelStage<ReplyPayload | undefined>({
+            deadlineAtMs: freshnessDeadlineAtMs,
+            fallback: payload,
+            label: "revision",
+            task: async () =>
+              await reviseMatrixFinalReplyWithFreshness({
+                cfg,
+                config: freshnessConfig,
+                agentId: _route.agentId,
+                ctxPayload: ctxPayload as Record<string, unknown>,
+                draftText: payload.text,
+                fallbackPayload: payload,
+                latestPendingHistory: state.latestPendingHistory,
+                log: logVerboseMessage,
+              }),
           });
+          if (revisionResult.failedOpen) {
+            return payload;
+          }
+          const revised = revisionResult.value;
           const stateAfterRevision = refreshDraftFreshnessState(draftEventId);
           if (freshnessStateAdvanced(state, stateAfterRevision)) {
             state = stateAfterRevision;
@@ -2460,6 +2523,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
         beforeDeliver: async (payload: ReplyPayload, info: { kind: string }) =>
           info.kind === "final" ? await resolveFreshnessFinalPayload(payload) : payload,
+        beforeDeliverOptions: {
+          timeoutMs: freshnessHoldbackMs + MATRIX_FRESHNESS_BEFORE_DELIVER_TIMEOUT_MS,
+        },
         deliver: async (payload: ReplyPayload, info: { kind: string }) => {
           const deliveryPayload = payload;
           if (draftStream && info.kind !== "tool" && !deliveryPayload.isCompactionNotice) {

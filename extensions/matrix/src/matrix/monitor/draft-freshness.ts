@@ -387,5 +387,5 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
   if (!text?.trim() || isSilentReplyText(text)) {
     return undefined;
   }
-  return { text };
+  return { ...params.fallbackPayload, text: text.trim() };
 }

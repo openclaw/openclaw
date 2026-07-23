@@ -578,7 +578,7 @@ describe("resolveMatrixAccount", () => {
     ]);
   });
 
-  it("preserves shared nested dm and actions config when an account overrides one field", () => {
+  it("preserves shared nested account config when an account overrides one field", () => {
     const account = resolveMatrixAccount({
       cfg: {
         channels: {
@@ -593,6 +593,16 @@ describe("resolveMatrixAccount", () => {
               reactions: true,
               messages: true,
             },
+            participation: {
+              enabled: true,
+              strategy: "ai-first",
+              model: "openai/root-participation",
+            },
+            freshness: {
+              enabled: true,
+              mode: "auto",
+              finalAction: "revise",
+            },
             accounts: {
               ops: {
                 accessToken: "ops-token",
@@ -601,6 +611,12 @@ describe("resolveMatrixAccount", () => {
                 },
                 actions: {
                   messages: false,
+                },
+                participation: {
+                  strategy: "deterministic",
+                },
+                freshness: {
+                  mode: "suppress",
                 },
               },
             },
@@ -618,6 +634,16 @@ describe("resolveMatrixAccount", () => {
     expect(account.config.actions).toEqual({
       reactions: true,
       messages: false,
+    });
+    expect(account.config.participation).toEqual({
+      enabled: true,
+      strategy: "deterministic",
+      model: "openai/root-participation",
+    });
+    expect(account.config.freshness).toEqual({
+      enabled: true,
+      mode: "suppress",
+      finalAction: "revise",
     });
   });
 
