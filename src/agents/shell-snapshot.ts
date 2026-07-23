@@ -9,7 +9,6 @@ import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { killProcessTree } from "../process/kill-tree.js";
 
@@ -177,10 +176,14 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
   });
 }
 
+function readNonBlankPathEnv(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
 function getTrustedShellHome(): string {
   return (
-    normalizeOptionalString(process.env.HOME) ??
-    normalizeOptionalString(process.env.USERPROFILE) ??
+    readNonBlankPathEnv(process.env.HOME) ??
+    readNonBlankPathEnv(process.env.USERPROFILE) ??
     os.homedir()
   );
 }

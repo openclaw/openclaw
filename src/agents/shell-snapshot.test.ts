@@ -333,10 +333,12 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-home-"));
+    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-home-"));
+    const home = path.join(homeRoot, " trusted home ");
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-state-"));
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
+    fs.mkdirSync(home);
+    tempDirs.push(homeRoot, stateDir, cwd);
     setSnapshotStateForTest(stateDir, { home });
     fs.writeFileSync(path.join(home, ".bashrc"), 'export PNPM_HOME="/rc-home"\n');
 
@@ -366,8 +368,8 @@ describe("exec shell snapshots", () => {
 
     await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
 
-    // A blank trusted HOME must fall back to USERPROFILE; resolving to "" would
-    // change the snapshot identity and drop the previously captured rc values.
+    // A blank trusted HOME must fall back to USERPROFILE without trimming a
+    // valid path; resolving to "" changes the identity and drops the rc values.
     setTestEnvValue("HOME", "");
     setTestEnvValue("USERPROFILE", home);
     await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
