@@ -1212,6 +1212,246 @@ describe("gateway session utils", () => {
     expect(row.displayName).toBe("openclaw-tui");
   });
 
+  test("direct channel session rows fall back to configured account names", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            quote: { name: "Quote Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:quote:feishu:direct:ou_8ad348410b",
+      entry: {
+        sessionId: "feishu-direct-session",
+        updatedAt: 1,
+        origin: {
+          provider: "feishu",
+          label: "ou_8ad348410b",
+        },
+      },
+    });
+
+    expect(row.displayName).toBe("Quote Assistant");
+  });
+
+  test("direct channel session rows inherit channel-level account names", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          name: "Personal Phone",
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:default:whatsapp:direct:15551230000",
+      entry: {
+        sessionId: "whatsapp-direct-session",
+        updatedAt: 1,
+        origin: {
+          provider: "whatsapp",
+          label: "15551230000",
+        },
+      },
+    });
+
+    expect(row.displayName).toBe("Personal Phone");
+  });
+
+  test("direct channel account names preserve labels and meaningful origin labels", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            main: { name: "Main Bot" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const labeled = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:feishu:direct:ou_802c30dd",
+      entry: {
+        sessionId: "labeled-session",
+        updatedAt: 1,
+        label: "nightly-summary",
+        origin: {
+          provider: "feishu",
+          label: "ou_802c30dd",
+        },
+      },
+    });
+    const namedPeer = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:feishu:direct:ou_802c30dd",
+      entry: {
+        sessionId: "named-peer-session",
+        updatedAt: 1,
+        origin: {
+          provider: "feishu",
+          label: "Ada Lovelace",
+        },
+      },
+    });
+
+    expect(labeled.displayName).toBe("nightly-summary");
+    expect(namedPeer.displayName).toBe("Ada Lovelace");
+  });
+
+  test("buildGatewaySessionRow displayName uses configured default account before agent id", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            work: { name: "Work Feishu" },
+            default: { name: "Default Feishu" },
+            main: { name: "Agent Named Feishu" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:main:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Work Feishu");
+  });
+
+  test("buildGatewaySessionRow displayName uses non-default agent account before configured default account", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: { name: "Main Bot" },
+            quote: { name: "Quote Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:quote:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:quote:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Quote Assistant");
+  });
+
+  test("buildGatewaySessionRow displayName uses configured default account for resolved default agent", () => {
+    const cfg = {
+      agents: { list: [{ id: "ops", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            ops: { name: "Ops Agent Account" },
+            work: { name: "Work Feishu" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:ops:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:ops:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Work Feishu");
+  });
+
+  test("buildGatewaySessionRow displayName normalizes configured account lookup", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "Router D",
+          accounts: {
+            "router-d": { name: "Router Display" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:main:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Router Display");
+  });
+
+  test("buildGatewaySessionRow displayName uses default account before agent id", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          accounts: {
+            default: { name: "Default Feishu" },
+            main: { name: "Agent Named Feishu" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const entry = {
+      chatType: "direct",
+      channel: "feishu",
+      origin: { label: "ou_8ad348410b" },
+    } as SessionEntry;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:feishu:direct:ou_8ad348410b": entry },
+      key: "agent:main:feishu:direct:ou_8ad348410b",
+      entry,
+    });
+    expect(row.displayName).toBe("Default Feishu");
+  });
+
   test("buildGatewaySessionRow keeps dashboard sender identity out of the session title", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
     const entry = {
