@@ -16,6 +16,13 @@ import {
   validateClawHubBootstrapEvidence,
 } from "../../scripts/lib/release-beta-verifier.ts";
 
+const execFileSyncMock = vi.hoisted(() => vi.fn(() => "{}"));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = (await importOriginal()) as typeof import("node:child_process");
+  return { ...original, execFileSync: execFileSyncMock };
+});
+
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -610,6 +617,33 @@ describe("parseNpmViewFields", () => {
 });
 
 describe("runNpmViewWithRetry", () => {
+  afterEach(() => {
+    execFileSyncMock.mockReset();
+    execFileSyncMock.mockReturnValue("{}");
+  });
+
+  it("bounds npm view command execution with a timeout and kill signal", async () => {
+    execFileSyncMock.mockReturnValue('"2026.5.10-beta.3"');
+    await runNpmViewWithRetry(["view", "openclaw@2026.5.10-beta.3", "version", "--json"], {
+      attempts: 1,
+      delay: async () => {},
+    });
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining([
+        "view",
+        "openclaw@2026.5.10-beta.3",
+        "version",
+        "--json",
+        "--prefer-online",
+      ]),
+      expect.objectContaining({
+        timeout: 120_000,
+        killSignal: "SIGKILL",
+      }),
+    );
+  });
+
   it("retries transient registry failures with online metadata reads", async () => {
     const calls: string[][] = [];
     const delays: number[] = [];
