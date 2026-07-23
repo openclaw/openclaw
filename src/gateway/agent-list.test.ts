@@ -55,6 +55,32 @@ describe("listGatewayAgentsBasic", () => {
     });
   });
 
+  it("uses keyed entries as the explicit roster and filters disk-only agents", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
+      await Promise.all(
+        ["main", "archive"].map((id) =>
+          fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
+        ),
+      );
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: {
+            jarvis: { default: true, identity: { name: "Jarvis" } },
+            writer: { name: "Writer" },
+          },
+        },
+      };
+
+      const result = listGatewayAgentsBasic(cfg);
+
+      expect(result.defaultId).toBe("jarvis");
+      expect(result.agents).toEqual([
+        { id: "jarvis", kind: "agent", name: "Jarvis" },
+        { id: "writer", kind: "agent", name: "Writer" },
+      ]);
+    });
+  });
+
   it("falls back to identity.name when the configured agent name is missing", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },

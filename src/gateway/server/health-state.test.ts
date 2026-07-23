@@ -218,3 +218,29 @@ describe("refreshGatewayHealthSnapshot", () => {
     expect(healthState.getHealthCache()).toBe(safeSummary);
   });
 });
+
+describe("buildGatewaySnapshot", () => {
+  it("advertises one keyed default agent and its real main session", async () => {
+    const healthState = await loadHealthState();
+    const configIo = await import("../../config/io.js");
+    configIo.setRuntimeConfigSnapshot({
+      agents: {
+        entries: {
+          jarvis: { default: true },
+          worker: {},
+        },
+      },
+    });
+
+    try {
+      expect(healthState.buildGatewaySnapshot().sessionDefaults).toEqual({
+        defaultAgentId: "jarvis",
+        mainKey: "main",
+        mainSessionKey: "agent:jarvis:main",
+        scope: "per-sender",
+      });
+    } finally {
+      configIo.clearRuntimeConfigSnapshot();
+    }
+  });
+});
