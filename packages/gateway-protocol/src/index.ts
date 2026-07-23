@@ -31,6 +31,7 @@ export {
   type SessionCreatedActor,
   type SessionRow,
 } from "./schema/sessions-row.js";
+export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -459,6 +460,10 @@ import {
   SessionSharingEventSchema,
   SessionSharingIdentitySchema,
   SessionSharingRoleSchema,
+  SessionSuggestionsAddParamsSchema,
+  SessionSuggestionsListParamsSchema,
+  SessionSuggestionsResolveParamsSchema,
+  SessionTypingParamsSchema,
   SessionVisibilitySchema,
   SessionVisibilitySetParamsSchema,
   SessionVisibilitySetResultSchema,
@@ -815,6 +820,12 @@ export const validateSessionVisibilitySetParams = lazyCompile(SessionVisibilityS
 export const validateSessionMembersListParams = lazyCompile(SessionMembersListParamsSchema);
 export const validateSessionMemberAddParams = lazyCompile(SessionMemberAddParamsSchema);
 export const validateSessionMemberRemoveParams = lazyCompile(SessionMemberRemoveParamsSchema);
+export const validateSessionSuggestionsAddParams = lazyCompile(SessionSuggestionsAddParamsSchema);
+export const validateSessionSuggestionsListParams = lazyCompile(SessionSuggestionsListParamsSchema);
+export const validateSessionSuggestionsResolveParams = lazyCompile(
+  SessionSuggestionsResolveParamsSchema,
+);
+export const validateSessionTypingParams = lazyCompile(SessionTypingParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
