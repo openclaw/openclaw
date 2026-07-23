@@ -1678,6 +1678,7 @@ export async function spawnSubagentDirect(
               phase: "started",
               runId: hookRunId,
               childSessionKey,
+              agentId: targetAgentId,
               requester: progressOrigin,
             },
             {

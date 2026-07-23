@@ -1,5 +1,6 @@
 // Discord plugin module maps portable subagent progress onto source-message feedback.
 import { resolveDiscordAccount } from "./accounts.js";
+import { sendDiscordSubagentFailureAnnounce } from "./failure-announce.js";
 import { reactMessageDiscord, removeReactionDiscord } from "./send.reactions.js";
 import { sendTypingDiscord } from "./send.typing.js";
 import {
@@ -44,12 +45,16 @@ type SubagentProgressEvent =
   | {
       phase: "started";
       runId: string;
+      agentId?: string;
+      childSessionKey?: string;
       requester?: DiscordProgressRequester;
     }
   | {
       phase: "ended";
       runId: string;
       outcome: SubagentProgressOutcome;
+      agentId?: string;
+      childSessionKey?: string;
       requester?: Extract<SubagentProgressEvent, { phase: "started" }>["requester"];
     };
 
@@ -73,7 +78,7 @@ const terminalRetryAttempts = new Map<string, number>();
 const startupRecoveryRetries = new Map<ProgressApi, StartupRecovery>();
 
 function isSubagentProgressEnabled(account: ReturnType<typeof resolveDiscordAccount>): boolean {
-  return Boolean(process.env.VITEST) && account.enabled && account.config.subagentProgress === true;
+  return account.enabled && account.config.subagentProgress === true;
 }
 
 function clearTerminalRetry(runId: string) {
@@ -220,6 +225,38 @@ async function sendTyping(api: ProgressApi, tracker: ProgressTracker) {
   }
 }
 
+function resolveFailureAgentId(event?: Partial<SubagentProgressEvent>): string | undefined {
+  const explicit = event?.agentId?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const childSessionKey = event?.childSessionKey?.trim();
+  const match = childSessionKey?.match(/^agent:([^:]+)/);
+  return match?.[1];
+}
+
+async function announceSubagentFailure(
+  api: ProgressApi,
+  tracker: ProgressTracker,
+  runId: string,
+  outcome: SubagentProgressOutcome,
+  event?: Partial<SubagentProgressEvent>,
+) {
+  if (outcome === "ok") {
+    return;
+  }
+  await sendDiscordSubagentFailureAnnounce({
+    cfg: api.config,
+    accountId: tracker.accountId,
+    channelId: tracker.channelId,
+    messageId: tracker.messageId,
+    runId,
+    outcome,
+    agentId: resolveFailureAgentId(event),
+    logger: api.logger,
+  });
+}
+
 function startTyping(api: ProgressApi, tracker: ProgressTracker) {
   tracker.typingExpiresAt = Date.now() + TYPING_TTL_MS;
   void sendTyping(api, tracker);
@@ -312,6 +349,11 @@ async function handleStarted(
           !reactionsEnabled ||
           (countsCleared && (await setReaction(api, tracker, FAILURE_EMOJI)));
         if (countsCleared && failurePresented) {
+          await Promise.all(
+            failedCleanupRuns.map((cleanup) =>
+              announceSubagentFailure(api, tracker, cleanup.runId, cleanup.value.outcome),
+            ),
+          );
           for (const cleanup of restored.cleanupRuns) {
             markRunTerminal(cleanup.runId, cleanup.value.outcome);
           }
@@ -386,6 +428,7 @@ async function handleStarted(
         !tracker.reactionsEnabled ||
         (await setReaction(api, tracker, FAILURE_EMOJI));
       if (failurePresented) {
+        await announceSubagentFailure(api, tracker, runId, endedOutcome, event);
         await consumeProgressRun(api, runId);
       } else {
         scheduleTerminalLookupRetry(
@@ -412,9 +455,10 @@ async function handleStarted(
 async function reconcilePersistedTracker(
   api: ProgressApi,
   persisted: PersistedProgressRun,
-  outcome: Extract<SubagentProgressEvent, { phase: "ended" }>["outcome"],
-  endingRunId: string,
+  event: Extract<SubagentProgressEvent, { phase: "ended" }>,
 ): Promise<PersistedReconciliationResult> {
+  const endingRunId = event.runId.trim();
+  const outcome = event.outcome;
   const store = getProgressStore(api);
   let activeRunIds: string[] = [];
   if (store) {
@@ -470,6 +514,7 @@ async function reconcilePersistedTracker(
   if (!reactionsCleared || !countPresented || !outcomePresented) {
     return { ok: false };
   }
+  await announceSubagentFailure(api, tracker, endingRunId, outcome, event);
   return {
     ok: true,
     activeRunIds,
@@ -579,7 +624,7 @@ async function handleEnded(
     }
     if (!tracker) {
       const reconciliation = owned
-        ? await reconcilePersistedTracker(api, owned, outcome, runId)
+        ? await reconcilePersistedTracker(api, owned, retryEvent)
         : { ok: false as const };
       if (reconciliation.ok && owned) {
         const consumed = await consumeProgressRun(api, runId);
@@ -616,13 +661,16 @@ async function handleEnded(
     const countReconciled = tracker.reactionsEnabled
       ? await updateRunningReaction(api, tracker)
       : owned
-        ? (await reconcilePersistedTracker(api, owned, outcome, runId)).ok
+        ? (await reconcilePersistedTracker(api, owned, retryEvent)).ok
         : true;
     const outcomePresented =
       outcome === "ok" ||
       !tracker.reactionsEnabled ||
       (countReconciled && (await setReaction(api, tracker, FAILURE_EMOJI)));
     const reconciled = countReconciled && outcomePresented;
+    if (reconciled) {
+      await announceSubagentFailure(api, tracker, runId, outcome, retryEvent);
+    }
     if (reconciled && owned) {
       const consumed = await consumeProgressRun(api, runId);
       if (!consumed) {

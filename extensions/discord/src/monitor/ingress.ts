@@ -1,5 +1,6 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
 import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createChannelIngressMonitor,
   type ChannelIngressQueue,
@@ -9,6 +10,7 @@ import {
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Client } from "../internal/discord.js";
 import { mapGatewayDispatchData } from "../internal/gateway-dispatch.js";
+import { sendDiscordHandlerTimeoutFailureAnnounce } from "../failure-announce.js";
 import { getDiscordRuntime } from "../runtime.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 
@@ -114,6 +116,7 @@ function isDiscordAuthenticationFailure(error: unknown): boolean {
 export function createDiscordIngressMonitor(params: {
   accountId: string;
   client: Client;
+  cfg?: OpenClawConfig;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
@@ -173,6 +176,21 @@ export function createDiscordIngressMonitor(params: {
         return null;
       },
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
+      onHandlerTimeout: async (claim) => {
+        const rawMessage = claim.payload.rawMessage;
+        if (!params.cfg || !rawMessage.channel_id || !rawMessage.id) {
+          return;
+        }
+        await sendDiscordHandlerTimeoutFailureAnnounce({
+          cfg: params.cfg,
+          accountId: params.accountId,
+          channelId: rawMessage.channel_id,
+          messageId: rawMessage.id,
+          logger: {
+            debug: (message) => params.runtime.log?.(message),
+          },
+        });
+      },
     },
     onError: (error) =>
       params.runtime.error?.(danger(`discord ingress drain failed: ${errorText(error)}`)),

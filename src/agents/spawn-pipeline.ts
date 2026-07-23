@@ -82,6 +82,7 @@ export async function runSpawnPipeline<TState>(params: {
           phase: "started",
           runId,
           childSessionKey: registration.childSessionKey,
+          agentId: registration.agentId,
           requester: params.progressOrigin,
         },
         {

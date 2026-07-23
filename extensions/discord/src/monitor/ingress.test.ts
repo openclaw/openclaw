@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -12,10 +13,28 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 
+const sendMessageDiscordMock = vi.hoisted(() =>
+  vi.fn(async (_to: string, _text: string, _opts: unknown) => ({
+    ok: true,
+    messageId: "timeout-note",
+    channelId: "channel-1",
+  })),
+);
+
+vi.mock("../send.js", () => ({ sendMessageDiscord: sendMessageDiscordMock }));
+
 type DiscordIngressPayload = {
   version: 1;
   receivedAt: number;
   rawMessage: APIMessage;
+};
+
+const TEST_CFG: OpenClawConfig = {
+  channels: {
+    discord: {
+      token: "test-token",
+    },
+  },
 };
 
 function createRawMessage(id: string, channelId = "channel-1"): APIMessage {
@@ -86,6 +105,8 @@ async function stopAll(monitors: DiscordIngressMonitor[]): Promise<void> {
 describe("Discord durable ingress", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+    sendMessageDiscordMock.mockReset();
+    vi.useRealTimers();
   });
 
   it("does not normalize or dispatch before the durable append completes", async () => {
@@ -249,6 +270,46 @@ describe("Discord durable ingress", () => {
           const verdict = await queue.enqueue("1005", payloadFor(rawMessage));
           expect(verdict.kind).toBe("failed");
         });
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("sends a visible reply when handler adoption times out", async () => {
+    vi.useFakeTimers();
+    sendMessageDiscordMock.mockResolvedValue({
+      ok: true,
+      messageId: "timeout-note",
+      channelId: "channel-timeout",
+    });
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async () => ({ kind: "deferred" as const }));
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        cfg: TEST_CFG,
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      monitor.start();
+      try {
+        await monitor.accept(createRawMessage("timeout-1", "channel-timeout"));
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+        await vi.waitFor(() => expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1));
+        expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+          "channel:channel-timeout",
+          "Discord gateway was busy and timed out before handling this message.\nPlease retry the request in a minute.",
+          expect.objectContaining({
+            cfg: TEST_CFG,
+            accountId: "default",
+            reply: { messageId: "timeout-1", scope: "all" },
+          }),
+        );
       } finally {
         await monitor.stop();
       }

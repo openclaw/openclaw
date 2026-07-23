@@ -861,12 +861,14 @@ export type PluginHookSubagentProgressEvent =
       phase: "started";
       runId: string;
       childSessionKey: string;
+      agentId?: string;
       requester?: PluginHookSubagentRequester;
     }
   | {
       phase: "ended";
       runId: string;
       childSessionKey: string;
+      agentId?: string;
       outcome: "ok" | "error" | "timeout" | "killed" | "unknown";
       requester?: PluginHookSubagentRequester;
     };

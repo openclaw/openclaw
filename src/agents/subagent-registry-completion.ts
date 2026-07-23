@@ -167,6 +167,7 @@ export async function emitSubagentProgressEndedHook(entry: SubagentRunRecord): P
         phase: "ended",
         runId: entry.runId,
         childSessionKey: entry.childSessionKey,
+        agentId: entry.agentId,
         outcome,
         requester: entry.progressOrigin,
       },

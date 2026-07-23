@@ -18,6 +18,7 @@ export function createDiscordMessageHandler(
   const ingress = createIngressMonitor({
     accountId: params.accountId,
     client: params.client,
+    cfg: params.cfg,
     runtime: params.runtime,
     dispatch: (event, lifecycle) =>
       dispatcher(event, params.client, {

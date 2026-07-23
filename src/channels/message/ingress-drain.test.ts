@@ -327,10 +327,12 @@ describe("channel ingress drain", () => {
       });
       await queue.enqueue("evt-stall", { text: "x" }, { laneKey: "l1" });
 
+      const onHandlerTimeout = vi.fn();
       const drain = createChannelIngressDrain<Payload>({
         queue,
         now: () => clock,
         adoptionStallTimeoutMs: 5_000,
+        onHandlerTimeout,
         dispatchClaimedEvent: async () => {
           // Never adopt, never return — stall until watchdog.
           await new Promise(() => {});
@@ -348,6 +350,10 @@ describe("channel ingress drain", () => {
       if (reenqueue.kind === "failed") {
         expect(reenqueue.record.reason).toBe("handler-timeout");
       }
+      expect(onHandlerTimeout).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "evt-stall", payload: { text: "x" } }),
+        expect.objectContaining({ ageMs: 5_000, laneKey: "l1" }),
+      );
       drain.dispose();
     });
   });

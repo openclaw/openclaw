@@ -5,8 +5,14 @@ import {
   handleDiscordSubagentProgress,
   recoverDiscordSubagentProgress,
 } from "./subagent-progress.js";
+import { resetDiscordFailureAnnounceForTest } from "./failure-announce.js";
 
 const sendMocks = vi.hoisted(() => ({
+  message: vi.fn(async (_to: string, _text: string, _opts: unknown) => ({
+    ok: true,
+    messageId: "failure-note",
+    channelId: "123",
+  })),
   react: vi.fn(async (_channelId: string, _messageId: string, _emoji: string, _opts: unknown) => ({
     ok: true,
   })),
@@ -26,6 +32,7 @@ vi.mock("./send.reactions.js", () => ({
   removeReactionDiscord: sendMocks.remove,
 }));
 vi.mock("./send.typing.js", () => ({ sendTypingDiscord: sendMocks.typing }));
+vi.mock("./send.js", () => ({ sendMessageDiscord: sendMocks.message }));
 
 type StoredProgressRunBase = {
   key: string;
@@ -117,10 +124,14 @@ describe("Discord subagent progress", () => {
     sendMocks.react.mockReset().mockResolvedValue({ ok: true });
     sendMocks.remove.mockReset().mockResolvedValue({ ok: true });
     sendMocks.typing.mockReset().mockResolvedValue({ ok: true, channelId: "123" });
+    sendMocks.message
+      .mockReset()
+      .mockResolvedValue({ ok: true, messageId: "failure-note", channelId: "123" });
   });
 
   afterEach(() => {
     resetDiscordSubagentProgressForTest();
+    resetDiscordFailureAnnounceForTest();
     vi.useRealTimers();
   });
 
@@ -165,10 +176,43 @@ describe("Discord subagent progress", () => {
       phase: "ended",
       runId: "run-error",
       outcome: "error",
+      agentId: "worker-1",
     });
 
     expect(sendMocks.remove).toHaveBeenCalledWith("123", "456", "1️⃣", expect.any(Object));
     expect(sendMocks.react).toHaveBeenLastCalledWith("123", "456", "🔴", expect.any(Object));
+    expect(sendMocks.message).toHaveBeenCalledWith(
+      "channel:123",
+      "Sub-agent worker worker-1 failed.\nOutcome: error.\nPlease retry the request.",
+      expect.objectContaining({
+        cfg: api.config,
+        accountId: "default",
+        reply: { messageId: "456", scope: "all" },
+      }),
+    );
+    const failureReactionCall = sendMocks.react.mock.calls.findIndex((call) => call[2] === "🔴");
+    expect(sendMocks.message.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sendMocks.react.mock.invocationCallOrder[failureReactionCall] ?? 0,
+    );
+  });
+
+  it("deduplicates subagent failure notes for the same source message and run", async () => {
+    await handleDiscordSubagentProgress(api, started("run-dedupe"));
+    await handleDiscordSubagentProgress(api, {
+      phase: "ended",
+      runId: "run-dedupe",
+      outcome: "timeout",
+    });
+    await handleDiscordSubagentProgress(api, {
+      phase: "ended",
+      runId: "run-dedupe",
+      outcome: "timeout",
+    });
+
+    expect(sendMocks.message).toHaveBeenCalledTimes(1);
+    expect(sendMocks.message.mock.calls[0]?.[1]).toContain(
+      "Gateway was busy -- try again in a minute.",
+    );
   });
 
   it("clears a count reaction whose successful add response was lost", async () => {

@@ -117,6 +117,10 @@ export type CreateChannelIngressDrainOptions<
   now?: () => number;
   formatError?: (err: unknown) => string;
   onLog?: (message: string) => void;
+  onHandlerTimeout?: (
+    claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+    details: { message: string; ageMs: number; laneKey: string },
+  ) => Promise<void> | void;
   abortSignal?: AbortSignal;
   orderBy?: "received" | "id";
   scanLimit?: number;
@@ -477,6 +481,17 @@ export function createChannelIngressDrain<
       } catch {
         // AbortController.abort is not fallible in practice.
       }
+      void Promise.resolve(
+        options.onHandlerTimeout?.(state.claim, {
+          message,
+          ageMs,
+          laneKey: state.laneKey,
+        }),
+      ).catch((error: unknown) => {
+        log(
+          `ingress drain: handler-timeout callback failed for event ${displayId}: ${formatError(error)}`,
+        );
+      });
       // Same bounded-retry/hold-ownership policy as tombstone: a fail write
       // error must not falsely settle (would stop heartbeat and wedge recovery).
       void state
