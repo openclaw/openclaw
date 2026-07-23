@@ -37,7 +37,6 @@ import type {
   CompactEmbeddedAgentSessionInternalParams,
   CompactEmbeddedAgentSessionParams,
 } from "./compact.types.js";
-import { buildCompactionHarnessModelProvider } from "./compaction-harness-model-provider.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   buildEmbeddedHookApi,
