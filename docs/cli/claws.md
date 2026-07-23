@@ -187,7 +187,9 @@ openclaw claws add ./incident-triage.claw.json \
 `--yes` alone is insufficient. OpenClaw rebuilds the plan and rejects consent
 when the source, destination, or live configuration changed after preview. Use
 `--agent-id` or `--workspace` during both preview and apply when package
-defaults collide with local state.
+defaults collide with local state. For disposable profiles and parallel validation,
+pass an explicit `--workspace`; `OPENCLAW_STATE_DIR` relocates runtime state but
+does not change the default workspace location.
 
 Adding a Claw creates the new agent and workspace configuration, writes declared
 workspace files, installs or reuses declared skill and plugin artifacts, and
