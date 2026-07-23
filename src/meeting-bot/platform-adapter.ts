@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createMeetingChromeTransport } from "./chrome-transport.js";
+import { createMeetingConfiguredNodeHost } from "./node-host.js";
 import type {
   MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
@@ -7,6 +8,7 @@ import type {
   MeetingPlatformAdapter as MeetingPlatformAdapterContract,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
+import { createMeetingRuntimeProbes } from "./runtime-probes.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -358,6 +360,8 @@ function createMeetingPlatformAdapter<
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
+  createRuntimeProbes: createMeetingRuntimeProbes,
+  createNodeHostHandler: createMeetingConfiguredNodeHost,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
 };
