@@ -1521,6 +1521,9 @@ struct GatewayNodeSessionTests {
         // Model an old push callback that was already queued on the session actor:
         // cleanup retires socket 1, then socket 2 becomes the active route before it runs.
         await gateway._test_handleChannelDisconnected("socket 1 lost", socketGeneration: 1)
+        // Replacement invokes are intentionally rejected until disconnect lifecycle cleanup
+        // clears its barrier, so establish the post-cleanup state this test models.
+        await gateway._test_waitForLifecycleCallbacks()
         await gateway._test_handlePush(
             .event(EventFrame(
                 type: "event",
@@ -2133,6 +2136,94 @@ struct GatewayNodeSessionTests {
 
         await gateway.disconnect()
         #expect(await gateway.supportsServerMethod("approval.get", ifCurrentRoute: route) == nil)
+    }
+
+    @Test
+    func `route bound node event request distinguishes handled and legacy acknowledgements`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos-test",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let task = try #require(session.latestTask())
+
+        let handledRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("handled node event request sent") {
+            task.sentRequestCount(method: "node.event") == 1
+        }
+        let firstRequest = try #require(task.sentRequests(method: "node.event").first)
+        task.emitResponse(
+            id: try #require(firstRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": true,
+                "reason": "cleared",
+            ])
+        let handled = try await handledRequest.value
+        #expect(handled?.handled == true)
+        #expect(handled?.reason == "cleared")
+
+        let unsupportedRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("unsupported node event request sent") {
+            task.sentRequestCount(method: "node.event") == 2
+        }
+        let secondRequest = try #require(task.sentRequests(method: "node.event").last)
+        task.emitResponse(
+            id: try #require(secondRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": false,
+                "reason": "invalid_payload",
+            ])
+        let unsupported = try await unsupportedRequest.value
+        #expect(unsupported?.handled == false)
+        #expect(unsupported?.reason == "invalid_payload")
+
+        let legacyRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("legacy node event request sent") {
+            task.sentRequestCount(method: "node.event") == 3
+        }
+        let thirdRequest = try #require(task.sentRequests(method: "node.event").last)
+        task.emitResponse(
+            id: try #require(thirdRequest["id"] as? String),
+            payload: ["ok": true])
+        let legacy = try await legacyRequest.value
+        #expect(legacy == nil)
+
+        await gateway.disconnect()
     }
 
     @Test
@@ -3073,15 +3164,13 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `failed device token write is not reported as an issued role`() async throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
+        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
+        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: false)
         try Data().write(to: blocker)
-        // Repoint the pinned state dir at a plain file to force write failures;
-        // the isolation trait restores the env var after the test.
-        setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
-        defer { try? FileManager.default.removeItem(at: tempDir) }
+        // Block only the legacy auth directory. SQLite identity creation must
+        // still succeed so this test reaches the token persistence failure.
+        defer { try? FileManager.default.removeItem(at: blocker) }
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -3553,6 +3642,9 @@ struct GatewayNodeSessionTests {
             })
 
         let route = try #require(await gateway.currentRoute())
+        try await waitUntil("main session key captured", timeoutSeconds: 2) {
+            await capturedMainSessionKey.get() == "agent:main:main"
+        }
         #expect(await capturedMainSessionKey.get() == "agent:main:main")
         #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == "agent:main:main")
 

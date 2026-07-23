@@ -28,7 +28,7 @@ import {
   type ModelSetupVerifyState,
   type ModelSetupWizardState,
 } from "./state.ts";
-import { renderModelSetup } from "./view.ts";
+import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
@@ -37,6 +37,7 @@ type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[numbe
 export type ModelSetupRouteData = {
   state: ModelSetupPageState;
   client: GatewayBrowserClient | null;
+  firstRun: boolean;
 };
 
 function errorMessage(error: unknown): string {
@@ -92,6 +93,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     onDone: () => void this.handleWizardDone(),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+    sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
   });
 
   override disconnectedCallback() {
@@ -170,7 +172,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.recommendedInstalls ?? []),
-      ].flatMap((entry) => (entry.icon ? [entry.icon] : [])),
+      ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
   }
 
@@ -511,7 +513,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onManualConnect: () => this.connectManual(),
       onMoreSignInToggle: (open) => (this.moreSignInOpen = open),
       onIconError: (iconUrl) => this.invalidateIcon(iconUrl),
-      onOpenChat: () => this.context.navigate("chat"),
+      onOpenChat: () => {
+        if (this.routeData?.firstRun) {
+          this.context.navigate("custodian", { search: "?onboarding=1" });
+          return;
+        }
+        this.context.navigate("chat");
+      },
       onWizardValueChange: (value) => (this.wizardValue = value),
       onWizardAnswer: (value, includeValue) => void this.wizard.answer(value, includeValue),
       onWizardCancel: () => void this.wizard.cancel(),
@@ -526,4 +534,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-model-setup-page", ModelSetupPage);
+if (!customElements.get("openclaw-model-setup-page")) {
+  customElements.define("openclaw-model-setup-page", ModelSetupPage);
+}

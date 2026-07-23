@@ -9,6 +9,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -35,6 +36,7 @@ const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const PLUGIN_PRERELEASE_WORKFLOW = ".github/workflows/plugin-prerelease.yml";
 const OPENCLAW_NPM_RELEASE_WORKFLOW = ".github/workflows/openclaw-npm-release.yml";
 const PLUGIN_CLAWHUB_RELEASE_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const PLUGIN_NPM_RELEASE_WORKFLOW = ".github/workflows/plugin-npm-release.yml";
@@ -42,6 +44,11 @@ const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const REPO_ROOT = process.env.GITHUB_WORKSPACE ?? process.cwd();
+const RELEASE_MAINTAINER_SKILL = resolve(
+  REPO_ROOT,
+  ".agents/skills/release-openclaw-maintainer/SKILL.md",
+);
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
@@ -98,8 +105,8 @@ type WorkflowJob = {
     "fail-fast"?: boolean;
     matrix?: {
       include?: WorkflowMatrixEntry[];
+      lane?: string;
       profile?: string[];
-      tier?: string;
     };
   };
   secrets?: string | Record<string, string>;
@@ -181,6 +188,7 @@ function runPackageAcceptanceSummary(params: {
   advisory?: boolean;
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
+  telegramAdvisory?: boolean;
   telegramEnabled: boolean;
   telegramResult: string;
 }) {
@@ -199,6 +207,7 @@ function runPackageAcceptanceSummary(params: {
       PACKAGE_TELEGRAM_RESULT: params.telegramResult,
       PATH: process.env.PATH,
       RESOLVE_RESULT: "success",
+      TELEGRAM_ADVISORY: String(params.telegramAdvisory ?? false),
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
   });
@@ -620,7 +629,7 @@ describe("package acceptance workflow", () => {
       cwd: existingDir,
     });
     const sourceArchive = readFileSync(sourceZip);
-    writeFileSync(corruptZip, sourceArchive.subarray(0, sourceArchive.length - 10));
+    writeFileSync(corruptZip, sourceArchive.subarray(0, -10));
 
     const compare = (left: string, right: string) =>
       spawnSync("python3", ["scripts/compare-release-evidence-zip.py", left, right], {
@@ -861,8 +870,6 @@ describe("package acceptance workflow", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       actions?: { job?: string };
     };
-    const ignoredWorkflow = readWorkflow(CRABBOX_HYDRATE_WORKFLOW);
-    void ignoredWorkflow;
     const workflowText = readFileSync(CRABBOX_HYDRATE_WORKFLOW, "utf8");
     const hydrate = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate");
     const hydrateWindowsDaemon = workflowJob(CRABBOX_HYDRATE_WORKFLOW, "hydrate-windows-daemon");
@@ -1261,7 +1268,10 @@ describe("package acceptance workflow", () => {
 
     expect(performanceStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expectTextToIncludeAll(performanceStep.run, [
+      "fail_on_regression=true",
       'if [[ "$RELEASE_PROFILE" == "beta" ]]',
+      "fail_on_regression=false",
+      '-f fail_on_regression="$fail_on_regression"',
       "Release impact: advisory",
       "advisory for beta",
     ]);
@@ -1556,6 +1566,7 @@ describe("package artifact reuse", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
         "${{ inputs.published_upgrade_survivor_baselines }}",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "${{ inputs.published_upgrade_survivor_scenarios }}",
+      PREPARE_ONLY: "${{ inputs.prepare_only }}",
       RELEASE_TEST_PROFILE: "${{ inputs.release_test_profile }}",
     });
     expect(workflow).toContain("plan_docker_lane_groups:");
@@ -1640,13 +1651,70 @@ describe("package artifact reuse", () => {
     expect(dockerE2ePlanAction).not.toContain('docker pull "${OPENCLAW_DOCKER_E2E_');
   });
 
-  it("uses Blacksmith Docker build caching for prepared E2E images", () => {
+  it("reuses a content-addressed bare image for prepared E2E images", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
 
+    expect(workflow).toContain("bare_context_sha=");
+    expect(workflow).toContain("-docker-e2e-bare:base-${bare_context_sha:0:32}");
+    expect(workflow).toContain('docker manifest inspect "$CACHE_IMAGE_REF"');
+    expect(workflow).toContain('cache=(--cache-from "$CACHE_IMAGE_REF")');
+    expect(workflow).not.toContain('docker tag "$CACHE_IMAGE_REF" "$IMAGE_REF"');
+    expect(workflow).toContain(
+      "Shared release candidate preparation requires both Docker image variants.",
+    );
+    expect(workflow).toContain(
+      "inputs.shared_image_artifact_id != '' && '1' || steps.plan.outputs.needs_bare_image",
+    );
+    expect(workflow).toContain("env DOCKER_BUILDKIT=1 docker build");
+    expect(workflow).toContain(
+      'if bash .release-harness/scripts/ci-docker-pull-retry.sh "$CACHE_IMAGE_REF"; then',
+    );
+    expect(workflow).toContain("Bare image cache pull failed; continuing with a cold build.");
+    expect(workflow).toContain("--build-context openclaw_package=.artifacts/docker-e2e-package");
+    expect(workflow).toContain('cache=(--cache-from "$BARE_IMAGE_REF")');
+    expect(workflow).not.toContain('docker push "$CACHE_IMAGE_REF"');
     expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
     expect(workflow).toContain("uses: useblacksmith/build-push-action@");
     expect(workflow).not.toContain("cache-from: type=gha,scope=docker-e2e");
     expect(workflow).not.toContain("cache-to: type=gha,mode=max,scope=docker-e2e");
+  });
+
+  it("prepares one immutable candidate for release validation children", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const prepare = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_release_candidate");
+    const pluginDispatch = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "plugin_prerelease"),
+      "Dispatch and monitor plugin prerelease",
+    );
+    const releaseDispatch = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks"),
+      "Dispatch and monitor release checks",
+    );
+
+    expect(prepare.uses).toBe("./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
+    expect(prepare.with).toMatchObject({
+      prepare_only: true,
+      shared_image_policy: "no-push-artifact",
+    });
+    expect(pluginDispatch.run).toContain(
+      'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
+    );
+    expect(releaseDispatch.run).toContain(
+      'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
+    );
+    expect(workflow).toContain("Shared release candidate preparation ended with");
+  });
+
+  it("gives memory extension shards enough CPU without lowering their planner cost", () => {
+    const workflow = readFileSync(PLUGIN_PRERELEASE_WORKFLOW, "utf8");
+
+    expect(workflow).toContain('extensionId.startsWith("memory-")');
+    expect(workflow).toContain('"blacksmith-16vcpu-ubuntu-2404"');
+    expect(workflow).toContain("vitest_max_workers:");
+    expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
+    expect(readFileSync("scripts/lib/extension-test-plan.mjs", "utf8")).toContain(
+      '"test/vitest/vitest.extension-memory.config.ts": 1',
+    );
   });
 
   it("shards broad native live tests instead of one serial live-all job", () => {
@@ -1688,7 +1756,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"',
     );
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai "full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
@@ -1698,12 +1766,12 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
-    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai");
+    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
     expect(workflow).toContain("suite_id: live-subagent-announce-docker");
     expect(workflow).toContain("suite_group: live-gateway-advisory-docker");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
     expect(workflow).toContain("inputs.live_suite_filter == matrix.suite_group");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
@@ -1765,8 +1833,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-opencode-go");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-openrouter");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-xai");
-    expect(workflow).not.toContain("suite_id: native-live-src-gateway-profiles-zai");
-    expect(workflow).toContain("Z.AI API Platform validation is temporarily disabled");
+    expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-zai");
+    expect(workflow).not.toContain("Z.AI API Platform validation is temporarily disabled");
     expect(workflow).not.toContain(
       "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,opencode-go,openrouter,xai,zai",
     );
@@ -2385,7 +2453,7 @@ describe("package artifact reuse", () => {
     });
     expect(dockerAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
-        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
     });
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
@@ -2423,6 +2491,9 @@ describe("package artifact reuse", () => {
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );
     expect(workflow).toContain("telegram_mode: mock-openai");
+    expect(packageAcceptanceJob.with).toMatchObject({
+      telegram_advisory: "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
+    });
     expect(workflow).not.toContain("telegram_scenarios:");
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
@@ -2650,7 +2721,7 @@ describe("package artifact reuse", () => {
 
   it("preserves the primary runtime token-efficiency failure", () => {
     const job = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_runtime_token_efficiency");
-    const runStep = workflowStep(job, "Run live runtime parity lane");
+    const runStep = workflowStep(job, "Run live core runtime-pair lane");
     const reportStep = workflowStep(job, "Generate live runtime token-efficiency report");
 
     expect(runStep.run).toContain('mkdir -p "${output_dir}"');
@@ -2698,36 +2769,35 @@ describe("package artifact reuse", () => {
     expect(runtimeCoverageUpload.with?.["if-no-files-found"]).toBe("error");
   });
 
-  it("runs runtime parity tiers in parallel and preserves one canonical gate", () => {
-    const tierJob = workflowJob(
-      RELEASE_CHECKS_WORKFLOW,
-      "qa_lab_runtime_parity_tier_release_checks",
-    );
+  it("runs canonical runtime-pair lanes in parallel and preserves one gate", () => {
+    const laneJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_lab_runtime_pair_lane_release_checks");
     const collectorJob = workflowJob(
       RELEASE_CHECKS_WORKFLOW,
       "qa_lab_runtime_parity_release_checks",
     );
 
-    expect(tierJob.strategy?.["fail-fast"]).toBe(false);
-    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard","soak"]');
-    expect(tierJob.strategy?.matrix?.tier).toContain('["agentic","standard"]');
-    expect(workflowStep(tierJob, "Run runtime parity tier").run).toContain('"${tier_args[@]}"');
-    expect(workflowStep(tierJob, "Upload runtime parity tier artifacts").with?.name).toContain(
-      "${{ matrix.tier }}",
+    expect(laneJob.strategy?.["fail-fast"]).toBe(false);
+    expect(laneJob.strategy?.matrix?.lane).toContain('["core","soak"]');
+    expect(laneJob.strategy?.matrix?.lane).toContain('["core"]');
+    const runtimePairRun = workflowStep(laneJob, "Run runtime-pair lane").run;
+    expect(runtimePairRun).toContain('--runtime-pair-lane "$RUNTIME_PAIR_LANE"');
+    expect(runtimePairRun).toContain("--runtime-parity-tier standard,live-only");
+    expect(runtimePairRun).toContain("--runtime-parity-tier soak");
+    expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
+    expect(workflowStep(laneJob, "Upload runtime-pair lane artifacts").with?.name).toContain(
+      "${{ matrix.lane }}",
     );
     expect(collectorJob.needs).toEqual([
       "resolve_target",
-      "qa_lab_runtime_parity_tier_release_checks",
+      "qa_lab_runtime_pair_lane_release_checks",
     ]);
-    expect(collectorJob.name).toBe("Run QA Lab runtime parity lane");
-    expect(workflowStep(collectorJob, "Download runtime parity tier artifacts").with).toMatchObject(
-      {
-        pattern: "release-qa-runtime-parity-tier-*-${{ needs.resolve_target.outputs.revision }}",
-        "merge-multiple": true,
-      },
-    );
-    expect(workflowStep(collectorJob, "Verify runtime parity tier statuses").run).toContain(
-      "tiers=(agentic standard)",
+    expect(collectorJob.name).toBe("Verify QA Lab runtime-pair lanes");
+    expect(workflowStep(collectorJob, "Download runtime-pair lane artifacts").with).toMatchObject({
+      pattern: "release-qa-runtime-pair-lane-*-${{ needs.resolve_target.outputs.revision }}",
+      "merge-multiple": true,
+    });
+    expect(workflowStep(collectorJob, "Verify runtime-pair lane statuses").run).toContain(
+      "lanes=(core)",
     );
     expect(workflowStep(collectorJob, "Upload runtime parity artifacts").with?.name).toBe(
       "release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}",
@@ -2873,51 +2943,72 @@ describe("package artifact reuse", () => {
   });
 
   it.each([
-    { telegramEnabled: true, telegramResult: "success" },
-    { telegramEnabled: false, telegramResult: "skipped" },
-  ])(
-    "accepts Telegram result $telegramResult when enabled=$telegramEnabled",
-    ({ telegramEnabled, telegramResult }) => {
-      const result = runPackageAcceptanceSummary({ telegramEnabled, telegramResult });
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
+    {
+      expectedOutput: undefined,
+      expectedStatus: 0,
+      name: "accepts Telegram result success when enabled=true",
+      params: { telegramEnabled: true, telegramResult: "success" },
     },
-  );
+    {
+      expectedOutput: undefined,
+      expectedStatus: 0,
+      name: "accepts Telegram result skipped when enabled=false",
+      params: { telegramEnabled: false, telegramResult: "skipped" },
+    },
+    {
+      expectedOutput: "::error::package_telegram ended with skipped",
+      expectedStatus: 1,
+      name: "rejects a skipped Telegram lane when package acceptance enabled it",
+      params: { telegramEnabled: true, telegramResult: "skipped" },
+    },
+    {
+      expectedOutput: "::error::No Docker acceptance transport ran",
+      expectedStatus: 1,
+      name: "rejects package acceptance when no Docker transport ran",
+      params: {
+        dockerArtifactResult: "skipped",
+        dockerRegistryResult: "skipped",
+        telegramEnabled: false,
+        telegramResult: "skipped",
+      },
+    },
+    {
+      expectedOutput:
+        "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
+      expectedStatus: 0,
+      name: "preserves advisory handling for an unexpectedly skipped Telegram lane",
+      params: { advisory: true, telegramEnabled: true, telegramResult: "skipped" },
+    },
+  ] as const)("$name", ({ expectedOutput, expectedStatus, params }) => {
+    const result = runPackageAcceptanceSummary(params);
 
-  it("rejects a skipped Telegram lane when package acceptance enabled it", () => {
-    const result = runPackageAcceptanceSummary({
-      telegramEnabled: true,
-      telegramResult: "skipped",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::package_telegram ended with skipped");
+    expect(result.status).toBe(expectedStatus);
+    if (expectedOutput) {
+      expect(result.stdout).toContain(expectedOutput);
+    } else {
+      expect(result.stderr).toBe("");
+    }
   });
 
-  it("rejects package acceptance when no Docker transport ran", () => {
-    const result = runPackageAcceptanceSummary({
-      dockerArtifactResult: "skipped",
-      dockerRegistryResult: "skipped",
-      telegramEnabled: false,
-      telegramResult: "skipped",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::No Docker acceptance transport ran");
-  });
-
-  it("preserves advisory handling for an unexpectedly skipped Telegram lane", () => {
-    const result = runPackageAcceptanceSummary({
-      advisory: true,
+  it("allows beta callers to make only Telegram package acceptance advisory", () => {
+    const telegramResult = runPackageAcceptanceSummary({
+      telegramAdvisory: true,
       telegramEnabled: true,
-      telegramResult: "skipped",
+      telegramResult: "failure",
+    });
+    const dockerResult = runPackageAcceptanceSummary({
+      dockerArtifactResult: "failure",
+      telegramAdvisory: true,
+      telegramEnabled: true,
+      telegramResult: "success",
     });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
+    expect(telegramResult.status).toBe(0);
+    expect(telegramResult.stdout).toContain(
+      "::warning::package_telegram ended with failure; package acceptance is advisory for this caller.",
     );
+    expect(dockerResult.status).toBe(1);
+    expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
   });
 
   it("gives release build steps enough Node heap", () => {
@@ -2984,8 +3075,10 @@ describe("package artifact reuse", () => {
       "Verify release checks accepted Tideclaw alpha advisory lanes",
       "release_checks_advisory_only",
       "release_check_blocking_job",
-      'or (.name | startswith("Run QA Lab runtime parity tier ("))',
+      'if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then',
+      'or (.name | startswith("Run QA Lab runtime-pair lane ("))',
       'or .name == "Run QA Lab live Discord lane"',
+      'or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))',
       "is a package-safety Tideclaw alpha release-check lane",
       '"Run package acceptance" | \\',
       '"Run package acceptance / "*)',
@@ -3097,6 +3190,8 @@ describe("package artifact reuse", () => {
       'candidate_manifest="${package_dir}/package-candidate.json"',
       'find "${package_dir}" -type f -name "*.tgz"',
       "package artifact manifest contains duplicate package metadata",
+      "Array.isArray(manifest.corePackageTarballs)",
+      "manifest.corePackageTarballs === undefined",
       "package artifact tarball set does not match preflight manifest",
       "package candidate manifest does not match the OpenClaw tarball",
       "Package Telegram artifact SHA-256 differs from package_sha256.",
@@ -3168,7 +3263,7 @@ describe("package artifact reuse", () => {
 
   it("uses bounded Convex lease waits instead of GitHub concurrency for CI Telegram consumers", () => {
     const telegramJobs = [
-      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "1800000"],
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E", "600000"],
       [RELEASE_TELEGRAM_QA_WORKFLOW, "run_telegram", "Run Telegram live lane", "600000"],
       [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane", "1800000"],
       [
@@ -3370,82 +3465,79 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("accepts a successful dispatched Telegram child", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "success",
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it.each(["cancelled", "failure", "skipped"] as const)(
-    "rejects a %s selected Telegram child",
-    (currentResult) => {
-      const result = runReleaseChecksSummary({
-        currentAttempt: "2",
-        currentResult,
-        telegramSelected: true,
-      });
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(
-        `::error::qa_live_telegram_release_checks ended with ${currentResult}`,
-      );
+  it.each([
+    {
+      emptyStderr: true,
+      expected: [],
+      name: "accepts a successful dispatched Telegram child",
+      params: { currentAttempt: "2", currentResult: "success" },
+      status: 0,
     },
-  );
-
-  it("accepts a skipped unselected Telegram dispatch", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "skipped",
-      telegramSelected: false,
-    });
-
-    expect(result.status).toBe(0);
-  });
-
-  it("keeps target resolution blocking before release children", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "skipped",
-      resolveResult: "failure",
-      telegramSelected: false,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::resolve_target ended with failure");
-  });
-
-  it("keeps a cancelled Telegram child non-blocking for Tideclaw alpha", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "cancelled",
-      workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
-    });
-
-    expect(result.status).toBe(0);
+    ...(["cancelled", "failure", "skipped"] as const).map((currentResult) => ({
+      emptyStderr: false,
+      expected: [`::error::qa_live_telegram_release_checks ended with ${currentResult}`],
+      name: `rejects a ${currentResult} selected Telegram child`,
+      params: { currentAttempt: "2", currentResult, telegramSelected: true },
+      status: 1,
+    })),
+    {
+      emptyStderr: false,
+      expected: [],
+      name: "accepts a skipped unselected Telegram dispatch",
+      params: { currentAttempt: "2", currentResult: "skipped", telegramSelected: false },
+      status: 0,
+    },
+    {
+      emptyStderr: false,
+      expected: ["::error::resolve_target ended with failure"],
+      name: "keeps target resolution blocking before release children",
+      params: {
+        currentAttempt: "2",
+        currentResult: "skipped",
+        resolveResult: "failure",
+        telegramSelected: false,
+      },
+      status: 1,
+    },
+    {
+      emptyStderr: false,
+      expected: ["qa_live_telegram_release_checks ended with cancelled", "Tideclaw alpha"],
+      name: "keeps a cancelled Telegram child non-blocking for Tideclaw alpha",
+      params: {
+        currentAttempt: "2",
+        currentResult: "cancelled",
+        workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
+      },
+      status: 0,
+    },
+  ] as const)("$name", ({ emptyStderr, expected, params, status }) => {
+    const result = runReleaseChecksSummary(params);
     const output = `${result.stdout}\n${result.stderr}`;
-    expect(output).toContain("qa_live_telegram_release_checks ended with cancelled");
-    expect(output).toContain("Tideclaw alpha");
+
+    expect(result.status).toBe(status);
+    if (emptyStderr) {
+      expect(result.stderr).toBe("");
+    }
+    for (const snippet of expected ?? []) {
+      expect(output).toContain(snippet);
+    }
   });
 
-  it("summarizes queue time separately from execution time in full validation", () => {
+  it("summarizes start delay separately from execution time in full validation", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
     const summaryJob = parsedWorkflow.jobs?.summary;
     const manifestStep = workflowStep(summaryJob ?? {}, "Write release validation manifest");
 
     expect(workflow).toContain("### Slowest jobs: ${label}");
-    expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("### Longest start delays: ${label}");
     expect(workflow).toContain("Write release validation manifest");
     expect(workflow).toContain("PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}");
     expect(workflow).toContain("Upload release validation manifest");
     expect(workflow).toContain("Failed child detail: ${label}");
     expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");
     expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
-    expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
+    expect(workflow).toContain("| Job | Result | Start delay minutes | Run minutes |");
     expect(workflow).toContain(
       'gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
     );
@@ -3458,10 +3550,7 @@ describe("package artifact reuse", () => {
   it("keeps release publish creation compatible with gh api and prerelease notes", () => {
     const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
-    const maintainerSkill = readFileSync(
-      ".agents/skills/release-openclaw-maintainer/SKILL.md",
-      "utf8",
-    );
+    const maintainerSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
     const fullReleaseWorkflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -3584,12 +3673,22 @@ describe("package artifact reuse", () => {
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
     expect(npmWorkflow).toContain("tarballSha256");
+    expect(npmWorkflow).toContain("corePackageTarballs");
     expect(npmWorkflow).toContain("dependencyTarballs");
+    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
     expect(npmWorkflow).toContain('packageName: "@openclaw/ai"');
+    expect(npmWorkflow).toContain('packageName: "@openclaw/gateway-protocol"');
+    expect(npmWorkflow).toContain('packageName: "@openclaw/gateway-client"');
+    expect(npmWorkflow).toContain(
+      "CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
+    );
     expect(npmWorkflow).toContain("AI_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("GATEWAY_PROTOCOL_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("GATEWAY_CLIENT_TARBALL_SHA256");
     expect(npmWorkflow).toContain("does not match openclaw");
     expect(npmWorkflow).toContain("Frozen target does not depend on @openclaw/ai");
-    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
+    expect(npmWorkflow).toContain("core-packages-SHA256SUMS");
+    expect(npmWorkflow).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
     expect(npmWorkflow).toContain('verify_args=("$TARBALL_PATH" "$PACKAGE_VERSION")');
     expect(npmWorkflow).toContain("Frozen target without an @openclaw/ai dependency");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
@@ -3661,10 +3760,7 @@ describe("package artifact reuse", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
     const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
-    const releaseSkill = readFileSync(
-      ".agents/skills/release-openclaw-maintainer/SKILL.md",
-      "utf8",
-    );
+    const releaseSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
 
     expect(releaseWorkflow).toContain(
       "Stable OpenClaw publish requires an explicit windows_node_tag.",
@@ -4601,6 +4697,117 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
+  });
+
+  it("executes shared release candidate identity validation with its JSON input", () => {
+    const selectedSha = "a".repeat(40);
+    const candidate = {
+      packageArtifactName: "docker-e2e-package-123-1",
+      packageArtifactId: "123",
+      packageArtifactDigest: "b".repeat(64),
+      packageArtifactRunId: "456",
+      packageArtifactRunAttempt: "1",
+      packageFileName: "openclaw-current.tgz",
+      packageSourceSha: selectedSha,
+      packageSha256: "c".repeat(64),
+      packageVersion: "2026.7.2",
+      imageArtifactName: "docker-e2e-shared-images-123-1",
+      imageArtifactId: "789",
+      imageArtifactDigest: "d".repeat(64),
+      imageArtifactRunId: "456",
+      imageArtifactRunAttempt: "1",
+      imageArchiveSha256: "e".repeat(64),
+    };
+    const validation = workflowStep(
+      workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+      "Validate shared release candidate identity",
+    ).run;
+    expect(validation).toBeDefined();
+
+    const valid = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
+        SELECTED_SHA: selectedSha,
+      },
+    });
+    expect(valid.status, valid.stderr).toBe(0);
+
+    const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
+        SELECTED_SHA: "f".repeat(40),
+      },
+    });
+    expect(mismatched.status).not.toBe(0);
+  });
+
+  it("keeps release history checks blobless", () => {
+    const fullHistoryCheckouts: Array<[string, string, string]> = [
+      [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],
+      [
+        RELEASE_CHECKS_WORKFLOW,
+        "resolve_target",
+        "Checkout selected ref for reachability fallback",
+      ],
+      [RELEASE_CHECKS_WORKFLOW, "prepare_release_package", "Checkout trusted workflow ref"],
+      [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "Checkout package workflow ref"],
+      [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Checkout"],
+      [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Checkout"],
+      [OPENCLAW_NPM_RELEASE_WORKFLOW, "preflight_openclaw_npm", "Checkout"],
+      [OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request", "Checkout"],
+      [
+        ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+        "prepare",
+        "Checkout public source ref",
+      ],
+    ];
+
+    for (const [workflowPath, jobName, stepName] of fullHistoryCheckouts) {
+      expect(
+        workflowStep(workflowJob(workflowPath, jobName), stepName).with,
+        workflowPath,
+      ).toMatchObject({
+        "fetch-depth": 0,
+        filter: "blob:none",
+      });
+    }
+
+    const metadataOnlyCheckouts: Array<[string, string, string]> = [
+      [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],
+      [
+        RELEASE_CHECKS_WORKFLOW,
+        "resolve_target",
+        "Checkout selected ref for reachability fallback",
+      ],
+    ];
+    for (const [workflowPath, jobName, stepName] of metadataOnlyCheckouts) {
+      expect(workflowStep(workflowJob(workflowPath, jobName), stepName).with).toMatchObject({
+        "sparse-checkout": "package.json",
+        "sparse-checkout-cone-mode": false,
+      });
+    }
+
+    const clawHubPackJob = workflowJob(
+      PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
+      "pack_plugins_clawhub_artifacts",
+    );
+    const clawHubPackTargetGuard = workflowStep(clawHubPackJob, "Validate target revision");
+    expect(clawHubPackTargetGuard.env?.TARGET_SHA).toBe(
+      "${{ needs.preview_plugins_clawhub.outputs.ref_revision }}",
+    );
+    expect(clawHubPackTargetGuard.run).toContain('[[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]');
+    expect(workflowStep(clawHubPackJob, "Checkout").with).toMatchObject({
+      ref: "${{ needs.preview_plugins_clawhub.outputs.ref_revision }}",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+    });
+    expect(clawHubPackJob.steps?.map((step) => step.name)).not.toContain(
+      "Checkout target revision",
+    );
   });
 
   it("validates the macOS release handoff before the GitHub release page exists", () => {

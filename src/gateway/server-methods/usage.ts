@@ -63,7 +63,7 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -88,6 +88,10 @@ type DateRange = { startMs: number; endMs: number; includeUntimestamped?: boolea
 // Keep validation and parsed timestamps in one result so handlers cannot forward
 // an invalid or backwards window to the usage loaders.
 type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: string };
+// 100 years: callers requesting unbounded history should use `range: "all"`.
+// Larger explicit day counts would overflow ECMAScript Date arithmetic and
+// surface as a misleading "calendar day does not exist" error from the resolver.
+const MAX_USAGE_DAYS = 366 * 100;
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "utc-offset"; utcOffsetMinutes: number }
@@ -140,7 +144,7 @@ function resolveSessionUsageFileOrRespond(
   sessionId: string;
   sessionFile: string;
 } | null {
-  const { entry, storePath } = loadSessionEntry(key);
+  const { entry, storePath } = loadSessionEntryReadOnly(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
@@ -388,14 +392,17 @@ const formatDateParts = (year: number, monthIndex: number, day: number): string 
   `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.floor(raw);
+  const fromFinite = (n: number): number | undefined => {
+    if (!Number.isFinite(n)) {
+      return undefined;
+    }
+    return Math.min(Math.floor(n), MAX_USAGE_DAYS);
+  };
+  if (typeof raw === "number") {
+    return fromFinite(raw);
   }
   if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.floor(parsed);
-    }
+    return fromFinite(Number(raw));
   }
   return undefined;
 };
@@ -898,12 +905,7 @@ async function loadCostUsageSummaryCached(params: {
   const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
-  if (
-    cached?.summary &&
-    cached.updatedAt &&
-    now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS &&
-    cached.summary.cacheStatus?.status !== "refreshing"
-  ) {
+  if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
     return cached.summary;
   }
 
@@ -934,9 +936,11 @@ async function loadCostUsageSummaryCached(params: {
         })
   )
     .then((summary) => {
+      // Refresh work is independent; retaining freshness prevents fleet rescans while it runs.
+      // The short TTL still picks up a completed refresh promptly.
       setCostUsageCache(cacheKey, {
         summary,
-        updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
+        updatedAt: Date.now(),
       });
       return summary;
     })

@@ -409,6 +409,20 @@ export function createChangedCheckPlan(result, options = {}) {
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
     result.paths.some((filePath) =>
+      /^(?:src\/|packages\/|extensions\/|config\/env-var-count-budget\.txt$|scripts\/check-env-var-count\.mjs$)/u.test(
+        filePath,
+      ),
+    )
+  ) {
+    add("environment variable count ratchet", [
+      "check:env-var-count",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some((filePath) =>
       /^(?:src\/|ui\/src\/|packages\/|extensions\/|\.oxlintrc\.json$|config\/max-lines-baseline\.txt$|scripts\/check-max-lines-ratchet\.mjs$)/u.test(
         filePath,
       ),
@@ -465,7 +479,7 @@ export function createChangedCheckPlan(result, options = {}) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
   if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API baseline", ["plugin-sdk:api:check"]);
+    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
@@ -506,6 +520,9 @@ export function createChangedCheckPlan(result, options = {}) {
   const lanes = result.lanes;
   const runAll = lanes.all;
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
+  if (lanes.scripts || lanes.tooling || lanes.testRoot) {
+    add("script declaration contracts", ["check:script-declarations"]);
+  }
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -545,7 +562,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
-
   if (lanes.core) {
     addTypecheck("typecheck core", ["tsgo:core"]);
   }
@@ -631,6 +647,14 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (hasMacosAppCiPath(result.paths)) {
     add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
+  if (lanes.apps || lanes.core) {
+    addCommand(
+      "native state schema version guard",
+      "node",
+      ["scripts/check-native-state-schema-version.mjs"],
+      baseEnv,
+    );
   }
 
   if (lanes.core || lanes.extensions) {

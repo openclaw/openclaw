@@ -11,6 +11,7 @@ import {
   moveDeliveryQueueEntryToFailed,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
+  type DeliveryQueueCompletionRetention,
   type DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
 import { generateSecureUuid } from "./secure-random.js";
@@ -28,6 +29,8 @@ type SessionDeliveryContext = {
 
 type SessionDeliveryRetryPolicy = {
   maxRetries?: number;
+  /** Retain terminal ownership when the durable producer can replay forever. */
+  completionRetention?: DeliveryQueueCompletionRetention;
 };
 
 export type SessionDeliveryRoute = {
@@ -139,7 +142,9 @@ export async function enqueueSessionDelivery(
     entry,
     metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
-    reviveFailedOrCorruptPending: Boolean(params.idempotencyKey),
+    ...(params.completionRetention === "permanent"
+      ? { insertOnly: true }
+      : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
   });
   return id;
 }

@@ -143,6 +143,7 @@ vi.mock("./subagent-announce-origin.js", () => ({
 vi.mock("./subagent-registry-steer-runtime.js", () => ({
   replaceSubagentRunAfterSteer: vi.fn(() => true),
   finalizeInterruptedSubagentRun: vi.fn(async () => 1),
+  reserveSwarmCollectorLaunch: vi.fn(() => true),
 }));
 
 function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -233,7 +234,7 @@ describe("subagent-orphan-recovery", () => {
     vi.restoreAllMocks();
   });
 
-  it("recovers orphaned sessions with abortedLastRun=true", async () => {
+  it("recovers orphaned collectors with their non-interactive output contract", async () => {
     const sessionEntry = {
       sessionId: "session-abc",
       updatedAt: Date.now(),
@@ -244,7 +245,10 @@ describe("subagent-orphan-recovery", () => {
       "agent:main:subagent:test-session-1": sessionEntry,
     });
 
-    const run = createTestRunRecord();
+    const run = createTestRunRecord({
+      collect: true,
+      outputSchema: { type: "object", required: ["answer"] },
+    });
     const activeRuns = new Map<string, SubagentRunRecord>();
     activeRuns.set("run-1", run);
 
@@ -266,6 +270,12 @@ describe("subagent-orphan-recovery", () => {
     expect(opts.sessionKey).toBe("agent:main:subagent:test-session-1");
     expect(opts.message).toContain("gateway reload");
     expect(opts.message).toContain("Test task: implement feature X");
+    expect(opts.swarmCollector).toBe(true);
+    expect(opts.swarmOutputSchema).toEqual({ type: "object", required: ["answer"] });
+    expect(subagentRegistrySteerRuntime.reserveSwarmCollectorLaunch).toHaveBeenCalledWith(
+      "run-1",
+      opts.idempotencyKey,
+    );
     expect(dispatchAgent.mock.calls[0]?.[1]).toBe(10_000);
     expect(subagentRegistrySteerRuntime.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
     const replaceParams = requireRecord(
@@ -678,7 +688,7 @@ describe("subagent-orphan-recovery", () => {
     const store = mockSingleAbortedSession({
       subagentRecovery: {
         automaticAttempts: 2,
-        lastAttemptAt: now - 30_000,
+        lastAttemptAt: now - 2 * 60_000,
         lastRunId: "previous-run",
       },
     });
@@ -708,6 +718,31 @@ describe("subagent-orphan-recovery", () => {
     expect(recovery.lastRunId).toBe("run-1");
     expect(recovery.wedgedAt).toBeTypeOf("number");
     expect(recovery.wedgedReason).toContain("recovery blocked");
+  });
+
+  it("starts a new attempt burst after the two-minute re-wedge window", async () => {
+    const now = Date.now();
+    const expiredRecovery = {
+      automaticAttempts: 2,
+      lastAttemptAt: now - 2 * 60_000 - 1,
+      lastRunId: "previous-run",
+    };
+    const store = mockSingleAbortedSession({ subagentRecovery: expiredRecovery });
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => createActiveRuns(createTestRunRecord()),
+    });
+
+    expect(result.recovered).toBe(1);
+    expect(dispatchAgent).toHaveBeenCalledOnce();
+    expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
+    const sessionEntry = requireRecord(
+      store["agent:main:subagent:test-session-1"],
+      "updated session entry",
+    );
+    const recovery = requireRecord(sessionEntry.subagentRecovery, "subagent recovery");
+    expect(recovery.automaticAttempts).toBe(1);
+    expect(recovery.lastRunId).toBe("run-1");
   });
 
   it("skips already tombstoned wedged sessions without rewriting them", async () => {

@@ -6,11 +6,8 @@ import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { PluginHookInboundDebounceResult } from "openclaw/plugin-sdk/plugin-entry";
-import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -30,10 +27,7 @@ import {
   WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
-import { getPrimaryIdentityId } from "../identity.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
-import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   attachWebInboxToSocket,
@@ -56,6 +50,7 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import { createEchoTracker } from "./monitor/echo.js";
+import { resolveWhatsAppInboundDebounceDecision } from "./monitor/inbound-debounce-policy.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -93,8 +88,7 @@ function resolveWebMonitorConfigSnapshot(params: {
       ...params.cfg.channels,
       whatsapp: {
         ...params.cfg.channels?.whatsapp,
-        ackReaction: account.ackReaction,
-        messagePrefix: account.messagePrefix,
+        responsePrefix: account.messagePrefix,
         allowFrom: account.allowFrom,
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
@@ -105,7 +99,6 @@ function resolveWebMonitorConfigSnapshot(params: {
         streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
         groups: account.groups,
-        direct: account.direct,
       },
     },
   } satisfies WhatsAppRuntimeConfig;
@@ -145,53 +138,6 @@ function resolveExplicitWhatsAppDebounceOverride(params: {
   return channel.debounceMs;
 }
 
-type WhatsAppConversationDebounceEntry = {
-  debounceMs?: number;
-};
-
-function normalizeDebounceMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.trunc(value)
-    : undefined;
-}
-
-function resolveWhatsAppScopedDebounceMs(params: {
-  entries?: Record<string, WhatsAppConversationDebounceEntry | undefined>;
-  id?: string | null;
-}): number | undefined {
-  const specific = params.id
-    ? normalizeDebounceMs(params.entries?.[params.id]?.debounceMs)
-    : undefined;
-  if (specific !== undefined) {
-    return specific;
-  }
-  return normalizeDebounceMs(params.entries?.["*"]?.debounceMs);
-}
-
-function resolveWhatsAppConversationDebounceMs(params: {
-  cfg: ReturnType<typeof getRuntimeConfig>;
-  msg: WebInboundMessageInput;
-  defaultMs: number;
-}): number {
-  const normalized = normalizeWebInboundMessage(params.msg);
-  const admission = normalized.admission;
-  if (!admission || admission.ingress.decision !== "allow") {
-    return params.defaultMs;
-  }
-  const channel = params.cfg.channels?.whatsapp;
-  const scoped =
-    admission.conversation.kind === "group"
-      ? resolveWhatsAppScopedDebounceMs({
-          entries: channel?.groups,
-          id: admission.conversation.id,
-        })
-      : resolveWhatsAppScopedDebounceMs({
-          entries: channel?.direct,
-          id: admission.conversation.id,
-        });
-  return scoped ?? params.defaultMs;
-}
-
 function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
   return (
     error instanceof WhatsAppAuthUnstableError ||
@@ -203,6 +149,7 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
+const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -234,7 +181,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
-  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
+  const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??
@@ -279,7 +226,7 @@ export async function monitorWebChannel(
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
   const reconnectCatchUpWindowMs = Math.min(
     Math.max(messageTimeoutMs, 60_000),
-    WHATSAPP_INBOUND_DEDUPE_TTL_MS,
+    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
   );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
@@ -316,17 +263,12 @@ export async function monitorWebChannel(
           accountId: account.accountId,
         }),
       });
-      const shouldDebounceByDefault = (msg: WebInboundMessageInput) => {
+      const shouldDebounce = (msg: WebInboundMessageInput) => {
         const normalized = normalizeWebInboundMessage(msg);
         return shouldDebounceTextInbound({
           text: normalized.payload.commandBody ?? normalized.payload.body,
           cfg,
-          hasMedia: Boolean(
-            normalized.payload.media?.path ||
-            normalized.payload.media?.type ||
-            normalized.payload.media?.url ||
-            normalized.payload.mediaItems?.length,
-          ),
+          hasMedia: Boolean(normalized.payload.media?.path || normalized.payload.media?.type),
           allowDebounce: !(
             normalized.payload.location ||
             normalized.quote?.id ||
@@ -334,67 +276,13 @@ export async function monitorWebChannel(
           ),
         });
       };
-      const resolveDebounceDecision = (
-        msg: WebInboundMessageInput,
-      ): PluginHookInboundDebounceResult | Promise<PluginHookInboundDebounceResult> => {
-        const normalized = normalizeWebInboundMessage(msg);
-        if (
-          isControlCommandMessage(normalized.payload.commandBody ?? normalized.payload.body, cfg)
-        ) {
-          return { action: "bypass" };
-        }
-        const admission = requireWhatsAppInboundAdmission(normalized);
-        const senderKey =
-          admission.conversation.kind === "group"
-            ? (getPrimaryIdentityId(normalized.platform.sender ?? null) ??
-              normalized.platform.senderJid ??
-              normalized.platform.senderE164 ??
-              normalized.platform.senderName ??
-              admission.sender.id)
-            : admission.conversation.id;
-        const effectiveDebounceMs = resolveWhatsAppConversationDebounceMs({
-          cfg: loadCurrentMonitorConfig(),
-          msg: normalized,
-          defaultMs: inboundDebounceMs,
+      const resolveDebounceDecision = (msg: WebInboundMessageInput) =>
+        resolveWhatsAppInboundDebounceDecision({
+          cfg,
+          msg,
+          defaultDebounceMs: inboundDebounceMs,
+          shouldDebounce,
         });
-        const defaultAction =
-          effectiveDebounceMs > 0 && shouldDebounceByDefault(normalized) ? "debounce" : "bypass";
-        const defaultDecision =
-          defaultAction === "debounce"
-            ? ({ action: "debounce", debounceMs: effectiveDebounceMs } as const)
-            : ({ action: "bypass" } as const);
-        const hookRunner = getGlobalHookRunner();
-        if (hookRunner?.hasHooks("inbound_debounce")) {
-          return hookRunner
-            .runInboundDebounce(
-              {
-                debounceKey: `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
-                defaultAction,
-                defaultDebounceMs: effectiveDebounceMs,
-                conversationKind: admission.conversation.kind,
-                message: {
-                  hasMedia: Boolean(
-                    normalized.payload.media?.path ||
-                    normalized.payload.media?.type ||
-                    normalized.payload.media?.url ||
-                    normalized.payload.mediaItems?.length,
-                  ),
-                  hasLocation: Boolean(normalized.payload.location),
-                  hasQuote: Boolean(normalized.quote?.id || normalized.quote?.body),
-                },
-              },
-              {
-                channelId: "whatsapp",
-                accountId: admission.accountId,
-                conversationId: admission.conversation.id,
-                messageId: normalized.event.id,
-                senderId: admission.sender.id,
-              },
-            )
-            .then((pluginDecision) => pluginDecision ?? defaultDecision);
-        }
-        return defaultDecision;
-      };
 
       let connection;
       try {
@@ -436,12 +324,6 @@ export async function monitorWebChannel(
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
               debounceMs: inboundDebounceMs,
-              resolveDebounceMs: (msg) =>
-                resolveWhatsAppConversationDebounceMs({
-                  cfg: loadCurrentMonitorConfig(),
-                  msg,
-                  defaultMs: inboundDebounceMs,
-                }),
               appendReplyWindow: connectionLocal.openedAfterRecentInbound
                 ? {
                     afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
@@ -450,7 +332,7 @@ export async function monitorWebChannel(
                   }
                 : undefined,
               resolveDebounceDecision,
-              shouldDebounce: shouldDebounceByDefault,
+              shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
               disconnectRetryPolicy: reconnectPolicy,

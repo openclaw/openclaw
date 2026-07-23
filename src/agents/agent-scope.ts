@@ -367,8 +367,17 @@ export function resolveAgentEffectiveModelPrimary(
   );
 }
 
-function findMutableAgentEntry(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
+function findMutableAgentEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Pick<AgentConfig, "model"> | undefined {
   const id = normalizeAgentId(agentId);
+  const entryKey = Object.keys(cfg.agents?.entries ?? {}).find(
+    (key) => normalizeAgentId(key) === id,
+  );
+  if (entryKey) {
+    return cfg.agents?.entries?.[entryKey];
+  }
   return cfg.agents?.list?.find((entry) => normalizeAgentId(entry?.id) === id);
 }
 
@@ -388,13 +397,19 @@ export function setAgentEffectiveModelPrimary(
   cfg: OpenClawConfig,
   agentId: string,
   primary: string,
+  options: { forceAgent?: boolean } = {},
 ): AgentModelPrimaryWriteTarget {
   const id = normalizeAgentId(agentId);
-  if (resolveAgentExplicitModelPrimary(cfg, id)) {
+  // forceAgent pins the write to the agent entry even without an explicit
+  // model, so a per-agent override never rewrites the shared default route.
+  if (options.forceAgent || resolveAgentExplicitModelPrimary(cfg, id)) {
     const entry = findMutableAgentEntry(cfg, id);
     if (entry) {
       entry.model = updateAgentModelPrimary(entry.model, primary);
       return "agent";
+    }
+    if (options.forceAgent) {
+      throw new Error(`Could not resolve configured agent "${id}".`);
     }
   }
   cfg.agents ??= {};

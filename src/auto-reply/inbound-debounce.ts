@@ -339,12 +339,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
 
-    let existing = buffers.get(key);
+    const existing = buffers.get(key);
     let previousFlush: Promise<void> | undefined;
     if (existing) {
       if (params.canCombine && !params.canCombine(existing.items, item)) {
         previousFlush = flushKey(key);
-        existing = undefined;
       } else {
         existing.items.push(item);
         existing.debounceMs = debounceMs;
@@ -408,7 +407,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     try {
       rawDecision = params.resolveDecision(item);
     } catch (error) {
-      rawDecision = Promise.reject(error);
+      rawDecision = Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
     const isSynchronousBypass =
       rawDecision !== undefined && "action" in rawDecision && rawDecision.action === "bypass";

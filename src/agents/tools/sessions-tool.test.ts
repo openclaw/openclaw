@@ -23,6 +23,27 @@ describe("sessions tool", () => {
     expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("sessions");
   });
 
+  it("advertises the full model-visible sidebar presence contract", () => {
+    const tool = createSessionsTool({ agentSessionKey: "agent:main:main", callGateway: vi.fn() });
+    expect(tool.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["patch", "group_list", "group_set", "group_rename", "group_delete"],
+        },
+        label: { type: "string", description: expect.stringContaining("Empty string clears") },
+        statusNote: { type: "string", maxLength: 120 },
+        attention: {
+          type: "string",
+          enum: ["clear", "hand", "key", "alert", "flag", "lock", "hourglass"],
+        },
+        ttlMinutes: { type: "integer", minimum: 1, maximum: 120 },
+        archived: { type: "boolean", description: expect.stringContaining("without deleting") },
+      },
+    });
+  });
+
   it("patches its session, then reverts a failed agent-selected model", async () => {
     await withTempDir({ prefix: "openclaw-sessions-tool-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -367,6 +388,57 @@ describe("sessions tool", () => {
       tool.execute("set-invalid", { action: "group_set", names: ["Now", null] }),
     ).rejects.toThrow("names[1] required");
     expect(callGateway).toHaveBeenCalledTimes(4);
+  });
+
+  it("patches and clears a sidebar icon", async () => {
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("patch-icon", { action: "patch", icon: "  name:lobster  " });
+    await tool.execute("clear-icon", { action: "patch", icon: "" });
+
+    expect(callGateway.mock.calls).toEqual([
+      ["sessions.patch", { key: "agent:main:main", icon: "name:lobster" }],
+      ["sessions.patch", { key: "agent:main:main", icon: null }],
+    ]);
+  });
+
+  it("patches and clears title, status, attention, and archive state", async () => {
+    const callGateway = vi.fn(async () => ({ ok: true }));
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway: callGateway as never,
+    });
+
+    await tool.execute("declare", {
+      action: "patch",
+      label: "Waiting on staging",
+      statusNote: "Blocked: need the staging password",
+      attention: "key",
+      ttlMinutes: 45,
+      archived: true,
+    });
+    await tool.execute("clear", { action: "patch", label: "", attention: "clear" });
+
+    expect(callGateway.mock.calls).toEqual([
+      [
+        "sessions.patch",
+        {
+          key: "agent:main:main",
+          label: "Waiting on staging",
+          statusNote: "Blocked: need the staging password",
+          attention: "key",
+          ttlMinutes: 45,
+          archived: true,
+        },
+      ],
+      ["sessions.patch", { key: "agent:main:main", label: null, attention: null }],
+    ]);
   });
 
   it("rejects an empty patch", async () => {

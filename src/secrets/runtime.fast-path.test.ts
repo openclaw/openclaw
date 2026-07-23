@@ -22,6 +22,7 @@ const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() =
       diagnostics: [],
     },
     degradedOwners: [],
+    secretOwners: [],
   })),
   runtimePrepareImportMock: vi.fn(),
 }));
@@ -44,7 +45,11 @@ vi.mock("./runtime-prepare.runtime.js", () => {
 });
 
 vi.mock("./runtime-owner-assignments.js", () => ({
-  resolveAndApplySecretAssignments: async () => [],
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
+  }),
 }));
 
 function emptyAuthStore(): AuthProfileStore {
@@ -335,12 +340,12 @@ describe("secrets runtime fast path", () => {
       agentDirs: [agentDir],
       loadAuthStore: loadInitialAuthStore,
     });
+    activateSecretsRuntimeSnapshot(initialSnapshot);
     newerSnapshot = await prepareSecretsRuntimeSnapshot({
       config: config(19_002),
       agentDirs: [agentDir],
       loadAuthStore: emptyAuthStore,
     });
-    activateSecretsRuntimeSnapshot(initialSnapshot);
 
     publishNewerSnapshot = true;
     await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);

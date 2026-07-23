@@ -88,10 +88,12 @@ function createNetworkProxyThreadLifecycleAppServerOptions() {
 function createParams(sessionFile: string, workspaceDir: string) {
   const params = createRunAttemptParams(sessionFile, workspaceDir);
   params.disableTools = false;
+  params.config = undefined;
   return params;
 }
 
 const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  "features.goals": false,
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,

@@ -82,6 +82,47 @@ describe("channel ingress drain", () => {
     });
   });
 
+  it("dispatches a resubmitted dead letter exactly once", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<Payload>({
+        channelId: "test",
+        accountId: "a",
+        stateDir,
+      });
+      await queue.enqueue("evt-replay", { text: "recover" }, { laneKey: "lane-a" });
+      const originalClaim = await queue.claim("evt-replay", { ownerId: "worker" });
+      if (!originalClaim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(originalClaim, { reason: "handler-error", failedAt: 20 });
+      if (!queue.resubmit) {
+        throw new Error("Expected queue.resubmit");
+      }
+      await expect(queue.resubmit("evt-replay", { resubmittedAt: 30 })).resolves.toMatchObject({
+        kind: "resubmitted",
+        record: { attempts: 0, receivedAt: 30 },
+      });
+
+      const dispatch = vi.fn(
+        async (_event: unknown, lifecycle: ChannelIngressDispatchLifecycle) => {
+          await lifecycle.onAdopted();
+        },
+      );
+      const drain = createChannelIngressDrain<Payload>({ queue, dispatchClaimedEvent: dispatch });
+
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+        id: "evt-replay",
+        payload: { text: "recover" },
+        attempts: 0,
+      });
+      drain.dispose();
+    });
+  });
+
   it("complete-at-adoption: adoption tombstones; settle is not required", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<Payload>({
@@ -146,13 +187,61 @@ describe("channel ingress drain", () => {
       expect(await queue.listPending()).toEqual([]);
 
       // Abandon releases for retry (attempts increment).
-      expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
+      await expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned();
       await drain.waitForIdle();
       await vi.waitFor(async () => {
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
         expect(pending[0]?.attempts).toBeGreaterThanOrEqual(1);
       });
+      drain.dispose();
+    });
+  });
+
+  it("lets callers await an abandoned claim release", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<Payload>({
+        channelId: "test",
+        accountId: "a",
+        stateDir,
+      });
+      await queue.enqueue("evt-await-abandon", { text: "x" }, { laneKey: "l1" });
+
+      let finishRelease!: () => void;
+      const releaseGate = new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      });
+      const release = vi.fn(async (...args: Parameters<typeof queue.release>) => {
+        await releaseGate;
+        return await queue.release(...args);
+      });
+      const capturedLifecycles: ChannelIngressDispatchLifecycle[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue: { ...queue, release },
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          capturedLifecycles.push(lifecycle);
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await vi.waitFor(() => expect(capturedLifecycles).toHaveLength(1));
+
+      let abandoned = false;
+      const abandonment = Promise.resolve(
+        expectDefined(capturedLifecycles[0], "deferred lifecycle").onAbandoned(),
+      ).then(() => {
+        abandoned = true;
+      });
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+      expect(abandoned).toBe(false);
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      finishRelease();
+      await abandonment;
+      expect(abandoned).toBe(true);
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending()).toHaveLength(1);
       drain.dispose();
     });
   });
@@ -172,7 +261,7 @@ describe("channel ingress drain", () => {
           const bound = bindIngressLifecycleToReplyOptions(lifecycle);
           bound.turnAdoptionLifecycle.onDeferred();
           // Never admitted — abandon path releases claim.
-          bound.turnAdoptionLifecycle.onAbandoned();
+          await bound.turnAdoptionLifecycle.onAbandoned();
           return { kind: "deferred" };
         },
       });
@@ -512,7 +601,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("bindIngressLifecycleToReplyOptions returns only turnAdoptionLifecycle", () => {
+  it("bindIngressLifecycleToReplyOptions returns only turnAdoptionLifecycle", async () => {
     const abort = new AbortController();
     const calls: string[] = [];
     const bound = bindIngressLifecycleToReplyOptions({
@@ -535,11 +624,11 @@ describe("channel ingress drain", () => {
     expect("onAdopted" in bound).toBe(false);
     expect(Object.keys(bound)).toEqual(["turnAdoptionLifecycle"]);
     bound.turnAdoptionLifecycle.onDeferred();
-    bound.turnAdoptionLifecycle.onAbandoned();
+    await bound.turnAdoptionLifecycle.onAbandoned();
     expect(calls).toEqual(["deferred", "abandoned"]);
     calls.length = 0;
     bound.turnAdoptionLifecycle.onDeferred();
-    void bound.turnAdoptionLifecycle.onAdopted();
+    await bound.turnAdoptionLifecycle.onAdopted();
     expect(calls).toEqual(["deferred", "adopted"]);
   });
 
@@ -724,7 +813,7 @@ describe("channel ingress drain", () => {
     });
   });
 
-  it("does not steal live peer-drain claims; recovers after dispose", async () => {
+  it("does not steal live peer-drain claims; recovers after owner abort", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<Payload>({
         channelId: "test",
@@ -739,9 +828,11 @@ describe("channel ingress drain", () => {
       });
       const firstDispatches: string[] = [];
       const secondDispatches: string[] = [];
+      const firstAbort = new AbortController();
 
       const first = createChannelIngressDrain<Payload>({
         queue,
+        abortSignal: firstAbort.signal,
         dispatchClaimedEvent: async (event, lifecycle) => {
           firstDispatches.push(event.id);
           await firstHold;
@@ -765,14 +856,17 @@ describe("channel ingress drain", () => {
       await second.drainOnce();
       expect(secondDispatches).toEqual([]);
 
-      first.dispose();
-      // After dispose, second drain can recover the orphan claim.
+      firstAbort.abort();
+      // Aborted owners retire before an uncooperative handler returns, allowing
+      // the replacement drain to recover under the claim-token fence.
       const recovered = await second.recoverStaleClaims();
       expect(recovered).toBeGreaterThanOrEqual(1);
       await second.drainOnce();
       await second.waitForIdle();
       expect(secondDispatches).toEqual(["evt-peer"]);
       releaseFirst();
+      await first.waitForIdle();
+      first.dispose();
       second.dispose();
     });
   });

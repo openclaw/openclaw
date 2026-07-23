@@ -19,12 +19,13 @@ import {
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
-import { MissingAgentHarnessError } from "./harness/errors.js";
+import { AgentHarnessSessionSupersededError, MissingAgentHarnessError } from "./harness/errors.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -199,7 +200,7 @@ const authRuntimeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
+vi.mock("./auth-profiles.runtime.js", () => authRuntimeMock.runtime);
 
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
@@ -239,7 +240,10 @@ function setDefaultPluginMetadataSnapshot(): void {
   });
 }
 
-afterEach(resetModelFallbackTestState);
+afterEach(() => {
+  resetModelFallbackTestState();
+  cliBackendsTesting.resetDepsForTest();
+});
 
 beforeEach(() => {
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
@@ -1351,10 +1355,15 @@ describe("runWithModelFallback", () => {
   });
 
   it("prefers a prepared harness over a colliding CLI runtime id", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        { id: "codex", pluginId: "test-codex-cli", config: { command: "codex" } },
+      ],
+    });
     const cfg = makeCfg({
       agents: {
         defaults: {
-          cliBackends: { codex: { command: "codex" } },
           model: { primary: "anthropic/claude-sonnet-4-6" },
         },
       },
@@ -1444,9 +1453,6 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           model: {
             primary: "claude-cli/opus",
           },
@@ -1529,6 +1535,33 @@ describe("runWithModelFallback", () => {
         run,
       }),
     ).rejects.toBe(takeoverError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a superseded harness session generation on fallback models", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const supersededError = new AgentHarnessSessionSupersededError(
+      "Codex session generation is no longer current: session-old",
+    );
+    const run = vi.fn().mockRejectedValue(supersededError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(supersededError);
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -2353,6 +2386,7 @@ describe("runWithModelFallback", () => {
             primary: "openai/gpt-4.1-mini",
             fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
           },
+          modelPolicy: { allow: ["openai/gpt-4.1-mini"] },
         },
       },
     });

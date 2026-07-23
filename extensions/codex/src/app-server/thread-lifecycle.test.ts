@@ -1223,6 +1223,12 @@ describe("Codex app-server turn params", () => {
     const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
     expect(resumeParams).toEqual({
       threadId: "thread-1",
+      excludeTurns: true,
+      initialTurnsPage: {
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      },
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",

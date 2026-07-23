@@ -4,14 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import {
+  updatePluginsAfterCoreUpdate,
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   resolvePostSyncPluginUpdateSkipIds,
 } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,
@@ -20,6 +25,7 @@ import {
 } from "./update-command-service.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
+  hasLoadedLaunchdKeepAliveSupervisor,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   shouldUseLegacyProcessRestartAfterUpdate,
@@ -46,6 +52,45 @@ describe("resolveGatewayInstallEntrypoint", () => {
     await expect(
       resolveGatewayInstallEntrypoint(root, async (candidate) => candidate === entryPath),
     ).resolves.toBe(entryPath);
+  });
+});
+
+describe("applyPostPluginConfigValidation", () => {
+  const pluginUpdate = {
+    status: "ok",
+    changed: true,
+    sync: {
+      changed: true,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [],
+    },
+    npm: { changed: true, outcomes: [] },
+    integrityDrifts: [],
+    warnings: [],
+  } satisfies PostCorePluginUpdateResult;
+
+  it("fails closed when updated plugin migrations leave config invalid", () => {
+    expect(applyPostPluginConfigValidation(pluginUpdate, false)).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        {
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    });
+  });
+
+  it("preserves an earlier plugin update error", () => {
+    const failed = {
+      ...pluginUpdate,
+      status: "error" as const,
+      reason: "plugin-sync-failed",
+    };
+
+    expect(applyPostPluginConfigValidation(failed, false)).toBe(failed);
   });
 });
 
@@ -760,6 +805,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       port: 18790,
       expectedVersion: "2026.5.3",
       env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
+      supervisorKeepsAlive: true,
     });
   });
 
@@ -795,6 +841,36 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     expect(result.health.waitOutcome).toBe("timeout");
     expect(result.launchAgentRecovery?.attempted).toBe(true);
     expect(result.launchAgentRecovery?.recovered).toBe(true);
+  });
+});
+
+describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
+  it("requires a loaded LaunchAgent before extending restart health", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const isLoaded = vi.fn().mockResolvedValue(false);
+    const service = { isLoaded } as unknown as GatewayService;
+
+    await expect(
+      hasLoadedLaunchdKeepAliveSupervisor({ service, env: { OPENCLAW_PROFILE: "work" } }),
+    ).resolves.toBe(false);
+    isLoaded.mockResolvedValue(true);
+    await expect(hasLoadedLaunchdKeepAliveSupervisor({ service })).resolves.toBe(true);
+
+    platformSpy.mockRestore();
+  });
+
+  it("does not inspect KeepAlive supervision outside macOS", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const isLoaded = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      hasLoadedLaunchdKeepAliveSupervisor({
+        service: { isLoaded } as unknown as GatewayService,
+      }),
+    ).resolves.toBe(false);
+    expect(isLoaded).not.toHaveBeenCalled();
+
+    platformSpy.mockRestore();
   });
 });
 

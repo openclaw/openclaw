@@ -8,6 +8,7 @@ export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   CliBackendAuthEpochMode,
+  CliBackendConfig,
   CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
@@ -16,7 +17,11 @@ export type {
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
+  CliBackendResolveRuntimeToolAvailability,
+  CliBackendResolveRuntimeToolAvailabilityContext,
+  CliBackendRuntimeToolAvailability,
   CliBackendSideQuestionToolMode,
+  CliBackendToolAvailability,
   CliBackendThinkingLevel,
   CliBundleMcpMode,
   PluginTextTransforms,
@@ -179,7 +184,6 @@ export type {
   ProviderBuiltInModelSuppressionResult,
   ProviderCatalogContext,
   ProviderCatalogResult,
-  ProviderDiscoveryContext,
   ProviderModernModelPolicyContext,
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
@@ -247,5 +251,5 @@ export type {
 } from "./plugin-registration.types.js";
 export type { PluginHookRegistration } from "./hook-types.js";
 export type { PluginTextTransformRegistration } from "./plugin-api.types.js";
-export type { ProviderDiscoveryOrder } from "./provider-catalog.types.js";
+export type { ProviderCatalogOrder } from "./provider-catalog.types.js";
 export type { ProviderPlugin } from "./provider-plugin.types.js";

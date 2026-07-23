@@ -110,8 +110,17 @@ export function buildStatusCommandOverviewRows(
   const degradedSecretsValue =
     degradedSecretOwners.length > 0
       ? params.warn(
-          `${degradedSecretOwners.length} unavailable · ${degradedSecretOwners
+          `${degradedSecretOwners.length} degraded · ${degradedSecretOwners
             .map((owner) => `${owner.ownerKind}:${owner.ownerId}`)
+            .join(", ")}`,
+        )
+      : null;
+  const degradedPlugins = params.summary.degradedPlugins ?? [];
+  const degradedPluginsValue =
+    degradedPlugins.length > 0
+      ? params.warn(
+          `${degradedPlugins.length} configured-unavailable · ${degradedPlugins
+            .map((plugin) => plugin.pluginId)
             .join(", ")}`,
         )
       : null;
@@ -176,6 +185,7 @@ export function buildStatusCommandOverviewRows(
         : []),
       { Item: "Memory", Value: memoryValue },
       ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
+      ...(degradedPluginsValue ? [{ Item: "Degraded plugins", Value: degradedPluginsValue }] : []),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },

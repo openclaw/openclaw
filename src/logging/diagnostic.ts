@@ -22,6 +22,8 @@ import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
+  stopDiagnosticRunActivityTracking,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity.js";
 import {
@@ -79,8 +81,6 @@ const webhookStats = {
 };
 
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
-const MIN_STUCK_SESSION_WARN_MS = 1_000;
-const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 5 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 3;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
@@ -130,6 +130,11 @@ type StartDiagnosticHeartbeatOptions = {
   sampleLiveness?: SampleDiagnosticLiveness;
   recoverStuckSession?: RecoverStuckSession;
   startupGraceMs?: number;
+  /** Keeps fake-timer recovery tests fast without reopening runtime config tuning. */
+  testTimings?: {
+    stuckSessionWarnMs: number;
+    stuckSessionAbortMs: number;
+  };
 };
 
 function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] | undefined {
@@ -142,10 +147,6 @@ function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] |
   } catch {
     return undefined;
   }
-}
-
-function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
-  return config?.diagnostics?.memoryPressureSnapshot === true;
 }
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -474,31 +475,12 @@ function formatDiagnosticWorkLabels(work: DiagnosticWorkSnapshot): string {
   return parts.join(" ");
 }
 
-export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
-  const raw = config?.diagnostics?.stuckSessionWarnMs;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return DEFAULT_STUCK_SESSION_WARN_MS;
-  }
-  const rounded = Math.floor(raw);
-  if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
-    return DEFAULT_STUCK_SESSION_WARN_MS;
-  }
-  return rounded;
+export function resolveStuckSessionWarnMs(): number {
+  return DEFAULT_STUCK_SESSION_WARN_MS;
 }
 
-export function resolveStuckSessionAbortMs(
-  config: OpenClawConfig | undefined,
-  stuckSessionWarnMs: number,
-): number {
-  const raw = config?.diagnostics?.stuckSessionAbortMs;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
-  }
-  const rounded = Math.floor(raw);
-  if (rounded <= 0) {
-    return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
-  }
-  return Math.max(stuckSessionWarnMs, rounded);
+export function resolveStuckSessionAbortMs(stuckSessionWarnMs: number): number {
+  return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
 }
 
 function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
@@ -1214,6 +1196,9 @@ export function startDiagnosticHeartbeat(
   if (!areDiagnosticsEnabledForProcess() || !isDiagnosticsEnabled(config)) {
     return;
   }
+  // The heartbeat owns run-activity event tracking for its full lifecycle.
+  // Importing diagnostic helpers must not seed process-global listeners.
+  startDiagnosticRunActivityTracking();
   startDiagnosticStabilityRecorder();
   installDiagnosticStabilityFatalHook();
   if (heartbeatInterval) {
@@ -1232,8 +1217,9 @@ export function startDiagnosticHeartbeat(
         heartbeatConfig = undefined;
       }
     }
-    const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
-    const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig, stuckSessionWarnMs);
+    const stuckSessionWarnMs = opts?.testTimings?.stuckSessionWarnMs ?? resolveStuckSessionWarnMs();
+    const stuckSessionAbortMs =
+      opts?.testTimings?.stuckSessionAbortMs ?? resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);
     const now = Date.now();
     const heartbeatElapsedMs =
@@ -1268,7 +1254,7 @@ export function startDiagnosticHeartbeat(
     } else {
       emitDiagnosticMemorySample({
         emitSample: shouldRecordMemorySample,
-        writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
+        writeCriticalBundle: false,
         resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
       });
     }
@@ -1374,6 +1360,7 @@ export function stopDiagnosticHeartbeat() {
     heartbeatInterval = null;
   }
   lastDiagnosticHeartbeatTickAt = undefined;
+  stopDiagnosticRunActivityTracking();
   stopDiagnosticLivenessSampler();
   stopDiagnosticStabilityRecorder();
   uninstallDiagnosticStabilityFatalHook();
@@ -1384,6 +1371,7 @@ export function getDiagnosticSessionStateCountForTest(): number {
 }
 
 export function resetDiagnosticStateForTest(): void {
+  stopDiagnosticHeartbeat();
   resetDiagnosticSessionRecoveryCoordinatorForTest();
   resetDiagnosticSessionStateForTest();
   resetDiagnosticActivityForTest();
@@ -1392,7 +1380,6 @@ export function resetDiagnosticStateForTest(): void {
   webhookStats.processed = 0;
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
-  stopDiagnosticHeartbeat();
   resetDiagnosticMemoryForTest();
   resetDiagnosticPhasesForTest();
   resetDiagnosticStabilityRecorderForTest();

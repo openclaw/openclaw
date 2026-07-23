@@ -1,6 +1,7 @@
 // Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatChannelProgressDraftLineForEntry,
@@ -14,7 +15,6 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
@@ -147,6 +147,8 @@ type CreateFeishuReplyDispatcherParams = {
   accountId?: string;
   identity?: OutboundIdentity;
   mentionTargets?: MentionTarget[];
+  /** Mentions required on every mention-capable text/card reply, used for bot-authored ingress. */
+  requiredMentionTargets?: MentionTarget[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -169,6 +171,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
     identity,
     mentionTargets,
+    requiredMentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
@@ -255,10 +258,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  // Streaming cards default to enabled: only streaming.mode "off" (or raw
-  // render mode) disables them, matching the legacy `streaming: false` boolean.
+  // Streaming cards cannot attach native mention recipients. Bot-authored ingress
+  // therefore uses normal cards/posts so every emitted unit reaches the peer bot.
   const streamingEnabled =
-    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" && renderMode !== "raw";
+    !requiredMentionTargets?.length &&
+    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" &&
+    renderMode !== "raw";
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const coreBlockStreamingEnabled = blockStreamingEnabled === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
@@ -500,7 +505,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     useCard: boolean;
     infoKind?: string;
     firstChunkMentions?: MentionTarget[];
-    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
+    chunkMentions?: MentionTarget[];
+    sendChunk: (params: {
+      chunk: string;
+      isFirst: boolean;
+      mentions?: MentionTarget[];
+    }) => Promise<void>;
   }) => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
@@ -521,13 +531,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             limit: textChunkLimit,
             mode: chunkMode,
             firstChunkMentions: paramsLocal.firstChunkMentions,
+            chunkMentions: paramsLocal.chunkMentions,
             initialChunks,
           }),
     );
     for (const [index, chunk] of chunks.entries()) {
+      const mentions = [
+        ...(paramsLocal.chunkMentions ?? []),
+        ...(index === 0 ? (paramsLocal.firstChunkMentions ?? []) : []),
+      ];
       await paramsLocal.sendChunk({
         chunk,
         isFirst: index === 0,
+        mentions: mentions.length > 0 ? mentions : undefined,
       });
       markVisibleReplySent();
     }
@@ -549,6 +565,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
+          allowTopLevelReplyFallback,
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
@@ -559,7 +576,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text: options.fallbackText,
             useCard: false,
             infoKind: "final",
-            sendChunk: async ({ chunk }) => {
+            chunkMentions: requiredMentionTargets,
+            sendChunk: async ({ chunk, mentions }) => {
               await sendMessageFeishu({
                 cfg,
                 to: sendTarget,
@@ -568,6 +586,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
+                ...(mentions ? { mentions } : {}),
               });
             },
           });
@@ -586,7 +605,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: fallbackText,
                 useCard: false,
                 infoKind: "final",
-                sendChunk: async ({ chunk }) => {
+                chunkMentions: requiredMentionTargets,
+                sendChunk: async ({ chunk, mentions }) => {
                   await sendMessageFeishu({
                     cfg,
                     to: sendTarget,
@@ -595,6 +615,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     replyInThread: effectiveReplyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
+                    ...(mentions ? { mentions } : {}),
                   });
                 },
               });
@@ -621,6 +642,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       replyInThread: effectiveReplyInThread,
       allowTopLevelReplyFallback,
       accountId,
+      ...(requiredMentionTargets?.length ? { mentions: requiredMentionTargets } : {}),
     });
     markVisibleReplySent();
     params.runtime.error?.(
@@ -638,7 +660,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return nextIdleSideEffects;
   };
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+  const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     responsePrefix: prefixContext.responsePrefix,
     responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, agentId),
@@ -668,6 +690,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       await Promise.resolve(typingCallbacks?.onReplyStart?.());
     },
+    onIdle: () => queueIdleSideEffects(),
+    onCleanup: () => {
+      typingCallbacks?.onCleanup?.();
+    },
+  };
+  const handleDeliveryError = async (error: unknown, info: { kind: string }) => {
+    streamingCloseErroredForReply = true;
+    streamingClosedForReply = false;
+    params.runtime.error?.(
+      `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
+    );
+    await queueIdleSideEffects({ markClosedForReply: false }).catch((cleanupError: unknown) =>
+      params.runtime.error?.(
+        `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
+      ),
+    );
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload: ReplyPayload, info) => {
       if (info?.kind === "final") {
         skippedFinalReason = null;
@@ -751,7 +791,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 useCard: false,
                 infoKind: "block",
                 firstChunkMentions,
-                sendChunk: async ({ chunk, isFirst }) => {
+                chunkMentions: requiredMentionTargets,
+                sendChunk: async ({ chunk, mentions }) => {
                   await sendMessageFeishu({
                     cfg,
                     to: sendTarget,
@@ -760,7 +801,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     replyInThread: effectiveReplyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
-                    ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+                    ...(mentions ? { mentions } : {}),
                   });
                 },
               });
@@ -814,7 +855,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text,
             useCard: true,
             infoKind: info?.kind,
-            sendChunk: async ({ chunk }) => {
+            chunkMentions: requiredMentionTargets,
+            sendChunk: async ({ chunk, mentions }) => {
               await sendStructuredCardFeishu({
                 cfg,
                 to: sendTarget,
@@ -825,6 +867,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 accountId,
                 header: cardHeader,
                 note: cardNote,
+                ...(mentions ? { mentions } : {}),
               });
             },
           });
@@ -836,7 +879,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             useCard: false,
             infoKind: info?.kind,
             firstChunkMentions,
-            sendChunk: async ({ chunk, isFirst }) => {
+            chunkMentions: requiredMentionTargets,
+            sendChunk: async ({ chunk, mentions }) => {
               await sendMessageFeishu({
                 cfg,
                 to: sendTarget,
@@ -845,7 +889,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
-                ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+                ...(mentions ? { mentions } : {}),
               });
             },
           });
@@ -859,24 +903,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       }
     },
-    onError: async (error, info) => {
-      streamingCloseErroredForReply = true;
-      streamingClosedForReply = false;
-      params.runtime.error?.(
-        `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
-      );
-      await queueIdleSideEffects({ markClosedForReply: false });
-    },
-    onIdle: () => queueIdleSideEffects(),
-    onCleanup: () => {
-      typingCallbacks?.onCleanup?.();
-    },
-  });
+    // The shipped SDK declaration stays void; core still awaits the runtime promise.
+    onError: handleDeliveryError as NonNullable<ChannelInboundTurnPlan["delivery"]["onError"]>,
+  };
 
   return {
-    dispatcher,
+    dispatcherOptions,
+    delivery,
     replyOptions: {
-      ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
@@ -952,7 +986,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
     },
-    markDispatchIdle,
     ensureNoVisibleReplyFallback,
     getVisibleReplyState: () => ({
       visibleReplySent,

@@ -10,6 +10,8 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -36,6 +38,10 @@ import {
 } from "./cli-runner/delivery-evidence.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
+import {
+  runClaudeCliAgentTurnWithDiagnostics,
+  type ClaudeCliRunDiagnosticLifecycle,
+} from "./cli-runner/run-diagnostics.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
@@ -176,14 +182,6 @@ export async function isCliBindingFlushed(
     }
   }
   return false;
-}
-
-function flushSessionManagerTranscript(sessionManager: SessionManager): void {
-  (
-    sessionManager as unknown as {
-      replacePersistedTranscript?: () => void;
-    }
-  ).replacePersistedTranscript?.();
 }
 
 async function assertSuccessfulCliRuntimeBindingCurrent(
@@ -460,15 +458,27 @@ async function finalizeCliContextEngineTurn(params: {
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
+  const params = {
+    ...paramsInput,
+    lifecycleGeneration,
+  };
+  // Observability services register before turns and keep subscriptions process-stable.
+  // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runCliAgentInternal({
-      ...paramsInput,
-      lifecycleGeneration,
-    }),
+    isClaudeCliProvider(params.provider) &&
+    areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventListeners()
+      ? runClaudeCliAgentTurnWithDiagnostics(params, (diagnosticLifecycle) =>
+          runCliAgentInternal(params, diagnosticLifecycle),
+        )
+      : runCliAgentInternal(params),
   );
 }
 
-async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
+async function runCliAgentInternal(
+  params: RunCliAgentParams,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
@@ -536,7 +546,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   let result: EmbeddedAgentRunResult | undefined;
   let runError: unknown;
   try {
-    result = await runPreparedCliAgent(context);
+    result = await runPreparedCliAgent(context, diagnosticLifecycle);
   } catch (error) {
     runError = error;
   }
@@ -565,6 +575,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
     if (runError || result?.didSendViaMessagingTool === true) {
       log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
     } else {
+      diagnosticLifecycle?.setPhase("cleanup");
       runError =
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
@@ -578,6 +589,7 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
   context: PreparedCliRunContext,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
@@ -867,7 +879,7 @@ export async function runPreparedCliAgent(
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );
-      flushSessionManagerTranscript(sessionManager);
+      sessionManager.flushPendingPersistence();
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
@@ -908,7 +920,14 @@ export async function runPreparedCliAgent(
               timeoutMs,
             },
           };
-    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
+    diagnosticLifecycle?.setPhase("send");
+    const output = await executePreparedCliRun(
+      attemptContext,
+      cliSessionIdToUse,
+      diagnosticLifecycle ? { onPhase: diagnosticLifecycle.setPhase } : undefined,
+    );
+    // Test facades and non-instrumented executors may not signal the boundary.
+    diagnosticLifecycle?.setPhase("resolve");
     const sourceReplyMirror = resolveCliSourceReplyMirror(output);
     const assistantText = sourceReplyMirror.delivered
       ? (sourceReplyMirror.visibleText ?? "")
@@ -1409,6 +1428,7 @@ export async function runPreparedCliAgent(
           `CLI run also failed before backend cleanup: ${formatErrorMessage(runError)}`,
         );
       }
+      diagnosticLifecycle?.setPhase("cleanup");
       throw cleanupError;
     }
     cliBackendLog.warn(

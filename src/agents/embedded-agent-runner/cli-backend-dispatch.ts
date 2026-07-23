@@ -193,6 +193,8 @@ async function runEmbeddedAgentViaCliBackend(
       agentDir: params.agentDir,
       config: params.config,
       prompt: params.prompt,
+      imagePrompt: params.prompt,
+      media: params.media,
       provider: dispatch.provider,
       model: params.model,
       thinkLevel: params.thinkLevel,
@@ -207,6 +209,7 @@ async function runEmbeddedAgentViaCliBackend(
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
+      onExecutionPhase: params.onExecutionPhase,
       cliToolAvailability,
       // One-shot helper run: fresh CLI process, no warm live session left
       // behind, and no implicit message sends without an explicit target.

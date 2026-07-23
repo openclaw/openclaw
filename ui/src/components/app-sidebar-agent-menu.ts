@@ -6,11 +6,13 @@ import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
+import "./sidebar-build-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
@@ -40,7 +42,11 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
-type AgentMenuAgent = { id: string; name?: string; identity?: { name?: string; emoji?: string } };
+type AgentMenuAgent = {
+  id: string;
+  name?: string;
+  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
+};
 
 type SidebarAgentMenuParams = {
   position: { x: number; bottom: number } | null;
@@ -55,6 +61,7 @@ type SidebarAgentMenuParams = {
   gatewayVersion: string | null;
   themeMode: ThemeMode;
   agentUnreadCount: (agentId: string) => number;
+  agentApprovalCount: (agentId: string) => number;
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
@@ -123,18 +130,32 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const label = normalizeAgentLabel(agent);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
-  const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
+  const approvals = params.agentApprovalCount(agentId);
+  const approvalLabel = t(
+    approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
+    { count: String(approvals) },
+  );
+  const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
       type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
-      <span slot="icon" class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-      <span class="sidebar-customize-menu__text">${label}</span>
+      <span slot="icon">${renderAgentSelectAvatar(option)}</span>
+      ${renderAgentSelectCopy(option)}
+      ${approvals > 0
+        ? html`<span
+            slot="details"
+            class="sidebar-agent-approval-count"
+            aria-label=${approvalLabel}
+            title=${approvalLabel}
+            >${approvals}</span
+          >`
+        : nothing}
       ${active
         ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
             >${icons.check}</span
@@ -224,11 +245,17 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             case `${COMMAND_VALUE_PREFIX}agent-settings`:
               params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
               break;
+            case `${COMMAND_VALUE_PREFIX}new-agent`:
+              params.onNavigate("custodian", { search: "?intent=new-agent" });
+              break;
             case `${COMMAND_VALUE_PREFIX}settings`:
               params.onNavigate("config");
               break;
             case `${COMMAND_VALUE_PREFIX}pair-mobile`:
               params.onPairMobile();
+              break;
+            case `${COMMAND_VALUE_PREFIX}apps`:
+              params.onNavigate("apps");
               break;
           }
         }}
@@ -303,6 +330,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing}
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+          <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
+        </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item"
           value="command:capabilities"
@@ -330,6 +361,10 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         >
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
           <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
+        </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
+          <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-agent-menu__help"

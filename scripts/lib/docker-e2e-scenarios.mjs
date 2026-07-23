@@ -21,6 +21,8 @@ const rootManagedVpsUpgradeCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade";
 const updateRestartAuthCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth";
+const updateRunPackageSelfUpgradeCommand =
+  "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 
 const LIVE_RETRY_PATTERNS = [
@@ -163,6 +165,12 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    }),
+    npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
+      resources: ["service"],
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 45 * 60 * 1000,
       weight: 3,
     }),
   ];
@@ -372,6 +380,24 @@ export const mainLanes = [
   npmLane(
     "npm-onboard-slack-channel-agent",
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
+  // Prerelease validation must pair frozen core bytes with matching target plugin bytes.
+  // Keep the registry-backed lanes above unchanged for published-package proof.
+  npmLane(
+    "npm-onboard-discord-candidate-channel-agent",
+    liveDockerScriptCommand(
+      "e2e/npm-onboard-channel-agent-docker.sh",
+      "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
+    ),
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
+  npmLane(
+    "npm-onboard-slack-candidate-channel-agent",
+    liveDockerScriptCommand(
+      "e2e/npm-onboard-channel-agent-docker.sh",
+      "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
+    ),
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   npmLane(

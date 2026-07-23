@@ -55,12 +55,15 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 type MockSessionSocket = {
+  end: ReturnType<typeof vi.fn>;
   ev: {
     on: ReturnType<typeof vi.fn>;
     off: ReturnType<typeof vi.fn>;
   };
   ws: EventEmitter & {
     close: ReturnType<typeof vi.fn>;
+    readonly isClosed: boolean;
+    readonly isClosing: boolean;
   };
   user: { id: string };
 };
@@ -81,9 +84,21 @@ vi.mock("./session.js", async () => {
   return {
     ...actual,
     createWaSocket: vi.fn(async () => {
+      let closed = false;
       const ws = new EventEmitter() as MockSessionSocket["ws"];
-      ws.close = vi.fn();
+      Object.defineProperties(ws, {
+        isClosed: { get: () => closed },
+        isClosing: { get: () => false },
+      });
+      ws.close = vi.fn(() => {
+        closed = true;
+        ws.emit("close");
+      });
       const socket: MockSessionSocket = {
+        end: vi.fn(() => {
+          closed = true;
+          ws.emit("close");
+        }),
         ev: {
           on: vi.fn(),
           off: vi.fn(),
@@ -125,8 +140,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
-    cfg.messages?.messagePrefix,
+  resolveMessagePrefix: (_cfg: unknown, _agentId: string, opts?: { configured?: string }) =>
+    opts?.configured,
   runEmbeddedAgent: vi.fn(),
 }));
 
@@ -247,7 +262,6 @@ export function createWebListenerFactoryCapture(): AnyExport {
     | {
         onMessage: (msg: WebInboundMessageInput) => Promise<void>;
         shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
-        resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
         resolveDebounceDecision?: (
           msg: WebInboundMessageInput,
         ) => Promise<InboundDebounceDecision | undefined>;
@@ -259,7 +273,6 @@ export function createWebListenerFactoryCapture(): AnyExport {
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessageInput) => Promise<void>;
     shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
-    resolveDebounceMs?: (msg: WebInboundMessageInput) => number | undefined;
     resolveDebounceDecision?: (
       msg: WebInboundMessageInput,
     ) => Promise<InboundDebounceDecision | undefined>;

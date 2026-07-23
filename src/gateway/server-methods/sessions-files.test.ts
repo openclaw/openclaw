@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Session file method tests cover transcript-linked files plus the workspace browser.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -32,6 +33,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
+    loadSessionEntryReadOnly: hoisted.loadSessionEntry,
   };
 });
 
@@ -162,6 +164,7 @@ describe("sessions.files RPC handlers", () => {
     );
 
     expect(payload.root).toBe(workspaceRoot);
+    expect(payload.gitCheckout).toBe(false);
     expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
       ["package.json", "modified"],
       ["ui/chat.ts", "modified"],
@@ -179,6 +182,11 @@ describe("sessions.files RPC handlers", () => {
       ["ui", "directory", "modified"],
       ["package.json", "file", "modified"],
     ]);
+    execFileSync("git", ["-C", workspaceRoot, "init", "-q", "-b", "main"]);
+    const gitPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:main" }),
+    );
+    expect(gitPayload.gitCheckout).toBe(true);
   });
 
   it("reveals the same workspace root returned by sessions.files.list", async () => {
@@ -957,22 +965,29 @@ describe("sessions.files RPC handlers", () => {
     expect(fs.existsSync(path.join(workspaceRoot, "missing.txt"))).toBe(false);
   });
 
-  it("rejects replacement content over the workspace preview limit", async () => {
-    const error = expectError(
-      await invokeSessionFilesHandler("sessions.files.set", {
-        sessionKey: "agent:main:main",
-        path: "ui/vite.config.ts",
-        content: "x".repeat(256 * 1024 + 1),
-        expectedHash: hashContent("export default {};\n"),
-      }),
-    );
+  it("rejects oversized replacement content before allocating an encoded Buffer", async () => {
+    const content = "é".repeat(128 * 1024 + 1);
+    const bufferFrom = vi.spyOn(Buffer, "from");
+    try {
+      const error = expectError(
+        await invokeSessionFilesHandler("sessions.files.set", {
+          sessionKey: "agent:main:main",
+          path: "ui/vite.config.ts",
+          content,
+          expectedHash: hashContent("export default {};\n"),
+        }),
+      );
 
-    expect(error.details).toMatchObject({
-      maxPreviewBytes: 256 * 1024,
-      path: "ui/vite.config.ts",
-      size: 256 * 1024 + 1,
-      type: "session_file_too_large",
-    });
+      expect(error.details).toMatchObject({
+        maxPreviewBytes: 256 * 1024,
+        path: "ui/vite.config.ts",
+        size: 256 * 1024 + 2,
+        type: "session_file_too_large",
+      });
+      expect(bufferFrom).not.toHaveBeenCalled();
+    } finally {
+      bufferFrom.mockRestore();
+    }
   });
 
   it("round-trips a UTF-8 BOM through get and set", async () => {

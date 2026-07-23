@@ -33,7 +33,7 @@ type RecordedWireCall = {
 
 type CapturedDispatcherOptions = {
   deliver: (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => Promise<unknown>;
-  onError?: (err: unknown, info: { kind: string }) => void;
+  onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
   typingCallbacks?: {
     onReplyStart?: () => Promise<void>;
     onIdle?: () => void;
@@ -453,7 +453,6 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       botId: "BBOT",
       textLimit: 4000,
       typingReaction: "",
-      removeAckAfterReply: false,
       allowFrom: [],
       // Mirrors the monitor's setSlackThreadStatus wiring
       // (extensions/slack/src/monitor/context.ts): typing travels over
@@ -548,7 +547,7 @@ async function setupSlackTrace(
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are
       // not counted as dispatched.
-      turn.options.onError?.(err, { kind });
+      await turn.options.onError?.(err, { kind });
     }
   };
 

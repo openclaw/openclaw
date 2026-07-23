@@ -162,6 +162,7 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
+    getLatestMcpAppChannelView,
     getMessagingToolSentMediaUrls,
     getMessagingToolSentTargets,
     getMessagingToolSentTexts,
@@ -216,6 +217,7 @@ export function completeEmbeddedAttemptResult(
   }
 
   if (
+    attempt.operation !== "settled-tool-finalization" &&
     input.hookRunner?.hasHooks("llm_output") &&
     shouldRunLlmOutputHooksForAttempt({ promptErrorSource: state.promptErrorSource })
   ) {
@@ -384,6 +386,7 @@ export function completeEmbeddedAttemptResult(
     bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarning.warningSignaturesSeen,
     bootstrapPromptWarningSignature: input.bootstrapPromptWarning.signature,
     assistantTexts,
+    latestMcpAppChannelView: getLatestMcpAppChannelView(),
     lastAssistantTextMessageIndex: getLastAssistantTextMessageIndex(),
     toolMetas: toolMetasNormalized,
     acceptedSessionSpawns,

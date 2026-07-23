@@ -247,17 +247,17 @@ describe("session hook context wiring", () => {
     expectFields(event, {
       sessionKey,
       reason: "new",
-      transcriptArchived: true,
+      transcriptArchived: false,
     });
     expectFields(context, { sessionKey, agentId: "main", sessionId: event?.sessionId });
-    expect(event?.sessionFile).toContain(".jsonl.reset.");
 
     const [startEvent, startContext] = requireHookCall(
       hookRunnerMocks.runSessionStart,
       "session_start",
     );
     expectFields(startEvent, { resumedFrom: "old-session" });
-    expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+    expect(event?.nextSessionId).toBe("old-session");
+    expect(startEvent?.sessionId).toBe("old-session");
     expectFields(startContext, { sessionId: startEvent?.sessionId });
   });
 
@@ -396,16 +396,17 @@ describe("session hook context wiring", () => {
         sessionId: "daily-session",
         text: "daily",
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        reset: { mode: "daily" },
       });
 
       const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
       const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
       expectFields(event, {
         reason: "daily",
-        transcriptArchived: true,
+        transcriptArchived: false,
       });
-      expect(event?.sessionFile).toContain(".jsonl.reset.");
       expect(event?.nextSessionId).toBe(startEvent?.sessionId);
+      expect(startEvent?.sessionId).toBe("daily-session");
     } finally {
       vi.useRealTimers();
     }

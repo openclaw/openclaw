@@ -235,7 +235,9 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toContain("rate-limited");
+        expect(result.payload.text).toBe(
+          "⚠️ The model request was rate-limited. Please try again in a few minutes.",
+        );
       }
     },
   );
@@ -270,6 +272,35 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }
     },
   );
+
+  it("scopes fallback exhaustion copy to the attempted models", () => {
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: Object.assign(new Error("fallback exhausted"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "anthropic",
+            model: "claude-opus-4-1",
+            error: "rate limited",
+            reason: "rate_limit",
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "overloaded",
+            reason: "overloaded",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+      sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toBe(
+      "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.",
+    );
+  });
 
   it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
     const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
@@ -371,6 +402,67 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       }
     },
   );
+
+  it.each(["tool_execution_started", "assistant_output_started"] as const)(
+    "does not replay a CLI timeout after %s",
+    async (phase) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onExecutionPhase?.({ phase });
+        throw new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
+          reason: "timeout",
+          provider: "claude-cli",
+          code: "cli_overall_timeout",
+          cliTimeout: {
+            mode: "overall",
+            timeoutSeconds: 600,
+            observedActivity: true,
+            activeToolCount: phase === "tool_execution_started" ? 1 : 0,
+            backgroundTaskCount: 0,
+          },
+        });
+      });
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toContain("overall turn limit");
+        expect(result.payload.text).toContain("did not replay this turn automatically");
+      }
+    },
+  );
+
+  it("warns about partial effects when an active CLI tool hits the no-output watchdog", async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onExecutionPhase?.({ phase: "tool_execution_started" });
+      throw new FailoverError("CLI produced no output for 120s and was terminated.", {
+        reason: "timeout",
+        provider: "claude-cli",
+        code: "cli_no_output_timeout",
+        cliTimeout: {
+          mode: "no-output",
+          timeoutSeconds: 120,
+          observedActivity: true,
+          activeToolCount: 1,
+          backgroundTaskCount: 0,
+        },
+      });
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("no-output watchdog");
+      expect(result.payload.text).toContain("1 active CLI tool call");
+      expect(result.payload.text).toMatch(/effects may be partial/i);
+      expect(result.payload.text).toContain("did not replay this turn automatically");
+    }
+  });
 
   it.each(["tool_execution_started", "assistant_output_started"] as const)(
     "cancels the pending overload notice after %s",
@@ -494,6 +586,32 @@ describe("runAgentTurnWithFallback: provider failures", () => {
         data: expect.objectContaining({ phase: "error", aborted: true }),
       }),
     );
+  });
+
+  it("interrupts the transient HTTP retry backoff on abort", async () => {
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    vi.useFakeTimers();
+    state.runEmbeddedAgentMock.mockRejectedValue(
+      new FailoverError("provider request timed out", {
+        reason: "timeout",
+        provider: "anthropic",
+        model: "claude-opus-4-1",
+      }),
+    );
+    const abortController = new AbortController();
+    const { replyOperation } = createMockReplyOperation({ abortSignal: abortController.signal });
+
+    const resultPromise = runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({ replyOperation }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    abortController.abort();
+    await expect(resultPromise).resolves.toMatchObject({
+      kind: "final",
+      payload: { text: SILENT_REPLY_TOKEN },
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {

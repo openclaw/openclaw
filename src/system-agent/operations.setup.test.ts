@@ -3,19 +3,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
+import {
+  executeSystemAgentOperation,
+  isPersistentSystemAgentOperation,
+  type SystemAgentCommandDeps,
+} from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
-function parseLastJsonLine(raw: string): unknown {
-  const lastLine = raw.trim().split("\n").at(-1);
-  if (!lastLine) {
-    throw new Error("Expected audit log to contain at least one JSON line");
-  }
-  return JSON.parse(lastLine) as unknown;
+function readLastAuditEntry(): unknown {
+  return listSystemAgentAuditEntriesForTests().at(-1)?.value;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -172,6 +174,7 @@ describe("parseSystemAgentOperation", () => {
   });
 
   afterEach(() => {
+    resetPluginStateStoreForTests();
     stateDirSnapshot?.restore();
     vi.unstubAllEnvs();
   });
@@ -185,6 +188,7 @@ describe("parseSystemAgentOperation", () => {
       configPath: path.join(tempDir, "openclaw.json"),
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
+      bootstrapPending: true,
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -218,6 +222,7 @@ describe("parseSystemAgentOperation", () => {
       },
     );
     expect(result.applied).toBe(true);
+    expect(result.bootstrapPending).toBe(true);
 
     expect(lines.join("\n")).toContain("[openclaw] done: openclaw.setup");
     expect(applySetup).toHaveBeenCalledWith(
@@ -230,8 +235,7 @@ describe("parseSystemAgentOperation", () => {
       { commit: expect.any(Function) },
     );
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
-    const auditPath = path.join(tempDir, "audit", "system-agent.jsonl");
-    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
+    const audit = readLastAuditEntry();
     expectAuditRecord(
       audit,
       {
@@ -339,6 +343,7 @@ describe("parseSystemAgentOperation", () => {
       configPath: "/tmp/openclaw.json",
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
+      bootstrapPending: false,
       lines: [],
     }));
 
@@ -401,6 +406,7 @@ describe("parseSystemAgentOperation", () => {
       configPath: path.join(tempDir, "openclaw.json"),
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
+      bootstrapPending: false,
       lines: ["Workspace: /tmp/work"],
     }));
 
@@ -421,7 +427,7 @@ describe("parseSystemAgentOperation", () => {
       },
     );
 
-    expect(result).toEqual({ applied: true });
+    expect(result).toEqual({ applied: true, bootstrapPending: false });
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
@@ -448,8 +454,14 @@ describe("parseSystemAgentOperation", () => {
     });
     mockConfig.mutateConfigFile.mockClear();
     const { runtime, lines } = createSystemAgentTestRuntime();
+    const reboundBinding = { execution: { agentId: "main" } } as never;
+    const onVerifiedInferenceChanged = vi.fn();
     let verificationCalls = 0;
-    const verifyInferenceConfig = vi.fn(async ({ config }: { config: TestConfig }) => {
+    type VerifyInferenceParams = Parameters<
+      NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>
+    >[0];
+    const verifyInferenceConfig = vi.fn(async (params: VerifyInferenceParams) => {
+      const { config, onVerifiedExecution } = params;
       verificationCalls += 1;
       const stagedDefaults = requireRecord(
         requireRecord(config.agents, "agents").defaults,
@@ -500,6 +512,8 @@ describe("parseSystemAgentOperation", () => {
           },
           channels: { telegram: { enabled: true } },
         });
+      } else {
+        onVerifiedExecution?.({} as never, reboundBinding);
       }
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
     });
@@ -507,7 +521,7 @@ describe("parseSystemAgentOperation", () => {
     const result = await executeSystemAgentOperation(
       { kind: "set-default-model", model: "openai/gpt-5.5" },
       runtime,
-      { approved: true, deps: { verifyInferenceConfig } },
+      { approved: true, deps: { verifyInferenceConfig }, onVerifiedInferenceChanged },
     );
 
     expect(result).toEqual({ applied: true });
@@ -518,12 +532,20 @@ describe("parseSystemAgentOperation", () => {
     );
     expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ requireExecutionOwner: true }),
+      expect.objectContaining({
+        requireExecutionOwner: true,
+        onVerifiedExecution: expect.any(Function),
+      }),
     );
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledOnce();
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledWith(reboundBinding);
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
     expect(mockConfig.mutateConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        writeOptions: { preCommitRuntimePreflight: expect.any(Function) },
+        writeOptions: {
+          auditOrigin: "system-agent",
+          preCommitRuntimePreflight: expect.any(Function),
+        },
       }),
     );
     const persisted = mockConfig.currentConfig();
@@ -552,9 +574,7 @@ describe("parseSystemAgentOperation", () => {
     expect(persisted.channels).toEqual({ telegram: { enabled: true } });
     expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5");
 
-    const audit = parseLastJsonLine(
-      await fs.readFile(path.join(tempDir, "audit", "system-agent.jsonl"), "utf8"),
-    );
+    const audit = readLastAuditEntry();
     expectAuditRecord(
       audit,
       {
@@ -917,13 +937,12 @@ describe("parseSystemAgentOperation", () => {
     mockConfig.setConfig({
       agents: {
         defaults: { model: { primary: "anthropic/global-default" } },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             default: true,
             model: { primary: "anthropic/work-default" },
           },
-        ],
+        },
       },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -932,8 +951,8 @@ describe("parseSystemAgentOperation", () => {
       expect(requireRecord(agents.defaults, "defaults").model).toEqual({
         primary: "anthropic/global-default",
       });
-      const list = agents.list as Array<{ id: string; model: unknown }>;
-      expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+      const entries = agents.entries as Record<string, { model: unknown }>;
+      expect(entries.work?.model).toEqual({
         primary: "openai/gpt-5.5",
       });
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 9 };
@@ -949,8 +968,8 @@ describe("parseSystemAgentOperation", () => {
     expect(requireRecord(agents.defaults, "defaults").model).toEqual({
       primary: "anthropic/global-default",
     });
-    const list = agents.list as Array<{ id: string; model: unknown }>;
-    expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+    const entries = agents.entries as Record<string, { model: unknown }>;
+    expect(entries.work?.model).toEqual({
       primary: "openai/gpt-5.5",
     });
   });
@@ -1004,6 +1023,25 @@ describe("parseSystemAgentOperation", () => {
     expect(lines.join("\n")).toContain(
       "[openclaw] returned from agent with request: restart gateway",
     );
+  });
+
+  it("seeds a fresh hatch into the agent TUI", async () => {
+    const { runtime } = createSystemAgentTestRuntime();
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+
+    await executeSystemAgentOperation(
+      { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
+      runtime,
+      { deps: { runTui } },
+    );
+
+    expect(runTui).toHaveBeenCalledWith({
+      local: true,
+      session: "agent:work:main",
+      deliver: false,
+      historyLimit: 200,
+      message: "Wake up, my friend!",
+    });
   });
 
   it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {

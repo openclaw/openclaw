@@ -11,6 +11,14 @@ function roundTrip(schedule: CronSchedule): CronSchedule | null {
 }
 
 describe("schedule column codec round-trip", () => {
+  it("round-trips pacing through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({ pacing: { min: "15m", max: "4h" } }),
+    );
+
+    expect(job.pacing).toEqual({ min: "15m", max: "4h" });
+  });
+
   it("round-trips an on-exit schedule with command + cwd", () => {
     expect(roundTrip({ kind: "on-exit", command: "make build", cwd: "/repo" })).toEqual({
       kind: "on-exit",
@@ -23,6 +31,28 @@ describe("schedule column codec round-trip", () => {
     expect(roundTrip({ kind: "on-exit", command: "./watch.sh" })).toEqual({
       kind: "on-exit",
       command: "./watch.sh",
+    });
+  });
+
+  it("round-trips a stream schedule through job_json without new columns", () => {
+    expect(
+      roundTrip({
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        cwd: "/repo",
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+        maxBatchBytes: 2_048,
+      }),
+    ).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      cwd: "/repo",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
     });
   });
 

@@ -1,9 +1,12 @@
 // Control UI view renders config screen content.
+import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import JSON5 from "json5";
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
-import type { ConfigUiHints } from "../../api/types.ts";
+import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
+import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import {
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
@@ -25,27 +28,43 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
-import "../../components/tooltip.ts";
 import {
   analyzeConfigSchema,
   renderConfigForm,
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
+import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import {
   renderSettingsRow,
   renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
+import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
-import { renderSettingsSelectRow } from "./settings-select-row.ts";
+import { renderNotificationsSection, type WebPushUiState } from "./notifications-section.ts";
 import {
-  APPEARANCE_SETTINGS_TARGET_IDS,
-  COMMUNICATION_SETTINGS_TARGET_IDS,
-} from "./settings-targets.ts";
+  renderSessionObserverSettings,
+  type SessionObserverModelSelection,
+} from "./session-observer-settings.ts";
+import { renderSettingsSelectRow } from "./settings-select-row.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+
+// The config editor is where JSON5 text first appears; warm the parser with
+// the page instead of racing the first raw-draft keystroke.
+void warmJson5().catch(() => undefined);
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -55,16 +74,9 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "configView.textSizes.xxl",
 };
 
-type WebPushUiState = {
-  supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-  error?: string | null;
-};
-
-type SettingsMicrophoneState = {
+type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -92,6 +104,7 @@ export type ConfigViewState = {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  expandedAdvancedSections: Set<string>;
   lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
   schemaAnalysisCache?: SchemaAnalysisCache;
@@ -106,6 +119,7 @@ export function createConfigViewState(): ConfigViewState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    expandedAdvancedSections: new Set(),
     lastCustomThemeImportFocusToken: null,
     lastConfigContextKey: null,
     lastFormModeForScroll: null,
@@ -134,6 +148,9 @@ export type ConfigProps = {
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
+  /** Set when the form renders under a composite page's custom rows; an empty
+   *  schema section stays silent instead of claiming the page is empty. */
+  embeddedEditor?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -167,6 +184,23 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  sidebarLiveActivity: boolean;
+  setSidebarLiveActivity: (enabled: boolean) => void;
+  showAdvancedSettings: boolean;
+  setShowAdvancedSettings: (enabled: boolean) => void;
+  forceAdvancedSection?: string | null;
+  sessionObserverEnabled?: boolean;
+  sessionObserverUtilityModel?: string;
+  sessionObserverResolvedModel?: SystemInfoResult["defaultAgentUtilityModel"];
+  sessionObserverModels?: readonly ModelCatalogEntry[];
+  sessionObserverModelsUnavailable?: boolean;
+  sessionObserverDisabled?: boolean;
+  setSessionObserverEnabled?: (enabled: boolean) => void;
+  setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
+  lobsterPetVisits?: boolean;
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  lobsterPetSounds?: boolean;
+  setLobsterPetSounds?: (enabled: boolean) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
@@ -174,9 +208,14 @@ export type ConfigProps = {
   setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
-  microphone?: SettingsMicrophoneState;
+  microphone?: SettingsMediaDeviceState;
   onMicrophoneRefresh?: () => void;
   onMicrophoneSelect?: (deviceId: string) => void;
+  camera?: SettingsMediaDeviceState;
+  onCameraRefresh?: () => void;
+  onCameraSelect?: (deviceId: string) => void;
+  composerHoldToRecord?: boolean;
+  setComposerHoldToRecord?: (enabled: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -187,6 +226,9 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
+  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  onNativeNotificationsRequestPermission?: () => void;
+  onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushUiState;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
@@ -500,8 +542,12 @@ const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
   },
   {
+    id: "security",
+    sections: ["security", "approvals"],
+  },
+  {
     id: "automation",
-    sections: ["commands", "hooks", "bindings", "cron", "approvals", "plugins"],
+    sections: ["commands", "hooks", "bindings", "cron", "plugins"],
   },
   {
     id: "infrastructure",
@@ -731,8 +777,8 @@ function computeRawDiff(
     return viewState.rawDiffCache.diff;
   }
   try {
-    const originalValue = JSON5.parse(original) as unknown;
-    const currentValue = JSON5.parse(current) as unknown;
+    const originalValue = parseJson5Text(original);
+    const currentValue = parseJson5Text(current);
     if (
       !originalValue ||
       !currentValue ||
@@ -751,7 +797,12 @@ function computeRawDiff(
     viewState.rawDiffCache = { original, current, diff };
     return diff;
   } catch {
-    viewState.rawDiffCache = { original, current, diff: [] };
+    // While the lazy JSON5 parser is still loading, a parse failure may be
+    // transient; skip the cache so the next render retries instead of pinning
+    // an empty diff for this text pair.
+    if (isJson5Warm()) {
+      viewState.rawDiffCache = { original, current, diff: [] };
+    }
     return [];
   }
 }
@@ -821,28 +872,43 @@ type ThemeOption = {
   id: ThemeName;
   labelKey: string;
   descriptionKey: string;
-  icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   {
     id: "claw",
     labelKey: "configView.themes.claw.label",
     descriptionKey: "configView.themes.claw.description",
-    icon: icons.zap,
   },
   {
     id: "knot",
     labelKey: "configView.themes.knot.label",
     descriptionKey: "configView.themes.knot.description",
-    icon: icons.link,
   },
   {
     id: "dash",
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
-    icon: icons.barChart,
   },
 ];
+
+/* Builtin cards preview their real palette (chip colors live in config.css,
+   mirrored from the base.css theme blocks). The custom card only has real
+   colors while active — its chips read the live CSS variables — so it falls
+   back to the spark icon otherwise. */
+function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
+  if (id === "custom" && activeTheme !== "custom") {
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
+  }
+  return html`
+    <span class="settings-theme-card__palette" aria-hidden="true">
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--bg"></span>
+    </span>
+  `;
+}
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
   return props.hasCustomTheme && props.customThemeLabel
@@ -870,200 +936,76 @@ function focusCustomThemeImportInput() {
   });
 }
 
-function renderNotificationsSection(props: ConfigProps) {
-  const push = props.webPush;
-  if (!push) {
-    return html`
-      <div class="settings-page">
-        <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-            <div class="settings-section__actions">
-              ${renderSettingsStatus({
-                kind: "muted",
-                label: t("configView.notifications.unavailable"),
-              })}
-            </div>
-          </div>
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="settings-row__desc">
-                  ${t("configView.notifications.unavailableHint")}
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    `;
-  }
-
-  const permissionLabel =
-    push.permission === "granted"
-      ? t("configView.notifications.granted")
-      : push.permission === "denied"
-        ? t("configView.notifications.denied")
-        : push.permission === "default"
-          ? t("configView.notifications.notRequested")
-          : t("configView.notifications.unsupported");
-  const subscriptionLabel = push.subscribed
-    ? t("configView.notifications.subscribed")
-    : t("configView.notifications.notSubscribed");
-  const statusLabel = !push.supported
-    ? t("configView.notifications.unsupported")
-    : push.permission === "denied"
-      ? t("configView.notifications.blocked")
-      : push.subscribed
-        ? t("configView.notifications.subscribed")
-        : t("configView.notifications.ready");
-  const statusKind = !push.supported
-    ? ("muted" as const)
-    : push.permission === "denied"
-      ? ("danger" as const)
-      : push.subscribed
-        ? ("ok" as const)
-        : ("accent" as const);
-
-  const actionButtons =
-    push.supported && push.permission !== "denied"
-      ? push.subscribed
-        ? html`
-            <button
-              class="btn"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushUnsubscribe?.()}
-            >
-              ${icons.x} ${t("configView.notifications.unsubscribe")}
-            </button>
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushTest?.()}
-            >
-              ${icons.send} ${t("configView.notifications.sendTest")}
-            </button>
-          `
-        : html`
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushSubscribe?.()}
-            >
-              ${push.loading ? icons.loader : nothing}
-              ${push.loading
-                ? t("configView.notifications.subscribing")
-                : t("configView.notifications.enable")}
-            </button>
-          `
-      : nothing;
-
-  return html`
-    <div class="settings-page">
-      <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-          <div class="settings-section__actions">
-            ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
-          </div>
-        </div>
-        <p class="settings-section__desc">${t("configView.notifications.hint")}</p>
-        <div class="settings-group">
-          ${renderSettingsRow({
-            title: t("configView.notifications.browserSupport"),
-            control: renderSettingsValue(
-              push.supported
-                ? t("configView.notifications.available")
-                : t("configView.notifications.notSupported"),
-            ),
-          })}
-          ${renderSettingsRow({
-            title: t("configView.notifications.permission"),
-            control: renderSettingsValue(permissionLabel),
-          })}
-          ${renderSettingsRow({
-            title: t("configView.notifications.status"),
-            control: renderSettingsStatus({
-              kind: push.subscribed ? "ok" : "muted",
-              label: subscriptionLabel,
-            }),
-          })}
-          ${actionButtons !== nothing
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__control">${actionButtons}</div>
-                </div>
-              `
-            : nothing}
-          ${push.permission === "denied"
-            ? renderSettingsRow({
-                title: t("configView.notifications.blocked"),
-                description: t("configView.notifications.blockedHint"),
-                control: renderSettingsStatus({
-                  kind: "danger",
-                  label: t("configView.notifications.denied"),
-                }),
-              })
-            : nothing}
-          ${push.error
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="cfg-field__error">${push.error}</span>
-                  </div>
-                </div>
-              `
-            : nothing}
-        </div>
-      </section>
-    </div>
-  `;
-}
-
-function renderSettingsMicrophoneField(props: ConfigProps) {
-  const microphone = props.microphone;
-  if (!microphone || !props.onMicrophoneSelect) {
+function renderSettingsMediaDeviceField(options: {
+  state: SettingsMediaDeviceState | undefined;
+  title: string;
+  systemDefaultLabel: string;
+  emptyLabel: string;
+  fallbackLabel: (number: number) => string;
+  dataAttribute: "microphone" | "camera";
+  onRefresh: (() => void) | undefined;
+  onSelect: ((deviceId: string) => void) | undefined;
+}) {
+  const state = options.state;
+  if (!state || !options.onSelect) {
     return nothing;
   }
-  const selectedDeviceId = microphone.selectedDeviceId.trim();
-  const selectedDeviceKnown = microphone.devices.some(
-    (device) => device.deviceId === selectedDeviceId,
-  );
-  const options = [
-    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
-    ...microphone.devices.map((device) => ({ label: device.label, value: device.deviceId })),
+  const selectedDeviceId = state.selectedDeviceId.trim();
+  const selectedDeviceKnown = state.devices.some((device) => device.deviceId === selectedDeviceId);
+  const selectOptions = [
+    { label: options.systemDefaultLabel, value: "" },
+    ...state.devices.map((device) => ({ label: device.label, value: device.deviceId })),
     // A remembered device that is unplugged right now stays selectable so the
     // choice survives until the user picks something else.
     ...(selectedDeviceId && !selectedDeviceKnown
       ? [
           {
-            label: t("chat.composer.microphoneFallback", {
-              number: String(microphone.devices.length + 1),
-            }),
+            label: options.fallbackLabel(state.devices.length + 1),
             value: selectedDeviceId,
           },
         ]
       : []),
   ];
-  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
-  const note = microphone.error
-    ? html`<span role="alert">${microphone.error}</span>`
-    : !microphone.loading && microphone.devices.length === 0
-      ? t("chat.composer.noMicrophones")
+  const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
+  const note = state.error
+    ? html`<span role="alert">${state.error}</span>`
+    : !state.loading && state.devices.length === 0
+      ? options.emptyLabel
       : undefined;
   return renderSettingsRow({
-    title: t("chat.composer.microphoneInput"),
+    title: options.title,
     description: note,
     control: html`
       <select
-        class="settings-select"
-        data-settings-microphone
-        aria-label=${t("chat.composer.microphoneInput")}
+        class="settings-select settings-select--media-device"
+        data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
+        data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
+        aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
-          props.onMicrophoneSelect?.((event.currentTarget as HTMLSelectElement).value)}
+          options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
-        ${options.map(
+        ${selectOptions.map(
           (option) => html`
             <option value=${option.value} ?selected=${option.value === selectedDeviceId}>
               ${option.label}
@@ -1075,12 +1017,38 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
         type="button"
         class="btn btn--sm btn--icon"
         aria-label=${refreshLabel}
-        ?disabled=${microphone.loading}
-        @click=${() => props.onMicrophoneRefresh?.()}
+        ?disabled=${state.loading}
+        @click=${() => options.onRefresh?.()}
       >
-        ${microphone.loading ? icons.loader : icons.refresh}
+        ${state.loading ? icons.loader : icons.refresh}
       </button>
     `,
+  });
+}
+
+function renderSettingsMicrophoneField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.microphone,
+    title: t("chat.composer.microphoneInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultMicrophone"),
+    emptyLabel: t("chat.composer.noMicrophones"),
+    fallbackLabel: (number) => t("chat.composer.microphoneFallback", { number: String(number) }),
+    dataAttribute: "microphone",
+    onRefresh: props.onMicrophoneRefresh,
+    onSelect: props.onMicrophoneSelect,
+  });
+}
+
+function renderSettingsCameraField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.camera,
+    title: t("chat.composer.cameraInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultCamera"),
+    emptyLabel: t("chat.composer.noCameras"),
+    fallbackLabel: (number) => t("chat.composer.cameraFallback", { number: String(number) }),
+    dataAttribute: "camera",
+    onRefresh: props.onCameraRefresh,
+    onSelect: props.onCameraSelect,
   });
 }
 
@@ -1095,7 +1063,9 @@ function renderChatPreferencesSection(props: ConfigProps) {
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.chatPrefs.title")}</h2>
       </div>
-      <p class="settings-section__desc">${t("configView.chatPrefs.hint")}</p>
+      <p class="settings-section__desc">
+        ${t("configView.chatPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
       <div class="settings-group">
         ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
@@ -1156,8 +1126,131 @@ function renderChatPreferencesSection(props: ConfigProps) {
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
-        ${renderSettingsMicrophoneField(props)}
+        ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
+        ${props.setComposerHoldToRecord
+          ? renderSettingsToggleRow({
+              title: t("chat.composer.holdToRecordSetting"),
+              description: t("chat.composer.holdToRecordSettingDescription"),
+              checked: props.composerHoldToRecord !== false,
+              onChange: props.setComposerHoldToRecord,
+            })
+          : nothing}
       </div>
+    </section>
+  `;
+}
+
+// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
+// prefs; the toggles are browser-local (ui/src/app/settings.ts), so hosts that
+// do not wire them (embedded editors) simply omit the section.
+function renderLobsterPetSection(props: ConfigProps) {
+  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
+    return nothing;
+  }
+  const lobsterPetVisits = props.lobsterPetVisits === true;
+  const lobsterPetSounds = props.lobsterPetSounds === true;
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("quickSettings.appearance.lobsterdex")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterVisits"),
+          description: lobsterPetVisits
+            ? t("quickSettings.appearance.lobsterVisitsOn")
+            : t("quickSettings.appearance.lobsterVisitsOff"),
+          checked: lobsterPetVisits,
+          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+        })}
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterSounds"),
+          description: lobsterPetSounds
+            ? t("quickSettings.appearance.lobsterSoundsOn")
+            : t("quickSettings.appearance.lobsterSoundsOff"),
+          checked: lobsterPetSounds,
+          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onAct: (enabled) => {
+            if (enabled) {
+              previewLobsterChirp();
+            }
+          },
+        })}
+        ${renderSettingsRow({
+          title: t("quickSettings.appearance.lobsterdex"),
+          description: t("quickSettings.appearance.lobsterdexSeen", {
+            seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+            total: String(LOBSTER_PET_PALETTES.length),
+          }),
+          stacked: true,
+          control: html`
+            <div class="lobsterdex">
+              ${LOBSTER_PET_PALETTES.map((palette) => {
+                const entry = getLobsterdexEntries().get(palette.id);
+                const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
+                const title = !seen
+                  ? "?"
+                  : entry.firstSeenAt !== null
+                    ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                        name: entry.name ?? palette.id,
+                        date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                      })
+                    : (entry.name ?? palette.id);
+                return html`
+                  <span
+                    class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                      ? ""
+                      : "lobsterdex__mini--unseen"}"
+                    style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                    title=${shinySeen ? `${title} ✦` : title}
+                  >
+                    ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
+                  </span>
+                `;
+              })}
+            </div>
+          `,
+        })}
+      </div>
+    </section>
+  `;
+}
+
+function renderSidebarPreferencesSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
+      </div>
+      <p class="settings-section__desc">
+        ${t("configView.sidebarPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.liveActivity"),
+          description: t("configView.sidebarPrefs.liveActivityHint"),
+          checked: props.sidebarLiveActivity,
+          onChange: props.setSidebarLiveActivity,
+        })}
+      </div>
+      <div class="settings-section__header settings-section__header--subsection">
+        <h3 class="settings-section__heading">${t("configView.sessionObserver.title")}</h3>
+      </div>
+      <p class="settings-section__desc">${t("configView.sessionObserver.hint")}</p>
+      ${renderSessionObserverSettings({
+        enabled: props.sessionObserverEnabled !== false,
+        utilityModel: props.sessionObserverUtilityModel,
+        resolvedUtilityModel: props.sessionObserverResolvedModel,
+        models: props.sessionObserverModels ?? [],
+        modelsUnavailable: props.sessionObserverModelsUnavailable === true,
+        disabled: props.sessionObserverDisabled === true,
+        onEnabledChange: (enabled) => props.setSessionObserverEnabled?.(enabled),
+        onUtilityModelChange: (selection) => props.setSessionObserverUtilityModel?.(selection),
+      })}
     </section>
   `;
 }
@@ -1178,13 +1271,11 @@ function renderAppearanceSection(props: ConfigProps) {
     id: ThemeName;
     label: string;
     description: string;
-    icon: TemplateResult;
   }> = [
     ...BUILTIN_THEME_OPTIONS.map((option) => ({
       id: option.id,
       label: t(option.labelKey),
       description: t(option.descriptionKey),
-      icon: option.icon,
     })),
     {
       id: "custom",
@@ -1192,7 +1283,6 @@ function renderAppearanceSection(props: ConfigProps) {
       description: props.hasCustomTheme
         ? t("configView.appearance.importedFrom", { name: importedName })
         : t("configView.appearance.importHint"),
-      icon: icons.spark,
     },
   ];
   return html`
@@ -1201,14 +1291,17 @@ function renderAppearanceSection(props: ConfigProps) {
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
         </div>
-        <p class="settings-section__desc">${t("configView.appearance.chooseTheme")}</p>
+        <p class="settings-section__desc">
+          ${t("configView.appearance.chooseTheme")} ${t("configView.syncedHint")}
+        </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               ${themeOptions.map(
                 (opt) => html`
                   <button
-                    class="settings-theme-card ${opt.id === props.theme
+                    class="settings-theme-card settings-theme-card--${opt.id} ${opt.id ===
+                    props.theme
                       ? "settings-theme-card--active"
                       : ""}"
                     title=${opt.description}
@@ -1225,7 +1318,7 @@ function renderAppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
+                    ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
                     ${opt.id === props.theme
                       ? html`<span class="settings-theme-card__check" aria-hidden="true"
@@ -1356,6 +1449,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
+      ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
       ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
@@ -1463,6 +1557,7 @@ function resetConfigEphemeralState(viewState: ConfigViewState) {
   viewState.envRevealed = false;
   viewState.validityDismissed = false;
   viewState.revealedSensitivePaths.clear();
+  viewState.expandedAdvancedSections.clear();
   viewState.lastCustomThemeImportFocusToken = null;
   viewState.rawDiffCache = undefined;
 }
@@ -1698,6 +1793,13 @@ export function renderConfig(props: ConfigProps) {
     formMode === "raw" && hasRawChanges && viewState.rawDiffOpen
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
+  if (formMode === "raw" && hasRawChanges && viewState.rawDiffOpen && !isJson5Warm()) {
+    // First diff open can race the lazy JSON5 parser; re-render when it lands
+    // so the pending-changes list fills in instead of staying empty.
+    void warmJson5()
+      .then(() => requestUpdate())
+      .catch(() => undefined);
+  }
   // Includes the app updater: writes are suspended while it runs, so raw
   // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
@@ -1791,7 +1893,9 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
 
-  const showToolbar = showModeToggle || showSectionTabs || autoSaveStatus !== nothing;
+  const showAdvancedToggle = formMode === "form";
+  const showToolbar =
+    showModeToggle || showSectionTabs || showAdvancedToggle || autoSaveStatus !== nothing;
   const applyBanner = renderConfigApplyBanner({
     needsApply: props.needsApply,
     applying: props.applying,
@@ -1846,6 +1950,19 @@ export function renderConfig(props: ConfigProps) {
                   `
                 : nothing}
               ${sectionTabs}
+              ${showAdvancedToggle
+                ? html`
+                    <button
+                      class="btn btn--sm config-show-advanced ${props.showAdvancedSettings
+                        ? "active"
+                        : ""}"
+                      aria-pressed=${props.showAdvancedSettings ? "true" : "false"}
+                      @click=${() => props.setShowAdvancedSettings(!props.showAdvancedSettings)}
+                    >
+                      ${t("configForm.showAdvanced")}
+                    </button>
+                  `
+                : nothing}
               <div class="config-toolbar__status" role="status" aria-live="polite">
                 ${autoSaveStatus}
               </div>
@@ -1923,12 +2040,24 @@ export function renderConfig(props: ConfigProps) {
                       schema: analysis.schema,
                       uiHints: props.uiHints,
                       value: props.formValue,
+                      embedded: props.embeddedEditor === true,
                       rawAvailable,
                       disabled: configBusy || !props.formValue,
                       unsupportedPaths: analysis.unsupportedPaths,
                       onPatch: props.onFormPatch,
                       activeSection: props.activeSection,
                       activeSubsection: effectiveSubsection,
+                      showAdvanced: props.showAdvancedSettings,
+                      expandedAdvancedSections: viewState.expandedAdvancedSections,
+                      forceAdvancedSection: props.forceAdvancedSection,
+                      onAdvancedSectionToggle: (section, expanded) => {
+                        if (expanded) {
+                          viewState.expandedAdvancedSections.add(section);
+                        } else {
+                          viewState.expandedAdvancedSections.delete(section);
+                        }
+                        requestUpdate();
+                      },
                       sectionActions:
                         props.activeSection === "env"
                           ? html`
@@ -2064,7 +2193,8 @@ export function renderConfig(props: ConfigProps) {
               })()}
       ${props.issues.length > 0
         ? html`<div class="callout danger" style="margin-top: 12px;">
-            <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
+            <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.issues, null, 2)))}</pre>
           </div>`
         : nothing}
     </div>

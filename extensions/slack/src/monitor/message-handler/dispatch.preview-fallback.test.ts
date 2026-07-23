@@ -56,6 +56,7 @@ let capturedReplyOptions:
       onVerboseProgressVisibility?: (isActive: () => boolean) => void;
       allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
       allowToolLifecycleWhenProgressHidden?: boolean;
+      turnAdoptionLifecycle?: object;
       onAssistantMessageStart?: () => Promise<void> | void;
       onReasoningEnd?: () => Promise<void> | void;
       onReasoningStream?: (payload?: {
@@ -387,6 +388,7 @@ function createPreparedSlackMessage(params?: {
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
+  turnAdoptionLifecycle?: object;
   eventScope?: {
     apiAppId: string;
     enterpriseId: string;
@@ -418,7 +420,6 @@ function createPreparedSlackMessage(params?: {
       botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
-      removeAckAfterReply: false,
       historyLimit: 0,
       channelHistories: new Map(),
       allowFrom: [],
@@ -429,6 +430,7 @@ function createPreparedSlackMessage(params?: {
       config: params?.accountConfig ?? {},
     },
     relayIdentity: params?.relayIdentity,
+    turnAdoptionLifecycle: params?.turnAdoptionLifecycle,
     eventScope: params?.eventScope,
     message,
     route: {
@@ -1203,6 +1205,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     appendSlackStreamMock.mockResolvedValue(undefined);
     stopSlackStreamMock.mockResolvedValue({});
     emitSlackMessageSentHooksMock.mockClear();
+  });
+
+  it("forwards durable ingress ownership into reply options", async () => {
+    const turnAdoptionLifecycle = {
+      admission: "exclusive",
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(),
+    };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ turnAdoptionLifecycle }));
+
+    expect(capturedReplyOptions?.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {

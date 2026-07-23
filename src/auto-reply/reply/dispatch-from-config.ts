@@ -30,6 +30,7 @@ import {
 } from "../../agents/subagent-capabilities.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
+import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -41,6 +42,7 @@ import {
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
 } from "../../channels/streaming.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -102,6 +104,7 @@ import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -595,6 +598,7 @@ async function dispatchReplyFromConfigInner(
     delete messageReceivedCtx.MediaUrls;
     delete messageReceivedCtx.MediaType;
     delete messageReceivedCtx.MediaTypes;
+    delete messageReceivedCtx.media;
     return {
       ...buildHookState(messageReceivedCtx).hookContext,
       mediaRemoteHost,
@@ -709,6 +713,7 @@ async function dispatchReplyFromConfigInner(
       mirror?: boolean;
       kind?: ReplyDispatchKind;
       responsePrefixContext?: ResponsePrefixContext;
+      sessionKey?: string;
     },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
@@ -719,15 +724,17 @@ async function dispatchReplyFromConfigInner(
     // runtime that produced this payload, so agent_end and message delivery
     // hooks expose the same canonical key for native command redirects.
     const agentRuntimeSessionKey =
-      ctx.CommandSource === "native"
+      options?.sessionKey ??
+      (ctx.CommandSource === "native"
         ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
-        : ctx.SessionKey;
+        : ctx.SessionKey);
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
       sessionKey: agentRuntimeSessionKey,
-      policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+      policySessionKey:
+        options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: routedReplyAccountId,
       requesterSenderId: ctx.SenderId,
@@ -781,12 +788,37 @@ async function dispatchReplyFromConfigInner(
     }
   };
 
+  type PluginBindingTranscriptOwner = {
+    agentId: string;
+    expectedSessionId?: string;
+    sessionKey: string;
+    transcriptWriteBlocked?: true;
+  };
   const deliverBindingPayload = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
+    transcriptOwner?: PluginBindingTranscriptOwner,
   ): Promise<boolean> => {
-    const result = await routeReplyToOriginating(payload, {
+    // Metadata is delivery-specific. Keep it off the plugin-owned payload so a
+    // reused reply object cannot carry a stale transcript owner into a later turn.
+    const bindingPayload = setReplyPayloadMetadata(
+      copyReplyPayloadMetadata(payload, { ...payload }),
+      {
+        sourceReplyTranscriptMirror: transcriptOwner
+          ? {
+              sessionKey: transcriptOwner.sessionKey,
+              agentId: transcriptOwner.agentId,
+              ...(transcriptOwner.expectedSessionId
+                ? { expectedSessionId: transcriptOwner.expectedSessionId }
+                : {}),
+              ...(transcriptOwner.transcriptWriteBlocked ? { transcriptWriteBlocked: true } : {}),
+            }
+          : undefined,
+      },
+    );
+    const result = await routeReplyToOriginating(bindingPayload, {
       kind: mode === "terminal" ? "final" : "tool",
+      sessionKey: transcriptOwner?.sessionKey,
     });
     if (result) {
       if (!result.ok) {
@@ -798,36 +830,106 @@ async function dispatchReplyFromConfigInner(
     }
     markInboundDedupeReplayUnsafe();
     return mode === "additive"
-      ? dispatcher.sendToolResult(payload)
-      : dispatcher.sendFinalReply(payload);
+      ? dispatcher.sendToolResult(bindingPayload)
+      : dispatcher.sendFinalReply(bindingPayload);
   };
   const sendBindingNotice = async (
     payload: ReplyPayload,
     mode: "additive" | "terminal",
+    transcriptOwner?: PluginBindingTranscriptOwner,
   ): Promise<boolean> => {
     if (suppressAutomaticSourceDelivery) {
       return false;
     }
-    return await deliverBindingPayload(payload, mode);
+    return await deliverBindingPayload(payload, mode, transcriptOwner);
   };
 
-  const pluginOwnedBindingRecord =
-    inboundClaimContext.conversationId && inboundClaimContext.channelId
-      ? resolveConversationBindingRecord({
-          channel: inboundClaimContext.channelId,
-          accountId:
-            inboundClaimContext.accountId ??
-            ((
-              cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
-            )?.[inboundClaimContext.channelId]?.defaultAccount as string | undefined) ??
-            "default",
-          conversationId: inboundClaimContext.conversationId,
-          parentConversationId: inboundClaimContext.parentConversationId,
-        })
-      : null;
+  // Hook contexts use transport-native ids (for example Slack `U123`), while
+  // binding records use the channel's canonical target (`user:U123`). Resolve
+  // through the binding contract instead of reusing the hook projection.
+  const pluginBindingConversation = resolveConversationBindingContextFromMessage({ cfg, ctx });
+  const pluginOwnedBindingRecord = pluginBindingConversation
+    ? resolveConversationBindingRecord({
+        channel: pluginBindingConversation.channel,
+        accountId: pluginBindingConversation.accountId,
+        conversationId: pluginBindingConversation.conversationId,
+        parentConversationId: pluginBindingConversation.parentConversationId,
+      })
+    : null;
   const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
+  const pluginBindingSessionKey = normalizeOptionalString(
+    pluginOwnedBindingRecord?.targetSessionKey,
+  );
+  const persistPluginBindingUserTurn = async (): Promise<
+    PluginBindingTranscriptOwner | undefined
+  > => {
+    const recorder = params.replyOptions?.userTurnTranscriptRecorder;
+    if (!recorder || !pluginBindingSessionKey) {
+      return undefined;
+    }
+    const targetAgentId = resolveSessionAgentId({
+      sessionKey: pluginBindingSessionKey,
+      config: cfg,
+      fallbackAgentId: ctx.AgentId,
+    });
+    const blockedOwner = (expectedSessionId?: string): PluginBindingTranscriptOwner => ({
+      agentId: targetAgentId,
+      sessionKey: pluginBindingSessionKey,
+      ...(expectedSessionId ? { expectedSessionId } : {}),
+      transcriptWriteBlocked: true,
+    });
+    if (recorder.hasPersisted()) {
+      return blockedOwner();
+    }
+    let attemptedSessionId: string | undefined;
+    let lastOwner: PluginBindingTranscriptOwner | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const targetSessionStoreEntry = resolveSessionStoreLookup(
+        {
+          ...ctx,
+          CommandTargetSessionKey: undefined,
+          SessionKey: pluginBindingSessionKey,
+        },
+        cfg,
+      );
+      const targetSessionEntry = targetSessionStoreEntry.entry;
+      if (!targetSessionEntry || targetSessionEntry.sessionId === attemptedSessionId) {
+        break;
+      }
+      attemptedSessionId = targetSessionEntry.sessionId;
+      lastOwner = {
+        agentId: targetAgentId,
+        expectedSessionId: targetSessionEntry.sessionId,
+        sessionKey: pluginBindingSessionKey,
+      };
+      const result = await recorder.persistApproved({
+        target: {
+          sessionId: targetSessionEntry.sessionId,
+          sessionKey: pluginBindingSessionKey,
+          sessionEntry: targetSessionEntry,
+          ...(targetSessionStoreEntry.store ? { sessionStore: targetSessionStoreEntry.store } : {}),
+          storePath: targetSessionStoreEntry.storePath,
+          agentId: targetAgentId,
+          cwd: resolveAgentWorkspaceDir(cfg, targetAgentId),
+          config: cfg,
+        },
+        expectedSessionId: targetSessionEntry.sessionId,
+        retryIfUnpersisted: true,
+      });
+      if (result) {
+        return lastOwner;
+      }
+    }
+    if (!lastOwner) {
+      recorder.markBlocked();
+      return blockedOwner();
+    }
+    recorder.markBlocked();
+    logVerbose(`plugin-bound user-turn persistence skipped after the target session changed`);
+    return blockedOwner(lastOwner.expectedSessionId);
+  };
 
   // Resolve automatic source-delivery suppression early so every outbound path
   // below (plugin-binding notices, fast-abort, normal dispatch) honors it. The
@@ -1244,19 +1346,23 @@ async function dispatchReplyFromConfigInner(
                 ? ({ status: "no_handler" } as const)
                 : ({ status: "missing_plugin" } as const);
             })();
-
         if (isPreDispatchOperationAborted()) {
           return finishReplyOperationAbortedDispatch();
         }
 
         switch (targetedClaimOutcome.status) {
           case "handled": {
+            const transcriptOwner = await persistPluginBindingUserTurn();
             if (targetedClaimOutcome.result.reply && shouldDeliverPluginBindingReply) {
               // A bound plugin's reply is the explicit output for this claimed turn,
               // not an automatic agent final; message-tool-only suppression must not
               // turn normal user-request bindings into silent channel responses.
               // Ambient room events keep the same privacy guard as final replies.
-              await deliverBindingPayload(targetedClaimOutcome.result.reply, "terminal");
+              await deliverBindingPayload(
+                targetedClaimOutcome.result.reply,
+                "terminal",
+                transcriptOwner,
+              );
             }
             markIdle("plugin_binding_dispatch");
             recordProcessed("completed", { reason: "plugin-bound-handled" });
@@ -1301,9 +1407,11 @@ async function dispatchReplyFromConfigInner(
             break;
           }
           case "declined": {
+            const transcriptOwner = await persistPluginBindingUserTurn();
             await sendBindingNotice(
               { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
               "terminal",
+              transcriptOwner,
             );
             markIdle("plugin_binding_declined");
             recordProcessed("completed", { reason: "plugin-bound-declined" });
@@ -1315,12 +1423,14 @@ async function dispatchReplyFromConfigInner(
             });
           }
           case "error": {
+            const transcriptOwner = await persistPluginBindingUserTurn();
             logVerbose(
               `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
             );
             await sendBindingNotice(
               { text: buildPluginBindingErrorText(pluginOwnedBinding) },
               "terminal",
+              transcriptOwner,
             );
             markIdle("plugin_binding_error");
             recordProcessed("completed", { reason: "plugin-bound-error" });
@@ -1395,12 +1505,24 @@ async function dispatchReplyFromConfigInner(
           : undefined;
       return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
     };
+    const hasAskUserPayload = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      return askUser && typeof askUser === "object" && !Array.isArray(askUser);
+    };
+    const readAskUserQuestionId = (payload: ReplyPayload) => {
+      const askUser = payload.channelData?.askUser;
+      if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
+        return undefined;
+      }
+      const questionId = (askUser as { questionId?: unknown }).questionId;
+      return typeof questionId === "string" ? questionId : undefined;
+    };
     const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
       if (!finalReplyDeliveryStarted) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      return !reply.hasMedia && !hasExecApprovalPayload(payload);
+      return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
     };
     // Durable inter-tool commentary lane: with verbose progress on, preamble
     // items become standalone progress messages like tool summaries. The latest
@@ -1892,6 +2014,9 @@ async function dispatchReplyFromConfigInner(
       if (execApproval && typeof execApproval === "object" && !Array.isArray(execApproval)) {
         return payload;
       }
+      if (hasAskUserPayload(payload)) {
+        return payload;
+      }
       if (isFastModeAutoProgressPayload(payload)) {
         return payload;
       }
@@ -2152,8 +2277,13 @@ async function dispatchReplyFromConfigInner(
       params.replyResolver ??
       (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
         .getReplyFromConfig;
+    // Channel runtimes can outlive a config reload. Resolve one live snapshot
+    // per turn so reply setup and dispatch callbacks share the same authority.
+    const runtimeReplyConfig = getRuntimeConfigSnapshot() ?? cfg;
     const replyConfig = withFullRuntimeReplyConfig(
-      params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
+      params.configOverride
+        ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
+        : runtimeReplyConfig,
     );
     recordAgentDispatchStarted();
     const replyResult = await runWithDispatchLifecycleAdmission(
@@ -2283,7 +2413,8 @@ async function dispatchReplyFromConfigInner(
                       if (
                         shouldSuppressProgressDelivery() &&
                         !isFastModeAutoProgressDelivery &&
-                        !isForcedToolProgress
+                        !isForcedToolProgress &&
+                        !hasAskUserPayload(payload)
                       ) {
                         return;
                       }
@@ -2329,18 +2460,40 @@ async function dispatchReplyFromConfigInner(
                       ) {
                         const hasMedia =
                           resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                        if (!hasMedia && !hasExecApprovalPayload(deliveryPayload)) {
+                        if (
+                          !hasMedia &&
+                          !hasExecApprovalPayload(deliveryPayload) &&
+                          !hasAskUserPayload(deliveryPayload)
+                        ) {
                           return;
                         }
                       }
                       if (deliveryPayload.isError === true) {
                         markVisibleToolErrorProgress();
                       }
+                      const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
+                      if (
+                        askUserQuestionId !== undefined &&
+                        !(await isAskUserPromptPending(askUserQuestionId))
+                      ) {
+                        return;
+                      }
+                      if (isDispatchOperationAborted()) {
+                        return;
+                      }
                       if (shouldRouteToOriginating) {
                         await sendPayloadAsync(deliveryPayload, undefined, false);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        dispatcher.sendToolResult(deliveryPayload);
+                        const delivered = dispatcher.sendToolResult(deliveryPayload);
+                        if (delivered && hasAskUserPayload(deliveryPayload)) {
+                          // ask_user blocks until this callback resolves; drain its prompt now
+                          // or the answerable UI can remain queued behind the blocked agent run.
+                          await waitForReplyDispatcherIdle(
+                            dispatcher,
+                            getDispatchAbortOperation()?.abortSignal,
+                          );
+                        }
                       }
                     };
                     return run();

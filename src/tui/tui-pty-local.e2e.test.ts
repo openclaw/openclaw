@@ -486,14 +486,13 @@ function buildLocalModeConfig(params: {
         skills: [],
         skipBootstrap: true,
       },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
           default: true,
           skills: [],
           model: { primary: "tui-pty-mock/gpt-5.5" },
         },
-      ],
+      },
     },
     tools: {
       profile: params.toolsProfile ?? "minimal",
@@ -571,7 +570,7 @@ async function startLocalModeTui(
   });
 
   const cleanup = createIdempotentCleanup(async () => {
-    run.dispose();
+    await run.dispose();
     await mockModel.stop();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -591,12 +590,7 @@ type SharedGatewayFixture = {
   cleanup: () => Promise<void>;
 };
 
-type SharedGatewayFixtureStartup = {
-  promise: Promise<SharedGatewayFixture>;
-  failureReported: boolean;
-};
-
-let sharedGatewayFixtureStartup: SharedGatewayFixtureStartup | undefined;
+let sharedGatewayFixtureStartup: Promise<SharedGatewayFixture> | undefined;
 let gatewaySessionSequence = 0;
 
 function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: string }) {
@@ -620,14 +614,18 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         skills: [],
         skipBootstrap: true,
       },
-      list: scenarios.map((scenario, index) => ({
-        id: scenario.agentId,
-        ...(index === 0 ? { default: true } : {}),
-        workspace: path.join(params.tempDir, scenario.agentId),
-        skills: [],
-        model: { primary: `tui-pty-mock/${scenario.modelId}` },
-        tools: { profile: scenario.toolsProfile },
-      })),
+      entries: Object.fromEntries(
+        scenarios.map((scenario, index) => [
+          scenario.agentId,
+          {
+            ...(index === 0 ? { default: true } : {}),
+            workspace: path.join(params.tempDir, scenario.agentId),
+            skills: [],
+            model: { primary: `tui-pty-mock/${scenario.modelId}` },
+            tools: { profile: scenario.toolsProfile },
+          },
+        ]),
+      ),
     },
     models: {
       mode: "replace",
@@ -641,7 +639,6 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
     messages: {
       queue: {
         mode: "followup",
-        debounceMs: 25,
       },
     },
   } satisfies OpenClawConfig;
@@ -701,7 +698,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
     const fixtureMockModel = mockModel;
     const fixtureControlClient = controlClient;
     const cleanup = createIdempotentCleanup(async () => {
-      fixtureControlClient.stop();
+      await fixtureControlClient.stop();
       try {
         await fixtureGateway.cleanup();
       } finally {
@@ -719,7 +716,7 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
       cleanup,
     };
   } catch (error) {
-    controlClient?.stop();
+    await controlClient?.stop();
     try {
       await gateway?.cleanup();
     } finally {
@@ -734,16 +731,26 @@ async function startSharedGatewayFixture(): Promise<SharedGatewayFixture> {
 }
 
 async function requireSharedGatewayFixture(): Promise<SharedGatewayFixture> {
-  const startup = sharedGatewayFixtureStartup;
-  if (!startup) {
+  if (!sharedGatewayFixtureStartup) {
     throw new Error("shared Gateway fixture startup was not initialized");
   }
-  try {
-    return await startup.promise;
-  } catch (error) {
-    startup.failureReported = true;
-    throw error;
+  return await sharedGatewayFixtureStartup;
+}
+
+async function cleanupSharedGatewayFixture(
+  startup: Promise<Pick<SharedGatewayFixture, "cleanup">> | undefined,
+): Promise<void> {
+  if (!startup) {
+    return;
   }
+  let fixture: Pick<SharedGatewayFixture, "cleanup">;
+  try {
+    fixture = await startup;
+  } catch {
+    // The setup hook already reports startup failures. Teardown only owns cleanup.
+    return;
+  }
+  await fixture.cleanup();
 }
 
 async function startGatewayModeTui(
@@ -776,7 +783,7 @@ async function startGatewayModeTui(
   });
   const cleanup = createIdempotentCleanup(async () => {
     shared.mockModel.releaseFirstResponse(scenario.modelId);
-    run.dispose();
+    await run.dispose();
     for (const key of sessionKeys) {
       await shared.controlClient.abortChat({ sessionKey: key });
     }
@@ -800,36 +807,19 @@ async function startGatewayModeTui(
 // Gateway cases share one real server but keep isolated PTYs, models, and sessions.
 // Keep them serial so constrained release runners avoid host contention.
 describe("TUI PTY real backends", () => {
-  beforeAll(() => {
-    const promise = startSharedGatewayFixture();
-    sharedGatewayFixtureStartup = { promise, failureReported: false };
-    // Local cases run while startup continues. Mark an early rejection handled;
-    // the Gateway setup hook awaits the original promise and reports the failure.
-    void promise.catch(() => undefined);
-  });
+  it("owns late fixture startup without swallowing cleanup failures", async () => {
+    await expect(
+      cleanupSharedGatewayFixture(Promise.reject(new Error("setup failed"))),
+    ).resolves.toBe(undefined);
 
-  afterAll(async () => {
-    const startup = sharedGatewayFixtureStartup;
-    try {
-      if (!startup) {
-        return;
-      }
-      let fixture: SharedGatewayFixture;
-      try {
-        fixture = await startup.promise;
-      } catch (error) {
-        // A filtered local-only run has no Gateway hook to surface startup failure.
-        // Preserve the old beforeAll contract without duplicating an existing failure.
-        if (!startup.failureReported) {
-          throw error;
-        }
-        return;
-      }
-      await fixture.cleanup();
-    } finally {
-      sharedGatewayFixtureStartup = undefined;
-    }
-  }, LOCAL_TEST_TIMEOUT_MS);
+    const cleanupError = new Error("cleanup failed");
+    const fixture = {
+      cleanup: async () => {
+        throw cleanupError;
+      },
+    };
+    await expect(cleanupSharedGatewayFixture(Promise.resolve(fixture))).rejects.toBe(cleanupError);
+  });
 
   it(
     "drives the real local backend with a mocked model endpoint",
@@ -1033,7 +1023,7 @@ describe("TUI PTY real backends", () => {
           await fixture.run.write("/exit\r", { delay: false });
           expect((await fixture.run.waitForExit()).exitCode).toBe(0);
         } finally {
-          eventProbe?.stop();
+          await eventProbe?.stop();
           await fixture.cleanup();
         }
       },
@@ -1357,7 +1347,7 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
-        queueClient.stop();
+        await queueClient.stop();
         await fixture.cleanup();
       }
     },
@@ -1365,10 +1355,16 @@ describe("TUI PTY real backends", () => {
   );
 
   describe("with shared Gateway fixture", () => {
-    // Preserve the fixture's original setup budget: overlap startup with local
-    // cases, then join it in a hook before any Gateway PTY starts.
     beforeAll(async () => {
-      await requireSharedGatewayFixture();
+      const startup = startSharedGatewayFixture();
+      sharedGatewayFixtureStartup = startup;
+      await startup;
+    }, LOCAL_TEST_TIMEOUT_MS);
+
+    afterAll(async () => {
+      const startup = sharedGatewayFixtureStartup;
+      sharedGatewayFixtureStartup = undefined;
+      await cleanupSharedGatewayFixture(startup);
     }, LOCAL_TEST_TIMEOUT_MS);
 
     for (const register of gatewayTestRegistrations) {

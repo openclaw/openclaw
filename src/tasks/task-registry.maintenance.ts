@@ -7,6 +7,7 @@ import {
   readAcpSessionEntry,
   type AcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
+import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js";
 import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
@@ -14,7 +15,7 @@ import {
 import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   type SessionEntrySummary,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,6 +34,7 @@ import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
+import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
 import {
   collectCronHistoryOverflowTaskIds,
@@ -98,11 +100,12 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  listSessionEntries: typeof listSessionEntries;
+  listSessionEntries: typeof listSessionEntriesReadOnly;
   resolveStorePath: typeof resolveStorePath;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
+  isBackgroundExecSessionActive?: typeof isBackgroundExecSessionActive;
   hasActiveAcpTurn: (sessionKey: string) => boolean;
   parseAgentSessionKey: typeof parseAgentSessionKey;
   hasActiveTaskForChildSessionKey: typeof hasActiveTaskForChildSessionKey;
@@ -136,11 +139,12 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  listSessionEntries,
+  listSessionEntries: listSessionEntriesReadOnly,
   resolveStorePath,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
+  isBackgroundExecSessionActive,
   hasActiveAcpTurn: isAcpTurnActive,
   parseAgentSessionKey,
   hasActiveTaskForChildSessionKey,
@@ -175,6 +179,7 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
   reason:
     | "acp_runtime_not_authoritative"
     | "active_cli_run"
+    | "active_background_exec"
     | "backing_session_missing"
     | "backing_session_present"
     | "cron_runtime_not_authoritative"
@@ -400,6 +405,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
 
+  if (isBackgroundExecTask(task)) {
+    const processSessionId = task.sourceId?.trim();
+    return Boolean(
+      processSessionId &&
+      taskRegistryMaintenanceRuntime.isBackgroundExecSessionActive?.(processSessionId),
+    );
+  }
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
     return true;
   }
@@ -934,6 +946,9 @@ function explainActiveTaskRetention(params: {
   }
   if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
     return { decision: "retained", reason: "active_cli_run" };
+  }
+  if (isBackgroundExecTask(params.task)) {
+    return { decision: "retained", reason: "active_background_exec" };
   }
   return { decision: "retained", reason: "backing_session_present" };
 }

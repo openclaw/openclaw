@@ -24,9 +24,10 @@ import {
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveAdvertisedControlUiLinks,
@@ -45,12 +46,25 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
+import { listAgentSessionDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
 export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
+
+/** Builds the token-authenticated Control UI URL shown by onboarding surfaces. */
+export function buildOnboardingControlUiUrl(params: {
+  httpUrl: string;
+  authMode?: GatewayAuthMode;
+  token?: string;
+  suppressTokenOutput?: boolean;
+}): string {
+  return params.authMode === "token" && params.token && !params.suppressTokenOutput
+    ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
+    : params.httpUrl;
+}
 
 /** Handles Clack cancellation by exiting through the runtime. */
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
@@ -238,7 +252,7 @@ export async function ensureWorkspaceAndSessions(
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId?: string;
   },
-) {
+): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
@@ -248,6 +262,7 @@ export async function ensureWorkspaceAndSessions(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
+  return { bootstrapPending: ws.bootstrapPending === true };
 }
 
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
@@ -300,7 +315,10 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
+  const sessionDirs = await listAgentSessionDirs(resolveStateDir());
+  for (const sessionDir of sessionDirs) {
+    await moveToTrash(sessionDir, runtime);
+  }
   if (scope === "full") {
     const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(workspaceDir);

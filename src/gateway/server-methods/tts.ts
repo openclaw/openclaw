@@ -16,7 +16,6 @@ import {
   listSpeechProviders,
 } from "../../tts/provider-registry.js";
 import {
-  getResolvedSpeechProviderConfig,
   getTtsPersona,
   getTtsProvider,
   isTtsEnabled,
@@ -55,11 +54,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const providerStates = listSpeechProviders(cfg).map((candidate) => ({
         id: candidate.id,
         label: candidate.label,
-        configured: candidate.isConfigured({
-          cfg,
-          providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
-          timeoutMs: config.timeoutMs,
-        }),
+        configured: isTtsProviderConfigured(config, candidate.id, cfg),
       }));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
@@ -179,7 +174,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
-      // synthesizeSpeech enforces the same messages.tts.maxTextLength bound but
+      // synthesizeSpeech enforces the same tts.maxTextLength bound but
       // reports it as a synthesis failure; pre-check to return a request error.
       const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
       if (text.length > maxTextLength) {
@@ -320,11 +315,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         providers: listSpeechProviders(cfg).map((provider) => ({
           id: provider.id,
           name: provider.label,
-          configured: provider.isConfigured({
-            cfg,
-            providerConfig: getResolvedSpeechProviderConfig(config, provider.id, cfg),
-            timeoutMs: config.timeoutMs,
-          }),
+          configured: isTtsProviderConfigured(config, provider.id, cfg),
           models: [...(provider.models ?? [])],
           voices: [...(provider.voices ?? [])],
         })),

@@ -69,7 +69,13 @@ vi.mock("../agents/main-session-restart-recovery.js", async (importOriginal) => 
 });
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
+const FAST_WAIT_OPTS = { timeout: 2_000, interval: 1 } as const;
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
@@ -206,6 +212,10 @@ async function removeTempDir(dir: string): Promise<void> {
 function createDirectChatContext(): GatewayRequestContext {
   return {
     loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
+    loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+    }),
     logGateway: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -216,6 +226,7 @@ function createDirectChatContext(): GatewayRequestContext {
     chatAbortControllers: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers: new Map(),
+    chatRunPlanSnapshots: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatDeltaLastBroadcastText: new Map(),
@@ -240,6 +251,12 @@ function createDirectChatContext(): GatewayRequestContext {
 }
 
 async function sendControlUiChat(params: {
+  authenticatedUserId?: string;
+  authenticatedUserProfile?: {
+    profileId: string;
+    displayName: string | null;
+    hasAvatar: boolean;
+  };
   context: GatewayRequestContext;
   expectedSessionRoutingContract?: string;
   idempotencyKey: string;
@@ -267,6 +284,10 @@ async function sendControlUiChat(params: {
     },
     params: requestParams,
     client: {
+      ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
+      ...(params.authenticatedUserProfile
+        ? { authenticatedUserProfile: params.authenticatedUserProfile }
+        : {}),
       connect: {
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -424,6 +445,63 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s replays the active plan snapshot in inFlightRun",
+    async (method) => {
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      try {
+        testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+        await writeMainSessionStore(sessionDir);
+        const context = createDirectChatContext();
+        const controller = new AbortController();
+        context.chatAbortControllers.set("run-active", {
+          controller,
+          sessionId: "sess-main",
+          sessionKey: "main",
+          startedAtMs: 1_000,
+          expiresAtMs: 10_000,
+          projectSessionActive: true,
+        });
+        context.chatRunBuffers.set("run-active", "partial reply");
+        context.chatRunPlanSnapshots?.set("run-active", {
+          explanation: "Replay on reconnect",
+          steps: [{ step: "Reconnect clients", status: "in_progress" }],
+        });
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        const { chatHandlers } = await import("./server-methods/chat.js");
+
+        await expectDefined(
+          chatHandlers[method],
+          `${method} test invariant`,
+        )({
+          req: { type: "req", id: method, method, params: { sessionKey: "main" } },
+          params: { sessionKey: "main" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+          context,
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok).toBe(true);
+        expect(
+          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
+        ).toEqual({
+          runId: "run-active",
+          text: "partial reply",
+          plan: {
+            explanation: "Replay on reconnect",
+            steps: [{ step: "Reconnect clients", status: "in_progress" }],
+          },
+        });
+      } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+        await removeTempDir(sessionDir);
+      }
+    },
+  );
+
   test("chat.history returns catalog-backed session metadata with history", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -610,7 +688,7 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
         models: {
           providers: {
@@ -786,7 +864,7 @@ describe("gateway server chat", () => {
                 model: { primary: "openai/gpt-5.5" },
                 models: { "openai/gpt-5.5": {} },
               },
-              list: [{ id: "main", default: true }, { id: "work" }],
+              entries: { main: { default: true }, work: {} },
             },
             auth: {
               order: { openai: ["openai:api", "openai:chatgpt", "openai:expired"] },
@@ -1048,7 +1126,7 @@ describe("gateway server chat", () => {
               "openai/*": {},
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
         models: {
           providers: {
@@ -1092,10 +1170,9 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          list: [
-            { id: "main", default: true },
-            {
-              id: "work",
+          entries: {
+            main: { default: true },
+            work: {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
@@ -1103,7 +1180,7 @@ describe("gateway server chat", () => {
                 "minimax/MiniMax-M2.7-highspeed": {},
               },
             },
-          ],
+          },
         },
         models: {
           providers: {
@@ -1213,15 +1290,14 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          list: [
-            { id: "main", default: true },
-            {
-              id: "work",
+          entries: {
+            main: { default: true },
+            work: {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
             },
-          ],
+          },
         },
         models: {
           providers: {
@@ -1357,7 +1433,7 @@ describe("gateway server chat", () => {
         });
 
       const first = Promise.resolve(callSend("first"));
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
@@ -1398,7 +1474,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
     } finally {
@@ -1501,7 +1577,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
         expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(true);
       }, FAST_WAIT_OPTS);
@@ -1672,7 +1748,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
       expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
@@ -1804,7 +1880,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
 
@@ -1915,7 +1991,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
 
@@ -1993,7 +2069,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
       }, FAST_WAIT_OPTS);
 
@@ -2075,7 +2151,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.dedupe.has(pendingKey)).toBe(true);
       }, FAST_WAIT_OPTS);
       const original = context.dedupe.get(pendingKey);
@@ -2139,7 +2215,7 @@ describe("gateway server chat", () => {
           context,
         }),
       );
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.dedupe.has(terminalPendingKey)).toBe(true);
       }, FAST_WAIT_OPTS);
       const terminalResult = {
@@ -2308,14 +2384,14 @@ describe("gateway server chat", () => {
         });
 
         expect(responses[0]?.ok).toBe(true);
-        await vi.waitFor(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
+        await waitForFast(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
         expect(captured?.replyOptions?.images).toBeUndefined();
         expect(captured?.ctx?.MediaPath).toEqual(expect.any(String));
         expect(captured?.ctx?.MediaPaths).toEqual([expect.any(String)]);
         expect(captured?.ctx?.MediaType).toBe("image/png");
         expect(captured?.ctx?.MediaTypes).toEqual(["image/png"]);
         expect(captured?.ctx?.MediaStaged).toBe(true);
-        await vi.waitFor(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
+        await waitForFast(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -2396,12 +2472,121 @@ describe("gateway server chat", () => {
       )?.replyOptions;
       expect(dispatchOptions?.suppressNextUserMessagePersistence).toBe(true);
       dispatchRelease.resolve(undefined);
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
     } finally {
       dispatchRelease.resolve(undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send persists optional connection identity per turn", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const send = async (params: {
+        authenticatedUserId?: string;
+        authenticatedUserProfile?: {
+          profileId: string;
+          displayName: string | null;
+          hasAvatar: boolean;
+        };
+        idempotencyKey: string;
+        message: string;
+      }) => {
+        const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
+        await sendControlUiChat({
+          context,
+          ...params,
+          respond: vi.fn() as RespondFn,
+        });
+        await waitForFast(
+          () => expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1),
+          FAST_WAIT_OPTS,
+        );
+      };
+
+      await send({
+        authenticatedUserId: "alice@example.com",
+        authenticatedUserProfile: {
+          profileId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
+          displayName: "Alice",
+          hasAvatar: false,
+        },
+        idempotencyKey: "idem-attributed-alice",
+        message: "prompt from alice",
+      });
+      await send({
+        authenticatedUserId: "bob@example.com",
+        authenticatedUserProfile: {
+          profileId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
+          displayName: "Bob",
+          hasAvatar: true,
+        },
+        idempotencyKey: "idem-attributed-bob",
+        message: "prompt from bob",
+      });
+      await send({
+        idempotencyKey: "idem-unattributed",
+        message: "prompt without identity",
+      });
+
+      const transcriptEvents = loadTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: testState.sessionStorePath,
+      });
+      expect(transcriptEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt from alice",
+              __openclaw: expect.objectContaining({
+                senderId: "0d9f4c35-d221-49da-9a3f-b8c73921066b",
+                senderName: "Alice",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt from bob",
+              __openclaw: expect.objectContaining({
+                senderId: "77ad3957-b2c8-428a-83d3-fc09e696492e",
+                senderName: "Bob",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt without identity",
+              __openclaw: expect.not.objectContaining({ senderId: expect.anything() }),
+            }),
+          }),
+        ]),
+      );
+    } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
@@ -2473,7 +2658,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
       dispatchRelease.resolve(undefined);
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
@@ -2526,7 +2711,7 @@ describe("gateway server chat", () => {
         message: "persist, then stop",
         respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
       });
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.chatAbortControllers.get(runId)).toBeDefined(),
         FAST_WAIT_OPTS,
       );
@@ -2607,7 +2792,7 @@ describe("gateway server chat", () => {
         },
       ]);
       if (retryable) {
-        await vi.waitFor(
+        await waitForFast(
           () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
           FAST_WAIT_OPTS,
         );
@@ -2825,7 +3010,7 @@ describe("gateway server chat", () => {
         respond: ((ok, payload, _error, meta) =>
           responses.push({ ok, payload, meta })) as RespondFn,
       });
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.dedupe.has(pendingChatSendDedupeKey(idempotencyKey))).toBe(true),
         FAST_WAIT_OPTS,
       );
@@ -3034,7 +3219,7 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
@@ -3081,7 +3266,7 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await vi.waitFor(
+      await waitForFast(
         () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
@@ -3213,7 +3398,7 @@ describe("gateway server chat", () => {
           payload: expect.objectContaining({ runId, status: "started" }),
         },
       ]);
-      await vi.waitFor(
+      await waitForFast(
         () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
@@ -3286,7 +3471,7 @@ describe("gateway server chat", () => {
         status: "done",
       });
       expect(ackSnapshot.entry?.restartRecoveryDeliveryRunId).toBeUndefined();
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
@@ -3390,7 +3575,7 @@ describe("gateway server chat", () => {
         });
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
-      await vi.waitFor(
+      await waitForFast(
         () => {
           expect(responses).toEqual([
             {
@@ -3413,7 +3598,7 @@ describe("gateway server chat", () => {
 
       const duplicate = Promise.resolve(callSend("duplicate", "idem-active-b"));
 
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(responses).toEqual([
           {
             id: "first",
@@ -3450,7 +3635,7 @@ describe("gateway server chat", () => {
         callSend("system-context", "idem-active-c", "proposal=support-file-sampler-b"),
       );
 
-      await vi.waitFor(
+      await waitForFast(
         () => {
           expect(responses).toEqual([
             {
@@ -3502,7 +3687,7 @@ describe("gateway server chat", () => {
       const withDifferentThinking = Promise.resolve(
         callSend("different-thinking", "idem-active-d", undefined, "high"),
       );
-      await vi.waitFor(
+      await waitForFast(
         () => {
           expect(responses.at(-1)).toEqual({
             id: "different-thinking",
@@ -3525,7 +3710,7 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve();
       await Promise.all([first, duplicate, withSystemContext, withDifferentThinking]);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(4);
       }, FAST_WAIT_OPTS);
     } finally {
@@ -3570,7 +3755,7 @@ describe("gateway server chat", () => {
       };
 
       const first = Promise.resolve(callSend("first", "idem-new-session-a"));
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(responses[0]).toEqual({
           id: "first",
           ok: true,
@@ -3594,7 +3779,7 @@ describe("gateway server chat", () => {
       invalidateSessionStoreCache(storePath);
 
       const duplicate = Promise.resolve(callSend("duplicate", "idem-new-session-b"));
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(responses.at(-1)).toEqual({
           id: "duplicate",
           ok: true,
@@ -3606,7 +3791,7 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve();
       await Promise.all([first, duplicate]);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
     } finally {
@@ -3725,7 +3910,7 @@ describe("gateway server chat", () => {
         RawBody: "/reset examples",
       });
       expect(dispatchContext).not.toHaveProperty("CommandSource");
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
     } finally {
@@ -3818,12 +4003,12 @@ describe("gateway server chat", () => {
         });
 
       await callSend("first", "first message", "idem-sequential-a");
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(1);
       }, FAST_WAIT_OPTS);
 
       await callSend("second", "second message", "idem-sequential-b");
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
 
@@ -3963,14 +4148,15 @@ describe("gateway server chat", () => {
         context,
       });
 
-      await vi.waitFor(() => expect(turnAdoptionLifecycle).toBeDefined(), FAST_WAIT_OPTS);
+      await waitForFast(() => expect(turnAdoptionLifecycle).toBeDefined(), FAST_WAIT_OPTS);
       expect(turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
+        expect.anything(),
       );
       dispatchRelease.resolve();
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(broadcast).toHaveBeenCalledWith(
           "chat",
           expect.objectContaining({
@@ -3978,6 +4164,7 @@ describe("gateway server chat", () => {
             sessionKey: "agent:main:main",
             state: "final",
           }),
+          { sessionKeys: ["agent:main:main"] },
         );
       }, FAST_WAIT_OPTS);
       const finalEvents = broadcast.mock.calls.filter(
@@ -4036,7 +4223,7 @@ describe("gateway server chat", () => {
 
       turnAdoptionLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
@@ -4082,7 +4269,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      await vi.waitFor(
+      await waitForFast(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(2),
         FAST_WAIT_OPTS,
       );
@@ -4212,7 +4399,7 @@ describe("gateway server chat", () => {
           error: undefined,
         },
       ]);
-      await vi.waitFor(
+      await waitForFast(
         () => {
           const phases = broadcastToConnIds.mock.calls
             .filter(([event]) => event === "chat.send_timing")
@@ -4369,7 +4556,7 @@ describe("gateway server chat", () => {
           error: undefined,
         },
       ]);
-      await vi.waitFor(
+      await waitForFast(
         () => {
           expect(broadcastToConnIds).toHaveBeenCalledWith(
             "chat.send_timing",
@@ -4397,6 +4584,7 @@ describe("gateway server chat", () => {
                 ]),
               }),
             }),
+            { sessionKeys: ["agent:main:main"] },
           );
         },
         { timeout: 2_000, interval: 5 },
@@ -5054,7 +5242,7 @@ describe("gateway server chat", () => {
         });
         expect(sendRes.ok).toBe(true);
 
-        await vi.waitFor(() => {
+        await waitForFast(() => {
           expect(spy.mock.calls.length).toBeGreaterThan(0);
         }, FAST_WAIT_OPTS);
 
@@ -5104,10 +5292,10 @@ describe("gateway server chat", () => {
             },
           });
 
-          await vi.waitFor(() => {
+          await waitForFast(() => {
             expect(spy.mock.calls.length).toBeGreaterThan(0);
           }, FAST_WAIT_OPTS);
-          await vi.waitFor(async () => {
+          await waitForFast(async () => {
             const events = await readTimelineEvents(timelinePath);
             const ackReady = events.find(
               (event) =>
@@ -5246,7 +5434,7 @@ describe("gateway server chat", () => {
         });
         expect(sendRes.ok).toBe(true);
 
-        await vi.waitFor(() => {
+        await waitForFast(() => {
           expect(spy.mock.calls.length).toBeGreaterThan(0);
         }, FAST_WAIT_OPTS);
 
@@ -5288,7 +5476,7 @@ describe("gateway server chat", () => {
         });
         expect(sendRes.ok).toBe(true);
 
-        await vi.waitFor(() => {
+        await waitForFast(() => {
           expect(spy.mock.calls.length).toBeGreaterThan(0);
         }, FAST_WAIT_OPTS);
 
@@ -5777,7 +5965,7 @@ describe("gateway server chat", () => {
       await writeGatewayConfig({
         session: { scope: "global" },
         agents: {
-          list: [{ id: "main", default: true }, { id: "work" }],
+          entries: { main: { default: true }, work: {} },
         },
       });
       await connectOk(ws);
@@ -6597,7 +6785,7 @@ describe("gateway server chat", () => {
 
       const sendRes = await sendResP;
       expect(sendRes.ok).toBe(true);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(spy.mock.calls.length).toBeGreaterThan(0);
       }, FAST_WAIT_OPTS);
 
@@ -6615,7 +6803,7 @@ describe("gateway server chat", () => {
       });
       expect(abortRes.ok).toBe(true);
       expect(abortRes.payload?.aborted).toBe(true);
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(aborted).toBe(true);
       }, FAST_WAIT_OPTS);
 
@@ -6629,7 +6817,7 @@ describe("gateway server chat", () => {
       });
       expect(completeRes.ok).toBe(true);
 
-      await vi.waitFor(async () => {
+      await waitForFast(async () => {
         const again = await rpcReq<{ status?: string }>(ws, "chat.send", {
           sessionKey: "main",
           message: "hello",

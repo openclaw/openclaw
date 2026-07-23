@@ -171,6 +171,9 @@ type ChannelHandler = {
   supportsMedia: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  normalizePayloadBatch?: (
+    payloads: NormalizedPayloadForChannelDelivery[],
+  ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
   renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
   presentationCapabilities?: ChannelOutboundAdapter["presentationCapabilities"];
@@ -470,6 +473,19 @@ function createPluginHandler(
             cfg: params.cfg,
             accountId: params.accountId,
           })
+      : undefined,
+    normalizePayloadBatch: outbound?.normalizePayloadBatch
+      ? (payloads) => {
+          const normalized = outbound.normalizePayloadBatch!({
+            payloads,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          });
+          return payloads.flatMap((entry, index) => {
+            const payload = normalized[index];
+            return payload ? [{ ...entry, payload }] : [];
+          });
+        }
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
     presentationCapabilities: outbound?.presentationCapabilities,
@@ -947,7 +963,9 @@ function normalizePayloadsForChannelDelivery(
       normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
     }
   }
-  return normalizedPayloads;
+  return handler.normalizePayloadBatch
+    ? handler.normalizePayloadBatch(normalizedPayloads)
+    : normalizedPayloads;
 }
 
 function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
@@ -1148,21 +1166,37 @@ async function renderPresentationForDelivery(
     presentation,
     capabilities: handler.presentationCapabilities,
   });
-  const adaptedPayload = { ...payload, presentation: adaptedPresentation };
+  const textIsFallback = payload.presentationTextMode === "fallback";
+  const adaptedPayload = {
+    ...payload,
+    ...(textIsFallback ? { text: undefined } : {}),
+    presentation: adaptedPresentation,
+  };
   const rendered = handler.renderPresentation
     ? await handler.renderPresentation(adaptedPayload)
     : null;
   if (rendered) {
-    const { presentation: _presentation, ...withoutPresentation } = rendered;
+    const {
+      presentation: _presentation,
+      presentationTextMode: _presentationTextMode,
+      ...withoutPresentation
+    } = rendered;
     return withoutPresentation;
   }
-  const { presentation: _presentation, ...withoutPresentation } = payload;
+  const {
+    presentation: _presentation,
+    presentationTextMode: _presentationTextMode,
+    ...withoutPresentation
+  } = payload;
   return {
     ...withoutPresentation,
-    text: renderMessagePresentationFallbackText({
-      text: payload.text,
-      presentation: adaptedPresentation,
-    }),
+    text: textIsFallback
+      ? (payload.text ??
+        renderMessagePresentationFallbackText({ presentation: adaptedPresentation }))
+      : renderMessagePresentationFallbackText({
+          text: payload.text,
+          presentation: adaptedPresentation,
+        }),
   };
 }
 

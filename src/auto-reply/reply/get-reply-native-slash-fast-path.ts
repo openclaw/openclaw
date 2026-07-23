@@ -1,11 +1,12 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -97,14 +98,24 @@ function shouldRunInternalTextSlashCommandFastPath(
 
 async function resolveNativeSlashDefaultThinkingLevel(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   provider: string;
   model: string;
+  agentDir: string;
+  workspaceDir: string;
 }): Promise<ThinkLevel> {
   return resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+    loadRuntimeCatalog: () =>
+      loadPreparedModelCatalog({
+        config: params.cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        readOnly: true,
+      }),
   });
 }
 
@@ -159,6 +170,13 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       };
     }
     const persistedInitialEntry = persistence.entry;
+    if (creatingSession) {
+      recordSessionCreated({
+        sessionKey: sessionState.sessionKey,
+        agentId: params.agentId,
+        entry: persistedInitialEntry,
+      });
+    }
     // Commit the synthesized activity/channel touch before commands or directives
     // capture their own mutation baseline.
     sessionState.sessionEntry = persistedInitialEntry;
@@ -182,12 +200,23 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const resolveDefaultThinkingLevel = async () => {
       resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
         cfg: params.cfg,
+        agentId: params.agentId,
         provider: params.provider,
         model: params.model,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
       });
       return resolvedDefaultThinkingLevel;
     };
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
+    // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
+    const thinkingCatalog = await loadPreparedModelCatalog({
+      config: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      readOnly: true,
+    });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -203,6 +232,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           provider: params.provider,
           model: params.model,
           workspaceDir: params.workspaceDir,
+          thinkingCatalog,
           resolvedThinkLevel,
           resolvedVerboseLevel: "off",
           resolvedReasoningLevel: "off",
@@ -315,6 +345,14 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     return { handled: true, reply: markCommandReplyForDelivery(directiveResult.reply) };
   }
 
+  const shouldPrepareStatusThinkingCatalog =
+    directiveResult.result.inlineStatusRequested ||
+    directiveResult.result.directives.hasStatusDirective ||
+    directiveResult.result.command.commandBodyNormalized.trim() === "/status";
+  const thinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await directiveResult.result.modelState.resolveThinkingCatalog()
+    : undefined;
+
   const inlineActionResult = await handleInlineActions({
     ctx: params.ctx,
     sessionCtx: sessionState.sessionCtx,
@@ -345,6 +383,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     elevatedAllowed: directiveResult.result.elevatedAllowed,
     elevatedFailures: directiveResult.result.elevatedFailures,
     defaultActivation: () => directiveResult.result.defaultActivation,
+    thinkingCatalog,
     resolvedThinkLevel: directiveResult.result.resolvedThinkLevel,
     resolvedVerboseLevel: directiveResult.result.resolvedVerboseLevel,
     resolvedReasoningLevel: directiveResult.result.resolvedReasoningLevel,

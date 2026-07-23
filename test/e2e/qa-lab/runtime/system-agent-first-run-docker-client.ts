@@ -7,7 +7,13 @@ import path from "node:path";
 import { shouldStartOnboardingForFreshInstall } from "../../../../dist/cli/run-main.js";
 import { clearConfigCache } from "../../../../dist/config/config.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
+import { createSqliteAuditRecordStore } from "../../../../dist/infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../../../../dist/runtime.js";
+import {
+  SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  SYSTEM_AGENT_AUDIT_SCOPE,
+  type SystemAgentAuditEntry,
+} from "../../../../dist/system-agent/audit.js";
 import {
   activateSetupInference,
   verifySetupInference,
@@ -339,7 +345,7 @@ async function main() {
     "first-run setup did not write default workspace",
   );
   assert(resolveDefaultModel(config) === spec.model, "first-run setup did not write default model");
-  const reef = config.agents?.list?.find((agent) => agent.id === spec.agentId);
+  const reef = config.agents?.entries?.[spec.agentId];
   assert(reef, "OpenClaw did not create reef agent");
   assert(reef.workspace === spec.dockerAgentWorkspace, "OpenClaw did not write reef workspace");
   assert(
@@ -367,10 +373,15 @@ async function main() {
     "OpenClaw persisted an unrelated ambient credential",
   );
 
-  const auditPath = path.join(stateDir, "audit", "system-agent.jsonl");
-  const audit = (await fs.readFile(auditPath, "utf8")).trim();
+  const audit = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+  }).entries();
   for (const operation of spec.auditOperations) {
-    assert(audit.includes(`"operation":"${operation}"`), `${operation} audit entry missing`);
+    assert(
+      audit.some((entry) => entry.value.operation === operation),
+      `${operation} audit entry missing`,
+    );
   }
 
   console.log("OpenClaw first-run Docker E2E passed");

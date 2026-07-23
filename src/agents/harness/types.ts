@@ -53,6 +53,23 @@ export type AgentHarnessAttemptParams = Omit<
 >;
 export type AgentHarnessAttemptResult =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
+type AgentHarnessSettledTurnFinalizationParams = {
+  /** Fully prepared attempt context for the isolated finalization operation. */
+  attempt: AgentHarnessAttemptParams;
+  /** Settled result whose completed tool transcript needs a final visible answer. */
+  settledAttempt: AgentHarnessAttemptResult;
+};
+export type AgentHarnessSettledTurnFinalizationResult = {
+  /** The single completed assistant answer produced by the isolated operation. */
+  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Normalized usage for the finalization model call only. */
+  usage?: import("../usage.js").NormalizedUsage;
+  /** True when the harness already persisted the assistant into the application transcript. */
+  assistantTranscriptOwned?: boolean;
+  /** Assistant stream generation index used to correlate final reply delivery. */
+  assistantMessageIndex?: number;
+  diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
+};
 export type AgentHarnessAuthBindingFingerprintParams = {
   authProfileId: string;
   authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
@@ -128,6 +145,42 @@ export type AgentHarnessResetParams = {
   reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
 };
 
+export type AgentHarnessSessionForkFailureCode =
+  | "steer-message"
+  | "in-progress-turn"
+  | "drift-mismatch"
+  | "upstream-unavailable";
+
+export type AgentHarnessSessionForkParams = {
+  targetKey: string;
+  source: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+    entryId: string;
+  };
+  upstream: {
+    catalogId: string;
+    hostId: string;
+    kind: import("../../plugins/session-catalog.js").SessionUpstreamKind;
+    threadId: string;
+    ref: import("../../plugins/session-catalog.js").SessionUpstreamJsonValue;
+  };
+};
+
+export type AgentHarnessSessionForkResult =
+  | {
+      status: "created";
+      key: string;
+      editorText?: string;
+    }
+  | {
+      status: "failed";
+      code: AgentHarnessSessionForkFailureCode;
+      message: string;
+    };
+
 export type AgentHarnessResultClassification =
   | "ok"
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
@@ -166,6 +219,13 @@ type AgentHarnessRunCapability = {
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  /**
+   * Produces one final answer from a settled tool transcript without exposing
+   * capabilities that can repeat or extend the completed work.
+   */
+  finalizeSettledTurn?(
+    params: AgentHarnessSettledTurnFinalizationParams,
+  ): Promise<AgentHarnessSettledTurnFinalizationResult>;
 };
 
 type AgentHarnessSideQuestionCapability = {
@@ -186,6 +246,13 @@ type AgentHarnessCompactionCapability = {
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   dispose?(): Promise<void> | void;
+};
+
+type AgentHarnessSessionForkCapability = {
+  sessionFork?: {
+    upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
+    fork(params: AgentHarnessSessionForkParams): Promise<AgentHarnessSessionForkResult>;
+  };
 };
 
 type AgentHarnessRuntimeArtifactCapability = {
@@ -225,6 +292,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {

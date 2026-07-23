@@ -538,7 +538,6 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
     const first = params.allowFrom?.[0];
     return first ? params.normalizeEntry(first) : null;
   },
-  resolveDmGroupAccessWithCommandGate: () => ({ commandAuthorized: true }),
   resolveSendableOutboundReplyParts: resolveSendableOutboundReplyPartsMock,
   resolveTextChunkLimit: () => 64_000,
   shouldComputeCommandAuthorized: () => false,
@@ -632,12 +631,11 @@ vi.mock("./auto-reply/monitor/message-line.runtime.js", () => ({
   resolveMessagePrefix: (
     cfg: {
       channels?: { whatsapp?: { messagePrefix?: string; allowFrom?: string[] } };
-      messages?: { messagePrefix?: string };
     },
     _agentId: string,
     params?: { configured?: string; hasAllowFrom?: boolean },
   ) => {
-    const configured = params?.configured ?? cfg.messages?.messagePrefix;
+    const configured = params?.configured ?? cfg.channels?.whatsapp?.messagePrefix;
     if (configured !== undefined) {
       return configured;
     }

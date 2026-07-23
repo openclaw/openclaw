@@ -3,9 +3,11 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateConversationListParams,
   validateConversationSendParams,
   validateConversationTurnCancelParams,
   validateConversationTurnParams,
+  type ConversationListParams,
   type ConversationSendParams,
   type ConversationTurnCancelParams,
   type ConversationTurnParams,
@@ -15,6 +17,7 @@ import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "../conversation-errors.js";
+import { runGatewayConversationList } from "../conversation-list.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -35,6 +38,7 @@ import type {
 
 type ConversationHandlerDeps = {
   cancelConversationTurn: typeof cancelPendingConversationTurn;
+  runConversationList: typeof runGatewayConversationList;
   runConversationSend: typeof runGatewayConversationSend;
   runConversationTurn: typeof runGatewayConversationTurn;
 };
@@ -184,14 +188,54 @@ async function runConversationOperation<T extends { channel: string }>(params: {
   }
 }
 
+const defaultConversationHandlerDeps: ConversationHandlerDeps = {
+  cancelConversationTurn: cancelPendingConversationTurn,
+  runConversationList: runGatewayConversationList,
+  runConversationSend: runGatewayConversationSend,
+  runConversationTurn: runGatewayConversationTurn,
+};
+
 export function createConversationHandlers(
-  deps: ConversationHandlerDeps = {
-    cancelConversationTurn: cancelPendingConversationTurn,
-    runConversationSend: runGatewayConversationSend,
-    runConversationTurn: runGatewayConversationTurn,
-  },
+  overrides: Partial<ConversationHandlerDeps> = {},
 ): GatewayRequestHandlers {
+  const deps = { ...defaultConversationHandlerDeps, ...overrides };
   return {
+    "conversations.list": async ({ params, respond, context }) => {
+      if (!validateConversationListParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid conversations.list params: ${formatValidationErrors(validateConversationListParams.errors)}`,
+          ),
+        );
+        return;
+      }
+      const request = params as ConversationListParams;
+      try {
+        respond(
+          true,
+          await deps.runConversationList({
+            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            agentId: request.agentId,
+            ...(request.channel ? { channel: request.channel } : {}),
+            ...(request.query ? { query: request.query } : {}),
+            limit: request.limit ?? 50,
+          }),
+          undefined,
+        );
+      } catch (cause) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            cause instanceof Error ? cause.message : String(cause),
+          ),
+        );
+      }
+    },
     "conversations.send": async ({ params, respond, context, client }) => {
       if (!validateConversationSendParams(params)) {
         respond(

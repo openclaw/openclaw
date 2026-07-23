@@ -28,7 +28,10 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
-import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import {
+  buildMemoryPromptSection,
+  type PreparedMemoryPromptSection,
+} from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -306,17 +309,21 @@ function buildMemorySection(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  prepared?: PreparedMemoryPromptSection;
 }) {
   if (params.isMinimal || params.includeMemorySection === false) {
     return [];
   }
-  return buildMemoryPromptSection({
-    availableTools: params.availableTools,
-    citationsMode: params.citationsMode,
-    agentId: params.agentId,
-    agentSessionKey: params.agentSessionKey,
-    sandboxed: params.sandboxed,
-  });
+  return buildMemoryPromptSection(
+    {
+      availableTools: params.availableTools,
+      citationsMode: params.citationsMode,
+      agentId: params.agentId,
+      agentSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed,
+    },
+    params.prepared,
+  );
 }
 
 function buildAgentBootstrapSystemContext(params: {
@@ -757,6 +764,8 @@ export function buildAgentSystemPrompt(params: {
   };
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Immutable memory state prepared before synchronous prompt assembly. */
+  preparedMemoryPrompt?: PreparedMemoryPromptSection;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
@@ -1002,6 +1011,7 @@ export function buildAgentSystemPrompt(params: {
     agentId: params.runtimeInfo?.agentId,
     agentSessionKey: params.runtimeInfo?.sessionKey,
     sandboxed: params.sandboxInfo?.enabled === true,
+    prepared: params.preparedMemoryPrompt,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,

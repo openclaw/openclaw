@@ -919,6 +919,26 @@ test("sessions.changed mutation events include session management metadata", asy
     pinnedAt: null,
   });
 
+  const icon = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    icon: "name:spark",
+  });
+  expectChangedBroadcast(icon.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    icon: "name:spark",
+  });
+
+  const iconCleared = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    icon: null,
+  });
+  expectChangedBroadcast(iconCleared.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    icon: null,
+  });
+
   const unread = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: true,
@@ -1171,12 +1191,22 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     entries: {
       "subagent:child": sessionStoreEntry("sess-child", {
         spawnedBy: "agent:main:main",
+        parentSessionKey: "agent:main:dashboard:navigation-parent",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
         spawnedCwd: "/tmp/task-repo",
         forkedFromParent: true,
         spawnDepth: 2,
         subagentRole: "orchestrator",
         subagentControlScope: "children",
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "agent:main:main" },
+        createdAt: 1_000,
+        forkSource: {
+          sessionKey: "agent:main:main",
+          sessionId: "sess-source",
+          entryId: "entry-source",
+        },
+        previousSessionId: "sess-previous",
       }),
     },
   });
@@ -1191,12 +1221,23 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     sessionKey: "agent:main:subagent:child",
     reason: "patch",
     spawnedBy: "agent:main:main",
+    controlOwnerSessionKey: "agent:main:main",
+    parentSessionKey: "agent:main:dashboard:navigation-parent",
     spawnedWorkspaceDir: "/tmp/subagent-workspace",
     spawnedCwd: "/tmp/task-repo",
     forkedFromParent: true,
     spawnDepth: 2,
     subagentRole: "orchestrator",
     subagentControlScope: "children",
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: "agent:main:main" },
+    createdAt: 1_000,
+    forkSource: {
+      sessionKey: "agent:main:main",
+      sessionId: "sess-source",
+      entryId: "entry-source",
+    },
+    previousSessionId: "sess-previous",
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

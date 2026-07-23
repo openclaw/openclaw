@@ -49,6 +49,28 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
   return evidence;
 }
 
+function trackMaxActiveFlowRuns() {
+  const run = runQaFlowSuite.getMockImplementation();
+  if (!run) {
+    throw new Error("expected default QA flow suite mock implementation");
+  }
+  let active = 0;
+  let maxActive = 0;
+  runQaFlowSuite.mockImplementation(async (params) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    try {
+      return await run(params);
+    } finally {
+      active -= 1;
+    }
+  });
+  return () => maxActive;
+}
+
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
@@ -186,7 +208,7 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
-  it("runs runtime-specific live scenarios in dedicated workers", async () => {
+  it("runs runtime-specific channel scenarios in dedicated workers", async () => {
     const repoRoot = await makeTempRepo("qa-suite-live-runtime-");
     await runQaSuite({
       repoRoot,
@@ -211,6 +233,134 @@ describe("qa suite runtime launcher", () => {
         outputDir: path.join(outputDir, "runtime-codex-1"),
         forcedRuntime: "codex",
         scenarioIds: ["slack-codex-approval-exec-native"],
+      }),
+    );
+  });
+
+  it("partitions portable scenarios by channel for a pluggable driver", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channels-");
+    const adapterFactories = [
+      {
+        id: "portable-driver",
+        matches: vi.fn(),
+        create: vi.fn(),
+      },
+    ];
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channels",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories,
+      scenarioIds: ["channel-chat-baseline", "telegram-help-command", "matrix-restart-resume"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "pluggable-channels");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(3);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: undefined,
+        outputDir: path.join(outputDir, "flow"),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "telegram",
+        outputDir: path.join(outputDir, "flow", "telegram"),
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "matrix",
+        outputDir: path.join(outputDir, "flow", "matrix"),
+        scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+  });
+
+  it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "portable-driver", matches: vi.fn(), create: vi.fn() }],
+      concurrency: 2,
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(maxActive()).toBe(2);
+  });
+
+  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    const scenarioIds = [
+      "matrix-approval-channel-target-both",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-thread-target",
+    ];
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [
+        {
+          id: "matrix",
+          isolatesInstances: true,
+          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+          create: vi.fn(),
+        },
+      ],
+      concurrency: 6,
+      scenarioIds,
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
+      scenarioIds.map((scenarioId) => [scenarioId]),
+    );
+    expect(maxActive()).toBe(6);
+  });
+
+  it("binds one portable channel scenario without an explicit channel override", async () => {
+    const adapterFactories = [
+      {
+        id: "portable-driver",
+        matches: vi.fn(),
+        create: vi.fn(),
+      },
+    ];
+
+    const result = await runQaSuite({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories,
+      scenarioIds: ["telegram-help-command"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories,
+        channelId: "telegram",
+        scenarioIds: ["telegram-help-command"],
       }),
     );
   });
@@ -978,7 +1128,13 @@ describe("qa suite runtime launcher", () => {
     const testFileBlocked = new Promise<void>((resolve) => {
       releaseTestFile = resolve;
     });
-    runQaFlowSuite.mockRejectedValueOnce(new Error("flow partition failed"));
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("flow partition failed", {
+        cause: Object.assign(new Error("unrelated capacity failure"), {
+          code: "POOL_EXHAUSTED",
+        }),
+      }),
+    );
     runQaTestFileScenarios.mockImplementationOnce(
       async (params: {
         outputDir: string;
@@ -1020,6 +1176,55 @@ describe("qa suite runtime launcher", () => {
     releaseTestFile();
     await expect(runPromise).rejects.toThrow("flow partition failed");
     expect(rejected).toBe(true);
+  });
+
+  it("reuses unavailable channel credential evidence across serial partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-credential-unavailable-");
+    const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
+      code: "POOL_EXHAUSTED",
+    });
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("failed to create QA transport live:whatsapp: credential acquire failed", {
+        cause: new Error("credential acquire timed out", { cause: poolError }),
+      }),
+    );
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/credential-unavailable",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
+      scenarioIds: [
+        "whatsapp-status-command",
+        "whatsapp-access-control-dm-open",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(result.result.scenarios.slice(0, 2)).toMatchObject([
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+    ]);
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        execution?: { channel?: { id?: string } };
+        result?: { status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
+      const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
+      expect(blocked).toMatchObject({
+        execution: { channel: { id: "whatsapp" } },
+        result: { status: "blocked" },
+      });
+    }
   });
 
   it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {

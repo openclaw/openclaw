@@ -22,6 +22,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
@@ -1806,10 +1807,13 @@ function ensureListener() {
       };
       if (evt.stream === "lifecycle") {
         const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
+        const eventStartedAt = evt.data?.startedAt;
         const startedAt =
-          typeof evt.data?.startedAt === "number" ? evt.data.startedAt : current.startedAt;
+          typeof eventStartedAt === "number" && Number.isFinite(eventStartedAt)
+            ? eventStartedAt
+            : current.startedAt;
         const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : undefined;
-        if (startedAt) {
+        if (startedAt !== undefined) {
           patch.startedAt = startedAt;
         }
         if (phase === "start") {
@@ -2337,7 +2341,18 @@ export async function cancelTaskById(params: {
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
-    if (task.runtime !== "cli") {
+    if (isBackgroundExecTask(task)) {
+      const processSessionId = task.sourceId?.trim();
+      const { cancelBackgroundExecSession } = await loadTaskRegistryControlRuntime();
+      if (!processSessionId || !cancelBackgroundExecSession?.(processSessionId)) {
+        return {
+          found: true,
+          cancelled: false,
+          reason: "Background command has no active cancellation handle.",
+          task: cloneTaskRecord(task),
+        };
+      }
+    } else if (task.runtime !== "cli") {
       if (task.runtime === "cron") {
         const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
         if (

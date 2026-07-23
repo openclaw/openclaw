@@ -327,6 +327,7 @@ export async function handleQaInbound(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: sessionKey,
       dispatchSessionKey: sessionKey,
@@ -361,7 +362,7 @@ export async function handleQaInbound(params: {
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,
-    route: { agentId: route.agentId, sessionKey: route.sessionKey },
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
@@ -384,6 +385,7 @@ export async function handleQaInbound(params: {
       },
     },
     replyOptions: {
+      allowToolLifecycleWhenProgressHidden: true,
       onPartialReply: async (payload) => {
         await preview.update(payload.text ?? "");
       },

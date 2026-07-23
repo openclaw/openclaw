@@ -330,6 +330,7 @@ export async function runEmbeddedAttempt(
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
         effectiveCwd,
+        effectiveFsWorkspaceOnly,
         effectiveWorkspace,
         initialSystemPrompt: preparedSystemPrompt.systemPromptText,
         isRawModelRun,

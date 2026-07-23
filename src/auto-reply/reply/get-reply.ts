@@ -18,6 +18,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
@@ -62,7 +63,10 @@ import {
 } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  PENDING_FINAL_DELIVERY_CLEAR_PATCH,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -92,14 +96,8 @@ function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number
   };
 }
 
-function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
-  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  return Math.max(
-    0,
-    agentHeartbeat?.ackMaxChars ??
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  );
+function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _agentId: string): number {
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -215,7 +213,7 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const isFastTestEnv = isFastTestRuntimeEnv();
   const cfg = resolveGetReplyConfig({
     getRuntimeConfig,
     isFastTestEnv,
@@ -349,7 +347,7 @@ export async function getReplyFromConfig(
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
     const configuredTypingSeconds =
-      agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+      agentEntry?.typingIntervalSeconds ?? agentCfg?.typingIntervalSeconds;
     const typingIntervalSeconds =
       typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
     const controller = createTypingController({
@@ -553,13 +551,7 @@ export async function getReplyFromConfig(
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
       if (heartbeatPending.shouldClear) {
-        sessionEntry.pendingFinalDelivery = undefined;
-        sessionEntry.pendingFinalDeliveryText = undefined;
-        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
-        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
-        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
-        sessionEntry.pendingFinalDeliveryLastError = undefined;
-        sessionEntry.pendingFinalDeliveryContext = undefined;
+        Object.assign(sessionEntry, PENDING_FINAL_DELIVERY_CLEAR_PATCH);
         sessionEntryHandle.replaceCurrent(sessionEntry);
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -568,15 +560,7 @@ export async function getReplyFromConfig(
           const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
           await updateSessionEntry(
             { storePath, sessionKey },
-            () => ({
-              pendingFinalDelivery: undefined,
-              pendingFinalDeliveryText: undefined,
-              pendingFinalDeliveryCreatedAt: undefined,
-              pendingFinalDeliveryLastAttemptAt: undefined,
-              pendingFinalDeliveryAttemptCount: undefined,
-              pendingFinalDeliveryLastError: undefined,
-              pendingFinalDeliveryContext: undefined,
-            }),
+            () => ({ ...PENDING_FINAL_DELIVERY_CLEAR_PATCH }),
             {
               skipMaintenance: true,
               takeCacheOwnership: true,
@@ -593,6 +577,8 @@ export async function getReplyFromConfig(
       await applyResetModelOverride({
         cfg,
         agentId,
+        agentDir,
+        workspaceDir,
         resetTriggered,
         bodyStripped,
         sessionCtx,
@@ -893,6 +879,16 @@ export async function getReplyFromConfig(
     });
   };
 
+  const shouldPrepareStatusThinkingCatalog =
+    inlineStatusRequested ||
+    directives.hasStatusDirective ||
+    command.commandBodyNormalized.trim() === "/status";
+  const statusThinkingCatalog = shouldPrepareStatusThinkingCatalog
+    ? await traceGetReplyPhase("reply.prepare_status_thinking_catalog", () =>
+        modelState.resolveThinkingCatalog(),
+      )
+    : undefined;
+
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
       ctx,
@@ -922,6 +918,7 @@ export async function getReplyFromConfig(
       elevatedAllowed,
       elevatedFailures,
       defaultActivation: () => defaultActivation,
+      thinkingCatalog: statusThinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel,
       resolvedReasoningLevel,

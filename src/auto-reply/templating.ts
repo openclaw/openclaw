@@ -1,10 +1,11 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import type { ReplyToMode } from "../config/types.base.js";
+import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -42,6 +43,18 @@ type UntrustedStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
+  sessionTranscriptDedupeMessageIds?: string[];
+  /** Internal visible-text hints for legacy assistant rows without transcript ids. */
+  sessionTranscriptAssistantTextDedupeKeys?: string[];
+};
+
+export type SessionTranscriptContext = {
+  chatWindow?: boolean;
+  historyLimit: number;
+  beforeTimestampMs?: number;
+  minTimestampMs?: number;
+  senderLabels?: { assistant: string; user: string };
 };
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
@@ -91,6 +104,8 @@ export type MsgContext = {
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
   InboundHistory?: HistoryEntry[];
+  /** Internal facts used to merge canonical transcript turns before dispatch. */
+  SessionTranscriptContext?: SessionTranscriptContext;
   /**
    * @deprecated Use CommandBody.
    *
@@ -116,6 +131,8 @@ export type MsgContext = {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Effective routed DM scope, including binding overrides. */
+  DmScope?: DmScope;
   /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
@@ -204,6 +221,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Ordered current-turn media facts; array position is attachment identity. */
+  media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
   MediaWorkspaceDir?: string;
@@ -257,6 +276,11 @@ export type MsgContext = {
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
+  /** Trusted in-process creation provenance; never populated from channel payloads. */
+  SessionCreation?: {
+    via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
+    actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+  };
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
@@ -302,6 +326,8 @@ export type MsgContext = {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Run-scoped plugin tool bindings; never rendered into prompt text. */
+  GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */
   ApprovalReviewerDeviceId?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */

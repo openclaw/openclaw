@@ -36,10 +36,10 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementPatchError,
@@ -49,7 +49,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
-  "sessions.patch": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.patch": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
@@ -58,10 +58,6 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
@@ -315,7 +311,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.pluginPatch": async ({ params, respond, context, client, isWebchatConnect }) => {
+  "sessions.pluginPatch": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
     ) {
@@ -323,9 +319,6 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     const key = requireSessionKey(params.key, respond);
     if (!key) {
-      return;
-    }
-    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
       return;
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
@@ -390,7 +383,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason: "plugin-patch",
     });
   },
-  "sessions.reset": async ({ params, respond, context }) => {
+  "sessions.reset": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -407,6 +400,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       ...(p.agentId ? { agentId: p.agentId } : {}),
       reason,
       commandSource: "gateway:sessions.reset",
+      creation: resolveOperatorSessionCreation(client),
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

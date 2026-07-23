@@ -17,8 +17,11 @@ import {
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
+import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
 import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -282,6 +285,44 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("persists a meaningful quiet outcome for the base session", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      const cfg = createConfig({ tmpDir, storePath });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: false,
+          summary: "Deployment completed; smoke test pending.",
+          nextCheck: "next scheduled heartbeat",
+        }),
+      );
+
+      await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        reason: "operator check",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(
+        claimHeartbeatOutcomeForRun({ agentId: "main", sessionKey, runId: "user-run" }),
+      ).toMatchObject({
+        outcome: "progress",
+        summary: "Deployment completed; smoke test pending.",
+        wakeSource: "manual",
+        wakeReason: "operator check",
+      });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+    });
   });
 
   it("delivers notificationText when notify=true", async () => {

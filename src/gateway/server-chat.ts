@@ -1,7 +1,10 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
-import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatEvent,
+  ChatRunStartupPhase,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -10,7 +13,9 @@ import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-commo
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
   type AgentEventPayload,
   type AgentEventRuntimePayload,
@@ -35,6 +40,7 @@ import {
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
@@ -51,7 +57,7 @@ import {
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -72,6 +78,18 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
+  switch (value) {
+    case "preparing_workspace":
+    case "provisioning_environment":
+    case "preparing_context":
+    case "starting_model":
+      return value;
+    default:
+      return undefined;
+  }
+}
 
 function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
   const data = payload.data;
@@ -109,15 +127,7 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
 }
 
 function resolveHeartbeatAckMaxChars(): number {
-  try {
-    const cfg = getRuntimeConfig();
-    return Math.max(
-      0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    );
-  } catch {
-    return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  }
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
@@ -202,11 +212,7 @@ function normalizeHeartbeatChatFinalText(params: {
  */
 const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
-export type ChatEventBroadcast = (
-  event: string,
-  payload: unknown,
-  opts?: { dropIfSlow?: boolean },
-) => void;
+export type ChatEventBroadcast = GatewayBroadcastFn;
 
 export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
@@ -220,19 +226,6 @@ const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "context_length",
   "unknown",
 ]);
-
-function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefined {
-  const raw = error ? formatForLog(error).trim() : "";
-  if (!raw) {
-    return undefined;
-  }
-  const text = raw.startsWith("⚠️") || raw.startsWith("Error:") ? raw : `Error: ${raw}`;
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: Date.now(),
-  };
-}
 
 function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
   return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
@@ -304,12 +297,7 @@ function resolveBroadcastDelta(params: {
 
 export type AgentEventHandlerOptions = {
   broadcast: ChatEventBroadcast;
-  broadcastToConnIds: (
-    event: string,
-    payload: unknown,
-    connIds: ReadonlySet<string>,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
@@ -456,7 +444,7 @@ export function createAgentEventHandler({
     event: AgentEventPayload,
   ): { suppress: boolean } => {
     try {
-      const { entry } = loadSessionEntry(sessionKey, {
+      const { entry } = loadSessionEntryReadOnly(sessionKey, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
@@ -510,6 +498,7 @@ export function createAgentEventHandler({
               ? {
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
+                  lastRunError: row.lastRunError,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -532,7 +521,18 @@ export function createAgentEventHandler({
     const activeRunFields = activeRunState
       ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
       : {};
-    const session = row ? { ...row, ...lifecyclePatch, ...activeRunFields } : undefined;
+    const clearsLastRunError =
+      Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const session = row
+      ? {
+          ...row,
+          ...lifecyclePatch,
+          ...activeRunFields,
+          // JSON drops undefined values, so a start/success must send null to
+          // evict a prior failure reason from the subscribed client row.
+          ...(clearsLastRunError ? { lastRunError: null } : {}),
+        }
+      : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
     }
@@ -551,7 +551,7 @@ export function createAgentEventHandler({
       spawnedBy: row?.spawnedBy,
       spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
       spawnedCwd: row?.spawnedCwd,
-      forkedFromParent: row?.forkedFromParent,
+      forkedFromParent: sessionEntryForkedFromParent(row ?? undefined) ? true : undefined,
       spawnDepth: row?.spawnDepth,
       subagentRole: row?.subagentRole,
       subagentControlScope: row?.subagentControlScope,
@@ -587,6 +587,7 @@ export function createAgentEventHandler({
       model: row?.model,
       ...activeRunFields,
       status: snapshotSource.status,
+      lastRunError: snapshotSource.lastRunError ?? null,
       startedAt: snapshotSource.startedAt,
       endedAt: snapshotSource.endedAt,
       runtimeMs: snapshotSource.runtimeMs,
@@ -1038,13 +1039,19 @@ export function createAgentEventHandler({
   ) => {
     const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
     if (opts?.controlUiVisible ?? true) {
-      broadcast("chat", payload, { dropIfSlow: opts?.dropIfSlow });
+      broadcast("chat", payload, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
       sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
       return;
     }
     const recipients = sessionMessageSubscribers.get(deliverySessionKey);
     if (recipients.size > 0) {
-      broadcastToConnIds("chat", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
+      broadcastToConnIds("chat", payload, recipients, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
     }
   };
 
@@ -1108,7 +1115,6 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
-      message: buildChatErrorMessage(error),
       ...(errorKind && { errorKind }),
       ...(stopReason && { stopReason }),
     };
@@ -1121,7 +1127,11 @@ export function createAgentEventHandler({
     opts?: { agentId?: string; controlUiVisible?: boolean; dropIfSlow?: boolean },
   ) => {
     if (opts?.controlUiVisible ?? true) {
-      broadcast("agent", payload);
+      broadcast("agent", payload, {
+        sessionKeys: sessionKey
+          ? [resolveSessionDeliveryKey(sessionKey, opts?.agentId)]
+          : undefined,
+      });
       if (sessionKey) {
         sendNodeSessionPayloadForAgent(sessionKey, "agent", payload, opts?.agentId);
       }
@@ -1130,11 +1140,13 @@ export function createAgentEventHandler({
     if (!sessionKey) {
       return;
     }
-    const recipients = sessionMessageSubscribers.get(
-      resolveSessionDeliveryKey(sessionKey, opts?.agentId),
-    );
+    const deliverySessionKey = resolveSessionDeliveryKey(sessionKey, opts?.agentId);
+    const recipients = sessionMessageSubscribers.get(deliverySessionKey);
     if (recipients.size > 0) {
-      broadcastToConnIds("agent", payload, recipients, { dropIfSlow: opts?.dropIfSlow });
+      broadcastToConnIds("agent", payload, recipients, {
+        dropIfSlow: opts?.dropIfSlow,
+        sessionKeys: [deliverySessionKey],
+      });
     }
   };
 
@@ -1264,7 +1276,7 @@ export function createAgentEventHandler({
       return runVerbose ?? "off";
     }
     try {
-      const { cfg, entry } = loadSessionEntry(sessionKey);
+      const { cfg, entry } = loadSessionEntryReadOnly(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1375,23 +1387,59 @@ export function createAgentEventHandler({
         : agentPayload;
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
-      broadcast("agent", {
-        runId: eventRunId,
-        stream: "error",
-        ts: Date.now(),
-        sessionKey,
-        ...(spawnedBy && { spawnedBy }),
-        ...(isHeartbeat !== undefined && { isHeartbeat }),
-        data: {
-          reason: "seq gap",
-          expected: last + 1,
-          received: evt.seq,
+      broadcast(
+        "agent",
+        {
+          runId: eventRunId,
+          stream: "error",
+          ts: Date.now(),
+          sessionKey,
+          ...(spawnedBy && { spawnedBy }),
+          ...(isHeartbeat !== undefined && { isHeartbeat }),
+          data: {
+            reason: "seq gap",
+            expected: last + 1,
+            received: evt.seq,
+          },
         },
-      });
+        {
+          sessionKeys: sessionKey
+            ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+            : undefined,
+        },
+      );
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (evt.stream === "assistant") {
       updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+    }
+    if (evt.stream === "plan" && evt.data?.phase === "update") {
+      const steps = normalizeAgentPlanSteps(evt.data.steps) ?? [];
+      const explanation =
+        typeof evt.data.explanation === "string" ? evt.data.explanation.trim() : "";
+      chatRunState.planSnapshots.set(clientRunId, {
+        steps,
+        ...(explanation ? { explanation } : {}),
+      });
+    }
+    if (evt.stream === "run_status") {
+      const phase = readChatRunStartupPhase(evt.data?.phase);
+      if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {
+        const payload = {
+          runId: clientRunId,
+          sessionKey,
+          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+          ...(spawnedBy && { spawnedBy }),
+          seq: evt.seq,
+          state: "status" as const,
+          phase,
+        } satisfies ChatEvent;
+        sendChatPayload(sessionKey, payload, {
+          agentId: sessionAgentId,
+          controlUiVisible: true,
+          dropIfSlow: true,
+        });
+      }
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
@@ -1428,7 +1476,8 @@ export function createAgentEventHandler({
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.).
+      // messages to messaging surfaces (Telegram, Discord, etc.). Carry the
+      // delivery key so scoped clients must also own the session subscription.
       const runToolRecipients = toolEventRecipients.get(evt.runId);
       if (
         isControlUiVisible &&
@@ -1445,6 +1494,11 @@ export function createAgentEventHandler({
               }
             : agentPayload,
           runToolRecipients,
+          {
+            sessionKeys: sessionKey
+              ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+              : undefined,
+          },
         );
       }
       if (!isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {

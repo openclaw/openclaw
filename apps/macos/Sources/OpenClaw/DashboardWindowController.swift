@@ -87,7 +87,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
     private static let updateMessageHandlerName = "openclawUpdate"
 
-    private let webView: DashboardWebView
+    let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
     private let linkBrowserSplitView: DashboardLinkSplitView
@@ -137,6 +137,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
         let windowDragMessageHandler = DashboardWindowDragMessageHandler()
         config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
+        let notificationsMessageHandler = DashboardNotificationsMessageHandler()
+        config.userContentController.add(notificationsMessageHandler, name: Self.notificationsMessageHandlerName)
         let updateMessageHandler = DashboardUpdateMessageHandler()
         self.updateMessageHandler = updateMessageHandler
         if shouldEnableUpdateBridge {
@@ -200,6 +202,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
         windowDragMessageHandler.owner = self
+        notificationsMessageHandler.owner = self
         updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
@@ -900,15 +903,35 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return String(raw.dropFirst().dropLast())
     }
 
-    static func shouldAllowNavigation(to url: URL, dashboardURL: URL) -> Bool {
+    static func shouldAllowNavigation(
+        to url: URL,
+        dashboardURL: URL,
+        isMainFrame: Bool,
+        isTrustedDashboardSource: Bool = false) -> Bool
+    {
         guard let scheme = url.scheme?.lowercased() else { return true }
         if scheme == "about" || scheme == "blob" || scheme == "data" {
             return true
         }
         guard scheme == "http" || scheme == "https" else { return false }
-        return url.scheme?.lowercased() == dashboardURL.scheme?.lowercased() &&
-            url.host?.lowercased() == dashboardURL.host?.lowercased() &&
-            url.port == dashboardURL.port
+        let dashboardScheme = dashboardURL.scheme?.lowercased()
+        let dashboardHost = dashboardURL.host?.lowercased()
+        let host = url.host?.lowercased()
+        if scheme == dashboardScheme, host == dashboardHost, url.port == dashboardURL.port {
+            return true
+        }
+        guard !isMainFrame,
+              isTrustedDashboardSource,
+              host?.isEmpty == false,
+              url.user == nil,
+              url.password == nil
+        else {
+            return false
+        }
+        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
+        return components.count == 4 &&
+            components[0] == "embed" &&
+            (components[1] == "channel" || components[1] == "thread")
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -1115,7 +1138,15 @@ extension DashboardWindowController {
                 decisionHandler: decisionHandler)
             return
         }
-        if Self.shouldAllowNavigation(to: url, dashboardURL: self.currentURL) {
+        if Self.shouldAllowNavigation(
+            to: url,
+            dashboardURL: self.currentURL,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
+                Self.isTrustedLinkSource(
+                    navigationAction.sourceFrame.request.url,
+                    dashboardURL: self.currentURL))
+        {
             decisionHandler(.allow)
             return
         }

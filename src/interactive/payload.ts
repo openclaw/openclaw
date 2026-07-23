@@ -34,6 +34,12 @@ export type MessagePresentationAction =
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {
+      /** Resolve one runtime-authored operator question choice. */
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
       /** Open a normal external link. */
       type: "url";
       url: string;
@@ -165,17 +171,11 @@ export type LegacyInteractiveReplyTextBlock = {
   text: string;
 };
 
-/** @deprecated Use MessagePresentationTextBlock. */
-export type InteractiveReplyTextBlock = LegacyInteractiveReplyTextBlock;
-
 export type LegacyInteractiveReplySelectBlock = {
   type: "select";
   placeholder?: string;
   options: LegacyInteractiveReplyOption[];
 };
-
-/** @deprecated Use MessagePresentationSelectBlock. */
-export type InteractiveReplySelectBlock = LegacyInteractiveReplySelectBlock;
 
 export type LegacyInteractiveReplyBlock =
   | LegacyInteractiveReplyTextBlock
@@ -364,6 +364,22 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
       return undefined;
     }
     return { type: "approval", approvalId, approvalKind, decision };
+  }
+  if (type === "question") {
+    if (record.type !== "question") {
+      return undefined;
+    }
+    const questionId = record.questionId;
+    const optionValue = record.optionValue;
+    if (
+      typeof questionId !== "string" ||
+      !isWellFormedApprovalId(questionId) ||
+      typeof optionValue !== "string" ||
+      !optionValue.trim()
+    ) {
+      return undefined;
+    }
+    return { type: "question", questionId, optionValue };
   }
   if (type === "url") {
     const url = normalizeOptionalString(record.url);
@@ -842,9 +858,9 @@ export const interactiveReplyToPresentation = legacyInteractiveReplyToPresentati
  *
  * Text and context blocks are rendered as-is. Buttons with a `command`-typed
  * action render as `label: \`command\`` so the value is copyable. URL and web
- * app actions include their user-facing URL. Approval, callback, legacy value,
- * and select actions render label-only to keep transport data private. Disabled
- * buttons render label-only regardless of action type.
+ * app actions include their user-facing URL. Approval, question, callback,
+ * legacy value, and select actions render label-only to keep transport data
+ * private. Disabled buttons render label-only regardless of action type.
  *
  * Downstream consumers should not claim a manual command is available unless
  * they verify one was actually rendered.

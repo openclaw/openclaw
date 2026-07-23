@@ -9,6 +9,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
+import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
   appendTranscriptMessage,
@@ -47,12 +48,15 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import {
+  appendSqliteTranscriptEventSync,
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
   replaceSqliteSessionEntrySync,
   replaceSqliteTranscriptEvents,
+  trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -470,12 +474,48 @@ describe("session accessor seam", () => {
 
     const recorded = await recordInboundSessionMeta({ storePath, sessionKey, ctx });
     expect(recorded?.origin?.provider).toBe("webchat");
+    expect(recorded).toMatchObject({
+      createdVia: "channel",
+      createdActor: { type: "human", id: "webchat:user-1" },
+      createdAt: expect.any(Number),
+    });
+    const creationStamp = {
+      createdVia: recorded?.createdVia,
+      createdActor: recorded?.createdActor,
+      createdAt: recorded?.createdAt,
+    };
+
+    await recordInboundSessionMeta({
+      storePath,
+      sessionKey,
+      ctx: { ...ctx, From: "webchat:different-sender" },
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(creationStamp);
 
     // Detached result: caller mutations must never leak into cached store state.
     if (recorded) {
       recorded.origin = { provider: "mutated" };
     }
     expect(loadSessionEntry({ sessionKey, storePath })?.origin?.provider).toBe("webchat");
+
+    const operatorKey = "agent:main:dashboard:operator-created";
+    const operator = await recordInboundSessionMeta({
+      storePath,
+      sessionKey: operatorKey,
+      ctx: {
+        ...ctx,
+        SessionKey: operatorKey,
+        SessionCreation: {
+          via: "operator",
+          actor: { type: "human", id: "profile-ada" },
+        },
+      },
+    });
+    expect(operator).toMatchObject({
+      createdVia: "operator",
+      createdActor: { type: "human", id: "profile-ada" },
+      createdAt: expect.any(Number),
+    });
   });
 
   it("does not create sessions when inbound meta recording opts out of upsert", async () => {
@@ -2106,19 +2146,22 @@ describe("session accessor seam", () => {
     ).resolves.toEqual([]);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
+  it("persists reset lifecycle entry changes with an in-log boundary", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
-    const nextTranscript = path.join(tempDir, "next-session.jsonl");
     const previousEntry: SessionEntry = {
       sessionFile: previousTranscript,
       sessionId: "previous-session",
       updatedAt: now,
     };
     const nextEntry: SessionEntry = {
-      sessionFile: nextTranscript,
-      sessionId: "next-session",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: previousEntry.sessionId,
+        storePath,
+      }),
+      sessionId: previousEntry.sessionId,
       updatedAt: now + 1,
     };
     fs.writeFileSync(
@@ -2148,33 +2191,36 @@ describe("session accessor seam", () => {
       agentId: "main",
       cleanupPreviousTranscript: true,
       nextEntry,
-      nextSessionFile: nextTranscript,
+      nextSessionFile: nextEntry.sessionFile!,
       previousEntry,
       previousSessionId: previousEntry.sessionId,
       sessionKey,
       storePath,
     });
 
-    expect(result.replayedMessages).toBe(2);
+    expect(result.replayedMessages).toBe(0);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
-    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.existsSync(previousTranscript)).toBe(true);
     const archivedPreviousTranscripts = fs
       .readdirSync(tempDir)
       .filter((file) => file.startsWith("previous-session.jsonl.reset."));
-    expect(archivedPreviousTranscripts).toHaveLength(1);
-    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
-    const archivedPreviousTranscript = path.join(
-      tempDir,
-      expectDefined(
-        archivedPreviousTranscriptName,
-        "archivedPreviousTranscriptName test invariant",
-      ),
-    );
-    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
-      '"id":"previous-session"',
-    );
-    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
-    expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
+    expect(archivedPreviousTranscripts).toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: previousEntry.sessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "msg-user", parentId: null }),
+      expect.objectContaining({ id: "msg-assistant", parentId: "msg-user" }),
+      expect.objectContaining({
+        type: "reset",
+        reason: "reset",
+        firstKeptEntryId: "msg-user",
+      }),
+    ]);
   });
 
   it("trims a manual compact transcript and clears stale token metadata", async () => {
@@ -2246,7 +2292,16 @@ describe("session accessor seam", () => {
     unsubscribe();
     expect(result).toMatchObject({ compacted: true, kept: 3 });
     const archived = result.compacted ? result.archived : "";
-    expect(archived).toContain(`sqlite:main:${sessionId}:`);
+    expect(path.basename(archived)).toMatch(
+      new RegExp(`^${sessionId}\\.jsonl\\.bak\\.\\d{4}-\\d{2}-\\d{2}T`),
+    );
+    expect(fs.realpathSync(path.dirname(archived))).toBe(fs.realpathSync(tempDir));
+    expect(fs.existsSync(archived)).toBe(true);
+    const archivedRecords = readSessionArchiveContentSync(archived)
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(archivedRecords).toEqual(transcriptRecords);
     const trimmedRecords = (await loadTranscriptEvents(scope)) as Array<Record<string, unknown>>;
     expect(trimmedRecords).toMatchObject([
       { type: "session", id: sessionId },
@@ -2265,6 +2320,130 @@ describe("session accessor seam", () => {
     expect(updatedEntry?.totalTokens).toBeUndefined();
     expect(updatedEntry?.totalTokensFresh).toBeUndefined();
     expect(updates).toEqual([]);
+  });
+
+  it("keeps every transcript row when the manual compact backup cannot be written", async () => {
+    const sessionId = "44444444-4444-4444-8444-444444444444";
+    const stateDir = path.join(tempDir, "state-root");
+    const scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      sessionId,
+      sessionKey: "agent:main:main",
+    };
+    const records = [
+      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
+    const archiveDirPath = path.join(stateDir, "agents", "main", "sessions");
+    fs.writeFileSync(archiveDirPath, "not a directory");
+
+    await expect(trimSessionTranscriptForManualCompact(scope, { maxLines: 3 })).rejects.toThrow();
+
+    expect((await loadTranscriptEvents(scope)).length).toBe(5);
+    expect(await loadTranscriptEvents(scope)).toEqual(records);
+  });
+
+  it("preserves the backup and rows written after the manual compact snapshot", async () => {
+    const sessionId = "55555555-5555-4555-8555-555555555555";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    const lateEvent = {
+      type: "custom",
+      id: "late-append",
+      timestamp: "2026-06-19T12:00:09.000Z",
+    };
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
+
+    await expect(
+      trimSqliteTranscriptForManualCompact(scope, (lines) => {
+        appendSqliteTranscriptEventSync(scope, lateEvent);
+        return lines.slice(0, 1);
+      }),
+    ).rejects.toThrow(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
+
+    const remaining = (await loadTranscriptEvents(scope)) as Array<Record<string, unknown>>;
+    expect(remaining).toHaveLength(6);
+    expect(remaining.slice(0, 5)).toEqual(records);
+    expect(remaining[5]).toMatchObject({ id: "late-append" });
+    const archiveNames = fs.readdirSync(tempDir).filter((name) => name.includes(".bak."));
+    expect(archiveNames).toHaveLength(1);
+    expect(
+      readSessionArchiveContentSync(
+        path.join(tempDir, expectDefined(archiveNames[0], "manual compact archive name")),
+      ),
+    ).toBe(`${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  });
+
+  it("preserves a reused manual compact backup when the rewrite conflicts", async () => {
+    const sessionId = "66666666-6666-4666-8666-666666666666";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    const records = [
+      { type: "session", version: 3, id: sessionId, timestamp: "2026-06-19T12:00:00.000Z" },
+      ...[1, 2, 3, 4].map((index) => ({
+        type: "message",
+        id: `entry-${index}`,
+        parentId: index === 1 ? null : `entry-${index - 1}`,
+        timestamp: `2026-06-19T12:00:0${index}.000Z`,
+        message: { role: "user", content: `message ${index}`, timestamp: index },
+      })),
+    ];
+    const existingArchive = path.join(tempDir, `${sessionId}.jsonl.bak.preexisting`);
+    const archiveContent = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+    await upsertSessionEntry(scope, { sessionId, updatedAt: 1 });
+    await replaceSqliteTranscriptEvents(
+      scope,
+      records as Parameters<typeof replaceSqliteTranscriptEvents>[1],
+    );
+    fs.writeFileSync(existingArchive, archiveContent);
+
+    await expect(
+      trimSqliteTranscriptForManualCompact(scope, (lines) => {
+        appendSqliteTranscriptEventSync(scope, {
+          type: "custom",
+          id: "late-append",
+          timestamp: "2026-06-19T12:00:09.000Z",
+        });
+        return lines.slice(0, 1);
+      }),
+    ).rejects.toThrow(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
+
+    expect(fs.existsSync(existingArchive)).toBe(true);
+    expect(readSessionArchiveContentSync(existingArchive)).toBe(archiveContent);
   });
 
   it("repairs a retained compaction boundary when its first kept entry was trimmed", async () => {
@@ -3042,6 +3221,45 @@ describe("session accessor seam", () => {
       lastMutationAtMs: expect.any(Number),
     });
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
+  });
+
+  it("preserves transcript generation on append and rotates it on replacement", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "generation-session",
+      sessionKey: "agent:main:generation-session",
+      storePath,
+    };
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: scope.agentId,
+    }).path;
+    expect(databasePath).toBeDefined();
+    const readGeneration = () =>
+      openOpenClawAgentDatabase({ agentId: scope.agentId, path: databasePath })
+        .db.prepare("SELECT generation FROM session_transcript_generations WHERE session_id = ?")
+        .get(scope.sessionId) as { generation: string } | undefined;
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "first" },
+    });
+    const first = readGeneration()?.generation;
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: "second" },
+    });
+    expect(readGeneration()?.generation).toBe(first);
+
+    await replaceSqliteTranscriptEvents(scope, [
+      { sessionId: scope.sessionId, type: "session" },
+      { id: "replacement", parentId: null, type: "custom" },
+    ]);
+    const replaced = readGeneration()?.generation;
+    expect(replaced).toMatch(/^[0-9a-f]{32}$/);
+    expect(replaced).not.toBe(first);
+
+    await replaceSqliteTranscriptEvents(scope, []);
+    expect(readGeneration()?.generation).not.toBe(replaced);
   });
 
   it("resolves an explicit read transcript file without agent identity", () => {

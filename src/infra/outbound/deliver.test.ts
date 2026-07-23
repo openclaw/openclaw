@@ -3281,6 +3281,54 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("passes ordered source indexes through adapter batch normalization", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(({ payloads }) => [
+      {
+        ...payloads[0]?.payload,
+        channelData: { merged: payloads.map((entry) => entry.index) },
+      },
+      null,
+    ]);
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "merged",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "First" }, { text: "Second" }],
+    });
+
+    expect(normalizePayloadBatch).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(sendPayload, "sendPayload").payload).toMatchObject({
+      text: "First",
+      channelData: { merged: [0, 1] },
+    });
+  });
+
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
     const sendPayload = vi.fn().mockResolvedValue({
       channel: "matrix" as const,
@@ -3434,6 +3482,104 @@ describe("deliverOutboundPayloads", () => {
         },
       ],
     });
+  });
+
+  it("uses runtime fallback text only when native presentation rendering is unavailable", async () => {
+    const nativeRender = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { native: true },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "question-card",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              presentationCapabilities: { supported: true, buttons: true },
+              renderPresentation: nativeRender,
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "Question with numbered fallback",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              { type: "text", text: "Question" },
+              { type: "buttons", buttons: [{ label: "Yes", value: "yes" }] },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(nativeRender, "native renderer").payload).toMatchObject({
+      text: undefined,
+      presentationTextMode: "fallback",
+    });
+    expect(requireMockCallArg(sendPayload, "send payload").payload).toMatchObject({
+      channelData: { native: true },
+      text: undefined,
+    });
+  });
+
+  it("keeps runtime presentation fallback text exact on button-less channels", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "question-text",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          text: "Question\n1. Yes\n2. No",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              { type: "text", text: "Question" },
+              { type: "buttons", buttons: [{ label: "Yes", value: "yes" }] },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "send text").text).toBe("Question\n1. Yes\n2. No");
   });
 
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {

@@ -128,6 +128,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       route: {
         agentId: "main",
+        dmScope: "main",
         accountId: "acct",
         routeSessionKey: "agent:main:test:group:room-1",
         parentSessionKey: "agent:main:test:group",
@@ -208,6 +209,7 @@ describe("buildChannelInboundEventContext", () => {
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
       AgentId: "main",
+      DmScope: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -222,6 +224,20 @@ describe("buildChannelInboundEventContext", () => {
       MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
       MediaTypes: ["image/png", "audio/mpeg"],
       MediaTranscribedIndexes: [1],
+      media: [
+        expect.objectContaining({
+          path: "/tmp/image.png",
+          contentType: "image/png",
+          kind: "image",
+          transcribed: false,
+        }),
+        expect.objectContaining({
+          url: "https://example.test/audio.mp3",
+          contentType: "audio/mpeg",
+          kind: "audio",
+          transcribed: true,
+        }),
+      ],
       ChatType: "group",
       ChatId: "room-1",
       ConversationLabel: "Room One",
@@ -626,6 +642,9 @@ describe("finalizeChannelInboundContext", () => {
     expect(result.context.ReplyToSender).toBe("Alice");
     expect(result.context.MediaPath).toBe("/tmp/a.png");
     expect(result.context.MediaType).toBe("image/png");
+    expect(result.context.media).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png" }),
+    ]);
     expect(Object.hasOwn(result.context, "SupplementalContext")).toBe(false);
   });
 });

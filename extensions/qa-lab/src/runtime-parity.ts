@@ -14,6 +14,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
 
 export type RuntimeId = "openclaw" | "codex";
@@ -984,6 +985,7 @@ function readRuntimeParitySessionEntries(params: {
     const entries = listSessionEntries({
       agentId: params.agentId,
       env: runtimeParitySessionEnv(params.stateDir),
+      readOnly: true,
     })
       .filter(({ entry }) => readNonEmptyString(entry.sessionId))
       .map(({ entry, sessionKey }) => ({
@@ -1052,6 +1054,7 @@ async function loadRuntimeParityMockToolCalls(
     let payload: unknown;
     try {
       if (!response.ok) {
+        await discardIgnoredResponseBody(response);
         return null;
       }
       payload = await response.json();

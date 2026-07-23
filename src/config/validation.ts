@@ -54,6 +54,11 @@ import {
 } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  isModelPolicyCompatSelector,
+  isValidExactModelPolicyRef,
+  parseModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import {
@@ -91,18 +96,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
-    return raw;
-  }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...raw,
-    commands,
-  };
-}
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
@@ -961,6 +954,11 @@ function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   return isPathWithinRoot(workspaceRoot, resolved);
 }
 
+function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
+  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
+  return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
+}
+
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
   const agents = config.agents?.list;
   if (!Array.isArray(agents) || agents.length === 0) {
@@ -983,18 +981,22 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       continue;
     }
     if (avatar.startsWith("~")) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(
@@ -1002,10 +1004,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       entry.id ?? resolveDefaultAgentId(config),
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must stay within the agent workspace.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
+      );
     }
   }
   return issues;
@@ -1051,6 +1052,61 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const defaultModels = config.agents?.defaults?.models;
+  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
+    const aliases = new Set<string>();
+    for (const models of modelMaps) {
+      for (const entry of Object.values(models ?? {})) {
+        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
+        if (alias) {
+          aliases.add(alias);
+        }
+      }
+    }
+    return aliases;
+  };
+  const validateRefs = (
+    refs: readonly string[] | undefined,
+    configPath: string,
+    aliases: Set<string>,
+  ) => {
+    for (const [index, raw] of (refs ?? []).entries()) {
+      const trimmed = raw.trim();
+      if (
+        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+        isModelPolicyCompatSelector(trimmed) ||
+        isValidExactModelPolicyRef(trimmed) ||
+        parseModelPolicyWildcardRef(trimmed)
+      ) {
+        continue;
+      }
+      issues.push({
+        path: `${configPath}.${index}`,
+        message:
+          `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".',
+      });
+    }
+  };
+
+  const defaultAliases = collectAliases(defaultModels);
+  validateRefs(
+    config.agents?.defaults?.modelPolicy?.allow,
+    "agents.defaults.modelPolicy.allow",
+    defaultAliases,
+  );
+  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+    validateRefs(
+      agent.modelPolicy?.allow,
+      `agents.list.${index}.modelPolicy.allow`,
+      collectAliases(defaultModels, agent.models),
+    );
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -1065,7 +1121,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    stripDeprecatedValidationKeys(raw),
+    raw,
     opts?.preservedLegacyRootKeys,
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
@@ -1077,7 +1133,9 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
-  const validatedConfig = materializeBundledModelProviderOverlays(validated.data as OpenClawConfig);
+  const validatedConfig = attachAgentListProjection(
+    materializeBundledModelProviderOverlays(validated.data as OpenClawConfig),
+  );
   const channelIssues =
     policyIssues.length > 0 || opts?.validateBundledChannels
       ? collectRawBundledChannelConfigIssues(validatedConfig)
@@ -1097,7 +1155,7 @@ export function validateConfigObjectRaw(
       ok: false,
       issues: [
         {
-          path: "agents.list",
+          path: "agents.entries",
           message: formatDuplicateAgentDirError(duplicates),
         },
       ],
@@ -1114,6 +1172,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
   if (gatewayTailscaleAuthIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleAuthIssues };
+  }
+  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
+  if (modelPolicyAllowIssues.length > 0) {
+    return { ok: false, issues: modelPolicyAllowIssues };
   }
   return {
     ok: true,
@@ -1134,10 +1196,27 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: materializeRuntimeConfig(result.config, "snapshot", {
-      manifestRegistry: opts?.manifestRegistry,
-    }),
+    config: attachAgentListProjection(
+      materializeRuntimeConfig(result.config, "snapshot", {
+        manifestRegistry: opts?.manifestRegistry,
+      }),
+    ),
   };
+}
+
+function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
+  if (!config.agents) {
+    return config;
+  }
+  Object.defineProperty(config.agents, "list", {
+    configurable: true,
+    enumerable: false,
+    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) =>
+      Object.assign({ id }, entry),
+    ),
+    writable: false,
+  });
+  return config;
 }
 
 type ValidateConfigWithPluginsResult =

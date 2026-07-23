@@ -4,6 +4,8 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -22,6 +24,7 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -155,8 +158,34 @@ function catalogResult(
   return result;
 }
 
+function projectCatalogHostCreatedActors(
+  host: SessionCatalogHost,
+  agentId: string,
+  actorBySessionKey: Map<string, SessionCatalogSession["createdActor"]>,
+): SessionCatalogHost {
+  return {
+    ...host,
+    sessions: host.sessions.map(({ createdActor: _providerCreatedActor, ...session }) => {
+      // Catalog providers do not own creator identity; the persisted session entry does.
+      const sessionKey = session.sessionKey;
+      let createdActor: SessionCatalogSession["createdActor"];
+      if (sessionKey && actorBySessionKey.has(sessionKey)) {
+        createdActor = actorBySessionKey.get(sessionKey);
+      } else {
+        createdActor = sessionKey
+          ? loadGatewaySessionRow(sessionKey, { agentId })?.createdActor
+          : undefined;
+        if (sessionKey) {
+          actorBySessionKey.set(sessionKey, createdActor);
+        }
+      }
+      return createdActor ? { ...session, createdActor: { ...createdActor } } : session;
+    }),
+  };
+}
+
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond, context }) => {
+  "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -168,6 +197,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogListParams;
+    if (request.cursors !== undefined && request.catalogId === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      );
+      return;
+    }
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
       const provider = providerOrRespond(request.catalogId, respond);
@@ -189,18 +226,56 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
+    const progressId = request.progressId;
+    const progressConnId = progressId && client?.connId ? client.connId : undefined;
+    const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+        const onHost = progressConnId
+          ? (host: SessionCatalog["hosts"][number]) => {
+              // Progressive frames are an optimization. The final RPC response remains
+              // authoritative when a slow client drops an intermediate host update.
+              context.broadcastToConnIds(
+                "sessions.catalog.host",
+                {
+                  progressId,
+                  agentId: resolvedAgent.agentId,
+                  catalog: catalogResult(
+                    provider,
+                    [
+                      projectCatalogHostCreatedActors(
+                        host,
+                        resolvedAgent.agentId,
+                        actorBySessionKey,
+                      ),
+                    ],
+                    undefined,
+                    createSession,
+                  ),
+                },
+                new Set([progressConnId]),
+                { dropIfSlow: true },
+              );
+            }
+          : undefined;
         try {
           const hosts = await provider.list({
             search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
-            ...("cursors" in request ? { cursors: request.cursors } : {}),
+            ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+            ...(onHost ? { onHost } : {}),
           });
-          return catalogResult(provider, hosts, undefined, createSession);
+          return catalogResult(
+            provider,
+            hosts.map((host) =>
+              projectCatalogHostCreatedActors(host, resolvedAgent.agentId, actorBySessionKey),
+            ),
+            undefined,
+            createSession,
+          );
         } catch (error) {
           return catalogResult(provider, [], catalogError(error), createSession);
         }

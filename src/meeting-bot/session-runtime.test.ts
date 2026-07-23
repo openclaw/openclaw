@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createMeetingSession } from "./session-factory.js";
 import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
@@ -14,6 +15,7 @@ type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
     launched: boolean;
     tab?: MeetingBrowserTab;
     health?: MeetingBrowserHealth;
+    hasAudioBridge?: boolean;
   };
 };
 type TestJoinContext = MeetingSessionRuntimeJoinContext<
@@ -24,7 +26,79 @@ type TestJoinContext = MeetingSessionRuntimeJoinContext<
   MeetingBrowserTab
 >;
 
+describe("createMeetingSession", () => {
+  it.each([
+    {
+      mode: "agent" as const,
+      provider: undefined,
+      transcriptionProvider: "deepgram",
+    },
+    {
+      mode: "bidi" as const,
+      provider: "openai-realtime",
+      transcriptionProvider: undefined,
+    },
+  ])("preserves $mode realtime session fields", ({ mode, provider, transcriptionProvider }) => {
+    const session = createMeetingSession({
+      platform: {
+        id: "test-meeting",
+        displayName: "Test Meeting",
+        logScope: "[test-meeting]",
+        agentConsult: {
+          surface: "a test meeting",
+          userLabel: "Participant",
+          assistantLabel: "Agent",
+          questionSourceLabel: "participant",
+          workingResponseLabel: "participant",
+          extraSystemPrompt: "Answer briefly.",
+        },
+        session: {
+          idPrefix: "test_meeting",
+          participantIdentity: (transport) => `Test participant via ${transport}`,
+        },
+      },
+      config: {
+        realtime: {
+          provider: "deepgram",
+          voiceProvider: "openai-realtime",
+          transcriptionProvider: "deepgram",
+          model: "realtime-model",
+          toolPolicy: "safe-read-only",
+        },
+      },
+      resolved: {
+        url: "https://meeting.example/room",
+        transport: "chrome",
+        mode,
+        agentId: "operator",
+      },
+      createdAt: "2026-07-22T00:00:00.000Z",
+    });
+
+    expect(session).toMatchObject({
+      id: expect.stringMatching(/^test_meeting_/),
+      state: "active",
+      participantIdentity: "Test participant via chrome",
+      realtime: {
+        enabled: true,
+        strategy: mode,
+        provider,
+        model: mode === "bidi" ? "realtime-model" : undefined,
+        transcriptionProvider,
+        toolPolicy: "safe-read-only",
+      },
+      notes: [],
+    });
+  });
+});
+
 function createTestRuntime(params: {
+  talkBack?: boolean;
+  refreshReusableSession?(
+    session: TestSession,
+    request: TestRequest,
+    resolved: { agentId: string; mode: TestMode; transport: TestTransport; url: string },
+  ): Promise<{ keepBrowserTab: boolean } | void>;
   joinTransport(input: {
     request: TestRequest;
     session: TestSession;
@@ -91,7 +165,7 @@ function createTestRuntime(params: {
     },
     resolveSpeechInstructions: () => undefined,
     isBrowserTransport: () => true,
-    isTalkBackMode: () => false,
+    isTalkBackMode: () => params.talkBack === true,
     isTranscribeMode: () => false,
     sameMeetingUrl: (left, right) => left === right,
     normalizeMeetingUrlForReuse: (url) => url,
@@ -101,7 +175,7 @@ function createTestRuntime(params: {
             launched: session.browser.launched,
             tab: session.browser.tab,
             health: session.browser.health,
-            hasAudioBridge: false,
+            hasAudioBridge: session.browser.hasAudioBridge === true,
           }
         : undefined,
     setBrowserTab: (session, tab) => {
@@ -118,7 +192,8 @@ function createTestRuntime(params: {
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
-    refreshReusableSession: async () => {},
+    refreshReusableSession: async (session, request, resolved) =>
+      await params.refreshReusableSession?.(session, request, resolved),
     ensureRealtimeBridge: async () => undefined,
     captureTranscript: async () => undefined,
     speakViaTransport: async () => undefined,
@@ -127,6 +202,40 @@ function createTestRuntime(params: {
 }
 
 describe("MeetingSessionRuntime failed joins", () => {
+  it("cleans an externally ended reusable session before replacing it", async () => {
+    const stop = vi.fn(async () => {});
+    const releaseBrowserTab = vi.fn(async () => true);
+    const joinTransport = vi.fn(
+      async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: session.id, openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        return {};
+      },
+    );
+    const { runtime } = createTestRuntime({
+      joinTransport,
+      refreshReusableSession: async (session) => {
+        session.state = "ended";
+      },
+      releaseBrowserTab,
+    });
+    const first = await runtime.join({ url: "https://meeting.example/room", agentId: "main" });
+
+    const replacement = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    expect(first.session.state).toBe("ended");
+    expect(replacement.session.id).not.toBe(first.session.id);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(releaseBrowserTab).not.toHaveBeenCalled();
+    expect(joinTransport).toHaveBeenCalledTimes(2);
+  });
+
   it("stops attached transport handles and releases the partial browser tab", async () => {
     const joinError = new Error("transport setup failed");
     const stop = vi.fn(async () => {});
@@ -284,6 +393,51 @@ describe("MeetingSessionRuntime failed joins", () => {
 });
 
 describe("MeetingSessionRuntime leave cleanup", () => {
+  it("clears stale in-call health after confirmed browser departure", async () => {
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          health: {
+            inCall: true,
+            micMuted: false,
+            manualActionMessage: "old action",
+            manualActionReason: "old-action",
+            manualActionRequired: true,
+            speechReady: true,
+            speechBlockedMessage: "old speech block",
+            speechBlockedReason: "old-speech-block",
+          },
+          tab: { targetId: "leave-tab", openedByPlugin: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({
+      browserLeft: true,
+      session: {
+        browser: {
+          health: {
+            inCall: false,
+            manualActionRequired: false,
+            speechReady: false,
+          },
+        },
+      },
+    });
+    expect(session.browser?.health?.manualActionReason).toBeUndefined();
+    expect(session.browser?.health?.manualActionMessage).toBeUndefined();
+    expect(session.browser?.health?.micMuted).toBeUndefined();
+    expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
+    expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();
+  });
+
   it("retries a failed transport stop without repeating settled browser cleanup", async () => {
     const stopError = new Error("transport stop failed");
     const stop = vi
@@ -352,5 +506,39 @@ describe("MeetingSessionRuntime leave cleanup", () => {
 
     expect(stop).toHaveBeenCalledOnce();
     expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("MeetingSessionRuntime speech readiness", () => {
+  it("treats an unknown microphone state as transiently unverified", async () => {
+    const { runtime } = createTestRuntime({
+      talkBack: true,
+      releaseBrowserTab: async () => true,
+      joinTransport: async ({ session }) => {
+        session.browser = {
+          launched: true,
+          hasAudioBridge: true,
+          health: { inCall: true },
+        };
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    expect(runtime.refreshSpeechReadiness(session)).toEqual({
+      ready: false,
+      reason: "browser-unverified",
+      message: "browser unverified",
+    });
+    expect(session.browser?.health).toMatchObject({
+      speechReady: false,
+      speechBlockedReason: "browser-unverified",
+    });
+
+    session.browser!.health = { ...session.browser?.health, micMuted: false };
+    expect(runtime.refreshSpeechReadiness(session)).toEqual({ ready: true });
   });
 });

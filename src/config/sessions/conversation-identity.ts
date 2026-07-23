@@ -56,7 +56,37 @@ function normalizeKind(value: unknown): ConversationKind {
   return "direct";
 }
 
-function finalizeConversationIdentity(params: {
+function resolvePairedOriginPeerId(params: {
+  entry: SessionEntry;
+  deliveryContext?: DeliveryContext;
+  deliveryTarget: string;
+  kind: ConversationKind;
+}): string | undefined {
+  if (params.kind !== "direct") {
+    return undefined;
+  }
+  const origin = params.entry.origin;
+  const originFrom = normalizeText(origin?.from);
+  const originTo = normalizeText(origin?.to);
+  const originChannel = normalizeText(origin?.provider)?.toLowerCase();
+  const deliveryChannel = normalizeText(params.deliveryContext?.channel)?.toLowerCase();
+  if (
+    !originFrom ||
+    originTo !== params.deliveryTarget ||
+    !originChannel ||
+    originChannel !== deliveryChannel ||
+    normalizeChatType(origin?.chatType) !== params.kind ||
+    (normalizeAccountId(origin?.accountId) ?? "default") !==
+      (normalizeAccountId(params.deliveryContext?.accountId) ?? "default") ||
+    normalizeThreadId(origin?.threadId) !== normalizeThreadId(params.deliveryContext?.threadId)
+  ) {
+    return undefined;
+  }
+  return originFrom;
+}
+
+/** Builds one stable transport address from authoritative channel route facts. */
+export function buildConversationIdentity(params: {
   channel?: string;
   accountId?: string;
   kind: ConversationKind;
@@ -142,13 +172,22 @@ export function conversationIdentityFromSessionEntry(
   const channel = routeOwnsTarget
     ? deliveryContext?.channel
     : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
-  return finalizeConversationIdentity({
+  // Outbound routes can use an alias for delivery while `origin.from` carries
+  // the canonical peer. Trust it only when both snapshots are fully paired.
+  const pairedOriginPeerId = routeTarget
+    ? resolvePairedOriginPeerId({
+        entry,
+        deliveryContext,
+        deliveryTarget: routeTarget,
+        kind,
+      })
+    : undefined;
+  return buildConversationIdentity({
     channel,
     accountId: routeOwnsTarget ? deliveryContext?.accountId : entry.origin?.accountId,
     kind,
-    // One authoritative route snapshot owns both the opaque identity and egress target.
     // Native ids remain descriptive metadata and cannot redirect a stored conversation ref.
-    peerId: deliveryTarget,
+    peerId: pairedOriginPeerId ?? deliveryTarget,
     deliveryTarget,
     threadId: routeOwnsTarget ? deliveryContext?.threadId : entry.origin?.threadId,
     nativeChannelId: entry.origin?.nativeChannelId,
@@ -192,7 +231,7 @@ export function conversationIdentityFromMsgContext(params: {
       normalizeText(route?.provider) ??
       normalizeText(params.ctx.OriginatingChannel) ??
       normalizeText(params.ctx.Provider));
-  return finalizeConversationIdentity({
+  return buildConversationIdentity({
     channel,
     accountId: useDirectIngressTarget
       ? (route?.accountId ?? params.ctx.AccountId)

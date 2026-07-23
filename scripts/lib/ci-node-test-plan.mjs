@@ -33,108 +33,118 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Fleet-loaded runners inflate measured hints by ~20-25%; a 220s packing cap
-// keeps the slowest bin near the 5-minute PR wall-clock budget under load.
-const COMPACT_NODE_TEST_JOB_SECONDS = 220;
+// The group hints below are loaded-fleet CI walls, so the cap is the real per-bin
+// test budget: 235s packs both runner classes into the same job count as before
+// (6 large + 15 small) while the measured ~60s median job setup keeps the slowest
+// bin near the 5-minute PR wall-clock budget. 220 with honest hints adds a job to
+// each pool for no ceiling win.
+// 190s cap: forbids pairings like core-runtime-media-ui (124) +
+// core-unit-src-security (95) that produced a 195s real-wall straggler bin
+// while the pack sat at ~160s; ~3 extra bins buy ~30-40s of run wall.
+const COMPACT_NODE_TEST_JOB_SECONDS = 190;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
 const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
 const UNIT_FAST_NODE_TEST_STRIPES = 2;
-// Advisory runtime estimates (seconds) per split shard: mean [shard:*]
-// begin->end wall clock across five green Blacksmith compact PR runs
-// (29557851276, 29558164241, 29558528472, 29558634980, 29558677406).
+// Advisory runtime estimates (seconds) per split shard: [shard:*] begin->end
+// wall clock across seven green Blacksmith compact PR runs after the
+// cli-runner reliability whale fix (29605136624, 29605203485, 29605983019,
+// 29606701461, 29611308972, 29611457693, 29611500865), averaged after
+// dropping cache-warm/contention outliers outside [median/1.5, median*1.5].
 // Packing only: a stale entry skews job balance but never correctness.
 // Unknown shards fall back to a per-file estimate.
 const COMPACT_GROUP_SECONDS_HINTS = new Map([
-  ["agentic-agents-core-auth", 23],
-  ["agentic-agents-core-isolated", 8],
-  ["agentic-agents-core-models", 60],
+  ["agentic-agents-core-auth", 27],
+  ["agentic-agents-core-isolated", 9],
+  ["agentic-agents-core-models", 51],
   // Reliability's runtime-free provider check dropped its wall time from
   // ~245s to ~5s; the narrow anthropic cli-api artifact removes the same
   // full-barrel evaluation for the remaining facade importers (spawn).
-  ["agentic-agents-core-runner-cli-1", 18],
-  ["agentic-agents-core-runner-cli-2", 11],
-  ["agentic-agents-core-runner-cli-3", 12],
-  ["agentic-agents-core-runner-commands", 25],
-  ["agentic-agents-core-runner-embedded", 9],
-  ["agentic-agents-core-runner-sessions", 10],
-  ["agentic-agents-core-runtime", 67],
-  ["agentic-agents-core-subagents", 25],
-  ["agentic-agents-core-tools", 50],
-  ["agentic-agents-embedded", 54],
-  ["agentic-agents-support", 108],
-  ["agentic-agents-tools", 41],
-  ["agentic-cli", 68],
-  ["agentic-command-support", 39],
-  ["agentic-commands-agent-channel", 56],
-  ["agentic-commands-doctor", 10],
-  ["agentic-commands-doctor-auth", 5],
-  ["agentic-commands-doctor-config-state", 37],
-  ["agentic-commands-doctor-gateway", 6],
-  ["agentic-commands-doctor-plugins-tools", 9],
+  ["agentic-agents-core-runner-cli-1", 8],
+  ["agentic-agents-core-runner-cli-2", 9],
+  ["agentic-agents-core-runner-cli-3", 8],
+  ["agentic-agents-core-runner-commands", 27],
+  ["agentic-agents-core-runner-embedded", 20],
+  ["agentic-agents-core-runner-sessions", 13],
+  ["agentic-agents-core-runtime", 79],
+  ["agentic-agents-core-subagents", 32],
+  ["agentic-agents-core-tools", 52],
+  ["agentic-agents-embedded", 57],
+  ["agentic-agents-support", 105],
+  ["agentic-agents-tools", 42],
+  ["agentic-cli", 72],
+  ["agentic-command-support", 41],
+  ["agentic-commands-agent-channel", 51],
+  ["agentic-commands-doctor", 19],
+  ["agentic-commands-doctor-auth", 11],
+  ["agentic-commands-doctor-config-state", 42],
+  ["agentic-commands-doctor-gateway", 4],
+  ["agentic-commands-doctor-plugins-tools", 11],
   ["agentic-commands-doctor-sessions-cron", 24],
-  ["agentic-commands-doctor-shared", 13],
-  ["agentic-commands-models", 14],
-  ["agentic-commands-onboard-config", 10],
-  ["agentic-commands-status-tools", 25],
-  ["agentic-control-plane-agent-chat", 71],
-  ["agentic-control-plane-auth-node", 86],
-  ["agentic-control-plane-http-models", 20],
-  ["agentic-control-plane-http-plugin-ws", 36],
-  ["agentic-control-plane-runtime-config", 12],
-  ["agentic-control-plane-runtime-cron", 25],
-  ["agentic-control-plane-runtime-server", 14],
-  ["agentic-control-plane-runtime-shared-token", 17],
-  ["agentic-control-plane-runtime-state", 25],
-  ["agentic-control-plane-runtime-ui-tools", 10],
-  ["agentic-control-plane-startup-core", 98],
-  ["agentic-control-plane-startup-health-runtime", 9],
-  ["agentic-control-plane-startup-restart-close", 16],
-  ["agentic-gateway-core", 127],
-  ["agentic-gateway-methods", 68],
-  ["agentic-plugin-sdk", 46],
-  ["auto-reply-core-top-level", 29],
-  ["auto-reply-reply-agent-runner", 35],
-  ["auto-reply-reply-commands-1", 26],
-  ["auto-reply-reply-commands-2", 9],
+  ["agentic-commands-doctor-shared", 16],
+  ["agentic-commands-models", 16],
+  ["agentic-commands-onboard-config", 11],
+  ["agentic-commands-status-tools", 21],
+  ["agentic-control-plane-agent-chat", 74],
+  ["agentic-control-plane-auth-node", 89],
+  ["agentic-control-plane-http-models", 33],
+  ["agentic-control-plane-http-plugin-ws", 39],
+  ["agentic-control-plane-runtime-config", 14],
+  ["agentic-control-plane-runtime-cron", 15],
+  ["agentic-control-plane-runtime-server", 29],
+  ["agentic-control-plane-runtime-shared-token", 22],
+  ["agentic-control-plane-runtime-state", 13],
+  ["agentic-control-plane-runtime-ui-tools", 11],
+  ["agentic-control-plane-startup-core", 156],
+  ["agentic-control-plane-startup-health-runtime", 22],
+  ["agentic-control-plane-startup-restart-close", 8],
+  ["agentic-gateway-core", 124],
+  ["agentic-gateway-methods", 69],
+  ["agentic-plugin-sdk", 47],
+  ["auto-reply-core-top-level", 30],
+  ["auto-reply-reply-agent-runner", 40],
+  ["auto-reply-reply-commands-1", 24],
+  ["auto-reply-reply-commands-2", 10],
   ["auto-reply-reply-commands-3", 12],
   ["auto-reply-reply-dispatch", 40],
   ["auto-reply-reply-session", 19],
   ["auto-reply-reply-state-routing", 18],
-  ["core-runtime-cron-core", 19],
-  ["core-runtime-cron-isolated-agent", 51],
-  ["core-runtime-cron-service", 20],
-  ["core-runtime-hooks", 8],
-  ["core-runtime-infra-approval-exec", 27],
-  ["core-runtime-infra-channel-plugin", 16],
-  ["core-runtime-infra-diagnostics-state", 14],
-  ["core-runtime-infra-heartbeat-runner", 51],
-  ["core-runtime-infra-misc", 11],
-  ["core-runtime-infra-net-install", 10],
-  ["core-runtime-infra-outbound-actions", 17],
-  ["core-runtime-infra-outbound-core", 39],
-  ["core-runtime-infra-process", 89],
-  ["core-runtime-infra-provider-push", 14],
-  ["core-runtime-infra-storage-state", 55],
-  ["core-runtime-infra-system-runtime", 35],
-  ["core-runtime-media-ui", 113],
-  ["core-runtime-secrets", 45],
-  ["core-runtime-shared", 46],
+  ["core-runtime-cron-core", 16],
+  ["core-runtime-cron-isolated-agent", 59],
+  ["core-runtime-cron-service", 23],
+  ["core-runtime-hooks", 9],
+  ["core-runtime-infra-approval-exec", 30],
+  ["core-runtime-infra-channel-plugin", 17],
+  ["core-runtime-infra-diagnostics-state", 19],
+  ["core-runtime-infra-heartbeat-runner", 53],
+  ["core-runtime-infra-misc", 9],
+  ["core-runtime-infra-net-install", 13],
+  ["core-runtime-infra-outbound-actions", 19],
+  ["core-runtime-infra-outbound-core", 45],
+  ["core-runtime-infra-process", 91],
+  ["core-runtime-infra-provider-push", 17],
+  ["core-runtime-infra-storage-state", 70],
+  ["core-runtime-infra-system-runtime", 40],
+  ["core-runtime-media-ui", 124],
+  ["core-runtime-secrets", 37],
+  ["core-runtime-shared", 48],
   // PTY timing suites still need a lightly packed lane; the exclusive-bin cap
   // leaves only trivial co-groups next to this measured runtime.
-  ["core-runtime-tui-pty", 103],
-  ["core-tooling-1", 85],
-  ["core-tooling-2", 112],
-  ["core-tooling-3", 106],
-  ["core-tooling-4", 105],
-  ["core-tooling-isolated", 58],
-  ["core-unit-fast-1", 60],
-  ["core-unit-fast-2", 60],
-  ["core-unit-fast-isolated", 25],
-  ["core-unit-src-security", 108],
-  ["core-unit-support", 15],
+  ["core-runtime-tui-pty", 116],
+  ["core-tooling-1", 94],
+  ["core-tooling-2", 95],
+  ["core-tooling-3", 108],
+  ["core-tooling-4", 125],
+  ["core-tooling-isolated", 49],
+  ["core-unit-fast-1", 41],
+  ["core-unit-fast-2", 35],
+  // Fork-per-file isolation parallelizes poorly on 4 vCPU; keep it on the
+  // 8 vCPU class, where it still runs a measured ~90s under fleet load.
+  ["core-unit-fast-isolated", 90],
+  ["core-unit-src-security", 95],
+  ["core-unit-support", 17],
 ]);
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
 // from single-file local runs (M4 Max) and static import-graph size. Packing
@@ -256,6 +266,7 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "core-runtime-media-ui",
   "core-unit-fast-1",
   "core-unit-fast-2",
+  "core-unit-fast-isolated",
   "core-unit-src-security",
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
@@ -1118,6 +1129,7 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.media-understanding.config.ts",
           "test/vitest/vitest.tui.config.ts",
           "test/vitest/vitest.ui.config.ts",
+          "test/vitest/vitest.ui-isolated.config.ts",
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,

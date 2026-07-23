@@ -1,7 +1,9 @@
 /** Cron service dependency, event, state, and public result types. */
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronTriggerEvaluationResult,
@@ -11,6 +13,7 @@ import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
+  CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
   CronRunDiagnostics,
@@ -73,10 +76,15 @@ export type CronServiceDeps = {
     job: CronJob;
     script: string;
     state: unknown;
+    streamBatch?: string;
     abortSignal?: AbortSignal;
   }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
+  /** Resolve the current default when runtime config can change after startup. */
+  resolveDefaultAgentId?: () => string;
+  /** Revalidate agent ownership inside the cron mutation lock. */
+  isAgentAvailable?: (agentId: string) => boolean;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
   /** Path to the session store (sessions.json) for reaper use. */
@@ -125,6 +133,10 @@ export type CronServiceDeps = {
     reason?: string;
     agentId?: string;
     sessionKey?: string;
+    /** Exact cron run marker whose own activity must not block its awaited wake. */
+    owningCronJobMarker?: CronActiveJobMarker;
+    /** Exact command-lane task whose own slot must not block its awaited wake. */
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
@@ -161,6 +173,7 @@ export type CronServiceDeps = {
        */
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome &
       CronRunTelemetry
   >;
@@ -170,6 +183,23 @@ export type CronServiceDeps = {
       deliveryAttempted?: boolean;
       deliveryError?: string;
       delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
+  runScriptJob?: (params: {
+    job: CronJob;
+    streamBatch?: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      deliveryError?: string;
+      delivery?: CronDeliveryTrace;
+      notify?: string;
+      wake?: "now" | "next-heartbeat";
+      stateChanged?: boolean;
+      state?: unknown;
+      nextCheck?: CronNextCheckProposal;
     } & CronRunOutcome
   >;
   cleanupTimedOutAgentRun?: (params: {
@@ -224,9 +254,6 @@ export type CronServiceState = {
   schedulingPaused: boolean;
   schedulerStarted: boolean;
   restartRecoveryPending: boolean;
-  /** Prevents maintenance reads from advancing deferred startup catch-up slots.
-   * Entries are removed when the deferred job runs or becomes irrelevant. */
-  pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
@@ -258,7 +285,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     schedulingPaused: false,
     schedulerStarted: false,
     restartRecoveryPending: false,
-    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [] },
@@ -290,7 +316,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
-  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
+  /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */
   storage: "sqlite";
@@ -332,6 +358,8 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
+  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  systemOwned?: boolean;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;

@@ -211,7 +211,7 @@ const FeishuSharedConfigShape = {
   textChunkLimit: z.number().int().positive().optional(),
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
-  heartbeat: ChannelHeartbeatVisibilitySchema,
+  heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: FeishuStreamingSchema,
   tools: FeishuToolsConfigSchema,
@@ -220,6 +220,8 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  allowBots: z.boolean().optional(),
+  vcAutoJoin: z.boolean().optional(),
   tts: TtsOverrideSchema,
 };
 

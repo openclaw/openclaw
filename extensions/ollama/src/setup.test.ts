@@ -596,10 +596,46 @@ describe("ollama setup", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(promptAndConfigureOllama({ cfg: {}, prompter })).rejects.toThrow(
-      "Failed to inspect Ollama model llama3:8b",
-    );
+    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+
     expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("could not be inspected"),
+      "Ollama",
+    );
+    expect(result.config.models?.providers?.ollama).toBeDefined();
+  });
+
+  it("skips a broken model and continues setup when one inspection fails", async () => {
+    const prompter = {
+      ...createLocalPrompter(),
+      confirm: vi.fn(),
+    } as unknown as WizardPrompter;
+    const baseFetch = createOllamaFetchMock({
+      tags: ["broken:20b", "gemma4:e4b"],
+      capabilities: { "gemma4:e4b": ["tools"] },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (requestUrl(input).endsWith("/api/show")) {
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        if (body.name === "broken:20b") {
+          return new Response("boom", { status: 500 });
+        }
+      }
+      return await baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.note).toHaveBeenCalledWith(expect.stringContaining("broken:20b"), "Ollama");
+    expect(
+      result.config.models?.providers?.ollama?.models?.find((model) => model.id === "gemma4:e4b"),
+    ).toMatchObject({ compat: { supportsTools: true } });
+    expect(
+      result.config.models?.providers?.ollama?.models?.find((model) => model.id === "broken:20b"),
+    ).toMatchObject({ compat: { supportsTools: false } });
   });
 
   it("checks all installed Ollama models before offering a recommended pull", async () => {
@@ -950,26 +986,27 @@ describe("ollama setup", () => {
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
   });
 
-  it("accepts cloud models in non-interactive mode without pulling", async () => {
-    const fetchMock = createOllamaFetchMock({ tags: [] });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+  it.each(["kimi-k2.5:cloud", "gpt-oss:120b-cloud"])(
+    "accepts cloud model %s in non-interactive mode without pulling",
+    async (modelId) => {
+      const fetchMock = createOllamaFetchMock({ tags: [] });
+      vi.stubGlobal("fetch", fetchMock);
+      const runtime = createRuntime();
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "kimi-k2.5:cloud",
-      },
-      runtime,
-    });
+      const result = await configureOllamaNonInteractive({
+        nextConfig: {},
+        opts: {
+          customBaseUrl: "http://127.0.0.1:11434",
+          customModelId: modelId,
+        },
+        runtime,
+      });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(
-      "kimi-k2.5:cloud",
-    );
-    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/kimi-k2.5:cloud" });
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(modelId);
+      expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
+    },
+  );
 
   it("exits when Ollama is unreachable", async () => {
     const fetchMock = createOllamaFetchMock({

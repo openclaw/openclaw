@@ -31,6 +31,10 @@ import {
   isSuppressedControlReplyText,
   stripSuppressedControlReplyToken,
 } from "./control-reply-text.js";
+import {
+  projectWorkspaceResultConflict,
+  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+} from "./worker-environments/workspace-conflicts.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
@@ -53,6 +57,7 @@ type ChatDisplayProjectionResult = {
 type PendingMessageToolVisibleReply = {
   toolCallId?: string;
   text: string;
+  requiresSourceRouteConfirmation: boolean;
   anchor: Record<string, unknown>;
   completionAnchor?: Record<string, unknown>;
   deliveryMirrorAnchor?: Record<string, unknown>;
@@ -115,6 +120,11 @@ function projectToolResultDetails(
     return undefined;
   }
   const projected: Record<string, unknown> = {};
+  for (const key of ["changed", "created"] as const) {
+    if (typeof record[key] === "boolean") {
+      projected[key] = record[key];
+    }
+  }
   if (typeof record.diff === "string" && record.diff.trim()) {
     projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
   }
@@ -576,6 +586,39 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function projectWorkspaceConflictDetails(
+  entry: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (entry.role !== "custom" || entry.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
+    return undefined;
+  }
+  const details = readRecord(entry.details);
+  if (
+    !details ||
+    !Array.isArray(details.paths) ||
+    details.paths.length === 0 ||
+    !details.paths.every(
+      (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
+    ) ||
+    typeof details.stagedResultRef !== "string" ||
+    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
+    (details.totalCount !== undefined &&
+      (!Number.isSafeInteger(details.totalCount) ||
+        (details.totalCount as number) < details.paths.length))
+  ) {
+    return undefined;
+  }
+  try {
+    return projectWorkspaceResultConflict(
+      details.paths,
+      details.stagedResultRef,
+      details.totalCount as number | undefined,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -597,9 +640,11 @@ function sanitizeChatHistoryMessage(
     typeof entry.tool_call_id === "string";
 
   if ("details" in entry) {
-    const projectedDetails = messageHasToolResultShape(entry)
-      ? projectToolResultDetails(entry.details, maxChars)
-      : undefined;
+    const projectedDetails =
+      projectWorkspaceConflictDetails(entry) ??
+      (messageHasToolResultShape(entry)
+        ? projectToolResultDetails(entry.details, maxChars)
+        : undefined);
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -996,15 +1041,17 @@ function extractMessageToolVisibleReplies(
     if (isDryRunMessageToolRecord(args)) {
       continue;
     }
-    if (hasExplicitMessageToolRoute(args)) {
-      continue;
-    }
+    const requiresSourceRouteConfirmation = hasExplicitMessageToolRoute(args);
     const text = readMessageToolVisibleText(args);
     if (!text?.trim()) {
       continue;
     }
     const toolCallId = readToolBlockCallId(record);
-    replies.push({ ...(toolCallId ? { toolCallId } : {}), text });
+    replies.push({
+      ...(toolCallId ? { toolCallId } : {}),
+      text,
+      requiresSourceRouteConfirmation,
+    });
   }
   return replies;
 }
@@ -1099,6 +1146,40 @@ function hasDryRunToolResultValue(value: unknown): boolean {
   });
 }
 
+function hasSuppressedToolResultValue(value: unknown): boolean {
+  const record = readMaybeJsonRecord(value);
+  if (record) {
+    const messageId = normalizeOptionalString(record.messageId)?.toLowerCase();
+    const status = (
+      normalizeOptionalString(record.deliveryStatus) ??
+      normalizeOptionalString(record.delivery_status) ??
+      normalizeOptionalString(record.status)
+    )?.toLowerCase();
+    if (
+      record.delivered === false ||
+      messageId === "skipped" ||
+      messageId === "suppressed" ||
+      status === "skipped" ||
+      status === "suppressed"
+    ) {
+      return true;
+    }
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((block) => {
+    if (hasSuppressedToolResultValue(block)) {
+      return true;
+    }
+    const blockRecord = readRecord(block);
+    return (
+      hasSuppressedToolResultValue(blockRecord?.text) ||
+      hasSuppressedToolResultValue(blockRecord?.content)
+    );
+  });
+}
+
 function isSuccessfulMessageToolResult(
   message: Record<string, unknown>,
   pending: PendingMessageToolVisibleReply,
@@ -1112,10 +1193,17 @@ function isSuccessfulMessageToolResult(
     return false;
   }
   const resultCallId = readMessageToolResultCallId(message);
+  const hasConfirmedSourceRoute =
+    !pending.requiresSourceRouteConfirmation ||
+    readRecord(message.details)?.sourceReplyRoute === "current-source";
   if (pending.toolCallId) {
-    return resultCallId === pending.toolCallId && isSuccessfulMessageToolResultPayload(message);
+    return (
+      resultCallId === pending.toolCallId &&
+      isSuccessfulMessageToolResultPayload(message) &&
+      hasConfirmedSourceRoute
+    );
   }
-  return isSuccessfulMessageToolResultPayload(message);
+  return isSuccessfulMessageToolResultPayload(message) && hasConfirmedSourceRoute;
 }
 
 function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>): boolean {
@@ -1127,6 +1215,15 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
     hasDryRunToolResultValue(message.output) ||
     hasDryRunToolResultValue(message.content) ||
     hasDryRunToolResultValue(message.text)
+  ) {
+    return false;
+  }
+  if (
+    hasSuppressedToolResultValue(message.details) ||
+    hasSuppressedToolResultValue(message.result) ||
+    hasSuppressedToolResultValue(message.output) ||
+    hasSuppressedToolResultValue(message.content) ||
+    hasSuppressedToolResultValue(message.text)
   ) {
     return false;
   }

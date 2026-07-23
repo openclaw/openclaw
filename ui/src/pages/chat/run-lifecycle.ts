@@ -8,8 +8,12 @@ import {
   type SessionRunTerminal,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
-import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
@@ -18,7 +22,7 @@ import {
   type CompactionStatus,
   type FallbackStatus,
   type PlanStatus,
-  type QuestionStatus,
+  type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
@@ -51,13 +55,14 @@ type RunLifecycleHost = Omit<
   chatRunId?: string | null;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
+  chatRunStartup?: ChatRunStartupState | null;
   chatSideResultTerminalRuns?: Set<string>;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
   planStatus?: PlanStatus | null;
-  questionStatus?: QuestionStatus | null;
+  waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
@@ -125,7 +130,8 @@ export function hasAbortableSessionRun(host: {
   }
   return Boolean(
     host.sessionsResult?.sessions.some(
-      (session) => session.key === host.sessionKey && isSessionRunActive(session),
+      (session) =>
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
   );
 }
@@ -221,6 +227,14 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
 }
 
 function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
+  if (runId) {
+    host.knownAgentRunIds?.delete(runId);
+  } else {
+    host.knownAgentRunIds?.clear();
+  }
+  if (!runId || host.chatRunStartup?.runId === runId) {
+    host.chatRunStartup = null;
+  }
   clearTimer(host.compactionClearTimer);
   host.compactionClearTimer = null;
   if (host.compactionStatus) {
@@ -231,15 +245,16 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   if (host.fallbackStatus) {
     host.fallbackStatus = null;
   }
+  for (const [approvalId, waitingApproval] of host.waitingApprovalStatuses ?? []) {
+    if (!runId || !waitingApproval.runId || waitingApproval.runId === runId) {
+      host.waitingApprovalStatuses?.delete(approvalId);
+    }
+  }
   // Plan checklists are run-owned (unlike the transient compaction/fallback
   // toasts): a terminal reconcile for another run must not clear them.
   const planOwner = host.planStatus?.runId;
   if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
     host.planStatus = null;
-  }
-  const questionOwner = host.questionStatus?.runId;
-  if (host.questionStatus && (!runId || !questionOwner || questionOwner === runId)) {
-    host.questionStatus = null;
   }
 }
 

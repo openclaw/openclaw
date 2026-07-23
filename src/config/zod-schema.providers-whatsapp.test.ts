@@ -73,43 +73,7 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
-  it("validates per-conversation debounce overrides", () => {
-    const result = WhatsAppConfigSchema.safeParse({
-      groups: {
-        "120363@g.us": { debounceMs: 30_000 },
-        "*": { debounceMs: 60_000 },
-      },
-      direct: {
-        "+15551234567": { debounceMs: 0 },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.groups?.["120363@g.us"]?.debounceMs).toBe(30_000);
-      expect(result.data.groups?.["*"]?.debounceMs).toBe(60_000);
-      expect(result.data.direct?.["+15551234567"]?.debounceMs).toBe(0);
-    }
-  });
-
-  it("accepts deprecated exposeErrorText as a no-op compatibility key", () => {
-    const result = WhatsAppConfigSchema.safeParse({
-      exposeErrorText: false,
-      accounts: {
-        work: {
-          exposeErrorText: true,
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(Object.hasOwn(result.data, "exposeErrorText")).toBe(false);
-      expect(Object.hasOwn(result.data.accounts?.work ?? {}, "exposeErrorText")).toBe(false);
-    }
-  });
-
-  it("keeps deprecated exposeErrorText out of generated config surfaces", () => {
+  it("keeps exposeErrorText out of generated config surfaces", () => {
     const schema = WhatsAppConfigSchema.toJSONSchema({
       target: "draft-07",
       unrepresentable: "any",

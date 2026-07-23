@@ -29,11 +29,7 @@ import {
   runPreparedInboundReply as runPreparedInboundReplyCore,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "../turn/kernel.js";
-import type {
-  ChannelTurnResult,
-  DispatchedChannelTurnResult,
-  DurableInboundReplyDeliveryOptions,
-} from "../turn/kernel.js";
+import type { ChannelTurnResult, DurableInboundReplyDeliveryOptions } from "../turn/kernel.js";
 import type {
   AssembledChannelTurn,
   ChannelTurnPlan,
@@ -68,60 +64,16 @@ export type ChannelInboundTurnPlan = ChannelTurnPlan;
 export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 
 /** Run an already prepared inbound reply through shared session-record + dispatch ordering. */
-type PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult> =
-  PreparedChannelTurn<TDispatchResult> & {
-    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
-  };
-
-type PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
-  PreparedChannelTurn<TDispatchResult>,
-  "botLoopProtection"
-> & {
-  botLoopProtection?: undefined;
-};
-
-export function runPreparedInboundReply<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReply<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReply<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runPreparedInboundReply<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedInboundReplyCore(params);
 }
 
-/** @deprecated Use `runPreparedInboundReply`. */
-export function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
-): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-export function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>>;
-export async function runPreparedInboundReplyTurn<TDispatchResult>(
-  params: PreparedChannelTurn<TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>> {
-  return await runPreparedInboundReply(params);
-}
-
 export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
   params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
 ) {
   return await runChannelInboundEventCore(params);
-}
-
-/** @deprecated Use `runChannelInboundEvent`. */
-export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
-) {
-  return await runChannelInboundEvent(params);
 }
 
 export async function dispatchChannelInboundReply(params: AssembledInboundReply) {

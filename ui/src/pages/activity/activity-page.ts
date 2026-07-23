@@ -247,4 +247,6 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-activity-page", ActivityPage);
+if (!customElements.get("openclaw-activity-page")) {
+  customElements.define("openclaw-activity-page", ActivityPage);
+}

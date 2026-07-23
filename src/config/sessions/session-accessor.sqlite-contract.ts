@@ -86,6 +86,13 @@ export type SessionTranscriptEventRow = {
   seq: number;
 };
 
+export type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptRawDeltaResult,
+  SessionTranscriptVisibleMessageDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaResult,
+} from "./session-accessor.types.js";
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
   cwd?: string;
@@ -246,12 +253,14 @@ export type ForkSessionEntryFromParentTargetParams = {
 };
 
 export type ResetSessionEntryLifecycleParams = {
+  archivePreviousTranscript?: boolean;
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 };
@@ -260,7 +269,7 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   archiveTranscript: boolean;
   expectedEntry?: SessionEntry;
-  expectedSessionId?: string;
+  expectedSessionId?: string | null;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
   storePath: string;

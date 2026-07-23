@@ -6,6 +6,7 @@ import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 export const GATEWAY_SERVER_CAPS = {
+  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
 } as const;
@@ -100,7 +101,22 @@ export const HelloOkSchema = closedObject({
       }),
     ),
   ),
+  // Additive: active plugin widget kinds whose renderers ship in the trusted UI bundle.
+  controlUiWidgetKinds: Type.Optional(
+    Type.Array(
+      closedObject({
+        pluginId: NonEmptyString,
+        kind: NonEmptyString,
+        label: NonEmptyString,
+      }),
+    ),
+  ),
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+  deviceAuthMigration: Type.Optional(
+    closedObject({
+      pending: Type.Literal(true),
+    }),
+  ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
     role: NonEmptyString,

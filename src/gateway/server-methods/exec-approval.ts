@@ -32,7 +32,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
@@ -179,6 +179,9 @@ export function createExecApprovalHandlers(
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
+        sessionId?: string;
+        runId?: string;
+        toolCallId?: string;
         turnSourceChannel?: string;
         turnSourceTo?: string;
         turnSourceAccountId?: string;
@@ -192,7 +195,9 @@ export function createExecApprovalHandlers(
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-      const explicitId = normalizeOptionalString(p.id) ?? null;
+      // IDs are opaque cross-surface handles. Preserve every supplied byte so
+      // the manager can reject unsafe values instead of silently normalizing them.
+      const explicitId = p.id ?? null;
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
       const approvalContext = resolveSystemRunApprovalRequestContext({
@@ -209,6 +214,7 @@ export function createExecApprovalHandlers(
       const effectiveAgentId = approvalContext.agentId;
       const effectiveSessionKey = approvalContext.sessionKey;
       const effectiveCommandText = approvalContext.commandText;
+      const requestRunId = normalizeOptionalString(p.runId);
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -332,12 +338,42 @@ export function createExecApprovalHandlers(
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
+        sessionId: normalizeOptionalString(p.sessionId) ?? null,
+        runId: requestRunId ?? null,
+        toolCallId: normalizeOptionalString(p.toolCallId) ?? null,
         turnSourceChannel: normalizeOptionalString(p.turnSourceChannel) ?? null,
         turnSourceTo: normalizeOptionalString(p.turnSourceTo) ?? null,
         turnSourceAccountId: normalizeOptionalString(p.turnSourceAccountId) ?? null,
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
-      const record = manager.create(request, timeoutMs, explicitId);
+      // This check is adjacent to manager creation with no await between them.
+      // The abort owner records the tombstone before sweeping pending approvals.
+      if (requestRunId && context.chatAbortedRuns?.has(requestRunId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval run already aborted", {
+            details: { reason: "EXEC_APPROVAL_RUN_ABORTED" },
+          }),
+        );
+        return;
+      }
+      let record: ReturnType<typeof manager.create>;
+      try {
+        record = manager.create(request, timeoutMs, explicitId);
+      } catch (error) {
+        if (error instanceof InvalidApprovalIdError) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+              details: { code: error.code, reason: error.reason },
+            }),
+          );
+          return;
+        }
+        throw error;
+      }
       bindApprovalRequesterMetadata({ record, client });
       if (client?.internal?.approvalRuntime === true) {
         // Reviewer ids widen approval visibility, so only the server-trusted
@@ -428,12 +464,16 @@ export function createExecApprovalHandlers(
         afterDecisionErrorLabel: "exec approvals: iOS push expire failed",
       });
     },
-    "exec.approval.waitDecision": async ({ params, respond, client }) => {
+    "exec.approval.waitDecision": async ({ params, respond, client, context }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
         client,
         respond,
+        resolveTerminalReason: (snapshot) => {
+          const runId = normalizeOptionalString(snapshot.request.runId);
+          return runId && context.chatAbortedRuns?.has(runId) ? "run-aborted" : undefined;
+        },
       });
     },
     "exec.approval.resolve": async ({ params, respond, client, context }) => {

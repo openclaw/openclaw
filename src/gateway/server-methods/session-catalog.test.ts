@@ -4,9 +4,15 @@ import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js"
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
+type CatalogSessionRowLoader = (
+  sessionKey: string,
+  options?: { agentId?: string; clone?: boolean },
+) => { createdActor?: { type: "human" | "agent" | "system"; id?: string; label?: string } } | null;
+
 const hoisted = vi.hoisted(() => ({
   activeRegistry: { sessionCatalogs: [] as unknown[] },
   pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
+  loadGatewaySessionRow: vi.fn<CatalogSessionRowLoader>(() => null),
   recordSessionStateEvent: vi.fn(),
   upsertSessionUpstreamLink: vi.fn(),
 }));
@@ -23,6 +29,7 @@ vi.mock("../../plugins/runtime.js", () => ({
 }));
 
 vi.mock("../../sessions/session-state-events.js", () => ({
+  listAmbientGroupWatchTargets: () => new Set<string>(),
   recordSessionStateEvent: hoisted.recordSessionStateEvent,
 }));
 
@@ -32,6 +39,10 @@ vi.mock("../../sessions/session-upstream-links.js", () => ({
 vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-utils.js")>();
+  return { ...actual, loadGatewaySessionRow: hoisted.loadGatewaySessionRow };
+});
 
 const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
   await import("./session-catalog.js");
@@ -53,14 +64,15 @@ async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] } },
+  client?: { connect?: { scopes?: string[] }; connId?: string },
+  contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
   await sessionCatalogHandlers[method]?.({
     params,
     respond,
     client,
-    context: { getRuntimeConfig: () => config },
+    context: { getRuntimeConfig: () => config, ...contextOverrides },
   } as never);
   return respond;
 }
@@ -69,6 +81,8 @@ describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry.sessionCatalogs = [];
     hoisted.pinnedSessionExtensionRegistry = undefined;
+    hoisted.loadGatewaySessionRow.mockReset();
+    hoisted.loadGatewaySessionRow.mockReturnValue(null);
     hoisted.recordSessionStateEvent.mockClear();
     hoisted.upsertSessionUpstreamLink.mockClear();
     conversationBindingMocks.bindPluginSessionConversation.mockClear();
@@ -96,6 +110,141 @@ describe("session catalog Gateway methods", () => {
         expect.objectContaining({ id: "zeta", hosts: [] }),
       ],
     });
+  });
+
+  it("streams completed hosts to only the requesting connection", async () => {
+    const broadcastToConnIds = vi.fn();
+    const host = {
+      hostId: "node:fast",
+      label: "Fast node",
+      kind: "node" as const,
+      connected: true,
+      nodeId: "fast",
+      sessions: [],
+    };
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          list: vi.fn(async ({ onHost }) => {
+            onHost?.(host);
+            return [host];
+          }),
+        }),
+      },
+    ];
+
+    const respond = await call(
+      "sessions.catalog.list",
+      { progressId: "progress-1" },
+      {},
+      { connId: "requester", connect: {} },
+      { broadcastToConnIds },
+    );
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      {
+        progressId: "progress-1",
+        agentId: "main",
+        catalog: expect.objectContaining({ id: "codex", hosts: [host] }),
+      },
+      new Set(["requester"]),
+      { dropIfSlow: true },
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
+    });
+  });
+
+  it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
+    const broadcastToConnIds = vi.fn();
+    const host = {
+      hostId: "gateway:local",
+      label: "Local Claude",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [
+        {
+          threadId: "owned-thread",
+          status: "stored",
+          archived: false,
+          sessionKey: "agent:main:owned",
+          createdActor: { type: "human" as const, id: "provider-spoof" },
+          canContinue: true,
+          canArchive: false,
+        },
+        {
+          threadId: "missing-thread",
+          status: "stored",
+          archived: false,
+          sessionKey: "agent:main:missing",
+          createdActor: { type: "human" as const, id: "provider-spoof" },
+          canContinue: true,
+          canArchive: false,
+        },
+        {
+          threadId: "external-thread",
+          status: "stored",
+          archived: false,
+          createdActor: { type: "human" as const, id: "provider-spoof" },
+          canContinue: true,
+          canArchive: false,
+        },
+      ],
+    };
+    hoisted.loadGatewaySessionRow.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:owned"
+        ? { createdActor: { type: "human", id: "profile-ada", label: "Ada" } }
+        : null,
+    );
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          list: vi.fn(async ({ onHost }) => {
+            onHost?.(host);
+            return [host];
+          }),
+        }),
+      },
+    ];
+
+    const respond = await call(
+      "sessions.catalog.list",
+      { progressId: "progress-creator" },
+      {},
+      { connId: "requester", connect: {} },
+      { broadcastToConnIds },
+    );
+    const projectedSessions = [
+      expect.objectContaining({
+        threadId: "owned-thread",
+        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+      }),
+      expect.not.objectContaining({ createdActor: expect.anything() }),
+      expect.not.objectContaining({ createdActor: expect.anything() }),
+    ];
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      expect.objectContaining({
+        catalog: expect.objectContaining({
+          hosts: [expect.objectContaining({ sessions: projectedSessions })],
+        }),
+      }),
+      new Set(["requester"]),
+      { dropIfSlow: true },
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          hosts: [expect.objectContaining({ sessions: projectedSessions })],
+        }),
+      ],
+    });
+    expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledWith("agent:main:owned", {
+      agentId: "main",
+    });
+    expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledTimes(2);
   });
 
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {
@@ -129,6 +278,21 @@ describe("session catalog Gateway methods", () => {
     } finally {
       gatewaySubagentState.nodes = previousNodesRuntime;
     }
+  });
+
+  it("rejects host cursors without a catalog selector", async () => {
+    const respond = await call("sessions.catalog.list", {
+      cursors: { "gateway:local": "next" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "catalogId is required when cursors are provided",
+      }),
+    );
   });
 
   it("normalizes search once before dispatching every provider", async () => {

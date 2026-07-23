@@ -6,6 +6,7 @@ import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -423,6 +424,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveDegradedPlugins([]);
   serverPluginsModule.clearFallbackGatewayContext();
   clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
@@ -445,6 +447,41 @@ describe("loadGatewayPlugins", () => {
       "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
     );
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  test("does not re-log a quarantined plugin verification diagnostic", () => {
+    const diagnostic: PluginDiagnostic = {
+      level: "error",
+      code: "plugin-verification",
+      pluginId: "broken-payload",
+      source: "/tmp/broken-payload/index.ts",
+      message: "configured plugin payload verification failed (missing-main-entry): missing",
+    };
+    const distinctDiagnostic: PluginDiagnostic = {
+      ...diagnostic,
+      message: "configured plugin payload verification failed (missing-package-json): missing",
+    };
+    const registry = createRegistry([diagnostic, distinctDiagnostic]);
+    loadOpenClawPlugins.mockReturnValue(registry);
+    setActiveDegradedPlugins([
+      {
+        pluginId: "broken-payload",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "missing",
+        },
+      },
+    ]);
+
+    const log = loadGatewayStartupPluginsForTest();
+
+    expect(log.error).toHaveBeenCalledOnce();
+    expect(log.error).toHaveBeenCalledWith(
+      "[plugins] configured plugin payload verification failed (missing-package-json): missing (plugin=broken-payload, source=/tmp/broken-payload/index.ts)",
+    );
+    expect(registry.diagnostics).toEqual([diagnostic, distinctDiagnostic]);
   });
 
   test("loads only gateway startup plugin ids", () => {
@@ -805,7 +842,7 @@ describe("loadGatewayPlugins", () => {
     });
   });
 
-  test("provides subagent runtime with sessions.get method aliases", async () => {
+  test("provides subagent runtime session messages through sessions.get", async () => {
     const runtime = await createSubagentRuntime(serverPluginsModule);
     serverPluginsModule.setFallbackGatewayContext(createTestContext("sessions-get-aliases"));
     handleGatewayRequest
@@ -816,20 +853,12 @@ describe("loadGatewayPlugins", () => {
       })
       .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
         expect(opts.req.method).toBe("sessions.get");
-        expect(opts.req.params).toEqual({ key: "s-legacy" });
-        opts.respond(true, { messages: [{ id: "m-2" }] });
-      })
-      .mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-        expect(opts.req.method).toBe("sessions.get");
         expect(opts.req.params).toEqual({ key: "s-limited", limit: 1_000 });
         opts.respond(true, { messages: [{ id: "m-3" }] });
       });
 
     await expect(runtime.getSessionMessages({ sessionKey: "s-read" })).resolves.toEqual({
       messages: [{ id: "m-1" }],
-    });
-    await expect(runtime.getSession({ sessionKey: "s-legacy" })).resolves.toEqual({
-      messages: [{ id: "m-2" }],
     });
     await expect(
       runtime.getSessionMessages({
@@ -885,6 +914,23 @@ describe("loadGatewayPlugins", () => {
         "agent",
         { sessionKey: "agent:main:cron:job:run:run-1" },
         { allowSyntheticCronRunContinuation: true, forceSyntheticClient: true },
+      ),
+    ).resolves.toEqual({ status: "ok" });
+  });
+
+  test("carries delegated tool-policy handoffs only in synthetic client context", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("delegated-tool-policy"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(opts.req.params).not.toHaveProperty("delegatedToolPolicyHandoff");
+      expect(opts.client?.internal?.delegatedToolPolicyHandoff).toBe(true);
+      opts.respond(true, { status: "ok" });
+    });
+
+    await expect(
+      serverPluginsModule.dispatchGatewayMethodInProcess(
+        "agent",
+        { sessionKey: "agent:main:main" },
+        { delegatedToolPolicyHandoff: true, forceSyntheticClient: true },
       ),
     ).resolves.toEqual({ status: "ok" });
   });
@@ -1018,7 +1064,7 @@ describe("loadGatewayPlugins", () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();
     serverPluginsModule.setFallbackGatewayContext({
-      getRuntimeConfig: () => ({ gateway: { nodes: { denyCommands: [command] } } }),
+      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { deny: [command] } } } }),
       nodeRegistry: {
         get: () => ({
           nodeId: "node-policy",
@@ -1453,6 +1499,7 @@ describe("loadGatewayPlugins", () => {
             pluginId: "other-plugin",
             toolNames: ["other_plugin_tool"],
           },
+          delegatedToolPolicyHandoff: true,
         },
       } as unknown as GatewayRequestOptions["client"],
       isWebchatConnect: () => false,
@@ -1469,6 +1516,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("workboard");
     expect(getLastDispatchedClientInternal().runtimePluginToolGrant).toBeUndefined();
+    expect(getLastDispatchedClientInternal().delegatedToolPolicyHandoff).toBeUndefined();
   });
 
   test("forwards lightContext as lightweight bootstrap context on subagent run", async () => {

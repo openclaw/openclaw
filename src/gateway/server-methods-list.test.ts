@@ -21,6 +21,24 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node presence activity updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
+
+  it("advertises session observer digests", () => {
+    expect(GATEWAY_EVENTS).toContain("session.observer");
+  });
+
+  it("advertises question methods and events", () => {
+    expect(GATEWAY_EVENTS).toContain("question.requested");
+    expect(GATEWAY_EVENTS).toContain("question.resolved");
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "question.request",
+        "question.waitAnswer",
+        "question.resolve",
+        "question.get",
+        "question.list",
+      ]),
+    );
+  });
 });
 
 describe("listGatewayMethods", () => {
@@ -44,13 +62,21 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-6)).toEqual([
+    expect(listGatewayMethods().slice(-14)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
+      "conversations.list",
+      "session.discussion.info",
+      "session.discussion.open",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+      "sessions.observer.ask",
+      "sessions.observer.visibility",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -111,7 +137,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-13)).toEqual([
+    expect(coreMethods.slice(-21)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -125,6 +151,14 @@ describe("listGatewayMethods", () => {
       "ui.command",
       "approval.history",
       "plugin.surface.refresh",
+      "conversations.list",
+      "session.discussion.info",
+      "session.discussion.open",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+      "sessions.observer.ask",
+      "sessions.observer.visibility",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -133,6 +167,8 @@ describe("listGatewayMethods", () => {
   it("advertises the versioned Talk session RPCs", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
+    expect(methods).toContain("talk.client.transcript");
+    expect(methods).toContain("talk.client.close");
     expect(methods).toContain("talk.client.toolCall");
     expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");

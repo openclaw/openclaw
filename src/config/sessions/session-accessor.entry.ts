@@ -11,8 +11,10 @@ import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   listSqliteSessionEntries,
+  listSqliteSessionEntriesReadOnly,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
+  loadSqliteSessionEntryReadOnly,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   readSqliteSessionUpdatedAt,
@@ -161,10 +163,9 @@ export function resolveSessionEntryCandidateTarget(
     env: scope.env,
   });
   const store = Object.fromEntries(
-    listSessionEntries({ agentId: scope.agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesReadOnly({ agentId: scope.agentId, storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
   );
   for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
     if (!candidateKey) {
@@ -296,6 +297,11 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
   return loadSqliteSessionEntry(scope);
 }
 
+/** Returns one session entry without joining the agent database writable lifecycle. */
+export function loadSessionEntryReadOnly(scope: SessionAccessScope): SessionEntry | undefined {
+  return loadSqliteSessionEntryReadOnly(scope);
+}
+
 /**
  * Returns only the row persisted under the exact key provided.
  * Use this for authorization-sensitive routing where alias canonicalization
@@ -311,6 +317,16 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
     return openSessionEntryReadView(scope).entries();
   }
   return listSqliteSessionEntries(scope);
+}
+
+/**
+ * Health/status introspection must not join the writable lifecycle or register databases;
+ * doing so churns fleet-wide agent handles on every health tick.
+ */
+export function listSessionEntriesReadOnly(
+  scope: SessionEntryListScope = {},
+): SessionEntrySummary[] {
+  return listSqliteSessionEntriesReadOnly(scope);
 }
 
 /**

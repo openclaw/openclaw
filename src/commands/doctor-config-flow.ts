@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
+  noteSandboxOriginProxyWarning,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -20,6 +21,7 @@ import {
   applyUnknownConfigKeyStep,
 } from "./doctor/shared/config-flow-steps.js";
 import { applyDoctorConfigMutation } from "./doctor/shared/config-mutation-state.js";
+import { isSingleTopLevelIncludeMigration } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
@@ -142,6 +144,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const preflight = await runDoctorConfigPreflight({
     repairPrefixedConfig: shouldRepair,
     recoverCorruptTargetStore: shouldRepair,
+    doctorOnlyStateMigrations: shouldRepair,
   });
   const snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
@@ -273,6 +276,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
+  const { repairStaleAgentModelRefs } =
+    await import("./doctor/shared/stale-agent-model-ref-repair.js");
+  const staleAgentModelRepair = repairStaleAgentModelRefs(candidate, { env: process.env });
+  emitDoctorChangesPanel(staleAgentModelRepair.changes, shouldRepair, { sanitize: true });
+  if (staleAgentModelRepair.warnings.length > 0) {
+    emitDoctorNotes({ note, warningNotes: staleAgentModelRepair.warnings });
+  }
+  ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+    state: { cfg, candidate, pendingChanges, fixHints },
+    mutation: staleAgentModelRepair,
+    shouldRepair,
+    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+  }));
+
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
   const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
@@ -400,18 +417,26 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
   });
   cfg = finalized.cfg;
+  const singleTopLevelIncludeWrite =
+    finalized.shouldWriteConfig &&
+    isSingleTopLevelIncludeMigration({
+      parsed: snapshot.parsed,
+      sourceConfig: snapshot.sourceConfig,
+      candidate: cfg,
+    });
 
   noteOpencodeProviderOverrides(cfg);
   noteImplicitFallbackClobberWarnings(cfg);
+  noteSandboxOriginProxyWarning(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
-    preservedLegacyRootKeys: ["defaultModel"],
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
+    ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
       : {}),

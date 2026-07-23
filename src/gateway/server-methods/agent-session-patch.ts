@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
@@ -16,7 +17,7 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { canonicalizeSpawnedByForAgent, loadSessionEntry } from "../session-utils.js";
+import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,
@@ -72,7 +73,7 @@ export function buildAgentSessionPatch(params: {
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
     try {
-      const parentEntry = loadSessionEntry(freshSpawnedBy)?.entry;
+      const parentEntry = loadSessionEntryReadOnly(freshSpawnedBy)?.entry;
       inheritedGroup = normalizeTrustedGroupMetadata({
         groupId: parentEntry?.groupId,
         groupChannel: parentEntry?.groupChannel,
@@ -201,11 +202,22 @@ export function buildAgentSessionPatch(params: {
     freshRecoverableTerminalSession &&
     !freshSessionRotatedSinceLoad &&
     patchSessionId === params.freshEntry?.sessionId;
+  const automaticRecoveryClearPatch = shouldClearRotatedState
+    ? buildMainSessionRecoveryClearPatch(params.freshEntry)
+    : {};
   const patch: Partial<SessionEntry> = {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
-    ...(params.touchInteraction ? { lastInteractionAt: params.now } : {}),
+    ...(params.touchInteraction
+      ? {
+          lastInteractionAt: params.now,
+          // Clear at human-turn admission, before the model may declare a new
+          // status. Later lifecycle writes must not erase a same-turn declaration.
+          agentStatus: undefined,
+        }
+      : {}),
+    ...automaticRecoveryClearPatch,
     ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
     ...(effectiveDeliveryFields.deliveryContext
       ? { deliveryContext: effectiveDeliveryFields.deliveryContext }

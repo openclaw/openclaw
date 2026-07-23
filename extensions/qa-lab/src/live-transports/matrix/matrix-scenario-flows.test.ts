@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readQaBootstrapScenarioCatalog } from "../../scenario-catalog.js";
+import {
+  readQaBootstrapScenarioCatalog,
+  readQaScenarioById,
+  readQaScenarioExecutionConfig,
+} from "../../scenario-catalog.js";
 
 function readModuleBinding(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
@@ -78,14 +82,35 @@ describe("Matrix QA Lab scenario flows", () => {
     expect(bindings.size).toBe(82);
   });
 
-  it("prepares the shared reaction canary only for reaction scenarios", () => {
+  it("prepares the shared canary only for canary-dependent scenarios", () => {
+    const canaryScenarioIds = new Set([
+      "matrix-reaction-not-a-reply",
+      "matrix-reaction-notification",
+      "matrix-reaction-redaction-observed",
+      "matrix-reaction-threaded",
+      "matrix-voice-preflight-mention",
+    ]);
     for (const scenario of scenarios) {
       const config = scenario.execution.config ?? {};
       expect(config.matrixRequireCanary === true, scenario.id).toBe(
-        scenario.id.startsWith("matrix-reaction-"),
+        canaryScenarioIds.has(scenario.id),
       );
       expect(readModuleBinding(scenario).callAction.args).toEqual([{ expr: "scenarioContext" }]);
     }
+  });
+
+  it("applies the portable thread override through Matrix flow preparation", () => {
+    expect(readQaScenarioById("thread-reply-override").execution).toMatchObject({
+      kind: "flow",
+      channel: "matrix",
+      timeoutMs: 60_000,
+      retryCount: 0,
+      config: {
+        matrixConfigOverrides: {
+          threadReplies: "always",
+        },
+      },
+    });
   });
 
   it("runs the allowlist scenario through its config-file reload owner", () => {
@@ -100,6 +125,44 @@ describe("Matrix QA Lab scenario flows", () => {
       call: "scenarioModule.runMatrixQaAllowlistHotReloadScenario",
       args: [{ expr: "scenarioContext" }],
       saveAs: "result",
+    });
+  });
+
+  it("loads the voice preflight provider and media overrides", () => {
+    expect(readQaScenarioById("matrix-voice-preflight-mention").execution).toMatchObject({
+      kind: "flow",
+      providerMode: "mock-openai",
+      retryCount: 0,
+      timeoutMs: 90_000,
+    });
+    expect(readQaScenarioById("matrix-voice-preflight-mention").gatewayConfigPatch).toMatchObject({
+      tools: {
+        media: {
+          models: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
+          audio: {
+            echoTranscript: true,
+            enabled: true,
+            prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
+          },
+        },
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],
+        },
+      },
+    });
+    expect(readQaScenarioExecutionConfig("matrix-voice-preflight-mention")).toMatchObject({
+      matrixRequireCanary: true,
+      matrixConfigOverrides: {
+        mediaModels: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
+        audio: {
+          echoTranscript: true,
+          enabled: true,
+          prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
+        },
+        groupMentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],
+      },
     });
   });
 });

@@ -1,9 +1,11 @@
+// @vitest-environment node
 // Control UI tests cover run lifecycle behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   CHAT_RUN_STATUS_TOAST_DURATION_MS,
+  hasAbortableSessionRun,
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
@@ -22,6 +24,20 @@ type TestRow = {
 function makeSessionsResult(rows: TestRow[]): SessionsListResult {
   return { sessions: rows } as unknown as SessionsListResult;
 }
+
+describe("hasAbortableSessionRun", () => {
+  it("recognizes the canonical main row while chat uses its main alias", () => {
+    expect(
+      hasAbortableSessionRun({
+        chatRunId: null,
+        sessionKey: "main",
+        sessionsResult: makeSessionsResult([
+          { key: "agent:main:main", hasActiveRun: true, status: "running" },
+        ]),
+      }),
+    ).toBe(true);
+  });
+});
 
 function makeHost(over: Partial<ReconcileHost> = {}): ReconcileHost {
   return {
@@ -98,6 +114,10 @@ describe("reconcileChatRunLifecycle indicators", () => {
   it("clears plan status on terminal run end", () => {
     const host = makeHost({
       chatRunId: "r1",
+      knownAgentRunIds: new Set(["r1", "r2"]),
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "r1" }],
+      ]),
       planStatus: {
         steps: [{ step: "Finish the run", status: "in_progress" }],
       },
@@ -110,6 +130,26 @@ describe("reconcileChatRunLifecycle indicators", () => {
     });
 
     expect(host.planStatus).toBeNull();
+    expect(host.knownAgentRunIds).toEqual(new Set(["r2"]));
+    expect(host.waitingApprovalStatuses?.size).toBe(0);
+  });
+
+  it("preserves a waiting approval owned by another run", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "r1" }],
+      ]),
+    });
+
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "r2",
+      clearIndicators: true,
+      clearLocalRun: false,
+    });
+
+    expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
   });
 
   it("preserves an owned plan when another run terminates", () => {
