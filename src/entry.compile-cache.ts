@@ -201,7 +201,7 @@ function runOpenClawCompileCacheRespawnPlan(
   runtime: OpenClawCompileCacheRespawnRuntime = {
     spawn,
     attachChildProcessBridge,
-    exit: process.exit.bind(process) as (code?: number) => never,
+    exit: (code?: number) => process.exit(code),
     writeError: (message: string) => process.stderr.write(message),
   },
 ): ChildProcess {
