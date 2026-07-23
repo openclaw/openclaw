@@ -248,19 +248,19 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       "--early-init-eval-command",
     ]),
     abbreviatedFlags: [
-      { label: "-eval-command", full: "-eval-command", min: "-eval" },
-      { label: "--eval-command", full: "--eval-command", min: "--eval" },
-      { label: "-init-eval-command", full: "-init-eval-command", min: "-init-eval" },
-      { label: "--init-eval-command", full: "--init-eval-command", min: "--init-eval" },
+      { label: "-eval-command", full: "-eval-command", min: "-ev" },
+      { label: "--eval-command", full: "--eval-command", min: "--ev" },
+      { label: "-init-eval-command", full: "-init-eval-command", min: "-init-e" },
+      { label: "--init-eval-command", full: "--init-eval-command", min: "--init-e" },
       {
         label: "-early-init-eval-command",
         full: "-early-init-eval-command",
-        min: "-early-init-eval",
+        min: "-early-init-e",
       },
       {
         label: "--early-init-eval-command",
         full: "--early-init-eval-command",
-        min: "--early-init-eval",
+        min: "--early-init-e",
       },
     ],
     prefixFlags: [

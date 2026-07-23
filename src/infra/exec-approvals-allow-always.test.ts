@@ -1712,6 +1712,11 @@ $0 \\"$1\\"" touch {marker}`,
     },
     {
       executable: "gdb",
+      first: "gdb -ev 'print 1'",
+      second: "gdb --ev 'shell id > {marker}'",
+    },
+    {
+      executable: "gdb",
       first: "gdb -eiex 'print 1'",
       second: "gdb -early-init-eval 'shell id > {marker}'",
     },

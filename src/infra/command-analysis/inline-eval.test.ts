@@ -150,24 +150,36 @@ describe("exec inline eval detection", () => {
     { argv: ["gdb", "-ex=shell id", "-ex", "quit"], expected: "gdb -ex" },
     { argv: ["gdb", "-iex", "shell id"], expected: "gdb -iex" },
     { argv: ["gdb", "-iex=shell id"], expected: "gdb -iex" },
+    { argv: ["gdb", "-ev", "shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval", "shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval-c", "shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval-c=shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval-command", "shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval-command=shell id"], expected: "gdb -eval-command" },
+    { argv: ["gdb", "--ev", "shell id"], expected: "gdb --eval-command" },
     { argv: ["gdb", "--eval", "shell id"], expected: "gdb --eval-command" },
     { argv: ["gdb", "--eval-c=shell id"], expected: "gdb --eval-command" },
     { argv: ["gdb", "--eval-command=shell id"], expected: "gdb --eval-command" },
+    { argv: ["gdb", "-init-e", "shell id"], expected: "gdb -init-eval-command" },
     { argv: ["gdb", "-init-eval", "shell id"], expected: "gdb -init-eval-command" },
     { argv: ["gdb", "-init-eval-c=shell id"], expected: "gdb -init-eval-command" },
+    { argv: ["gdb", "--init-e", "shell id"], expected: "gdb --init-eval-command" },
     { argv: ["gdb", "--init-eval-command=shell id"], expected: "gdb --init-eval-command" },
     { argv: ["gdb", "--init-eval=shell id"], expected: "gdb --init-eval-command" },
     { argv: ["gdb", "-init-eval-command=shell id"], expected: "gdb -init-eval-command" },
     { argv: ["gdb", "-eiex", "shell id"], expected: "gdb -eiex" },
     { argv: ["gdb", "-eiex=shell id"], expected: "gdb -eiex" },
     {
+      argv: ["gdb", "-early-init-e", "shell id"],
+      expected: "gdb -early-init-eval-command",
+    },
+    {
       argv: ["gdb", "-early-init-eval", "shell id"],
       expected: "gdb -early-init-eval-command",
+    },
+    {
+      argv: ["gdb", "--early-init-e=shell id"],
+      expected: "gdb --early-init-eval-command",
     },
     {
       argv: ["gdb", "--early-init-eval=shell id"],
@@ -264,6 +276,7 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["erl", "-sname", "node"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["erl", "-setcookie", "cookie"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["erl", "-shutdown_time", "1000"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["gdb", "-e", "program"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["gdb", "--command=commands.gdb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["gdb", "-eix", "early.gdb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["gdb", "-early-init-command", "early.gdb"])).toBeNull();
