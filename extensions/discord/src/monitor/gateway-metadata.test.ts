@@ -226,3 +226,57 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
     }
   });
 });
+
+describe("fetchDiscordGatewayInfo bounded reads", () => {
+  it("rejects oversized response body from a real loopback HTTP server", async () => {
+    const oversizedPayloadBytes = DISCORD_GATEWAY_METADATA_MAX_BYTES + 256 * 1024;
+    let streamedBytes = 0;
+
+    const server = createServer((_request, res) => {
+      const chunk = Buffer.alloc(64 * 1024, 0x78);
+      res.writeHead(200, { "content-type": "application/json" });
+
+      const writeMore = () => {
+        while (streamedBytes < oversizedPayloadBytes) {
+          if (res.destroyed) {
+            return;
+          }
+          streamedBytes += chunk.byteLength;
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        res.end();
+      };
+
+      writeMore();
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const error = await fetchDiscordGatewayInfo({
+        token: "test",
+        fetchImpl: async () => fetch(`http://127.0.0.1:${port}`),
+      }).catch((err: unknown) => err);
+
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const resolved = resolveGatewayInfoWithFallback({ runtime, error });
+
+      expect(resolved.usedFallback).toBe(true);
+      expect(resolved.info.url).toBe("wss://gateway.discord.gg/");
+      const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(logs).toMatch(
+        new RegExp(
+          `Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
+        ),
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
