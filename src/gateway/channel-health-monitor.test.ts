@@ -588,6 +588,95 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("caps pending recovery restarts at the configured maxRestartsPerHour with one completion pass", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    let callCount = 0;
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          callCount++;
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 2,
+    });
+
+    // Run enough checks to trigger pending restarts beyond the limit
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    // Without the fix, pending restarts bypass maxRestartsPerHour
+    // and startChannel would be called many times (one per check tick).
+    // With the fix, pending restarts count toward the hourly limit,
+    // but the pending recovery that consumed the last slot gets one
+    // completion pass to finish. After that, further calls are blocked.
+    expect(callCount).toBe(3);
+
+    monitor.stop();
+  });
+
+  it("grants one completion pass for a pending recovery that consumed the last hourly slot", async () => {
+    const checkIntervalMs = 1_000;
+    const advanceTick = () => vi.advanceTimersByTimeAsync(checkIntervalMs);
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    let callCount = 0;
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          callCount++;
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 2,
+    });
+
+    // Tick 1: normal restart — first restart uses slot 1
+    await advanceTick();
+    expect(callCount).toBe(1);
+
+    // Tick 2: pending continuation — second restart uses slot 2 (last slot)
+    await advanceTick();
+    expect(callCount).toBe(2);
+
+    // Tick 3: pending continuation — hourly cap hit (2 >= 2), but the
+    // pending recovery that consumed slot 2 gets one completion pass.
+    // No new restart record is created.
+    await advanceTick();
+    expect(callCount).toBe(3);
+
+    // Tick 4+: pending continuation — completion pass already used,
+    // blocked by hourly cap.
+    for (let i = 0; i < 5; i++) {
+      await advanceTick();
+    }
+    expect(callCount).toBe(3);
+
+    monitor.stop();
+  });
+
   it("counts failed restart attempts toward cooldown and hourly caps", async () => {
     const manager = createSnapshotManager(
       {
@@ -873,5 +962,70 @@ describe("channel-health-monitor", () => {
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
     });
+  });
+
+  it("resets completion-pass flag when pruning reopens hourly budget", async () => {
+    const account = disconnectedAccount(Date.now() - 300_000);
+    let callCount = 0;
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          callCount++;
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      cooldownCycles: 0,
+      maxRestartsPerHour: 2,
+    });
+
+    // Phase 1: exhaust the hourly budget (2 slots + 1 completion pass = 3 calls)
+    await vi.advanceTimersByTimeAsync(350);
+    expect(callCount).toBe(3);
+
+    // Phase 2: more checks should all be blocked by cap
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(callCount).toBe(3);
+
+    // Phase 3: advance time to just before the 1-hour prune point.
+    // First restart record at ~100ms, current total = 850ms.
+    // Advance by 3,599,150 → total = 3,600,000 (both records still < 1 hour).
+    await vi.advanceTimersByTimeAsync(3_599_150);
+
+    // The cap is still active — no new calls during the advance.
+    expect(callCount).toBe(3);
+
+    // Phase 4: advance by 100ms → total = 3,600,100.
+    // Record at 100ms is now >1 hour old, pruned. completionPassAllowed reset.
+    await vi.advanceTimersByTimeAsync(100);
+    // With fix: callCount = 4 (first post-rollover budget slot).
+    // Without fix: callCount stays 3 (completionPassAllowed still true, blocked).
+    expect(callCount).toBe(4);
+
+    // Advance by 100ms → total = 3,600,200. Record at 200ms also pruned.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callCount).toBe(5); // second budget slot consumed
+
+    // Phase 5: advance by 100ms → total = 3,600,300. Cap hit in new window.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callCount).toBe(6); // completion pass for the new window
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(callCount).toBe(6); // blocked again
+
+    monitor.stop();
   });
 });

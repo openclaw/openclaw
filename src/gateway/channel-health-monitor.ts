@@ -51,6 +51,9 @@ export type ChannelHealthMonitor = {
 type RestartRecord = {
   lastRestartAt: number;
   restartsThisHour: { at: number }[];
+  /** Whether a completion pass was granted for a pending recovery at the hourly
+   *  cap. Reset to false when a new restart record is pushed. */
+  completionPassAllowed?: boolean;
 };
 
 function resolveTimingPolicy(
@@ -86,8 +89,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
 
-  function pruneOldRestarts(record: RestartRecord, now: number) {
+  function pruneOldRestarts(record: RestartRecord, now: number, maxRestarts: number) {
+    const before = record.restartsThisHour.length;
     record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
+    // If pruning old entries reopens budget capacity, reset the completion-pass
+    // flag so the next pending restart can retry within the fresh window.
+    if (
+      record.completionPassAllowed &&
+      before >= maxRestarts &&
+      record.restartsThisHour.length < maxRestarts
+    ) {
+      record.completionPassAllowed = false;
+    }
   }
 
   async function runCheckWork() {
@@ -167,21 +180,30 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
-          pruneOldRestarts(record, now);
-          if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
-            log.warn?.(
-              `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
-            );
-            continue;
+          pruneOldRestarts(record, now, maxRestartsPerHour);
+          // Pending restarts count toward the per-hour budget to prevent
+          // infinite restart loops when a channel is permanently stuck pending.
+          // But a pending recovery that consumed the last slot gets one
+          // completion pass to finish without recording a new restart entry.
+          if (record.restartsThisHour.length >= maxRestartsPerHour) {
+            if (continuingPendingRestart && !record.completionPassAllowed) {
+              record.completionPassAllowed = true;
+            } else {
+              log.warn?.(
+                `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
+              );
+              continue;
+            }
           }
 
           const reason = resolveChannelRestartReason(status, health);
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          if (!continuingPendingRestart) {
+          if (!record.completionPassAllowed) {
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
+            record.completionPassAllowed = false;
             restartRecords.set(key, record);
           }
 
