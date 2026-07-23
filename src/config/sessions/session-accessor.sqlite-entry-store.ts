@@ -361,7 +361,7 @@ export function deleteSqliteSessionEntryRows(
 }
 
 /** Remove the logical entry while retaining its node-owned transcript windows. */
-export function clearSqliteSessionEntryPreservingWindows(
+function clearSqliteSessionEntryPreservingWindows(
   database: OpenClawAgentDatabase,
   params: { sessionId: string; sessionKey: string; updatedAt: number },
 ): void {
