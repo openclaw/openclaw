@@ -99,6 +99,11 @@ async function withGoogleChatResponse<T>(params: {
     }
     return await handleResponse(response);
   } finally {
+    // fetchOk (status-only) leaves the body unread. JSON/buffer handlers set
+    // bodyUsed first. release() does not cancel streams.
+    if (!response.bodyUsed) {
+      await response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }
