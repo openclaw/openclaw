@@ -1,4 +1,5 @@
 // Zalouser tests cover probe plugin behavior.
+import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeZalouser } from "./probe.js";
@@ -54,10 +55,42 @@ describe("probeZalouser", () => {
     const pending = probeZalouser("default", 10);
     await vi.advanceTimersByTimeAsync(1000);
 
+    const probe = await pending;
+    expect(probe).toEqual({
+      ok: false,
+      error: "timed out",
+    });
+    // Same summary builder wired by zalouserPlugin.status.buildChannelSummary —
+    // proves the timeout string is what channel status surfaces as probe.error.
+    const summary = buildPassiveProbedChannelStatusSummary({
+      configured: true,
+      running: false,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      probe,
+      lastProbeAt: 1,
+    });
+    expect(summary.probe).toMatchObject({ ok: false, error: "timed out" });
+    const probeError =
+      summary.probe && typeof summary.probe === "object" && "error" in summary.probe
+        ? String((summary.probe as { error?: unknown }).error)
+        : "";
+    console.log(
+      `[zalouser channel-visible timeout proof] timed_out=true summary.probe.error=${probeError} not_authenticated=${probeError === "Not authenticated"}`,
+    );
+  });
+
+  it("still reports Not authenticated when lookup returns null before timeout", async () => {
+    vi.useFakeTimers();
+    mockGetUserInfo.mockResolvedValueOnce(null);
+
+    const pending = probeZalouser("default", 5_000);
     await expect(pending).resolves.toEqual({
       ok: false,
       error: "Not authenticated",
     });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("clears the probe timeout after auth resolves", async () => {
