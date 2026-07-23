@@ -337,7 +337,12 @@ export async function hasTailscaleFunnelRouteForPort(
   } catch {
     return false;
   }
-  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  } catch {
+    return false;
+  }
   return tailscaleFunnelStatusCoversPort(parsed, port);
 }
 
