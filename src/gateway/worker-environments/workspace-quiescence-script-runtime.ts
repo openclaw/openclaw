@@ -135,7 +135,7 @@ async function recoverProcessReferences(references, concurrency = ${REMOTE_QUIES
 }
 function processStatus(pid) {
   try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim();
+    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000, killSignal: "SIGKILL" }).trim();
     const match = /^(\S+)\s+(.+)$/u.exec(output);
     return match ? { state: match[1], start: match[2] } : null;
   } catch (error) {
@@ -187,36 +187,43 @@ function parseLease(raw, expectedNonce, options = {}) {
   }
   return lease;
 }
-function leaseMutationProcessStartTime(pid) {
-  if (process.platform !== "linux") return null;
-  try {
-    const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8"); const commEndIndex = stat.lastIndexOf(")");
-    if (commEndIndex < 0) return null;
-    const starttime = Number(stat.slice(commEndIndex + 1).trimStart().split(/\s+/)[19]);
-    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
-  } catch { return null; }
+function leaseMutationOwnerStatus(pid) {
+  const status = processStatus(pid);
+  if (status === null) return null;
+  return {
+    state: status.state,
+    identity: crypto.createHash("sha256").update(status.start).digest("hex"),
+  };
+}
+function leaseMutationSelfIdentity() {
+  if (typeof leaseMutationSelfIdentity.value === "string") return leaseMutationSelfIdentity.value;
+  const status = leaseMutationOwnerStatus(process.pid);
+  if (status === null) {
+    throw new Error("workspace quiescence lease mutation owner identity was not observable");
+  }
+  leaseMutationSelfIdentity.value = status.identity;
+  return status.identity;
 }
 function leaseMutationOwnerDefinitelyStale(owner) {
   if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid < 1) return false;
-  if (Number.isSafeInteger(owner.starttime) && owner.starttime >= 0) {
-    const currentStarttime = leaseMutationProcessStartTime(owner.pid);
-    if (currentStarttime !== null && currentStarttime !== owner.starttime) return true;
+  let status;
+  try { status = leaseMutationOwnerStatus(owner.pid); } catch { return false; }
+  if (status === null) {
+    // A failed status probe is not proof of PID reuse; only reclaim when absence is observable.
+    try { process.kill(owner.pid, 0); } catch (error) { return Boolean(error && error.code === "ESRCH"); }
+    return false;
   }
-  try { process.kill(owner.pid, 0); } catch (error) { return Boolean(error && error.code === "ESRCH"); }
-  if (process.platform === "linux") {
-    try { return /^State:\s+Z/m.test(fs.readFileSync("/proc/" + owner.pid + "/status", "utf8")); } catch {}
-  }
-  return false;
+  if (status.state.startsWith("Z") || status.state.startsWith("X")) return true;
+  return status.identity !== owner.identity;
 }
-// The owner identity is atomic directory-entry metadata, so a crash cannot publish partial JSON.
+// The canonical process start identity is encoded in atomic directory-entry metadata.
 function leaseMutationOwnerName(owner) {
-  return "owner." + owner.pid + "." + (owner.starttime ?? "x") + "." + owner.token;
+  return "owner." + owner.pid + "." + owner.identity + "." + owner.token;
 }
 function parseLeaseMutationOwnerName(name) {
-  const match = /^owner\.(\d+)\.(x|\d+)\.([a-f0-9]{32})$/.exec(name);
+  const match = /^owner\.(\d+)\.([a-f0-9]{64})\.([a-f0-9]{32})$/.exec(name);
   if (!match) return null;
-  const owner = { pid: Number(match[1]), token: match[3] };
-  if (match[2] !== "x") owner.starttime = Number(match[2]);
+  const owner = { pid: Number(match[1]), identity: match[2], token: match[3] };
   return Number.isSafeInteger(owner.pid) && owner.pid > 0 ? owner : null;
 }
 function leaseMutationDirectoryOwners(lockPath) {
@@ -267,9 +274,7 @@ function leaseMutationTimeout() {
 function acquireLeaseMutation(targetPath, timeoutMs = ${REMOTE_QUIESCENCE_LEASE_LOCK_TIMEOUT_MS}) {
   const lockPath = targetPath + ".lock";
   const token = crypto.randomBytes(16).toString("hex");
-  const owner = { pid: process.pid, token };
-  const starttime = leaseMutationProcessStartTime(process.pid);
-  if (starttime !== null) owner.starttime = starttime;
+  const owner = { pid: process.pid, identity: leaseMutationSelfIdentity(), token };
   const ownerName = leaseMutationOwnerName(owner);
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   const deadlineMs = Date.now() + timeoutMs;
@@ -310,4 +315,5 @@ function persistLeaseLocked(targetPath, lease, verifyCurrent) {
 }
 function persistLease(targetPath, lease, verifyCurrent) {
   return withLeaseMutation(targetPath, () => persistLeaseLocked(targetPath, lease, verifyCurrent));
-}`;
+}
+leaseMutationSelfIdentity();`;

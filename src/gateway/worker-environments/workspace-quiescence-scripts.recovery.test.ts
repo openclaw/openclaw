@@ -32,6 +32,7 @@ async function fixture() {
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
+    bin,
     home,
     workspace,
     probeSlots,
@@ -130,7 +131,7 @@ describe("remote workspace quiescence lease ownership", () => {
       process.execPath,
       [
         "-e",
-        'const fs = require("node:fs"); const target = process.argv[1]; let starttime = "x"; if (process.platform === "linux") { const stat = fs.readFileSync("/proc/" + process.pid + "/stat", "utf8"); const end = stat.lastIndexOf(")"); starttime = String(Number(stat.slice(end + 1).trimStart().split(/\\s+/)[19])); } fs.mkdirSync(target, { mode: 0o700 }); fs.closeSync(fs.openSync(target + "/owner." + process.pid + "." + starttime + "." + "d".repeat(32), "wx", 0o600)); setInterval(() => {}, 1000);',
+        'const childProcess = require("node:child_process"); const crypto = require("node:crypto"); const fs = require("node:fs"); const target = process.argv[1]; const start = childProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim(); const identity = crypto.createHash("sha256").update(start).digest("hex"); fs.mkdirSync(target, { mode: 0o700 }); fs.closeSync(fs.openSync(target + "/owner." + process.pid + "." + identity + "." + "d".repeat(32), "wx", 0o600)); setInterval(() => {}, 1000);',
         lockPath,
       ],
       { stdio: "ignore" },
@@ -163,6 +164,118 @@ describe("remote workspace quiescence lease ownership", () => {
     } finally {
       lockHolder.kill("SIGKILL");
       await terminate(child);
+      try {
+        process.kill(lease.watchdog.pid, "SIGKILL");
+      } catch {}
+    }
+  }, 15_000);
+
+  it("reclaims a lease mutation lock after its owner PID is reused", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      watchdog: { pid: number; start: string };
+    };
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const lockOwner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const childPid = child.pid!;
+    const lockOwnerPid = lockOwner.pid!;
+    const lockPath = `${leaseFile}.lock`;
+    try {
+      const entry = { pid: childPid, start: await processStart(childPid) };
+      process.kill(childPid, "SIGSTOP");
+      await expectProcessState(childPid, true);
+      await fs.writeFile(
+        leaseFile,
+        JSON.stringify({
+          ...lease,
+          version: 1,
+          nonce,
+          expiresAtMs: Date.now() + 10_000,
+          processes: [entry],
+        }),
+      );
+      await fs.mkdir(lockPath, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(lockPath, `owner.${lockOwnerPid}.${"0".repeat(64)}.${"e".repeat(32)}`),
+        "",
+        { mode: 0o600 },
+      );
+
+      await resume(input, nonce);
+
+      await expectProcessState(childPid, false);
+      await expect(fs.access(leaseFile)).rejects.toThrow();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+      expect(lockOwner.exitCode).toBeNull();
+    } finally {
+      await terminate(lockOwner);
+      await terminate(child);
+      try {
+        process.kill(lease.watchdog.pid, "SIGKILL");
+      } catch {}
+    }
+  }, 15_000);
+
+  it("preserves a live lease mutation lock when owner status cannot be observed", async () => {
+    const input = await fixture();
+    const nonce = await quiesce(input);
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      watchdog: { pid: number; start: string };
+    };
+    const lockOwner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const lockOwnerPid = lockOwner.pid!;
+    const lockPath = `${leaseFile}.lock`;
+    try {
+      const identity = createHash("sha256")
+        .update(await processStart(lockOwnerPid))
+        .digest("hex");
+      await fs.writeFile(
+        leaseFile,
+        JSON.stringify({
+          ...lease,
+          version: 1,
+          nonce,
+          expiresAtMs: Date.now() + 60_000,
+          processes: [],
+        }),
+      );
+      await fs.mkdir(lockPath, { mode: 0o700 });
+      await fs.writeFile(
+        path.join(lockPath, `owner.${lockOwnerPid}.${identity}.${"f".repeat(32)}`),
+        "",
+        { mode: 0o600 },
+      );
+      await fs.writeFile(
+        path.join(input.bin, "ps"),
+        '#!/bin/sh\ncase "$*" in *"stat=,lstart= -p $OPENCLAW_TEST_PS_STALL_PID"*) exec sleep 10 ;; esac\nexec /bin/ps "$@"\n',
+      );
+
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", REMOTE_WORKSPACE_RESUME_JS, input.workspace, nonce],
+        {
+          timeoutMs: 12_000,
+          baseEnv: {
+            ...input.env,
+            OPENCLAW_TEST_PS_STALL_PID: String(lockOwnerPid),
+          },
+        },
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("workspace quiescence lease update timed out");
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      expect(lockOwner.exitCode).toBeNull();
+    } finally {
+      await terminate(lockOwner);
       try {
         process.kill(lease.watchdog.pid, "SIGKILL");
       } catch {}
