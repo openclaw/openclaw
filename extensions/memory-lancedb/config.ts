@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 export type MemoryConfig = {
   embedding: {
@@ -31,8 +32,7 @@ export const DEFAULT_RECALL_MAX_CHARS = 1000;
 const LEGACY_STATE_DIRS: string[] = [];
 
 function resolveDefaultDbPath(): string {
-  const home = homedir();
-  const preferred = join(home, ".openclaw", "memory", "lancedb");
+  const preferred = join(resolveStateDir(), "memory", "lancedb");
   try {
     if (fs.existsSync(preferred)) {
       return preferred;
@@ -42,7 +42,7 @@ function resolveDefaultDbPath(): string {
   }
 
   for (const legacy of LEGACY_STATE_DIRS) {
-    const candidate = join(home, legacy, "memory", "lancedb");
+    const candidate = join(homedir(), legacy, "memory", "lancedb");
     try {
       if (fs.existsSync(candidate)) {
         return candidate;

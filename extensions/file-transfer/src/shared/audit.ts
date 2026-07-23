@@ -9,9 +9,9 @@
 // file as sensitive.
 
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 export type FileTransferAuditOp = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
 
@@ -53,7 +53,7 @@ async function ensureAuditDir(): Promise<string> {
     return auditDirPromise;
   }
   const promise = (async () => {
-    const dir = path.join(os.homedir(), ".openclaw", "audit");
+    const dir = path.join(resolveStateDir(), "audit");
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     return dir;
   })();
