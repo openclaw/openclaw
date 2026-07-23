@@ -64,4 +64,9 @@ describe("redactSensitiveText token ordering", () => {
     expect(output).not.toContain(token);
     expect(output).not.toContain("_tailtail");
   });
+
+  it("does not mask AWS-shaped chunks inside longer base64-like payloads", () => {
+    const payload = "Ab9+".repeat(512);
+    expect(redactSensitiveText(`payload ${payload}`, { mode: "tools" })).toBe(`payload ${payload}`);
+  });
 });

@@ -1376,6 +1376,10 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(dataUrlWithPlusBoundary, { mode: "tools" })).toBe(
       dataUrlWithPlusBoundary,
     );
+    const dataUrlWithAwsShapedPayload = `data:application/octet-stream;base64,${"Ab9+".repeat(10)}`;
+    expect(redactSensitiveText(dataUrlWithAwsShapedPayload, { mode: "tools" })).toBe(
+      dataUrlWithAwsShapedPayload,
+    );
     expect(redactSensitiveText("aws AKIA_ID=AKIAABCDEFGHIJKLMNOP", { mode: "tools" })).toBe(
       "aws AKIA_ID=AKIAAB…MNOP",
     );
