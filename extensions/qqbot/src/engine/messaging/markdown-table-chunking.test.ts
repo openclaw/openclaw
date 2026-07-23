@@ -260,11 +260,141 @@ describe("chunkQQBotMarkdownText", () => {
       "后置说明第二段。",
     ].join("\n");
 
+    // Front prose merges with the table (both fit under 3600 bytes), and the
+    // trailing prose becomes its own chunk because no table/fence follows it.
     expect(chunkQQBotMarkdownText(text, 180, baseChunker)).toEqual([
-      "前置说明第一段，长度足够触发普通文本先发送。\n前置说明第二段继续解释。",
-      ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n"),
-      "后置说明第一段，表格结束后继续普通文字。\n后置说明第二段。",
+      [
+        "前置说明第一段，长度足够触发普通文本先发送。",
+        "前置说明第二段继续解释。",
+        "| Id | Value |",
+        "|---:|---|",
+        "| 1 | alpha |",
+        "| 2 | beta |",
+      ].join("\n"),
+      ["后置说明第一段，表格结束后继续普通文字。", "后置说明第二段。"].join("\n"),
     ]);
+  });
+
+  it("merges a short paragraph with a short table when total bytes fit the QQ limit", () => {
+    const paragraph = "Short intro paragraph that wraps the table below.";
+    const tableText = ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n");
+    const text = `${paragraph}\n${tableText}`;
+
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+
+    expect(chunks).toEqual([text]);
+  });
+
+  it("merges a short paragraph with a short fenced block when total bytes fit the QQ limit", () => {
+    const paragraph = "Brief intro before the code block.";
+    const fenceText = ["```ts", "const a = 1;", "const b = 2;", "```"].join("\n");
+    const text = `${paragraph}\n${fenceText}`;
+
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+
+    expect(chunks).toEqual([text]);
+  });
+
+  it("does not merge a paragraph with a table that would push the chunk past 3600 bytes", () => {
+    // A 3000-byte paragraph plus a table whose combined UTF-8 byte length
+    // would exceed the 3600-byte safety limit. The paragraph must therefore
+    // be emitted as its own chunk, separate from the table.
+    const paragraph = "x".repeat(3000);
+    const tableText = ["| Id | Value |", "|---:|---|", `| 1 | ${"y".repeat(1500)} |`].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(`${paragraph}\n${tableText}`, 5000, baseChunker);
+
+    expect(chunks).toContain(paragraph);
+    expect(chunks).toContain(tableText);
+    expect(chunks.find((c) => c.includes(paragraph) && c.includes("| Id |"))).toBeUndefined();
+  });
+
+  it("does not merge a paragraph with a fenced block that would push the chunk past 3600 bytes", () => {
+    const paragraph = "x".repeat(3000);
+    const fenceLine = "y".repeat(1500);
+    const fenceText = ["```ts", fenceLine, "```"].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(`${paragraph}\n${fenceText}`, 5000, baseChunker);
+
+    expect(chunks).toContain(paragraph);
+    expect(chunks).toContain(fenceText);
+    expect(chunks.find((c) => c.includes(paragraph) && c.includes("```ts"))).toBeUndefined();
+  });
+
+  it("emits only prose unchanged when no table or fence is present", () => {
+    const text = "First paragraph line.\nSecond paragraph line.";
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([text]);
+  });
+
+  it("emits only a table unchanged when no surrounding prose exists", () => {
+    const text = ["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n");
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([text]);
+  });
+
+  it("emits only a fenced block unchanged when no surrounding prose exists", () => {
+    const text = ["```ts", "const a = 1;", "```"].join("\n");
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([text]);
+  });
+
+  it("preserves an empty fenced block", () => {
+    const text = ["Intro", "```ts", "```"].join("\n");
+    expect(chunkQQBotMarkdownText(text, 5000, baseChunker)).toEqual([text]);
+  });
+
+  it("keeps pending prose available for a table completed by a later stream block", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["Intro", "| A | B |"].join("\n"), 5000)).toEqual([]);
+    expect(chunker.chunkText(["|---|---|", "| 1 | 2 |"].join("\n"), 5000)).toEqual([
+      ["Intro", "| A | B |", "|---|---|", "| 1 | 2 |"].join("\n"),
+    ]);
+  });
+
+  it("keeps prose before a rejected streamed table header", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["Intro", "| maybe | header |"].join("\n"), 5000)).toEqual([]);
+    expect(chunker.chunkText("plain continuation", 5000)).toEqual([
+      ["Intro", "| maybe | header |", "plain continuation"].join("\n"),
+    ]);
+  });
+
+  it("keeps pending prose available for a fenced block completed by a later stream block", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["Intro", "```ts"].join("\n"), 5000)).toEqual([]);
+    expect(chunker.chunkText(["const a = 1;", "```"].join("\n"), 5000)).toEqual([
+      ["Intro", "```ts", "const a = 1;", "```"].join("\n"),
+    ]);
+  });
+
+  it("keeps oversized empty fenced blocks under the QQ markdown byte safety limit", () => {
+    const text = [`\`\`\`${"x".repeat(4000)}`, "```"].join("\n");
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
+    }
+  });
+
+  it("emits a paragraph with no trailing table or fence inside chunkText itself", () => {
+    // A paragraph that does not border a table or fence must not wait for a
+    // future structural block; it is emitted as its own chunk before chunkText
+    // returns, so flushPendingText has nothing left to flush.
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+    const chunks = chunker.chunkText("Paragraph that ends without any table or fence.", 5000);
+    expect(chunks).toEqual(["Paragraph that ends without any table or fence."]);
+    expect(chunker.flushPendingText(5000)).toEqual([]);
+  });
+
+  it("falls back to the base chunker when a single oversized paragraph exceeds 3600 bytes", () => {
+    const text = "x".repeat(4000);
+    const chunks = chunkQQBotMarkdownText(text, 5000, baseChunker);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
+    }
   });
 });
 
