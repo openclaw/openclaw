@@ -1,3 +1,4 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -21,13 +22,6 @@ export type FeishuReplyDeliveryResult = {
 
 export type FeishuReplyDeliveryResultWithFinalization = FeishuReplyDeliveryResult & {
   finalization: Promise<FeishuReplyDeliveryResult>;
-};
-
-const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
-
-type FeishuPartialReplyDeliveryError = Error & {
-  code: typeof CHANNEL_PARTIAL_DELIVERY_ERROR_CODE;
-  deliveryResult: FeishuReplyDeliveryResult & { visibleReplySent: true };
 };
 
 export const noVisibleFeishuReplyDelivery: FeishuReplyDeliveryResult = {
@@ -98,26 +92,5 @@ export function createFeishuPartialReplyDeliveryError(
   if (result.visibleReplySent !== true) {
     return cause instanceof Error ? cause : new Error(formatErrorMessage(cause), { cause });
   }
-  return Object.assign(new Error(formatErrorMessage(cause), { cause }), {
-    code: CHANNEL_PARTIAL_DELIVERY_ERROR_CODE,
-    deliveryResult: { ...result, visibleReplySent: true as const },
-  });
-}
-
-export function isFeishuPartialReplyDeliveryError(
-  error: unknown,
-): error is FeishuPartialReplyDeliveryError {
-  if (!error || typeof error !== "object" || Array.isArray(error)) {
-    return false;
-  }
-  const candidate = error as { code?: unknown; deliveryResult?: unknown };
-  return (
-    candidate.code === CHANNEL_PARTIAL_DELIVERY_ERROR_CODE &&
-    Boolean(
-      candidate.deliveryResult &&
-      typeof candidate.deliveryResult === "object" &&
-      !Array.isArray(candidate.deliveryResult) &&
-      (candidate.deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === true,
-    )
-  );
+  return createChannelPartialDeliveryError(cause, { ...result, visibleReplySent: true });
 }

@@ -1,7 +1,10 @@
 // Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  isChannelPartialDeliveryError,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatChannelProgressDraftLineForEntry,
@@ -28,7 +31,6 @@ import type { MentionTarget } from "./mention-target.types.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
-  isFeishuPartialReplyDeliveryError,
   mergeFeishuReplyDeliveryResults,
   noVisibleFeishuReplyDelivery,
   type FeishuReplyDeliveryResult,
@@ -853,7 +855,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         results.push(await sendFallbackText(degradedVoiceFallbackText));
       }
     } catch (error: unknown) {
-      const partial = isFeishuPartialReplyDeliveryError(error) ? error.deliveryResult : undefined;
+      const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
       throw createFeishuPartialReplyDeliveryError(
         error,
         mergeFeishuReplyDeliveryResults([...results, ...(partial ? [partial] : [])]),
@@ -1001,7 +1003,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 completion.infoKind,
               );
             } catch (fallbackError: unknown) {
-              const fallbackPartial = isFeishuPartialReplyDeliveryError(fallbackError)
+              const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
                 ? fallbackError.deliveryResult
                 : undefined;
               const fallbackCause =
@@ -1040,7 +1042,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (deliveryError !== undefined) {
               completion.reject(
                 createFeishuPartialReplyDeliveryError(
-                  isFeishuPartialReplyDeliveryError(deliveryError) && deliveryError instanceof Error
+                  isChannelPartialDeliveryError(deliveryError) && deliveryError instanceof Error
                     ? (deliveryError.cause ?? deliveryError)
                     : deliveryError instanceof FeishuStreamingFinalizationError
                       ? (deliveryError.cause ?? deliveryError)
@@ -1121,7 +1123,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           paramsLocal.infoKind,
         )) ?? finalized;
     } catch (fallbackError: unknown) {
-      fallbackPartial = isFeishuPartialReplyDeliveryError(fallbackError)
+      fallbackPartial = isChannelPartialDeliveryError(fallbackError)
         ? fallbackError.deliveryResult
         : undefined;
       const fallbackCause =
@@ -1135,7 +1137,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           )
         : fallbackCause;
     }
-    const mediaPartial = isFeishuPartialReplyDeliveryError(paramsLocal.error)
+    const mediaPartial = isChannelPartialDeliveryError(paramsLocal.error)
       ? paramsLocal.error.deliveryResult
       : undefined;
     const accepted = mergeFeishuReplyDeliveryResults(
@@ -1287,9 +1289,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         try {
           deliveredResults.push(await sendMediaReplies(mediaPayload, mediaOptions));
         } catch (error: unknown) {
-          const partial = isFeishuPartialReplyDeliveryError(error)
-            ? error.deliveryResult
-            : undefined;
+          const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
           const accumulated = mergeFeishuReplyDeliveryResults([
             ...deliveredResults,
             ...(partial ? [partial] : []),
@@ -1462,7 +1462,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       const result = mergeFeishuReplyDeliveryResults(deliveredResults, text);
       if (priorClosedStreamingSettlement?.error !== undefined) {
         throw createFeishuPartialReplyDeliveryError(
-          isFeishuPartialReplyDeliveryError(priorClosedStreamingSettlement.error) &&
+          isChannelPartialDeliveryError(priorClosedStreamingSettlement.error) &&
             priorClosedStreamingSettlement.error instanceof Error
             ? (priorClosedStreamingSettlement.error.cause ?? priorClosedStreamingSettlement.error)
             : priorClosedStreamingSettlement.error,

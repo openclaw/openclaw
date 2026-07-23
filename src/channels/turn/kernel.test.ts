@@ -827,6 +827,65 @@ describe("channel turn kernel", () => {
     });
   });
 
+  it("prefers a later visible partial error across deferred payloads", async () => {
+    let rejectFirst!: (error: unknown) => void;
+    let rejectSecond!: (error: unknown) => void;
+    const firstFinalization = new Promise<never>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    const secondFinalization = new Promise<never>((_resolve, reject) => {
+      rejectSecond = reject;
+    });
+    const firstError = new Error("first finalization failed");
+    const partialError = Object.assign(new Error("second finalization failed"), {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: "accepted second preview",
+        messageIds: ["om-second-preview"],
+        visibleReplySent: true,
+      },
+    });
+    const deliver = vi
+      .fn()
+      .mockResolvedValueOnce({ visibleReplySent: false, finalization: firstFinalization })
+      .mockResolvedValueOnce({ visibleReplySent: false, finalization: secondFinalization });
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      await params.dispatcherOptions.deliver({ text: "first requested" }, { kind: "final" });
+      await params.dispatcherOptions.deliver({ text: "second requested" }, { kind: "final" });
+      rejectFirst(firstError);
+      rejectSecond(partialError);
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 2 } };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "feishu",
+        agentId: "main",
+        routeSessionKey: "agent:main:feishu:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: { observeMessageSent: true, deliver },
+      }),
+    ).rejects.toBe(partialError);
+
+    expect(emitMessageSent).toHaveBeenCalledTimes(2);
+    expect(emitMessageSent).toHaveBeenNthCalledWith(1, {
+      success: false,
+      content: "first requested",
+      error: "first finalization failed",
+      messageId: undefined,
+    });
+    expect(emitMessageSent).toHaveBeenNthCalledWith(2, {
+      success: false,
+      content: "accepted second preview",
+      error: "second finalization failed",
+      messageId: "om-second-preview",
+    });
+  });
+
   it("suppresses message_sent when the adapter proves provider dispatch never began", async () => {
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
       try {
