@@ -336,7 +336,9 @@ test("incognito sessions survive non-default-agent webchat reply initialization"
       sessionKey,
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     closeOpenClawAgentDatabasesForTest();
     dispatchInboundMessageMock.mockClear();

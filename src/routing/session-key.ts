@@ -31,7 +31,7 @@ export { isValidAgentId, normalizeAgentId };
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
-const INCOGNITO_SESSION_RE = /^(?:dashboard|subagent):incognito-[^:]+$/u;
+const INCOGNITO_SESSION_RE = /^(?:dashboard|subagent|internal-session-effects):incognito-[^:]+$/u;
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 function normalizeToken(value: string | undefined | null): string {

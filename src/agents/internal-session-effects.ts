@@ -31,10 +31,17 @@ export function resolveInternalSessionEffectsTarget(params: {
   runId: string;
   storePath: string;
 }): Required<Pick<AgentRunSessionTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">> {
+  const incognito = isIncognitoOpenClawAgentSqlitePath(params.storePath, {
+    agentId: params.agentId,
+  });
   return {
     agentId: params.agentId,
     storePath: params.storePath,
-    ...resolveInternalSessionEffectsIdentity(params),
+    ...resolveInternalSessionEffectsIdentity({
+      agentId: params.agentId,
+      runId: params.runId,
+      ...(incognito ? { incognito: true } : {}),
+    }),
   };
 }
 
