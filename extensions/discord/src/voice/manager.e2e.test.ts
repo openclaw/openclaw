@@ -18,7 +18,7 @@ import {
   requireRecord,
   type TestRealtimeBridgeParams,
   type TestRealtimeSessionEntry,
-} from "./manager.e2e.test-helpers.js";
+} from "./manager.e2e.test-support.js";
 import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 const {

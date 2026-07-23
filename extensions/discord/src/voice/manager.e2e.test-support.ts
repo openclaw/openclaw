@@ -7,7 +7,7 @@ export type MockCallSource = {
   mock: { calls: ArrayLike<ReadonlyArray<unknown>> };
 };
 
-export type TestRealtimeSpeakerTurn = {
+type TestRealtimeSpeakerTurn = {
   close: () => void;
   sendInputAudio: (audio: Buffer) => void;
 };
