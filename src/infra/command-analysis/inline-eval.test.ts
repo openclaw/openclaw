@@ -61,6 +61,26 @@ describe("exec inline eval detection", () => {
     { argv: ["php", "-E", "system('id');"], expected: "php -E" },
     { argv: ["php", "-R", "system('id');"], expected: "php -R" },
     { argv: ["Rscript", "-e", "system('id')"], expected: "rscript -e" },
+    { argv: ["julia", "-e", "run(`id`)"], expected: "julia -e" },
+    { argv: ["julia", "--eval=run(`id`)"], expected: "julia --eval" },
+    { argv: ["julia", "-E", "VERSION"], expected: "julia -E" },
+    { argv: ["elixir", "-e", 'System.cmd("id", [])'], expected: "elixir -e" },
+    { argv: ["elixir", '--eval=System.cmd("id", [])'], expected: "elixir --eval" },
+    { argv: ["guile", "-c", '(system "id")'], expected: "guile -c" },
+    { argv: ["groovy", "-e", '"id".execute()'], expected: "groovy -e" },
+    { argv: ["scala", "-e", 'sys.process.Process("id").!'], expected: "scala -e" },
+    { argv: ["clojure", "-e", '(clojure.java.shell/sh "id")'], expected: "clojure -e" },
+    { argv: ["clj", "--eval", "(println 1)"], expected: "clj --eval" },
+    { argv: ["raku", "-e", "run 'id'"], expected: "raku -e" },
+    { argv: ["perl6", "-e", "run 'id'"], expected: "perl6 -e" },
+    { argv: ["ghc", "-e", 'System.Process.system "id"'], expected: "ghc -e" },
+    { argv: ["ghci", "-e", 'System.Process.system "id"'], expected: "ghci -e" },
+    { argv: ["erl", "-eval", 'os:cmd("id").'], expected: "erl -eval" },
+    { argv: ["werl", "-eval", 'os:cmd("id").'], expected: "werl -eval" },
+    { argv: ["gdb", "-ex", "shell id", "-ex", "quit"], expected: "gdb -ex" },
+    { argv: ["gdb", "-ex=shell id", "-ex", "quit"], expected: "gdb -ex" },
+    { argv: ["gdb", "--eval-command=shell id"], expected: "gdb --eval-command" },
+    { argv: ["expect", "-c", "spawn id"], expected: "expect -c" },
     { argv: ["lua", "-eprint(1)"], expected: "lua -e" },
     { argv: ["osascript", "-e", "beep"], expected: "osascript -e" },
     { argv: ["osascript", '-edisplay alert "hi"'], expected: "osascript -e" },
@@ -121,6 +141,29 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["perl", "-0xFFpe", "say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["Rscript", "script.R"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["julia", "script.jl"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["julia", "-EVERSION"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["elixir", "script.exs"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["elixir", "-eIO.puts(1)"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["guile", "script.scm"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["guile", "-c(display 1)"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["groovy", "script.groovy"])).toBeNull();
+    expect(
+      detectInterpreterInlineEvalArgv(["groovy", "-encoding", "UTF-8", "script.groovy"]),
+    ).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["scala", "script.scala"])).toBeNull();
+    expect(
+      detectInterpreterInlineEvalArgv(["scala", "-encoding", "UTF-8", "script.scala"]),
+    ).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["clojure", "-M", "-m", "app.main"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["clojure", "-e(println 1)"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["raku", "script.raku"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["raku", "-e say 1"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["ghc", "Main.hs"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["ghc", "-exclude-module", "Debug.Trace"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["erl", "-noshell", "-s", "init", "stop"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["gdb", "--command=commands.gdb"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["expect", "script.exp"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["awk", "-f", "script.awk", "data.csv"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-name", "*.ts"])).toBeNull();
@@ -142,6 +185,19 @@ describe("exec inline eval detection", () => {
     expect(isInterpreterLikeAllowlistPattern("pypy3.10")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/node")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("Rscript")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("/opt/bin/julia")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("**/elixir")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("guile3.0")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("/usr/bin/groovy")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("scala")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("clojure.exe")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("**/clj")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("raku")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("perl6")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("ghci")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("erl")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("gdb")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("expect")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("r2")).toBe(false);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/awk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/gawk")).toBe(true);

@@ -1574,6 +1574,98 @@ $0 \\"$1\\"" touch {marker}`,
     ).toBe(true);
   });
 
+  it.each([
+    {
+      executable: "julia",
+      first: "julia -e 'println(1)'",
+      second: "julia -e 'run(`id > {marker}`)'",
+    },
+    {
+      executable: "elixir",
+      first: "elixir -e 'IO.puts(:ok)'",
+      second: 'elixir -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
+    },
+    {
+      executable: "guile",
+      first: "guile -c '(display 1)'",
+      second: "guile -c '(system \"id > {marker}\")'",
+    },
+    {
+      executable: "groovy",
+      first: "groovy -e 'println 1'",
+      second: "groovy -e '\"sh -c id > {marker}\".execute()'",
+    },
+    {
+      executable: "scala",
+      first: "scala -e 'println(1)'",
+      second: "scala -e 'sys.process.Process(\"sh -c id > {marker}\").!'",
+    },
+    {
+      executable: "clojure",
+      first: "clojure -e '(println 1)'",
+      second: 'clojure -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',
+    },
+    {
+      executable: "clj",
+      first: "clj -e '(println 1)'",
+      second: 'clj -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',
+    },
+    {
+      executable: "raku",
+      first: "raku -e 'say 1'",
+      second: 'raku -e \'run "sh", "-c", "id > {marker}"\'',
+    },
+    {
+      executable: "perl6",
+      first: "perl6 -e 'say 1'",
+      second: 'perl6 -e \'run "sh", "-c", "id > {marker}"\'',
+    },
+    {
+      executable: "ghc",
+      first: "ghc -e '1 + 1'",
+      second: "ghc -e 'System.Process.system \"id > {marker}\"'",
+    },
+    {
+      executable: "ghci",
+      first: "ghci -e '1 + 1'",
+      second: "ghci -e 'System.Process.system \"id > {marker}\"'",
+    },
+    {
+      executable: "erl",
+      first: "erl -eval 'erlang:display(ok).' -noshell -s init stop",
+      second: "erl -eval 'os:cmd(\"id > {marker}\").' -noshell -s init stop",
+    },
+    {
+      executable: "gdb",
+      first: "gdb -ex 'print 1' -ex quit",
+      second: "gdb -ex 'shell id > {marker}' -ex quit",
+    },
+    {
+      executable: "expect",
+      first: "expect -c 'puts ok'",
+      second: "expect -c 'exec sh -c \"id > {marker}\"'",
+    },
+  ] as const)(
+    "prevents allow-always bypass for additional inline-eval interpreter: $executable",
+    async ({ executable, first, second }) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeTempDir();
+      makeExecutable(dir, executable);
+      const env = makePathEnv(dir);
+      const marker = path.join(dir, `${executable}-marker`);
+
+      await expectAllowAlwaysBypassBlocked({
+        dir,
+        firstCommand: first,
+        secondCommand: second.replace("{marker}", marker),
+        env,
+        persistedPattern: null,
+      });
+    },
+  );
+
   it("prevents allow-always bypass for shell-carried awk interpreters", async () => {
     if (process.platform === "win32") {
       return;

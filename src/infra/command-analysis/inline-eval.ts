@@ -20,6 +20,8 @@ type InterpreterFlagSpec = {
   exactFlags: ReadonlySet<string>;
   rawExactFlags?: ReadonlyMap<string, string>;
   rawPrefixFlags?: readonly PrefixFlagSpec[];
+  joinedExactFlags?: ReadonlySet<string>;
+  joinedRawExactFlags?: ReadonlyMap<string, string>;
   prefixFlags?: readonly PrefixFlagSpec[];
   shortClusterFlags?: readonly ShortClusterFlagSpec[];
   scanPastDoubleDash?: boolean;
@@ -161,6 +163,27 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     ]),
   },
   { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
+  {
+    names: ["julia"],
+    exactFlags: new Set(["-e", "--eval", "--print"]),
+    rawExactFlags: new Map([["-E", "-E"]]),
+    joinedExactFlags: new Set(),
+    joinedRawExactFlags: new Map(),
+  },
+  { names: ["elixir"], exactFlags: new Set(["-e", "--eval"]), joinedExactFlags: new Set() },
+  { names: ["guile"], exactFlags: new Set(["-c"]), joinedExactFlags: new Set() },
+  { names: ["groovy"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  { names: ["scala"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  { names: ["clojure", "clj"], exactFlags: new Set(["-e", "--eval"]), joinedExactFlags: new Set() },
+  { names: ["raku", "perl6"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  { names: ["ghc", "ghci"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  { names: ["erl", "werl"], exactFlags: new Set(["-eval"]) },
+  {
+    names: ["gdb"],
+    exactFlags: new Set(["-ex", "--eval-command"]),
+    prefixFlags: [{ label: "-ex", prefix: "-ex=" }],
+  },
+  { names: ["expect"], exactFlags: new Set(["-c"]), joinedExactFlags: new Set() },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
@@ -329,8 +352,9 @@ function matchJoinedExactFlag(
       if (lower.startsWith(prefix) && lower.length > prefix.length) {
         return flag;
       }
-      continue;
     }
+  }
+  for (const flag of spec.joinedExactFlags ?? spec.exactFlags) {
     if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
       return normalizeLowercaseStringOrEmpty(flag);
     }
@@ -339,7 +363,7 @@ function matchJoinedExactFlag(
 }
 
 function matchJoinedRawExactFlag(spec: InterpreterFlagSpec, token: string): string | null {
-  for (const [flag, label] of spec.rawExactFlags ?? []) {
+  for (const [flag, label] of spec.joinedRawExactFlags ?? spec.rawExactFlags ?? []) {
     if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
       return label;
     }
