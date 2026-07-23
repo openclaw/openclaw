@@ -55,9 +55,12 @@ export async function readInputFiles(
   files: string[],
 ): Promise<Array<{ path: string; buffer: Buffer }>> {
   return await Promise.all(
-    files.map(async (filePath) => ({
-      path: path.resolve(filePath),
-      buffer: await fs.readFile(path.resolve(filePath)),
-    })),
+    files.map(async (filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      return {
+        path: resolvedPath,
+        buffer: await fs.readFile(resolvedPath),
+      };
+    }),
   );
 }
