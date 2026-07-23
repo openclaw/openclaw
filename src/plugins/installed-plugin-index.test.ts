@@ -1,8 +1,10 @@
 // Covers installed plugin index read, write, and policy behavior.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "./discovery.js";
+import { safeHashFile } from "./installed-plugin-index-hash.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
@@ -17,6 +19,7 @@ import {
 } from "./installed-plugin-index.js";
 import { recordPluginInstall } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -1148,6 +1151,25 @@ describe("installed plugin index", () => {
       })),
     };
     expect(diffInstalledPluginIndexInvalidationReasons(current, moved)).toContain("source-changed");
+  });
+
+  it("stream-hashes oversized files through EOF using a bounded buffer", () => {
+    const dir = makeTempDir();
+    const filePath = path.join(dir, "large-asset.bin");
+    const writeChunk = Buffer.alloc(65536, 0xab);
+    const totalChunks = Math.ceil((50 * 1024 * 1024 + 1) / 65536);
+    const fullHash = crypto.createHash("sha256");
+    const fd = fs.openSync(filePath, "w");
+    for (let i = 0; i < totalChunks; i++) {
+      fs.writeSync(fd, writeChunk);
+      fullHash.update(writeChunk);
+    }
+    fs.closeSync(fd);
+    const expectedHash = fullHash.digest("hex");
+    const diagnostics: PluginDiagnostic[] = [];
+    const hash = safeHashFile({ filePath, pluginId: "test-plugin", diagnostics, required: true });
+    expect(hash).toBe(expectedHash);
+    expect(diagnostics).toStrictEqual([]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
