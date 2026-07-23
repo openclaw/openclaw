@@ -68,7 +68,7 @@ export function resolvePlannedSegmentArgv(segment: ExecCommandSegment): string[]
   const argv = [...baseArgv];
   const execution = segment.resolution?.execution;
   const resolvedExecutable =
-    execution?.resolvedRealPath?.trim() ?? execution?.resolvedPath?.trim() ?? "";
+    execution?.resolvedRealPath?.trim() || execution?.resolvedPath?.trim() || "";
   if (resolvedExecutable) {
     argv[0] = resolvedExecutable;
   }
