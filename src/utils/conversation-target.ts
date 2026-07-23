@@ -22,7 +22,7 @@ export function normalizeConversationTargetParams(params: ConversationTargetPara
 } {
   const channel =
     typeof params.channel === "string"
-      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
+      ? (normalizeMessageChannel(params.channel) ?? normalizeOptionalString(params.channel))
       : undefined;
   const conversationId = normalizeConversationId(params.conversationId);
   const parentConversationId = normalizeConversationId(params.parentConversationId);
