@@ -292,6 +292,46 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(pane.sessionSuggestionRole).toBe("owner");
   });
 
+  it("drops a resolve completion after the same session key rotates instances", async () => {
+    const response = createDeferred<{ suggestion: SessionSuggestion }>();
+    const client = {
+      request: vi.fn(() => response.promise),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const session = (sessionId: string): GatewaySessionRow =>
+      ({
+        key: state.sessionKey,
+        kind: "direct",
+        sessionId,
+        updatedAt: 1,
+        visibility: "suggest",
+        sharingRole: "owner",
+      }) as GatewaySessionRow;
+    const suggestion: SessionSuggestion = {
+      id: "old-instance-resolution",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "owner", label: "Owner" },
+      text: "old instance suggestion",
+      createdAt: 1,
+      state: "pending",
+    };
+    pane.context.gateway.snapshot.selfUser = { id: "owner" } as never;
+    pane.syncSessionSuggestionTarget("main", session("session-a"));
+    pane.sessionSuggestions = [suggestion];
+
+    const resolving = pane.resolveCurrentSessionSuggestion(suggestion, "queue");
+    pane.syncSessionSuggestionTarget("main", session("session-b"));
+    response.resolve({ suggestion: { ...suggestion, state: "accepted" } });
+    await resolving;
+
+    expect(pane.sessionSuggestions).toEqual([]);
+    expect(state.chatError).toBeNull();
+  });
+
   it.each(["draft", "shared"] as const)(
     "loads an owner's pending suggestions after visibility changes to %s",
     async (visibility) => {
@@ -338,7 +378,7 @@ describe("chat pane session suggestion lifecycle", () => {
     },
   );
 
-  it("does not apply an edit failure after switching sessions", async () => {
+  it("does not apply an edit failure after the same session key rotates instances", async () => {
     const deferred = createDeferred<never>();
     const client = {
       request: vi.fn(() => deferred.promise),
@@ -359,9 +399,11 @@ describe("chat pane session suggestion lifecycle", () => {
     state.handleChatDraftChange = (next) => {
       state.chatMessage = next;
     };
+    pane.sessionSuggestionTargetSignature = "main\0agent:main:current\0session-a";
     state.chatMessage = "original";
     const pending = pane.resolveCurrentSessionSuggestion(suggestion, "edit");
-    state.sessionKey = "agent:main:next";
+    pane.sessionSuggestionTargetSignature = "main\0agent:main:current\0session-b";
+    pane.resetSessionSuggestions();
     state.chatMessage = "new session draft";
     deferred.reject(new Error("old request failed"));
 

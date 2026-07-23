@@ -479,7 +479,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     }
     const resolution = params.resolution as SessionSuggestionResolution;
     const dispatching = resolution === "send" || resolution === "queue";
-    if (dispatching) {
+    if (resolution !== "dismiss") {
       const lifecycleError = resolveSessionWorkStartError(target.canonicalKey, target.entry);
       if (lifecycleError) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, lifecycleError));

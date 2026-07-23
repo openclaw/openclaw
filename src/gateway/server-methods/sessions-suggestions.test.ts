@@ -240,7 +240,7 @@ describe("session suggestion handlers", () => {
     });
   });
 
-  it("rejects archived suggestion creation and dispatch while allowing dismiss", async () => {
+  it("rejects archived suggestion creation and non-dismiss resolutions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const archivedKey = "agent:main:archived-suggestions";
       await upsertSessionEntry(
@@ -272,14 +272,14 @@ describe("session suggestion handlers", () => {
       expect(add.responses[0]?.[0]).toBe(false);
       expect(add.responses[0]?.[2]?.message).toMatch(/is archived/);
 
-      for (const resolution of ["send", "queue"] as const) {
-        const dispatched = await call(
+      for (const resolution of ["send", "queue", "edit"] as const) {
+        const resolved = await call(
           "session.suggestions.resolve",
           { sessionKey: archivedKey, id: "archived-suggestion", resolution },
           owner,
         );
-        expect(dispatched.responses[0]?.[0]).toBe(false);
-        expect(dispatched.responses[0]?.[2]?.message).toMatch(/is archived/);
+        expect(resolved.responses[0]?.[0]).toBe(false);
+        expect(resolved.responses[0]?.[2]?.message).toMatch(/is archived/);
       }
       expect(mocks.handleChatSend).not.toHaveBeenCalled();
 

@@ -1012,6 +1012,11 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = scope.state.sessionKey;
+    const targetSignature = this.sessionSuggestionTargetSignature;
+    const isCurrentTarget = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      scope.state.sessionKey === sessionKey &&
+      this.sessionSuggestionTargetSignature === targetSignature;
     const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
     const editOperation = resolution === "edit" ? Symbol() : undefined;
     if (editOperation) {
@@ -1037,7 +1042,7 @@ class ChatPane extends OpenClawLightDomElement {
           ...scopedAgentParamsForSession(scope.state, sessionKey),
         },
       );
-      if (!this.isConnectionScopeCurrent(scope) || scope.state.sessionKey !== sessionKey) {
+      if (!isCurrentTarget()) {
         return;
       }
       if (result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id) {
@@ -1053,7 +1058,7 @@ class ChatPane extends OpenClawLightDomElement {
         );
       }
     } catch (error) {
-      if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
+      if (isCurrentTarget()) {
         if (
           resolution === "edit" &&
           error instanceof GatewayRequestError &&
@@ -1066,11 +1071,13 @@ class ChatPane extends OpenClawLightDomElement {
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
-      if (this.sessionSuggestionEditOperation === editOperation) {
-        this.sessionSuggestionEditOperation = undefined;
+      if (isCurrentTarget()) {
+        if (this.sessionSuggestionEditOperation === editOperation) {
+          this.sessionSuggestionEditOperation = undefined;
+        }
+        this.sessionSuggestionBusyIds.delete(suggestion.id);
+        this.requestUpdate();
       }
-      this.sessionSuggestionBusyIds.delete(suggestion.id);
-      this.requestUpdate();
     }
   }
 
