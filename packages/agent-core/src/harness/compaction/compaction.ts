@@ -117,6 +117,13 @@ function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage
   return getMessageFromEntry(entry);
 }
 
+function isResetReplayableEntry(entry: SessionTreeEntry): boolean {
+  return (
+    entry.type === "message" &&
+    (entry.message.role === "user" || entry.message.role === "assistant")
+  );
+}
+
 /** Generated compaction data ready to be persisted as a compaction entry. */
 export interface CompactionResult<T = unknown> {
   /** Summary text that replaces compacted history in future context. */
@@ -727,6 +734,7 @@ export function prepareCompaction(
   }
 
   let previousSummary: string | undefined;
+  let effectiveEntries = pathEntries;
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
@@ -736,14 +744,28 @@ export function prepareCompaction(
         ? prevBoundary.firstKeptEntryId
         : undefined;
     const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === firstKeptEntryId);
-    boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
+    if (prevBoundary?.type === "reset") {
+      const keptEntries =
+        firstKeptEntryIndex >= 0
+          ? pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex).filter(isResetReplayableEntry)
+          : [];
+      effectiveEntries = [...keptEntries, ...pathEntries.slice(prevBoundaryIndex + 1)];
+      prevBoundaryIndex = -1;
+    } else {
+      boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
+    }
   }
-  const boundaryEnd = pathEntries.length;
+  const boundaryEnd = effectiveEntries.length;
 
   const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-  const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
-  const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
+  const cutPoint = findCutPoint(
+    effectiveEntries,
+    boundaryStart,
+    boundaryEnd,
+    settings.keepRecentTokens,
+  );
+  const firstKeptEntry = effectiveEntries[cutPoint.firstKeptEntryIndex];
   if (!firstKeptEntry?.id) {
     return err(
       new CompactionError(
@@ -757,7 +779,7 @@ export function prepareCompaction(
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [];
   for (let i = boundaryStart; i < historyEnd; i++) {
-    const entry = pathEntries.at(i);
+    const entry = effectiveEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (msg) {
       messagesToSummarize.push(msg);
@@ -766,7 +788,7 @@ export function prepareCompaction(
   const turnPrefixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const entry = pathEntries.at(i);
+      const entry = effectiveEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
@@ -776,7 +798,7 @@ export function prepareCompaction(
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {
     return ok(undefined);
   }
-  const fileOps = extractFileOperations(messagesToSummarize, pathEntries, prevBoundaryIndex);
+  const fileOps = extractFileOperations(messagesToSummarize, effectiveEntries, prevBoundaryIndex);
   if (cutPoint.isSplitTurn) {
     for (const msg of turnPrefixMessages) {
       extractFileOpsFromMessage(msg, fileOps);

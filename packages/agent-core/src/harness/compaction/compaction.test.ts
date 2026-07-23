@@ -252,6 +252,48 @@ describe("session-entry compaction budgeting", () => {
       }),
     ).toEqual({ ok: true, value: undefined });
   });
+
+  it("keeps reset-filtered tool rows out of later compaction input", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
+      createMessageEntry({ role: "user", content: "kept question", timestamp: 2 }, 1),
+      createMessageEntry(
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read",
+          content: [{ type: "text", text: "hidden tool result" }],
+          isError: false,
+          timestamp: 3,
+        },
+        2,
+      ),
+      createMessageEntry(createAssistant("kept answer", createUsage(2), 4), 3),
+      {
+        type: "reset",
+        id: "entry-4",
+        parentId: "entry-3",
+        timestamp: new Date(5).toISOString(),
+        reason: "new",
+        firstKeptEntryId: "entry-1",
+      },
+      createMessageEntry({ role: "user", content: "post reset", timestamp: 6 }, 5),
+      createMessageEntry(createAssistant("new answer", createUsage(2), 7), 6),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected reset transcript to be compactable");
+    }
+    expect(JSON.stringify(result.value.messagesToSummarize)).not.toContain("hidden tool result");
+    expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("hidden tool result");
+  });
 });
 
 describe("generateSummary thinking options", () => {
