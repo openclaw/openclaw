@@ -137,13 +137,13 @@ export function collectAdmissionProtectedSessionIds(params: {
   const db = getSessionKysely(params.database.db);
   const rows = executeSqliteQuerySync(
     params.database.db,
-    db.selectFrom("session_entries").select(["entry_json", "session_id", "session_key"]),
+    db.selectFrom("session_nodes").select(["entry_json", "current_session_id", "session_key"]),
   ).rows;
   for (const row of rows) {
     if (!normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       continue;
     }
-    protectedSessionIds.add(row.session_id);
+    protectedSessionIds.add(row.current_session_id);
     const entry = parseSqliteSessionEntryJson(row);
     if (entry) {
       for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
@@ -156,7 +156,7 @@ export function collectAdmissionProtectedSessionIds(params: {
   // every generation of an admitted key stays off-limits.
   const generationRows = executeSqliteQuerySync(
     params.database.db,
-    db.selectFrom("sessions").select(["session_id", "session_key"]),
+    db.selectFrom("session_windows").select(["session_id", "session_key"]),
   ).rows;
   for (const row of generationRows) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
@@ -174,7 +174,7 @@ function readHistoricalSessionIds(params: {
   return executeSqliteQuerySync(
     params.database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select("session_id")
       .orderBy("updated_at", "asc")
       .orderBy("session_id", "asc"),
@@ -384,7 +384,10 @@ async function enforceSessionHistoryMaintenanceSerialized(
             deleted =
               executeSqliteQuerySync(
                 transactionDb.db,
-                db.selectFrom("sessions").select("session_id").where("session_id", "=", sessionId),
+                db
+                  .selectFrom("session_windows")
+                  .select("session_id")
+                  .where("session_id", "=", sessionId),
               ).rows.length === 0;
           }, toDatabaseOptions(resolved));
           if (!deleted) {

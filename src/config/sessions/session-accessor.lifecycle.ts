@@ -166,7 +166,7 @@ async function applySessionCompactionCheckpointMutation(
 /**
  * Forks checkpoint transcript content and persists a new branch entry in one
  * storage-sized mutation. SQLite adapters implement the transcript row copy
- * and `session_entries.entry_json` insert inside the same write transaction.
+ * and `session_nodes.entry_json` insert inside the same write transaction.
  */
 export async function branchSessionFromCompactionCheckpoint(
   params: BranchSessionFromCompactionCheckpointParams,
@@ -184,7 +184,7 @@ export async function branchSessionFromCompactionCheckpoint(
 /**
  * Forks checkpoint transcript content and replaces the current entry in one
  * storage-sized mutation. SQLite adapters implement the transcript row copy
- * and `session_entries.entry_json` update inside the same write transaction.
+ * and `session_nodes.entry_json` update inside the same write transaction.
  */
 export async function restoreSessionFromCompactionCheckpoint(
   params: RestoreSessionFromCompactionCheckpointParams,

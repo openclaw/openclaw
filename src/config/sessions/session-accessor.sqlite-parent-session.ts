@@ -12,9 +12,10 @@ import type {
   SessionParentForkDecision,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  deleteSqliteLifecycleTargetRows,
+  deleteLegacySessionEntryRows,
   normalizeSqliteLifecycleTarget,
   readSqliteSessionIdentitySnapshot,
+  rehomeSqliteSessionWindows,
   resolveSqliteLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -227,8 +228,17 @@ export async function forkSqliteSessionEntryFromParentTarget(
         sessionId: fork.transcript.sessionId,
       });
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);
-      deleteSqliteLifecycleTargetRows(writeDatabase, sessionTarget);
       writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next);
+      rehomeSqliteSessionWindows(
+        writeDatabase,
+        sessionTarget.canonicalKey,
+        sessionTarget.storeKeys,
+      );
+      deleteLegacySessionEntryRows(
+        writeDatabase,
+        sessionTarget.storeKeys,
+        sessionTarget.canonicalKey,
+      );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
           activeSessionKey: sessionTarget.canonicalKey,
@@ -272,8 +282,17 @@ async function persistSqliteParentForkSkipPatch(params: {
   let currentIdentity = new Map<string, SessionEntry>();
   runOpenClawAgentWriteTransaction((database) => {
     previousIdentity = readSqliteSessionIdentitySnapshot(database, params.sessionTarget.storeKeys);
-    deleteSqliteLifecycleTargetRows(database, params.sessionTarget);
     writeSessionEntry(database, params.sessionTarget.canonicalKey, next);
+    rehomeSqliteSessionWindows(
+      database,
+      params.sessionTarget.canonicalKey,
+      params.sessionTarget.storeKeys,
+    );
+    deleteLegacySessionEntryRows(
+      database,
+      params.sessionTarget.storeKeys,
+      params.sessionTarget.canonicalKey,
+    );
     maintenancePlans.push(
       applySqliteSessionEntryMaintenance(database, {
         activeSessionKey: params.sessionTarget.canonicalKey,

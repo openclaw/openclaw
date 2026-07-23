@@ -422,12 +422,20 @@ describe("session sharing handlers", () => {
         { sessionId: "session-alias-member", updatedAt: 1, visibility: "read-only" },
       );
       const database = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
-      database.db
-        .prepare("UPDATE session_entries SET session_key = ? WHERE session_key = ?")
-        .run(aliasKey, canonicalKey);
+      database.db.exec("PRAGMA foreign_keys = OFF;");
+      try {
+        database.db
+          .prepare("UPDATE session_nodes SET session_key = ? WHERE session_key = ?")
+          .run(aliasKey, canonicalKey);
+        database.db
+          .prepare("UPDATE session_windows SET session_key = ? WHERE session_key = ?")
+          .run(aliasKey, canonicalKey);
+      } finally {
+        database.db.exec("PRAGMA foreign_keys = ON;");
+      }
       expect(
         database.db
-          .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+          .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
           .get(canonicalKey),
       ).toBeUndefined();
       clearSessionStoreCacheForTest();

@@ -32,7 +32,7 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   | "session_transcript_active_events"
-  | "session_transcript_generations"
+  | "transcript_rewrite_watermarks"
   | "session_transcript_index_state"
   | "transcript_event_identities"
   | "transcript_events"
@@ -293,7 +293,7 @@ export function readSessionTranscriptVisibleMessageDelta(
     const generation = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
-        .selectFrom("session_transcript_generations")
+        .selectFrom("transcript_rewrite_watermarks")
         .select("generation")
         .where("session_id", "=", projection.resolved.sessionId),
     )?.generation;

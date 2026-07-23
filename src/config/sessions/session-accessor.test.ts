@@ -48,6 +48,10 @@ import {
   upsertSessionEntry,
 } from "./session-accessor.js";
 import {
+  readSqliteSessionEntryCount,
+  readSqliteSessionEntryKeys,
+} from "./session-accessor.sqlite-entry-store.js";
+import {
   appendSqliteTranscriptEventSync,
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
@@ -137,6 +141,53 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("excludes transcript-only nodes from logical entry counts and keys", async () => {
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:logical-entry", storePath },
+      { sessionId: "logical-entry-session", updatedAt: 10 },
+    );
+    await replaceSqliteTranscriptEvents(
+      {
+        agentId: "main",
+        sessionId: "transcript-only-session",
+        sessionKey: "agent:main:transcript-only",
+        storePath,
+      },
+      [{ type: "session", id: "transcript-only-session" }],
+    );
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "entry count database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+
+    expect(readSqliteSessionEntryCount(database)).toBe(1);
+    expect(readSqliteSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
+  });
+
+  it("retains legacy createdBy actor projections across rewrites", async () => {
+    const sessionKey = "agent:main:created-by";
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      createdBy: { id: "legacy-human" },
+      sessionId: "created-by-session",
+      updatedAt: 10,
+    } as SessionEntry & { createdBy: { id: string } });
+    await upsertSessionEntry({ sessionKey, storePath }, { label: "rewritten" });
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "createdBy database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+
+    expect(
+      database.db
+        .prepare(
+          "SELECT created_actor_type, created_actor_id FROM session_nodes WHERE session_key = ?",
+        )
+        .get(sessionKey),
+    ).toEqual({ created_actor_type: "human", created_actor_id: "legacy-human" });
+  });
+
   it("lists retained transcript instances across same-key session rotation", async () => {
     const scope = {
       agentId: "main",
@@ -223,7 +274,7 @@ describe("session accessor seam", () => {
       path: databasePath,
     });
     database.db
-      .prepare("UPDATE sessions SET transcript_updated_at = NULL WHERE session_id = ?")
+      .prepare("UPDATE session_windows SET transcript_updated_at = NULL WHERE session_id = ?")
       .run(scope.sessionId);
 
     await replaceSessionEntry(
@@ -301,7 +352,7 @@ describe("session accessor seam", () => {
     });
     database.db
       .prepare(
-        "UPDATE sessions SET session_entry_provenance = 0, plugin_owner_id = NULL WHERE session_id = ?",
+        "UPDATE session_windows SET session_entry_provenance = 0, plugin_owner_id = NULL WHERE session_id = ?",
       )
       .run("migrated-plugin-session");
 
@@ -586,6 +637,8 @@ describe("session accessor seam", () => {
   });
 
   it("patches the freshest target alias and rewrites it to the canonical key", async () => {
+    const canonicalKey = "agent:main:work";
+    const aliasKey = "agent:main:main";
     await replaceSessionEntry(
       {
         sessionKey: "agent:main:work",
@@ -606,6 +659,32 @@ describe("session accessor seam", () => {
         updatedAt: 20,
       },
     );
+    await replaceSqliteTranscriptEvents(
+      { agentId: "main", sessionId: "legacy-history", sessionKey: aliasKey, storePath },
+      [{ id: "legacy-history-event", type: "message" }],
+    );
+    const aliasDatabasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "alias database path",
+    );
+    const aliasDatabase = openOpenClawAgentDatabase({ agentId: "main", path: aliasDatabasePath });
+    aliasDatabase.db.exec(`
+      INSERT INTO board_tabs (
+        session_key, tab_id, title, position, chat_dock, created_by, revision
+      ) VALUES ('agent:main:main', 'main', 'Alias board', 0, 'right', 'user', 1);
+      INSERT INTO board_widgets (
+        session_key, name, tab_id, content_kind, html, sha256, view_generation,
+        revision, size_w, size_h, position, created_by, created_at, updated_at
+      ) VALUES (
+        'agent:main:main', 'status', 'main', 'html', X'3C703E6F6B3C2F703E',
+        'hash', 'view-1', 1, 4, 4, 0, 'user', 20, 20
+      );
+      INSERT INTO heartbeat_outcomes (
+        session_key, run_session_key, outcome, summary, occurred_at, updated_at
+      ) VALUES ('agent:main:main', 'agent:main:main', 'done', 'alias heartbeat', 20, 20);
+      INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+      VALUES ('agent:main:main', 'member-1', 'owner-1', 20);
+    `);
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
@@ -638,6 +717,39 @@ describe("session accessor seam", () => {
         }),
       },
     ]);
+    expect(
+      aliasDatabase.db
+        .prepare("SELECT session_key, title FROM board_tabs ORDER BY session_key")
+        .all(),
+    ).toEqual([{ session_key: "agent:main:work", title: "Alias board" }]);
+    expect(
+      aliasDatabase.db
+        .prepare("SELECT session_key, name FROM board_widgets ORDER BY session_key")
+        .all(),
+    ).toEqual([{ session_key: "agent:main:work", name: "status" }]);
+    expect(
+      aliasDatabase.db
+        .prepare("SELECT session_key, summary FROM heartbeat_outcomes ORDER BY session_key")
+        .all(),
+    ).toEqual([{ session_key: "agent:main:work", summary: "alias heartbeat" }]);
+    expect(
+      aliasDatabase.db
+        .prepare("SELECT session_key, identity_id FROM session_members ORDER BY session_key")
+        .all(),
+    ).toEqual([{ session_key: "agent:main:work", identity_id: "member-1" }]);
+    expect(
+      aliasDatabase.db
+        .prepare("SELECT session_key FROM session_windows WHERE session_id = 'legacy-history'")
+        .get(),
+    ).toEqual({ session_key: canonicalKey });
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "legacy-history",
+        sessionKey: canonicalKey,
+        storePath,
+      }),
+    ).resolves.toEqual([{ id: "legacy-history-event", type: "message" }]);
     const sessionKey = "agent:main:other";
     const scope = { sessionKey, storePath };
     await replaceSessionEntry(scope, { sessionId: "created", updatedAt: 10 });
@@ -3236,7 +3348,7 @@ describe("session accessor seam", () => {
     expect(databasePath).toBeDefined();
     const readGeneration = () =>
       openOpenClawAgentDatabase({ agentId: scope.agentId, path: databasePath })
-        .db.prepare("SELECT generation FROM session_transcript_generations WHERE session_id = ?")
+        .db.prepare("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")
         .get(scope.sessionId) as { generation: string } | undefined;
 
     await appendTranscriptMessage(scope, {

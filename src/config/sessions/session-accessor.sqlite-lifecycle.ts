@@ -28,13 +28,16 @@ import {
   assertSqliteLifecycleTargetSnapshotUnchanged,
   assertSqliteLifecycleTargetUnchanged,
   deleteSqliteLifecycleTargetRows,
+  deleteLegacySessionEntryRows,
   readSqliteLifecycleTargetSnapshot,
+  rehomeSqliteSessionWindows,
   sqliteSessionEntriesEqual,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
+  assertPlannedSqliteLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSqliteSessionStatePlans,
   deletePlannedSqliteLifecycleArtifactEntries,
   planSqliteSessionLifecycleArtifactCleanup,
@@ -127,13 +130,16 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
     let removedEntries = 0;
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
-      removedEntries = deletePlannedSqliteLifecycleArtifactEntries(
-        transactionDb,
-        cleanupPlan.entries,
-      );
+      assertPlannedSqliteLifecycleArtifactEntriesUnchanged(transactionDb, cleanupPlan.entries);
       archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
         transactionDb,
         materializedPlans,
+        undefined,
+        new Set(cleanupPlan.entries.map((entry) => entry.sessionKey)),
+      );
+      removedEntries = deletePlannedSqliteLifecycleArtifactEntries(
+        transactionDb,
+        cleanupPlan.entries,
       );
     }, toDatabaseOptions(resolved));
     emitCommittedSessionEntryRemovals(cleanupPlan.entries);
@@ -193,8 +199,17 @@ export async function resetSqliteSessionEntryLifecycle(
             throw new Error(`Failed to append reset boundary for ${current.key}`);
           }
         }
-        deleteSqliteLifecycleTargetRows(transactionDb, params.target);
         writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry);
+        rehomeSqliteSessionWindows(
+          transactionDb,
+          params.target.canonicalKey,
+          params.target.storeKeys,
+        );
+        deleteLegacySessionEntryRows(
+          transactionDb,
+          params.target.storeKeys,
+          params.target.canonicalKey,
+        );
         // Reset only advances the live entry and route. Historical rows stay searchable;
         // disk-budget cleanup owns durable extraction before reclaiming them.
       }, toDatabaseOptions(resolved));
@@ -414,16 +429,22 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       if (!shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)) {
         return;
       }
+      const archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
+        transactionDb,
+        materializedPlans,
+        undefined,
+        new Set([
+          params.target.canonicalKey,
+          ...params.target.storeKeys,
+          ...transactionSnapshot.rows.map((row) => row.sessionKey),
+        ]),
+      );
       deleteSqliteLifecycleTargetRows(transactionDb, params.target);
       deleteSessionBoardRows(transactionDb, [
         params.target.canonicalKey,
         ...params.target.storeKeys,
         ...transactionSnapshot.rows.map((row) => row.sessionKey),
       ]);
-      const archivedTranscripts = deleteMaterializedSqliteSessionStatePlans(
-        transactionDb,
-        materializedPlans,
-      );
       result = {
         archivedTranscripts,
         deleted: true,

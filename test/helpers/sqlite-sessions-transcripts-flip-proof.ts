@@ -2361,8 +2361,8 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
     return {
       exists: true,
       path: dbPath,
-      sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_entries"),
-      sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM sessions"),
+      sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_nodes"),
+      sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_windows"),
       trajectoryRuntimeEvents: scalarNumber(
         db,
         "SELECT COUNT(*) AS count FROM trajectory_runtime_events",
@@ -2381,8 +2381,8 @@ function readTrackedEntries(
 ): SqliteSessionEntryEvidence[] {
   const rows = db
     .prepare(
-      `SELECT session_key AS sessionKey, session_id AS sessionId, entry_json AS entryJson
-       FROM session_entries
+      `SELECT session_key AS sessionKey, current_session_id AS sessionId, entry_json AS entryJson
+       FROM session_nodes
        ORDER BY session_key ASC`,
     )
     .all() as Array<{ entryJson?: unknown; sessionId?: unknown; sessionKey?: unknown }>;

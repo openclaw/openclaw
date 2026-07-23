@@ -30,12 +30,12 @@ import {
   collectSessionEntryLookupKeys,
   createSqliteSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
-  deleteSqliteLifecycleTargetRows,
   readExactSessionEntryRow,
   readSessionEntryRow,
   readSqliteLifecycleTargetSnapshot,
   readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
+  rehomeSqliteSessionWindows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { listSqliteTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
@@ -119,7 +119,7 @@ export function resolveSqliteSessionKeyBySessionId(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select("session_key")
       .where("session_id", "=", resolved.sessionId)
       .limit(1),
@@ -157,8 +157,8 @@ function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
   const rows = executeSqliteQuerySync(
     database.db,
     db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json", "session_id", "updated_at"])
+      .selectFrom("session_nodes")
+      .select(["session_key", "entry_json", "current_session_id", "updated_at"])
       .orderBy("session_key", "asc"),
   ).rows;
   return rows
@@ -384,8 +384,13 @@ export async function patchSqliteSessionEntryTarget(
             previous: writeBase,
             sessionKey: scope.target.canonicalKey,
           });
-      deleteSqliteLifecycleTargetRows(writeDatabase, scope.target);
       writeSessionEntry(writeDatabase, scope.target.canonicalKey, next);
+      rehomeSqliteSessionWindows(writeDatabase, scope.target.canonicalKey, scope.target.storeKeys);
+      deleteLegacySessionEntryRows(
+        writeDatabase,
+        scope.target.storeKeys,
+        scope.target.canonicalKey,
+      );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
           activeSessionKey: scope.target.canonicalKey,

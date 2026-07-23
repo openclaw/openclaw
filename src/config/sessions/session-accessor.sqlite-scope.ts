@@ -27,17 +27,22 @@ import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
+  | "board_tabs"
+  | "board_widgets"
   | "conversation_deliveries"
   | "conversations"
+  | "heartbeat_outcomes"
   | "session_conversations"
-  | "session_entries"
-  | "session_routes"
-  | "session_transcript_generations"
-  | "sessions"
+  | "session_members"
+  | "session_nodes"
+  | "session_windows"
+  | "transcript_rewrite_watermarks"
   | "trajectory_runtime_events"
   | "transcript_event_identities"
   | "transcript_events"
->;
+> & {
+  sqlite_schema: { name: string | null; type: string };
+};
 
 export type ResolvedSqliteScope = {
   agentId: string;
