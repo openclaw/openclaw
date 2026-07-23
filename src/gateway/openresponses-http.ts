@@ -32,6 +32,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -1108,7 +1109,7 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
-  void (async () => {
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
     try {
       const result = await runResponsesAgentCommand({
         message: prompt.message,
@@ -1363,7 +1364,7 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     }
-  })();
+  });
 
   return true;
 }
