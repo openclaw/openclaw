@@ -69,9 +69,9 @@ export async function persistActivatedSetupInference(input: {
   revalidateOwner: (params: {
     route: SystemAgentConfiguredRoute;
     auth: AgentExecutionAuthBinding;
-    stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot;
+    stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
     deps: ActivateSetupInferenceDeps;
-  }) => Promise<void>;
+  }) => Promise<unknown>;
 }): Promise<ActivateSetupInferenceResult | undefined> {
   const {
     params,
@@ -95,7 +95,6 @@ export async function persistActivatedSetupInference(input: {
     revalidateOwner,
   } = input;
   let committedConfig: OpenClawConfig | undefined;
-  let autoLocalModelLeanApplied: boolean;
   let { codexInstallOwnership } = state;
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
@@ -301,7 +300,7 @@ export async function persistActivatedSetupInference(input: {
         throwIfSetupInferenceCancelled(params);
         params.onCommitStarted?.();
         commitMayHaveStarted = true;
-        autoLocalModelLeanApplied = autoLocalModelLean.enabled;
+        state.autoLocalModelLeanApplied = autoLocalModelLean.enabled;
         return { nextConfig };
       },
     });
@@ -364,7 +363,6 @@ export async function persistActivatedSetupInference(input: {
   }
 
   state.committedConfig = committedConfig;
-  state.autoLocalModelLeanApplied = autoLocalModelLeanApplied;
   state.codexInstallOwnership = codexInstallOwnership;
   return undefined;
 }
