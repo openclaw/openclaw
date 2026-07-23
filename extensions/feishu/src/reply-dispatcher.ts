@@ -14,12 +14,61 @@ import {
 } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import {
+  buildCotCardElements,
+  createCotCardState,
+  resolveCotHeaderTemplate,
+  type CotCardState,
+  type CotLocale,
+} from "./cot-card.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+
+/** COT envelope shape shared with the ACP projector via `channelData.acpCot`. */
+type AcpCotEnvelope =
+  | { kind: "thinking"; text: string }
+  | {
+      kind: "tool";
+      id?: string;
+      label: string;
+      detail?: string;
+      status: "running" | "success" | "failed";
+    };
+
+/** Extract the ACP COT envelope from a reply payload's channel-data, if present. */
+function extractCotEnvelope(payload: ReplyPayload): AcpCotEnvelope | undefined {
+  const raw = (payload.channelData as { acpCot?: unknown } | undefined)?.acpCot;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const candidate = raw as Partial<AcpCotEnvelope> & { kind?: string };
+  if (candidate.kind === "thinking" && typeof candidate.text === "string") {
+    return { kind: "thinking", text: candidate.text };
+  }
+  if (candidate.kind === "tool" && typeof candidate.label === "string") {
+    const status =
+      candidate.status === "success" || candidate.status === "failed"
+        ? candidate.status
+        : "running";
+    return {
+      kind: "tool",
+      ...(typeof candidate.id === "string" ? { id: candidate.id } : {}),
+      label: candidate.label,
+      ...(typeof candidate.detail === "string" ? { detail: candidate.detail } : {}),
+      status,
+    };
+  }
+  return undefined;
+}
+
+/** Detect whether text is predominantly Chinese to pick COT labels. */
+function resolveCotLocale(sample: string): CotLocale {
+  return /[一-鿿]/.test(sample) ? "zh" : "en";
+}
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -198,6 +247,75 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingStartPromise: Promise<void> | null = null;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
+  // Native Lark COT: when the ACP stream surfaces structured thinking / tool
+  // events (via channelData.acpCot), render a single card with a collapsed
+  // thinking panel + aggregated tool panel + separated final answer, matching
+  // the AnyGen Agent COT experience. Falls back to the flat combined-text card
+  // when no COT envelopes arrive (backward compatible).
+  const cotRenderEnabled = account.config?.cot !== false && renderMode !== "raw";
+  const cotState: CotCardState = createCotCardState("zh");
+  let cotActive = false;
+  let cotLocaleLocked = false;
+
+  const lockCotLocale = (sample: string) => {
+    if (cotLocaleLocked || !sample.trim()) {
+      return;
+    }
+    cotState.locale = resolveCotLocale(sample);
+    cotLocaleLocked = true;
+  };
+
+  const cotRunningPlaceholder = () => (cotState.locale === "zh" ? "⏳ 思考中..." : "⏳ Thinking...");
+
+  const renderCotCard = (): Promise<void> => {
+    partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      if (!streaming?.isActive()) {
+        return;
+      }
+      const elements = buildCotCardElements(cotState, {
+        runningPlaceholder: cotRunningPlaceholder(),
+      });
+      await streaming.updateFullCard(elements, {
+        headerTemplate: resolveCotHeaderTemplate(cotState),
+        onError: (e) => params.runtime.log?.(`feishu: cot card update failed: ${String(e)}`),
+      });
+    });
+    return partialUpdateQueue;
+  };
+
+  const applyCotEnvelope = (envelope: AcpCotEnvelope): Promise<void> => {
+    if (!cotRenderEnabled) {
+      return Promise.resolve();
+    }
+    cotActive = true;
+    if (envelope.kind === "thinking") {
+      lockCotLocale(envelope.text);
+      cotState.thinking = envelope.text;
+    } else {
+      lockCotLocale(envelope.label);
+      const existing = envelope.id
+        ? cotState.tools.find((tool) => tool.id === envelope.id)
+        : undefined;
+      if (existing) {
+        existing.label = envelope.label;
+        if (envelope.detail) existing.detail = envelope.detail;
+        existing.status = envelope.status;
+      } else {
+        cotState.tools.push({
+          id: envelope.id ?? `tool_${cotState.tools.length + 1}`,
+          label: envelope.label,
+          ...(envelope.detail ? { detail: envelope.detail } : {}),
+          status: envelope.status,
+        });
+      }
+    }
+    startStreaming();
+    return renderCotCard();
+  };
+
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) return "";
     const withoutLabel = thinking.replace(/^Reasoning:\n/, "");
@@ -244,12 +362,27 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const mode = options?.mode ?? "snapshot";
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
+    if (cotActive) {
+      // COT card owns the layout once structured events have surfaced: feed the
+      // answer into the dedicated content element and re-render the whole card.
+      lockCotLocale(streamText);
+      cotState.answer = streamText;
+      renderCotCard();
+      return;
+    }
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
   const queueReasoningUpdate = (nextThinking: string) => {
     if (!nextThinking) return;
     reasoningText = nextThinking;
+    // Once a native COT card is active (driven by structured acpCot envelopes),
+    // route reasoning into its thinking panel. Otherwise keep the legacy inline
+    // "💭 Thinking" combined-text card for non-ACP reasoning streams.
+    if (cotActive) {
+      applyCotEnvelope({ kind: "thinking", text: nextThinking });
+      return;
+    }
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
@@ -287,24 +420,55 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
-  const closeStreaming = async () => {
+  const closeStreaming = async (opts?: { errored?: boolean }) => {
     if (streamingStartPromise) {
       await streamingStartPromise;
     }
     await partialUpdateQueue;
     if (streaming?.isActive()) {
-      let text = buildCombinedStreamText(reasoningText, streamText);
-      if (mentionTargets?.length) {
-        text = buildMentionedCardContent(mentionTargets, text);
-      }
       const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-      await streaming.close(text, { note: finalNote });
+      if (cotActive) {
+        // Finalize the COT card: mark the turn done so the header/status settle
+        // and the collapsed process panels persist alongside the final answer.
+        cotState.running = false;
+        cotState.errored = opts?.errored === true;
+        if (streamText) {
+          cotState.answer = mergeStreamingText(cotState.answer, streamText);
+        }
+        let answer = cotState.answer;
+        if (mentionTargets?.length && answer) {
+          answer = buildMentionedCardContent(mentionTargets, answer);
+          cotState.answer = answer;
+        }
+        const elements = buildCotCardElements(cotState, {
+          note: finalNote,
+          runningPlaceholder: cotRunningPlaceholder(),
+        });
+        await streaming.updateFullCard(elements, {
+          headerTemplate: resolveCotHeaderTemplate(cotState),
+          onError: (e) => params.runtime.log?.(`feishu: cot final render failed: ${String(e)}`),
+        });
+        await streaming.close(cotState.answer, { note: finalNote, skipContentUpdate: true });
+      } else {
+        let text = buildCombinedStreamText(reasoningText, streamText);
+        if (mentionTargets?.length) {
+          text = buildMentionedCardContent(mentionTargets, text);
+        }
+        await streaming.close(text, { note: finalNote });
+      }
     }
     streaming = null;
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
     reasoningText = "";
+    cotActive = false;
+    cotState.answer = "";
+    cotState.thinking = "";
+    cotState.tools = [];
+    cotState.running = true;
+    cotState.errored = false;
+    cotLocaleLocked = false;
   };
 
   const sendChunkedTextReply = async (params: {
@@ -361,6 +525,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await typingCallbacks?.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
+        // Structured COT events (thinking / tool calls) arrive as tool-kind
+        // payloads carrying channelData.acpCot. When streaming can render a
+        // native COT card, consume them into the card and stop — they are not
+        // standalone visible messages. When streaming is unavailable, fall
+        // through so the tool summary text is still delivered (backward compat).
+        if (info?.kind === "tool" && cotRenderEnabled && streamingEnabled) {
+          const envelope = extractCotEnvelope(payload);
+          if (envelope) {
+            await applyCotEnvelope(envelope);
+            return;
+          }
+        }
+
         const reply = resolveSendableOutboundReplyParts(payload);
         const text = reply.text;
         const hasText = reply.hasText;
@@ -403,7 +580,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             if (info?.kind === "final") {
               streamText = mergeStreamingText(streamText, text);
-              await closeStreaming();
+              await closeStreaming({ errored: payload.isError === true });
               deliveredFinalTexts.add(text);
             }
             // Send media even when streaming handled the text
@@ -462,7 +639,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await closeStreaming();
+        await closeStreaming({ errored: true });
         typingCallbacks?.onIdle?.();
       },
       onIdle: async () => {

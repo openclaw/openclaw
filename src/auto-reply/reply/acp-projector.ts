@@ -22,12 +22,49 @@ const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 
+/**
+ * Channels with a native Chain-of-Thought surface that can consume the
+ * `channelData.acpCot` envelope. Other channels never receive it, keeping their
+ * projection behavior unchanged.
+ */
+const COT_ENVELOPE_CHANNELS = new Set(["feishu"]);
+
+function providerSupportsCotEnvelope(provider: string | undefined): boolean {
+  return COT_ENVELOPE_CHANNELS.has((provider ?? "").trim().toLowerCase());
+}
+
 export type AcpProjectedDeliveryMeta = {
   tag?: AcpSessionUpdateTag;
   toolCallId?: string;
   toolStatus?: string;
   allowEdit?: boolean;
 };
+
+/** Unified lifecycle status shared by tool rows and the whole COT card. */
+export type AcpCotStatus = "running" | "success" | "failed";
+
+/**
+ * Structured Chain-of-Thought envelope carried on `ReplyPayload.channelData.acpCot`.
+ * Channels with a native COT surface (e.g. Feishu/Lark cards) read this to render
+ * collapsed thinking + aggregated tool calls; channels without one ignore it and
+ * fall back to the payload's plain `text`.
+ */
+export type AcpCotEnvelope =
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; id?: string; label: string; detail?: string; status: AcpCotStatus };
+
+function mapToolCotStatus(status: string | undefined): AcpCotStatus {
+  if (!status) {
+    return "running";
+  }
+  if (["failed", "error"].includes(status)) {
+    return "failed";
+  }
+  if (["completed", "done", "success"].includes(status)) {
+    return "success";
+  }
+  return "running";
+}
 
 type ToolLifecycleState = {
   started: boolean;
@@ -159,6 +196,24 @@ function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_cal
   return formatToolSummary(display);
 }
 
+/** Build the structured COT envelope for a tool event (clean label + detail). */
+function renderToolCotEnvelope(
+  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
+): Extract<AcpCotEnvelope, { kind: "tool" }> {
+  const title = event.title?.trim();
+  const fallback = event.text?.trim();
+  const label = title || fallback || "tool call";
+  // Keep a short detail line separate from the label when a title is present.
+  const detail = title && fallback && fallback !== title ? fallback : undefined;
+  return {
+    kind: "tool",
+    ...(event.toolCallId?.trim() ? { id: event.toolCallId.trim() } : {}),
+    label,
+    ...(detail ? { detail } : {}),
+    status: mapToolCotStatus(normalizeToolStatus(event.status)),
+  };
+}
+
 export type AcpReplyProjector = {
   onEvent: (event: AcpRuntimeEvent) => Promise<void>;
   flush: (force?: boolean) => Promise<void>;
@@ -176,6 +231,9 @@ export function createAcpReplyProjector(params: {
   accountId?: string;
 }): AcpReplyProjector {
   const settings = resolveAcpProjectionSettings(params.cfg);
+  // Emit structured COT envelopes only when enabled AND the target channel has a
+  // native COT surface, so non-COT channels keep their existing projection.
+  const cotEnabled = settings.cot && providerSupportsCotEnvelope(params.provider);
   const streaming = resolveAcpStreamingConfig({
     cfg: params.cfg,
     provider: params.provider,
@@ -203,6 +261,9 @@ export function createAcpReplyProjector(params: {
   let pendingHiddenBoundary = false;
   let liveBufferText = "";
   let liveIdleTimer: NodeJS.Timeout | undefined;
+  let thinkingSnapshot = "";
+  let lastThinkingHash: string | undefined;
+  let lastCotToolKey: string | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
 
@@ -270,6 +331,9 @@ export function createAcpReplyProjector(params: {
     lastVisibleOutputTail = undefined;
     pendingHiddenBoundary = false;
     liveBufferText = "";
+    thinkingSnapshot = "";
+    lastThinkingHash = undefined;
+    lastCotToolKey = undefined;
     pendingToolDeliveries.length = 0;
     toolLifecycleById.clear();
   };
@@ -323,6 +387,33 @@ export function createAcpReplyProjector(params: {
     lastStatusHash = hash;
   };
 
+  // Emit a text-less COT envelope for a tool event so native COT surfaces can
+  // aggregate calls even when the visible tool summary is suppressed. Deduped by
+  // tool id + status so start/refine/terminal collapse into one row per call.
+  const emitToolCotEnvelope = async (
+    event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
+  ) => {
+    if (!cotEnabled || !params.shouldSendToolSummaries) {
+      return;
+    }
+    const envelope = renderToolCotEnvelope(event);
+    const key = `${envelope.id ?? envelope.label}:${envelope.status}`;
+    if (settings.repeatSuppression && lastCotToolKey === key) {
+      return;
+    }
+    lastCotToolKey = key;
+    const payload: ReplyPayload = { channelData: { acpCot: envelope } };
+    const meta: AcpProjectedDeliveryMeta = {
+      ...(event.tag ? { tag: event.tag } : {}),
+      ...(envelope.id ? { toolCallId: envelope.id } : {}),
+    };
+    if (settings.deliveryMode === "final_only") {
+      pendingToolDeliveries.push({ payload, meta });
+    } else {
+      await params.deliver("tool", payload, meta);
+    }
+  };
+
   const emitToolSummary = async (event: Extract<AcpRuntimeEvent, { type: "tool_call" }>) => {
     if (!params.shouldSendToolSummaries) {
       return;
@@ -373,16 +464,45 @@ export function createAcpReplyProjector(params: {
       ...(status ? { toolStatus: status } : {}),
       allowEdit: Boolean(toolCallId && event.tag === "tool_call_update"),
     };
+    const toolPayload: ReplyPayload = cotEnabled
+      ? { text: toolSummary, channelData: { acpCot: renderToolCotEnvelope(event) } }
+      : { text: toolSummary };
     if (settings.deliveryMode === "final_only") {
       pendingToolDeliveries.push({
-        payload: { text: toolSummary },
+        payload: toolPayload,
         meta: deliveryMeta,
       });
     } else {
       await flush(true);
-      await params.deliver("tool", { text: toolSummary }, deliveryMeta);
+      await params.deliver("tool", toolPayload, deliveryMeta);
     }
     lastToolHash = hash;
+  };
+
+  // Forward accumulated reasoning as a COT thinking envelope. Carries no visible
+  // `text`, so channels without a native COT surface silently ignore it while
+  // Feishu/Lark renders it inside a collapsed panel.
+  const emitThinkingSnapshot = async () => {
+    if (!cotEnabled || !params.shouldSendToolSummaries) {
+      return;
+    }
+    const trimmed = thinkingSnapshot.trim();
+    if (!trimmed) {
+      return;
+    }
+    const hash = hashText(trimmed);
+    if (settings.repeatSuppression && lastThinkingHash === hash) {
+      return;
+    }
+    lastThinkingHash = hash;
+    const envelope: AcpCotEnvelope = { kind: "thinking", text: trimmed };
+    const payload: ReplyPayload = { channelData: { acpCot: envelope } };
+    const meta: AcpProjectedDeliveryMeta = { tag: "agent_thought_chunk" };
+    if (settings.deliveryMode === "final_only") {
+      pendingToolDeliveries.push({ payload, meta });
+    } else {
+      await params.deliver("tool", payload, meta);
+    }
   };
 
   const emitTruncationNotice = async () => {
@@ -404,6 +524,13 @@ export function createAcpReplyProjector(params: {
   const onEvent = async (event: AcpRuntimeEvent): Promise<void> => {
     if (event.type === "text_delta") {
       if (event.stream && event.stream !== "output") {
+        // Reasoning/thought stream: accumulate and forward as a COT thinking
+        // envelope (for native COT surfaces) or when the thought tag is visible.
+        // Never mixed into the answer text.
+        if (event.stream === "thought" && event.text && (cotEnabled || isAcpTagVisible(settings, event.tag))) {
+          thinkingSnapshot += event.text;
+          await emitThinkingSnapshot();
+        }
         return;
       }
       if (!isAcpTagVisible(settings, event.tag)) {
@@ -474,6 +601,9 @@ export function createAcpReplyProjector(params: {
 
     if (event.type === "tool_call") {
       if (!isAcpTagVisible(settings, event.tag)) {
+        // Even when the visible tool summary is suppressed, forward a structured
+        // COT envelope so native COT surfaces can still aggregate the call.
+        await emitToolCotEnvelope(event);
         if (event.tag && HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
           const status = normalizeToolStatus(event.status);
           const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;

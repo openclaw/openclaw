@@ -36,10 +36,15 @@ vi.mock("./streaming-card.js", async () => {
     mergeStreamingText: actual.mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
+      fullCardUpdates: any[] = [];
       start = vi.fn(async () => {
         this.active = true;
       });
       update = vi.fn(async () => {});
+      updateFullCard = vi.fn(async (elements: any, opts: any) => {
+        this.fullCardUpdates.push({ elements, opts });
+      });
+      hasState = vi.fn(() => this.active);
       close = vi.fn(async () => {
         this.active = false;
       });
@@ -706,5 +711,130 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     } finally {
       streamingInstances.push = origPush;
     }
+  });
+
+  describe("native COT rendering", () => {
+    function lastFullCard() {
+      const session = streamingInstances.at(-1);
+      return session?.fullCardUpdates.at(-1);
+    }
+
+    function elementById(update: any, id: string) {
+      return (update?.elements as any[])?.find((el) => el.element_id === id);
+    }
+
+    function panelById(update: any, id: string) {
+      return (update?.elements as any[])?.find(
+        (el) => el.tag === "collapsible_panel" && el.element_id === id,
+      );
+    }
+
+    it("renders a collapsible thinking panel from a COT thinking envelope", async () => {
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { channelData: { acpCot: { kind: "thinking", text: "先理解需求，再拆解。" } } },
+        { kind: "tool" },
+      );
+
+      const session = streamingInstances.at(-1);
+      expect(session?.start).toHaveBeenCalled();
+      const panel = panelById(lastFullCard(), "cot_thinking");
+      expect(panel).toBeDefined();
+      expect(panel.expanded).toBe(false); // thinking collapsed by default
+      // regular text send path is NOT used for COT envelopes
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("aggregates multiple tool calls into a single panel with unified status", async () => {
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { channelData: { acpCot: { kind: "tool", id: "c1", label: "Read", status: "success" } } },
+        { kind: "tool" },
+      );
+      await options.deliver(
+        { channelData: { acpCot: { kind: "tool", id: "c2", label: "Bash", status: "running" } } },
+        { kind: "tool" },
+      );
+
+      const toolPanel = panelById(lastFullCard(), "cot_tools");
+      expect(toolPanel).toBeDefined();
+      const body = String(toolPanel.elements[0].content);
+      expect(body).toContain("Read");
+      expect(body).toContain("Bash");
+      // one panel only (aggregation), not one message per call
+      const panels = (lastFullCard()?.elements as any[]).filter(
+        (el) => el.tag === "collapsible_panel",
+      );
+      expect(panels).toHaveLength(1);
+    });
+
+    it("coalesces the same tool id across status updates into one row", async () => {
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { channelData: { acpCot: { kind: "tool", id: "c1", label: "Run", status: "running" } } },
+        { kind: "tool" },
+      );
+      await options.deliver(
+        { channelData: { acpCot: { kind: "tool", id: "c1", label: "Run", status: "success" } } },
+        { kind: "tool" },
+      );
+
+      const toolPanel = panelById(lastFullCard(), "cot_tools");
+      const body = String(toolPanel.elements[0].content);
+      // single row, terminal status wins
+      expect(body.split("\n").filter((l: string) => l.includes("Run"))).toHaveLength(1);
+      expect(body).toContain("✅ Run");
+    });
+
+    it("separates the final answer from the process and marks success on close", async () => {
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { channelData: { acpCot: { kind: "tool", id: "c1", label: "Read", status: "success" } } },
+        { kind: "tool" },
+      );
+      await options.deliver({ text: "这是最终答复。" }, { kind: "final" });
+
+      const finalCard = lastFullCard();
+      const content = elementById(finalCard, "content");
+      expect(content.content).toBe("这是最终答复。");
+      // header settles to the success (green) template on completion
+      expect(finalCard.opts.headerTemplate).toBe("green");
+      // divider separates the answer from the process panel
+      expect((finalCard.elements as any[]).some((el) => el.tag === "hr")).toBe(true);
+      expect(streamingInstances.at(-1)?.close).toHaveBeenCalled();
+    });
+
+    it("marks the card failed when the final payload is an error", async () => {
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { channelData: { acpCot: { kind: "tool", id: "c1", label: "Build", status: "failed" } } },
+        { kind: "tool" },
+      );
+      await options.deliver({ text: "turn failed", isError: true }, { kind: "final" });
+
+      expect(lastFullCard()?.opts.headerTemplate).toBe("red");
+    });
+
+    it("falls back to plain text tool summaries when COT is disabled", async () => {
+      resolveFeishuAccountMock.mockReturnValue({
+        accountId: "main",
+        appId: "app_id",
+        appSecret: "app_secret",
+        domain: "feishu",
+        config: { renderMode: "auto", streaming: true, cot: false },
+      });
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        {
+          text: "🔧 Tool Call: Read",
+          channelData: { acpCot: { kind: "tool", id: "c1", label: "Read", status: "success" } },
+        },
+        { kind: "tool" },
+      );
+
+      // No COT card rendered; the summary text goes through the normal path.
+      const session = streamingInstances.at(-1);
+      expect(session?.fullCardUpdates ?? []).toHaveLength(0);
+    });
   });
 });

@@ -14,6 +14,10 @@ type CardState = {
   sequence: number;
   currentText: string;
   hasNote: boolean;
+  /** Header title text, preserved across full-card COT updates. */
+  headerTitle?: string;
+  /** Current header color template, updated as the unified status changes. */
+  headerTemplate?: string;
 };
 
 /** Options for customising the initial streaming card appearance. */
@@ -288,6 +292,10 @@ export class FeishuStreamingSession {
       sequence: 1,
       currentText: "",
       hasNote: !!options?.note,
+      ...(options?.header?.title ? { headerTitle: options.header.title } : {}),
+      ...(options?.header?.template
+        ? { headerTemplate: resolveFeishuCardTemplate(options.header.template) ?? "blue" }
+        : {}),
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
@@ -319,6 +327,67 @@ export class FeishuStreamingSession {
         await release();
       })
       .catch((error) => onError?.(error));
+  }
+
+  /**
+   * Replace the whole card body (and optionally the header color template) via
+   * the Card Kit full-update API. Used to render the structured COT card, which
+   * dynamically adds/removes collapsible panels the per-element PUT cannot.
+   */
+  async updateFullCard(
+    elements: Record<string, unknown>[],
+    options?: { headerTemplate?: string; onError?: (error: unknown) => void },
+  ): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    const template = options?.headerTemplate ?? this.state.headerTemplate;
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    if (template) {
+      this.state.headerTemplate = template;
+    }
+    const cardJson: Record<string, unknown> = {
+      schema: "2.0",
+      config: {
+        streaming_mode: true,
+        summary: { content: "[Generating...]" },
+        streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 1 } },
+      },
+      body: { elements },
+    };
+    if (this.state.headerTitle) {
+      cardJson.header = {
+        title: { tag: "plain_text", content: this.state.headerTitle },
+        template: template ?? "blue",
+      };
+    }
+    await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}`,
+      init: {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          card: { type: "card_json", data: JSON.stringify(cardJson) },
+          sequence: this.state.sequence,
+          uuid: `f_${this.state.cardId}_${this.state.sequence}`,
+        }),
+      },
+      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+      auditContext: "feishu.streaming-card.full-update",
+    })
+      .then(async ({ release }) => {
+        await release();
+      })
+      .catch((error) => options?.onError?.(error));
+  }
+
+  /** Whether the streaming session has an active card entity. */
+  hasState(): boolean {
+    return this.state !== null;
   }
 
   async update(text: string): Promise<void> {
@@ -386,7 +455,10 @@ export class FeishuStreamingSession {
       .catch((e) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<void> {
+  async close(
+    finalText?: string,
+    options?: { note?: string; skipContentUpdate?: boolean },
+  ): Promise<void> {
     if (!this.state || this.closed) {
       return;
     }
@@ -401,8 +473,9 @@ export class FeishuStreamingSession {
     const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
-    // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.currentText) {
+    // Only send final content update when the COT full-card path did not already
+    // render the final body (skipContentUpdate) and the content actually changed.
+    if (!options?.skipContentUpdate && text && text !== this.state.currentText) {
       await this.updateCardContent(text);
       this.state.currentText = text;
     }

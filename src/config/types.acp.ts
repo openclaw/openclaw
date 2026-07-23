@@ -25,6 +25,12 @@ export type AcpStreamConfig = {
    * Keys not listed here fall back to OpenClaw defaults.
    */
   tagVisibility?: Partial<Record<AcpSessionUpdateTag, boolean>>;
+  /**
+   * Emit structured Chain-of-Thought envelopes (thinking + tool calls) so
+   * channels with a native COT surface (Feishu/Lark) can render a collapsed
+   * thinking panel and an aggregated tool-call panel. Defaults to true.
+   */
+  cot?: boolean;
 };
 
 export type AcpRuntimeConfig = {

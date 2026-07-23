@@ -52,6 +52,12 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
 
+// Native COT (Chain-of-Thought) rendering: when enabled (default), structured
+// thinking / tool-call events render inside a native Lark card with a collapsed
+// thinking panel and an aggregated tool-call panel. Set false to fall back to
+// the flat combined-text streaming card.
+const CotModeSchema = z.boolean().optional();
+
 const BlockStreamingCoalesceSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -176,6 +182,7 @@ const FeishuSharedConfigShape = {
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
+  cot: CotModeSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,

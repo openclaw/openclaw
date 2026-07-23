@@ -195,6 +195,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum characters for projected ACP session/update lines (tool/status updates).",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
+  "acp.stream.cot":
+    "When true (default), emit structured Chain-of-Thought envelopes (thinking + tool calls) so native COT surfaces (Feishu/Lark) render a collapsed thinking panel and aggregated tool-call panel.",
   "acp.runtime.ttlMinutes":
     "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
   "acp.runtime.installCommand":

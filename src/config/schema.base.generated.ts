@@ -894,6 +894,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "boolean",
                 },
               },
+              cot: {
+                type: "boolean",
+              },
             },
             additionalProperties: false,
           },
@@ -13539,6 +13542,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "acp.stream.tagVisibility": {
       label: "ACP Stream Tag Visibility",
       help: "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
+      tags: ["advanced"],
+    },
+    "acp.stream.cot": {
+      label: "ACP Stream Native COT",
+      help: "When true (default), emit structured Chain-of-Thought envelopes (thinking + tool calls) so native COT surfaces (Feishu/Lark) render a collapsed thinking panel and aggregated tool-call panel.",
       tags: ["advanced"],
     },
     "acp.runtime.ttlMinutes": {

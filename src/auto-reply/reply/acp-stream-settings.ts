@@ -10,6 +10,7 @@ const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR = "paragraph";
 const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
 const DEFAULT_ACP_MAX_OUTPUT_CHARS = 24_000;
 const DEFAULT_ACP_MAX_SESSION_UPDATE_CHARS = 320;
+const DEFAULT_ACP_COT = true;
 
 export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   agent_message_chunk: true,
@@ -34,6 +35,14 @@ export type AcpProjectionSettings = {
   maxOutputChars: number;
   maxSessionUpdateChars: number;
   tagVisibility: Partial<Record<AcpSessionUpdateTag, boolean>>;
+  /**
+   * Emit structured Chain-of-Thought envelopes (thinking + tool calls) on
+   * `channelData.acpCot`, independent of `tagVisibility`. Channels with a native
+   * COT surface (Feishu/Lark) render them; others ignore the envelope. Defaults
+   * to true so the native Lark COT experience works out of the box without
+   * flooding non-COT channels with visible text.
+   */
+  cot: boolean;
 };
 
 function clampBoolean(value: unknown, fallback: boolean): boolean {
@@ -102,6 +111,7 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
       },
     ),
     tagVisibility: stream?.tagVisibility ?? {},
+    cot: clampBoolean(stream?.cot, DEFAULT_ACP_COT),
   };
 }
 

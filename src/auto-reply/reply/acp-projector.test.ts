@@ -1,19 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { prefixSystemMessage } from "../../infra/system-message.js";
-import { createAcpReplyProjector } from "./acp-projector.js";
+import type { ReplyPayload } from "../types.js";
+import { type AcpCotEnvelope, createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
 
-type Delivery = { kind: string; text?: string };
+type Delivery = { kind: string; text?: string; cot?: AcpCotEnvelope };
 
-function createProjectorHarness(cfgOverrides?: Parameters<typeof createCfg>[0]) {
+function extractCot(payload: ReplyPayload): AcpCotEnvelope | undefined {
+  return (payload.channelData as { acpCot?: AcpCotEnvelope } | undefined)?.acpCot;
+}
+
+function createProjectorHarness(
+  cfgOverrides?: Parameters<typeof createCfg>[0],
+  opts?: { provider?: string },
+) {
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
     shouldSendToolSummaries: true,
     deliver: async (kind, payload) => {
-      deliveries.push({ kind, text: payload.text });
+      deliveries.push({ kind, text: payload.text, cot: extractCot(payload) });
       return true;
     },
+    ...(opts?.provider ? { provider: opts.provider } : {}),
   });
   return { deliveries, projector };
 }
@@ -734,5 +743,107 @@ describe("createAcpReplyProjector", () => {
     await projector.flush(true);
 
     expect(combinedBlockText(deliveries)).toBe("AB");
+  });
+});
+
+describe("createAcpReplyProjector native COT envelopes", () => {
+  const liveFeishuCfg = createLiveCfgOverrides({ coalesceIdleMs: 0, maxChunkChars: 256 });
+
+  function cotDeliveries(deliveries: Delivery[]) {
+    return deliveries.filter((d) => d.cot).map((d) => d.cot!);
+  }
+
+  it("does not emit COT envelopes for channels without a native COT surface", async () => {
+    const { deliveries, projector } = createProjectorHarness(liveFeishuCfg); // no provider
+    await projector.onEvent({
+      type: "text_delta",
+      text: "reasoning...",
+      stream: "thought",
+      tag: "agent_thought_chunk",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "c1",
+      status: "in_progress",
+      title: "Read file",
+      text: "Read file (in_progress)",
+    });
+    await projector.flush(true);
+    expect(cotDeliveries(deliveries)).toEqual([]);
+  });
+
+  it("forwards a thinking envelope for feishu even when the thought tag is hidden", async () => {
+    const { deliveries, projector } = createProjectorHarness(liveFeishuCfg, { provider: "feishu" });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "先理解需求，",
+      stream: "thought",
+      tag: "agent_thought_chunk",
+    });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "再拆解任务。",
+      stream: "thought",
+      tag: "agent_thought_chunk",
+    });
+    const thinking = cotDeliveries(deliveries).filter((c) => c.kind === "thinking");
+    expect(thinking.length).toBeGreaterThan(0);
+    expect(thinking.at(-1)).toEqual({ kind: "thinking", text: "先理解需求，再拆解任务。" });
+    // Thought text is never mixed into visible block/answer output.
+    expect(combinedBlockText(deliveries)).toBe("");
+  });
+
+  it("aggregates tool lifecycle into COT envelopes with mapped status", async () => {
+    const { deliveries, projector } = createProjectorHarness(liveFeishuCfg, { provider: "feishu" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "c1",
+      status: "in_progress",
+      title: "Run tests",
+      text: "Run tests (in_progress)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "c1",
+      status: "completed",
+      title: "Run tests",
+      text: "Run tests (completed)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "c2",
+      status: "failed",
+      title: "Build",
+      text: "Build (failed)",
+    });
+    const tools = cotDeliveries(deliveries).filter((c) => c.kind === "tool");
+    const byStatus = tools.map((t) => (t.kind === "tool" ? t.status : undefined));
+    expect(byStatus).toContain("running");
+    expect(byStatus).toContain("success");
+    expect(byStatus).toContain("failed");
+    const running = tools.find((t) => t.kind === "tool" && t.status === "running");
+    expect(running?.kind === "tool" && running.label).toBe("Run tests");
+  });
+
+  it("keeps the visible answer stream free of COT envelopes", async () => {
+    const { deliveries, projector } = createProjectorHarness(liveFeishuCfg, { provider: "feishu" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "c1",
+      status: "in_progress",
+      title: "Read",
+      text: "Read (in_progress)",
+    });
+    await projector.onEvent({ type: "text_delta", text: "答复内容。", tag: "agent_message_chunk" });
+    await projector.flush(true);
+    // The answer is delivered as a normal block with no COT envelope attached.
+    const blocks = deliveries.filter((d) => d.kind === "block");
+    expect(blocks.map((b) => b.text).join("")).toBe("答复内容。");
+    expect(blocks.every((b) => !b.cot)).toBe(true);
   });
 });
