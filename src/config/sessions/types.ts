@@ -495,6 +495,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     contextTokens?: number;
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
+    /** Last byte-triggered preflight compaction active transcript size, in bytes. */
+    transcriptBytesCompactionBytes?: number;
+    /** Byte threshold used for the last byte-triggered preflight compaction. */
+    transcriptBytesCompactionThreshold?: number;
+    /** Session file produced/kept by the last byte-triggered preflight compaction. */
+    transcriptBytesCompactionSessionFile?: string;
+    /** Timestamp (ms) of the last byte-triggered preflight compaction. */
+    transcriptBytesCompactionAt?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
     memoryFlushAt?: number;
     memoryFlushCompactionCount?: number;

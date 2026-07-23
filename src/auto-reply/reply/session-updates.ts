@@ -301,6 +301,14 @@ export async function incrementCompactionCount(params: {
   newSessionId?: string;
   /** Session file after compaction, when the runtime rotated transcripts. */
   newSessionFile?: string;
+  /** Last byte-triggered preflight compaction active transcript size, in bytes. */
+  transcriptBytesCompactionBytes?: number;
+  /** Byte threshold used for the last byte-triggered preflight compaction. */
+  transcriptBytesCompactionThreshold?: number;
+  /** Session file produced/kept by the last byte-triggered preflight compaction. */
+  transcriptBytesCompactionSessionFile?: string;
+  /** Timestamp (ms) of the last byte-triggered preflight compaction. */
+  transcriptBytesCompactionAt?: number;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -313,6 +321,10 @@ export async function incrementCompactionCount(params: {
     tokensAfter,
     newSessionId,
     newSessionFile,
+    transcriptBytesCompactionBytes,
+    transcriptBytesCompactionThreshold,
+    transcriptBytesCompactionSessionFile,
+    transcriptBytesCompactionAt,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -362,6 +374,35 @@ export async function incrementCompactionCount(params: {
     updates.cacheWrite = undefined;
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
+  }
+  const normalizedTranscriptBytesCompactionBytes =
+    typeof transcriptBytesCompactionBytes === "number" &&
+    Number.isFinite(transcriptBytesCompactionBytes) &&
+    transcriptBytesCompactionBytes >= 0
+      ? Math.floor(transcriptBytesCompactionBytes)
+      : undefined;
+  const normalizedTranscriptBytesCompactionThreshold =
+    typeof transcriptBytesCompactionThreshold === "number" &&
+    Number.isFinite(transcriptBytesCompactionThreshold) &&
+    transcriptBytesCompactionThreshold > 0
+      ? Math.floor(transcriptBytesCompactionThreshold)
+      : undefined;
+  const normalizedTranscriptBytesCompactionAt =
+    typeof transcriptBytesCompactionAt === "number" &&
+    Number.isFinite(transcriptBytesCompactionAt) &&
+    transcriptBytesCompactionAt > 0
+      ? Math.floor(transcriptBytesCompactionAt)
+      : undefined;
+  if (
+    normalizedTranscriptBytesCompactionBytes !== undefined &&
+    normalizedTranscriptBytesCompactionThreshold !== undefined
+  ) {
+    updates.transcriptBytesCompactionBytes = normalizedTranscriptBytesCompactionBytes;
+    updates.transcriptBytesCompactionThreshold = normalizedTranscriptBytesCompactionThreshold;
+    updates.transcriptBytesCompactionSessionFile = normalizeOptionalString(
+      transcriptBytesCompactionSessionFile,
+    );
+    updates.transcriptBytesCompactionAt = normalizedTranscriptBytesCompactionAt ?? now;
   }
   const nextEntry = {
     ...entry,
