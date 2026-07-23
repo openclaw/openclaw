@@ -319,8 +319,12 @@ function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
       filePath,
       maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
     });
+    const snapshotDecoder = new StringDecoder("utf8");
+    const decoded = snapshotDecoder.write(buffer) + snapshotDecoder.end();
+    // Replace with a fresh decoder for follow-mode continuation; end()
+    // permanently finishes a decoder, so it cannot decode subsequent chunks.
     const fileDecoder = new StringDecoder("utf8");
-    const lines = fileDecoder.write(buffer).split(/\r?\n/u);
+    const lines = decoded.split(/\r?\n/u);
     const trailing = lines.pop() ?? "";
     const trailingEvent = parseTrajectoryEventLine(trailing);
     return {
