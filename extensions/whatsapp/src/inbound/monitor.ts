@@ -590,11 +590,17 @@ export async function attachWebInboxToSocket(
     shouldDebounce: shouldDebounceInboundMessage,
     resolveDecision: resolveInboundDebounceDecision,
     resolveMaxBufferAgeMs: resolveWhatsAppInboundMaxBufferAgeMs,
-    // Location and quote are singular contexts, so they cannot be represented safely in a batch.
+    // Singular structured contexts cannot be represented safely in a batch.
     canCombine: (bufferedItems, item) =>
       !item.payload.location &&
       !item.quote &&
-      bufferedItems.every((entry) => !entry.payload.location && !entry.quote),
+      !item.payload.untrustedStructuredContext?.length &&
+      bufferedItems.every(
+        (entry) =>
+          !entry.payload.location &&
+          !entry.quote &&
+          !entry.payload.untrustedStructuredContext?.length,
+      ),
     onFlush: async (entries) => {
       let finishFlush!: () => void;
       const flushTask = new Promise<void>((resolve) => {

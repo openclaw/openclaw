@@ -1181,6 +1181,71 @@ describe("web monitor inbox", () => {
     expect(messages.some((message) => message.payload.body === "after quote")).toBe(true);
   });
 
+  it("keeps contact context out of plugin-requested batches", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("plugin-debounce-contact"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            contactMessage: {
+              displayName: "Ada Lovelace",
+              vcard: [
+                "BEGIN:VCARD",
+                "VERSION:3.0",
+                "FN:Ada Lovelace",
+                "TEL;TYPE=CELL:+15555550123",
+                "END:VCARD",
+              ].join("\n"),
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-after-contact"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "after contact",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 2);
+
+    await listener.close();
+
+    const messages = onMessage.mock.calls.map((call) => call[0] as WebInboundMessage);
+    expect(
+      messages.find((message) => message.payload.untrustedStructuredContext)?.payload
+        .untrustedStructuredContext,
+    ).toEqual([
+      expect.objectContaining({
+        type: "contact",
+        source: "whatsapp",
+        payload: {
+          kind: "contact",
+          total: 1,
+          contacts: [{ name: "Ada Lovelace", phones: ["+15555550123"] }],
+        },
+      }),
+    ]);
+    expect(messages.some((message) => message.payload.body === "after contact")).toBe(true);
+  });
+
   it("completes shutdown under a long durable debounce without waiting for the window", async () => {
     // Durable pump tasks await claim flush waiters; close must force-flush
     // debounced batches before waiting on those pumps (socket-close timeout).
