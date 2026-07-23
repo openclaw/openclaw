@@ -4810,6 +4810,18 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     );
   });
 
+  it("bounds plugin-clawhub-release external git fetch operations", () => {
+    const source = readFileSync(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+
+    expect(gitFetchLines).toHaveLength(2);
+    expect(
+      gitFetchLines.every((line) =>
+        line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
+      ),
+    ).toBe(true);
+  });
+
   it("validates the macOS release handoff before the GitHub release page exists", () => {
     const macosRelease = readWorkflow(".github/workflows/macos-release.yml");
     const validateJob = workflowJob(
