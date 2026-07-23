@@ -61,7 +61,51 @@ describe("PlaywrightDiffScreenshotter", () => {
   afterEach(async () => {
     await vi.runAllTimersAsync();
     vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     await cleanupRootDir();
+  });
+
+  it("uses standard Windows install roots when ProgramFiles overrides are blank", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.stubEnv("LOCALAPPDATA", "   ");
+    vi.stubEnv("ProgramFiles", "   ");
+    vi.stubEnv("ProgramFiles(x86)", "");
+    const chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+    vi.spyOn(fs, "access").mockImplementation(async (candidate) => {
+      if (String(candidate) !== chromePath) {
+        throw new Error("ENOENT");
+      }
+    });
+    launchMock.mockResolvedValue(createMockBrowser([]));
+
+    try {
+      const screenshotter = new PlaywrightDiffScreenshotter({ config: {}, browserIdleMs: 1_000 });
+      await screenshotter.screenshotHtml({
+        html: '<html><head></head><body><main class="oc-frame"></main></body></html>',
+        outputPath,
+        theme: "dark",
+        image: {
+          format: "png",
+          qualityPreset: "standard",
+          scale: 1,
+          maxWidth: 960,
+          maxPixels: 8_000_000,
+        },
+      });
+      expect(launchMock).toHaveBeenCalledWith(
+        expect.objectContaining({ executablePath: chromePath }),
+      );
+      expect(fs.access).not.toHaveBeenCalledWith(
+        path.win32.join("Google", "Chrome", "Application", "chrome.exe"),
+        expect.anything(),
+      );
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
   });
 
   it("reuses the same browser across renders and closes it after the idle window", async () => {
