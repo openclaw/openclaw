@@ -78,7 +78,8 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       proc.stderr.write(Buffer.from(unterminatedDiagnostic, "utf8"));
       expect(debug).toHaveBeenCalledTimes(callsBeforeLine + 1);
 
-      proc.emit("exit", 0, null);
+      proc.stderr.end();
+      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(debug).toHaveBeenNthCalledWith(
         callsBeforeLine + 2,
         `[meeting] ${label}: ${unterminatedDiagnostic}`,
@@ -193,7 +194,9 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     outputProcess.stderr.write("before exit ");
     outputProcess.emit("exit", 0, null);
-
-    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit");
+    outputProcess.stderr.write("after exit");
+    outputProcess.stderr.end();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
   });
 });
