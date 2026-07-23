@@ -1581,9 +1581,19 @@ $0 \\"$1\\"" touch {marker}`,
       second: "julia -e 'run(`id > {marker}`)'",
     },
     {
+      executable: "julia",
+      first: "julia '-eprintln(1)'",
+      second: "julia '-Erun(`id > {marker}`)'",
+    },
+    {
       executable: "elixir",
       first: "elixir -e 'IO.puts(:ok)'",
       second: 'elixir -e \'System.cmd("sh", ["-c", "id > {marker}"])\'',
+    },
+    {
+      executable: "elixir",
+      first: "elixir --rpc-eval worker@127.0.0.1 'IO.puts(:ok)'",
+      second: 'elixir --rpc-eval worker@127.0.0.1 \'System.cmd("sh", ["-c", "id > {marker}"])\'',
     },
     {
       executable: "guile",
@@ -1594,6 +1604,11 @@ $0 \\"$1\\"" touch {marker}`,
       executable: "groovy",
       first: "groovy -e 'println 1'",
       second: "groovy -e '\"sh -c id > {marker}\".execute()'",
+    },
+    {
+      executable: "groovy",
+      first: "groovy '-eprintln 1'",
+      second: "groovy '-e\"sh -c id > {marker}\".execute()'",
     },
     {
       executable: "scala",
@@ -1616,9 +1631,19 @@ $0 \\"$1\\"" touch {marker}`,
       second: 'raku -e \'run "sh", "-c", "id > {marker}"\'',
     },
     {
+      executable: "raku",
+      first: "raku -ne 'say $_'",
+      second: 'raku -ne \'run "sh", "-c", "id > {marker}"\'',
+    },
+    {
       executable: "perl6",
       first: "perl6 -e 'say 1'",
       second: 'perl6 -e \'run "sh", "-c", "id > {marker}"\'',
+    },
+    {
+      executable: "perl6",
+      first: "perl6 -pe 'say $_'",
+      second: 'perl6 -pe \'run "sh", "-c", "id > {marker}"\'',
     },
     {
       executable: "ghc",
@@ -1641,9 +1666,19 @@ $0 \\"$1\\"" touch {marker}`,
       second: "gdb -ex 'shell id > {marker}' -ex quit",
     },
     {
+      executable: "gdb",
+      first: "gdb -iex 'print 1'",
+      second: "gdb -iex 'shell id > {marker}'",
+    },
+    {
       executable: "expect",
       first: "expect -c 'puts ok'",
       second: "expect -c 'exec sh -c \"id > {marker}\"'",
+    },
+    {
+      executable: "expect",
+      first: "expect '-cputs ok'",
+      second: "expect '-cexec sh -c \"id > {marker}\"'",
     },
   ] as const)(
     "prevents allow-always bypass for additional inline-eval interpreter: $executable",

@@ -22,6 +22,7 @@ type InterpreterFlagSpec = {
   rawPrefixFlags?: readonly PrefixFlagSpec[];
   joinedExactFlags?: ReadonlySet<string>;
   joinedRawExactFlags?: ReadonlyMap<string, string>;
+  joinedFlagDenyPrefixes?: readonly string[];
   prefixFlags?: readonly PrefixFlagSpec[];
   shortClusterFlags?: readonly ShortClusterFlagSpec[];
   scanPastDoubleDash?: boolean;
@@ -167,23 +168,48 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     names: ["julia"],
     exactFlags: new Set(["-e", "--eval", "--print"]),
     rawExactFlags: new Map([["-E", "-E"]]),
-    joinedExactFlags: new Set(),
-    joinedRawExactFlags: new Map(),
   },
-  { names: ["elixir"], exactFlags: new Set(["-e", "--eval"]), joinedExactFlags: new Set() },
+  {
+    names: ["elixir"],
+    exactFlags: new Set(["-e", "--eval", "--rpc-eval"]),
+    joinedExactFlags: new Set(),
+  },
   { names: ["guile"], exactFlags: new Set(["-c"]), joinedExactFlags: new Set() },
-  { names: ["groovy"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  { names: ["groovy"], exactFlags: new Set(["-e"]), joinedFlagDenyPrefixes: ["-encoding"] },
   { names: ["scala"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
   { names: ["clojure", "clj"], exactFlags: new Set(["-e", "--eval"]), joinedExactFlags: new Set() },
-  { names: ["raku", "perl6"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
+  {
+    names: ["raku", "perl6"],
+    exactFlags: new Set(["-e"]),
+    joinedExactFlags: new Set(),
+    shortClusterFlags: [
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set(["n", "p"]),
+      },
+    ],
+  },
   { names: ["ghc", "ghci"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
   { names: ["erl", "werl"], exactFlags: new Set(["-eval"]) },
   {
     names: ["gdb"],
-    exactFlags: new Set(["-ex", "--eval-command"]),
-    prefixFlags: [{ label: "-ex", prefix: "-ex=" }],
+    exactFlags: new Set([
+      "-ex",
+      "-iex",
+      "-eval-command",
+      "--eval-command",
+      "-init-eval-command",
+      "--init-eval-command",
+    ]),
+    prefixFlags: [
+      { label: "-ex", prefix: "-ex=" },
+      { label: "-iex", prefix: "-iex=" },
+      { label: "-eval-command", prefix: "-eval-command=" },
+      { label: "-init-eval-command", prefix: "-init-eval-command=" },
+    ],
   },
-  { names: ["expect"], exactFlags: new Set(["-c"]), joinedExactFlags: new Set() },
+  { names: ["expect"], exactFlags: new Set(["-c"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
@@ -346,6 +372,9 @@ function matchJoinedExactFlag(
   token: string,
   lower: string,
 ): string | null {
+  if (spec.joinedFlagDenyPrefixes?.some((prefix) => lower.startsWith(prefix)) === true) {
+    return null;
+  }
   for (const flag of spec.exactFlags) {
     if (flag.startsWith("--")) {
       const prefix = `${flag}=`;

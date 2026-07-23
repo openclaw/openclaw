@@ -62,25 +62,41 @@ describe("exec inline eval detection", () => {
     { argv: ["php", "-R", "system('id');"], expected: "php -R" },
     { argv: ["Rscript", "-e", "system('id')"], expected: "rscript -e" },
     { argv: ["julia", "-e", "run(`id`)"], expected: "julia -e" },
+    { argv: ["julia", "-erun(`id`)"], expected: "julia -e" },
     { argv: ["julia", "--eval=run(`id`)"], expected: "julia --eval" },
     { argv: ["julia", "-E", "VERSION"], expected: "julia -E" },
+    { argv: ["julia", "-EVERSION"], expected: "julia -E" },
     { argv: ["elixir", "-e", 'System.cmd("id", [])'], expected: "elixir -e" },
     { argv: ["elixir", '--eval=System.cmd("id", [])'], expected: "elixir --eval" },
+    {
+      argv: ["elixir", "--rpc-eval", "worker@127.0.0.1", 'System.cmd("id", [])'],
+      expected: "elixir --rpc-eval",
+    },
     { argv: ["guile", "-c", '(system "id")'], expected: "guile -c" },
     { argv: ["groovy", "-e", '"id".execute()'], expected: "groovy -e" },
+    { argv: ["groovy", '-e"id".execute()'], expected: "groovy -e" },
     { argv: ["scala", "-e", 'sys.process.Process("id").!'], expected: "scala -e" },
     { argv: ["clojure", "-e", '(clojure.java.shell/sh "id")'], expected: "clojure -e" },
     { argv: ["clj", "--eval", "(println 1)"], expected: "clj --eval" },
     { argv: ["raku", "-e", "run 'id'"], expected: "raku -e" },
+    { argv: ["raku", "-ne", "run 'id'"], expected: "raku -e" },
     { argv: ["perl6", "-e", "run 'id'"], expected: "perl6 -e" },
+    { argv: ["perl6", "-pe", "run 'id'"], expected: "perl6 -e" },
     { argv: ["ghc", "-e", 'System.Process.system "id"'], expected: "ghc -e" },
     { argv: ["ghci", "-e", 'System.Process.system "id"'], expected: "ghci -e" },
     { argv: ["erl", "-eval", 'os:cmd("id").'], expected: "erl -eval" },
     { argv: ["werl", "-eval", 'os:cmd("id").'], expected: "werl -eval" },
     { argv: ["gdb", "-ex", "shell id", "-ex", "quit"], expected: "gdb -ex" },
     { argv: ["gdb", "-ex=shell id", "-ex", "quit"], expected: "gdb -ex" },
+    { argv: ["gdb", "-iex", "shell id"], expected: "gdb -iex" },
+    { argv: ["gdb", "-iex=shell id"], expected: "gdb -iex" },
+    { argv: ["gdb", "-eval-command", "shell id"], expected: "gdb -eval-command" },
+    { argv: ["gdb", "-eval-command=shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "--eval-command=shell id"], expected: "gdb --eval-command" },
+    { argv: ["gdb", "--init-eval-command=shell id"], expected: "gdb --init-eval-command" },
+    { argv: ["gdb", "-init-eval-command=shell id"], expected: "gdb -init-eval-command" },
     { argv: ["expect", "-c", "spawn id"], expected: "expect -c" },
+    { argv: ["expect", "-cspawn id"], expected: "expect -c" },
     { argv: ["lua", "-eprint(1)"], expected: "lua -e" },
     { argv: ["osascript", "-e", "beep"], expected: "osascript -e" },
     { argv: ["osascript", '-edisplay alert "hi"'], expected: "osascript -e" },
@@ -142,7 +158,6 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["Rscript", "script.R"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["julia", "script.jl"])).toBeNull();
-    expect(detectInterpreterInlineEvalArgv(["julia", "-EVERSION"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["elixir", "script.exs"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["elixir", "-eIO.puts(1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["guile", "script.scm"])).toBeNull();
