@@ -1435,8 +1435,8 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
-      let lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>>;
-      lifecycle = await lifecyclePromise;
+      const lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>> =
+        await lifecyclePromise;
       if (!resetSkipped) {
         handleSessionStateSessionReset(target.canonicalKey ?? params.key);
       }
