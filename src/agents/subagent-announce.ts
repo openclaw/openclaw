@@ -4,6 +4,7 @@
  * Captures child output, applies wait outcomes, routes announcements, and performs cleanup decisions.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -34,7 +35,7 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
-  buildChildCompletionFindings,
+  buildChildCompletionFindingsWithRuns,
   buildCompactAnnounceStatsLine,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
@@ -128,6 +129,68 @@ function buildDescendantWakeMessage(params: { findings: string; taskLabel: strin
 
 const WAKE_RUN_SUFFIX = ":wake";
 
+type MarkRequesterConsumedCompletion = (params: {
+  requesterSessionKey: string;
+  runStartedAt: number;
+  runIds: readonly string[];
+}) => unknown;
+
+type RequesterConsumedRegistryRuntime = {
+  markDescendantCompletionConsumedByRequester?: MarkRequesterConsumedCompletion;
+};
+
+function deliveryHasRequesterConsumptionCredit(delivery: SubagentAnnounceDeliveryResult): boolean {
+  if (!delivery.delivered) {
+    return false;
+  }
+  const phases = delivery.phases ?? [];
+  if (phases.some((phase) => phase.phase === "direct-primary" && phase.delivered)) {
+    return true;
+  }
+  // Older callers/tests may construct a bare direct result without dispatch phase evidence.
+  // Fallback steering is never represented as path="direct", so keep legacy direct-delivery
+  // credit while denying transcript-only steer fallback.
+  return phases.length === 0 && delivery.path === "direct";
+}
+
+function recordRequesterConsumedDescendantCompletions(params: {
+  delivery: SubagentAnnounceDeliveryResult;
+  subagentRegistryRuntime?: RequesterConsumedRegistryRuntime;
+  childSessionKey: string;
+  childRunId: string;
+  startedAt?: number;
+  childCompletionFindings?: string;
+  consumedChildRunIds?: readonly string[];
+  pendingRequesterConsumedDescendantRunIds?: readonly string[];
+  pendingRequesterConsumedRunStartedAt?: number;
+}): void {
+  if (!deliveryHasRequesterConsumptionCredit(params.delivery)) {
+    return;
+  }
+  const mark = params.subagentRegistryRuntime?.markDescendantCompletionConsumedByRequester;
+  const startedAt = params.startedAt ?? 0;
+  const directRunIds = params.childCompletionFindings?.trim()
+    ? normalizeUniqueStringEntries(params.consumedChildRunIds)
+    : [];
+  if (directRunIds.length > 0) {
+    mark?.({
+      requesterSessionKey: params.childSessionKey,
+      runStartedAt: startedAt,
+      runIds: directRunIds,
+    });
+  }
+  const pendingRunIds = normalizeUniqueStringEntries(
+    params.pendingRequesterConsumedDescendantRunIds,
+  );
+  if (pendingRunIds.length > 0) {
+    mark?.({
+      requesterSessionKey: params.childSessionKey,
+      runStartedAt: params.pendingRequesterConsumedRunStartedAt ?? startedAt,
+      runIds: pendingRunIds,
+    });
+  }
+}
+
 function stripWakeRunSuffixes(runId: string): string {
   let next = runId.trim();
   while (next.endsWith(WAKE_RUN_SUFFIX)) {
@@ -172,6 +235,8 @@ async function wakeSubagentRunAfterDescendants(params: {
   findings: string;
   announceId: string;
   signal?: AbortSignal;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
 }): Promise<boolean> {
   if (params.signal?.aborted) {
     return false;
@@ -231,6 +296,8 @@ async function wakeSubagentRunAfterDescendants(params: {
     // Persist the wake message as the replacement run's task so that any
     // post-restart redispatch reconstructs the correct prompt.
     task: wakeMessage,
+    pendingRequesterConsumedDescendantRunIds: params.pendingRequesterConsumedDescendantRunIds,
+    pendingRequesterConsumedRunStartedAt: params.pendingRequesterConsumedRunStartedAt,
   });
 }
 
@@ -258,6 +325,8 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  pendingRequesterConsumedDescendantRunIds?: string[];
+  pendingRequesterConsumedRunStartedAt?: number;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -317,6 +386,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let childCompletionFindings: string | undefined;
+    let consumedChildRunIds: string[] = [];
     let subagentRegistryRuntime:
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
@@ -348,15 +418,16 @@ export async function runSubagentAnnounceFlow(params: {
           },
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
-          childCompletionFindings = buildChildCompletionFindings(
-            dedupeLatestChildCompletionRows(
-              filterCurrentDirectChildCompletionRows(directChildren, {
-                requesterSessionKey: params.childSessionKey,
-                getLatestSubagentRunByChildSessionKey:
-                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
-              }),
-            ),
+          const currentDirectChildren = filterCurrentDirectChildCompletionRows(directChildren, {
+            requesterSessionKey: params.childSessionKey,
+            getLatestSubagentRunByChildSessionKey:
+              subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+          });
+          const childCompletion = buildChildCompletionFindingsWithRuns(
+            dedupeLatestChildCompletionRows(currentDirectChildren),
           );
+          consumedChildRunIds = childCompletion?.consumedRunIds ?? [];
+          childCompletionFindings = childCompletion?.text;
         }
       }
     } catch {
@@ -385,6 +456,8 @@ export async function runSubagentAnnounceFlow(params: {
         findings: childCompletionFindings,
         announceId: wakeAnnounceId,
         signal: params.signal,
+        pendingRequesterConsumedDescendantRunIds: consumedChildRunIds,
+        pendingRequesterConsumedRunStartedAt: params.startedAt,
       });
       if (woke) {
         shouldDeleteChildSession = false;
@@ -599,6 +672,17 @@ export async function runSubagentAnnounceFlow(params: {
     });
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered || delivery.terminal === true;
+    recordRequesterConsumedDescendantCompletions({
+      delivery,
+      subagentRegistryRuntime,
+      childSessionKey: params.childSessionKey,
+      childRunId: params.childRunId,
+      startedAt: params.startedAt,
+      childCompletionFindings,
+      consumedChildRunIds,
+      pendingRequesterConsumedDescendantRunIds: params.pendingRequesterConsumedDescendantRunIds,
+      pendingRequesterConsumedRunStartedAt: params.pendingRequesterConsumedRunStartedAt,
+    });
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

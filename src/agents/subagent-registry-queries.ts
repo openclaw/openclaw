@@ -500,6 +500,12 @@ export function countActiveDescendantRunsFromRuns(
   return count;
 }
 
+function isRequesterConsumedCompletionSettled(entry: SubagentRunRecord): boolean {
+  return (
+    entry.delivery?.status === "delivered" && typeof entry.delivery.requesterConsumedAt === "number"
+  );
+}
+
 function countPendingDescendantRunsInternal(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
@@ -518,6 +524,7 @@ function countPendingDescendantRunsInternal(
       }
       const runPending = hasSubagentRunEnded(entry)
         ? typeof entry.cleanupCompletedAt !== "number" &&
+          !isRequesterConsumedCompletionSettled(entry) &&
           !(options?.treatSuspendedDeliveryAsSettled === true && isDeliverySuspended(entry))
         : isLiveUnendedSubagentRun(entry);
       if (runPending) {

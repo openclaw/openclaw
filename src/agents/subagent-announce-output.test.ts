@@ -5,7 +5,7 @@ import {
   testing,
   applySubagentWaitOutcome,
   buildCompactAnnounceStatsLine,
-  buildChildCompletionFindings,
+  buildChildCompletionFindingsWithRuns,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
 } from "./subagent-announce-output.test-support.js";
@@ -262,7 +262,13 @@ describe("readSubagentOutput", () => {
   });
 });
 
-describe("buildChildCompletionFindings", () => {
+function buildChildCompletionFindings(
+  children: Parameters<typeof buildChildCompletionFindingsWithRuns>[0],
+): string | undefined {
+  return buildChildCompletionFindingsWithRuns(children)?.text;
+}
+
+describe("buildChildCompletionFindingsWithRuns", () => {
   it("does not convert ANNOUNCE_SKIP child completions into no-output findings", () => {
     const findings = buildChildCompletionFindings([
       {

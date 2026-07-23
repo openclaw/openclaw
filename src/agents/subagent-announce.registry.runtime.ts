@@ -15,3 +15,4 @@ export {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-runtime.js";
+export { markDescendantCompletionConsumedByRequester } from "./subagent-registry-consumption.js";

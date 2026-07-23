@@ -177,6 +177,7 @@ function mergeDeliveryState(
     enqueuedAt: current.enqueuedAt ?? restored.enqueuedAt,
     deliveredAt: current.deliveredAt ?? restored.deliveredAt,
     announcedAt: current.announcedAt ?? restored.announcedAt,
+    requesterConsumedAt: current.requesterConsumedAt ?? restored.requesterConsumedAt,
     lastAttemptAt: current.lastAttemptAt ?? restored.lastAttemptAt,
     attemptCount: current.attemptCount ?? restored.attemptCount,
     lastError: current.lastError ?? restored.lastError,

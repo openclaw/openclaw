@@ -134,7 +134,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("child output text");
+    expect(result?.text).toBe("child output text");
   });
 
   it("falls back to frozenResultText when session transcript unavailable", async () => {
@@ -149,7 +149,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("frozen child output");
+    expect(result?.text).toBe("frozen child output");
   });
 
   it("prefers session transcript over frozenResultText", async () => {
@@ -161,7 +161,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("live transcript text");
+    expect(result?.text).toBe("live transcript text");
   });
 
   it("prefers captured completion for internally resumed descendants", async () => {
@@ -176,7 +176,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("fresh recovered output");
+    expect(result?.text).toBe("fresh recovered output");
   });
 
   it("does not fall back to visible transcript for internally resumed descendants without captured output", async () => {
@@ -212,7 +212,31 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("first child output\n\nsecond child output");
+    expect(result?.text).toBe("first child output\n\nsecond child output");
+  });
+
+  it("returns consumed run ids with fallback reply details", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+      createDescendantRun({ runId: "run-1", resultText: "first child output" }),
+      createDescendantRun({
+        runId: "run-2",
+        childSessionKey: "child-2",
+        task: "task-2",
+        endedAt: 3000,
+        resultText: "second child output",
+      }),
+    ]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
+
+    const result = await readDescendantSubagentFallbackReply({
+      sessionKey: "test-session",
+      runStartedAt,
+    });
+
+    expect(result).toEqual({
+      text: "first child output\n\nsecond child output",
+      consumedRunIds: ["run-1", "run-2"],
+    });
   });
 
   it("skips SILENT_REPLY_TOKEN descendants", async () => {
@@ -236,7 +260,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       sessionKey: "test-session",
       runStartedAt,
     });
-    expect(result).toBe("useful output");
+    expect(result?.text).toBe("useful output");
   });
 
   it("returns undefined when completion result is null", async () => {

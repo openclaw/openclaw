@@ -48,6 +48,7 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
     countPendingDescendantRuns: vi.fn(() => 0),
     countPendingDescendantRunsExcludingRun: vi.fn(() => 0),
     listSubagentRunsForRequester: vi.fn(() => []),
+    markDescendantCompletionConsumedByRequester: vi.fn(() => 0),
     replaceSubagentRunAfterSteer: vi.fn(() => true),
     resolveRequesterForChildSession: vi.fn(() => null),
   },
