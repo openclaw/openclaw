@@ -418,7 +418,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       // Special handling for suspicious-network: check port
       if (rule.ruleId === "suspicious-network") {
         const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
-        if (STANDARD_PORTS.has(port)) {
+        if (Number.isFinite(port) && port >= 0 && port <= 65535 && STANDARD_PORTS.has(port)) {
           continue;
         }
       }
