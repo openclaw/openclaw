@@ -57,6 +57,10 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     `<version>` (e.g. `2026.2.26`), and beta versions such as
     `2026.2.26-beta.1`. Beta tags do not move `latest` or `main`.
 
+    Extended-stable releases use dedicated aliases: `extended-stable`,
+    `extended-stable-slim`, and `extended-stable-browser`. They never advance
+    the regular `latest`, `main`, or browser aliases.
+
   </Step>
 
   <Step title="Airgapped rerun">
