@@ -487,7 +487,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
               registry.plugins.find((entry) => entry.id === pluginId);
-            if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+            // `state` (openKeyedStore/openSyncKeyedStore/openChannelIngressQueue) is
+            // namespaced per-plugin persistent storage. It is safe for bundled plugins,
+            // official @openclaw installs, and plugins the user installed themselves
+            // (global/workspace origins) — including plugins generated locally by
+            // OpenClaw's own plugin-generation flow, which run the user's own code.
+            const trusted =
+              record?.origin === "bundled" ||
+              record?.trustedOfficialInstall === true ||
+              record?.origin === "global" ||
+              record?.origin === "workspace";
+            if (!trusted) {
               throw new Error(
                 `${methodName} is only available for trusted plugins in this release.`,
               );
