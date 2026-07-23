@@ -762,9 +762,14 @@ export function createSessionMcpRuntime(params: {
                           catalogInFlight = undefined;
                           // The runtime owns refresh generations. Cancel only work
                           // whose result can no longer populate the current cache.
-                          supersededRefresh?.controller.abort(
-                            new Error("MCP catalog refresh superseded by tools/list_changed"),
-                          );
+                          // Let a protocol response delivered immediately before
+                          // this notification settle before cancelling remaining
+                          // in-flight and queued work from the old generation.
+                          queueMicrotask(() => {
+                            supersededRefresh?.controller.abort(
+                              new Error("MCP catalog refresh superseded by tools/list_changed"),
+                            );
+                          });
                         },
                       },
                     },
@@ -976,7 +981,8 @@ export function createSessionMcpRuntime(params: {
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
-        if (abandonedCatalogRefreshControllers.has(refreshController)) {
+        const generationSuperseded = catalogInvalidationGeneration !== catalogGeneration;
+        if (abandonedCatalogRefreshControllers.has(refreshController) || generationSuperseded) {
           await retireSessionsCreatedAndOwnedByCatalogRefresh(refreshController);
           throw error;
         }
