@@ -47,6 +47,8 @@ describe("tui session actions", () => {
       restorePendingUsers: vi.fn(),
       updateAssistant: vi.fn(),
       startTool: vi.fn(),
+      recordToolActivity: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
     } as unknown as ChatLog;
     return { chatLog, addSystem, addUser };
   };
@@ -83,11 +85,13 @@ describe("tui session actions", () => {
       chatLog: {
         addSystem: vi.fn(),
         addUser: vi.fn(),
+        updateAssistant: vi.fn(),
         finalizeAssistant: vi.fn(),
         clearPendingUsers: vi.fn(),
         clearAll: vi.fn(),
         reconcilePendingUsers: vi.fn().mockReturnValue([]),
         restorePendingUsers: vi.fn(),
+        resetStreamingAssistantState: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
       tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
@@ -628,6 +632,7 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
     } as unknown as import("./components/chat-log.js").ChatLog;
@@ -663,6 +668,7 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
     } as unknown as import("./components/chat-log.js").ChatLog;
@@ -695,6 +701,7 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
     } as unknown as import("./components/chat-log.js").ChatLog;
@@ -1505,11 +1512,13 @@ describe("tui session actions", () => {
     const chatLog = {
       addSystem: vi.fn(),
       addUser: vi.fn(),
+      updateAssistant: vi.fn(),
       finalizeAssistant: vi.fn(),
       clearAll: vi.fn(),
       clearPendingUsers: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
       restorePendingUsers: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
     };
 
     const { loadHistory: runLoadHistory } = createTestSessionActions({
@@ -1585,6 +1594,154 @@ describe("tui session actions", () => {
       runId: "run-pending",
       text: "not persisted",
     });
+  });
+
+  it("gives each replayed assistant turn its own runId so separate turns cannot collapse into one component (#onresume)", async () => {
+    // Two user/assistant turns with nothing (no tool call) between them. Before
+    // the fix, both updateAssistant() calls shared the same default runId, so
+    // the second call's setText() silently overwrote the first turn's component
+    // instead of rendering as its own row in its own chronological position.
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        { role: "user", content: "first question" },
+        { role: "assistant", content: [{ type: "text", text: "first answer" }] },
+        { role: "user", content: "second question" },
+        { role: "assistant", content: [{ type: "text", text: "second answer" }] },
+      ],
+    });
+    const updateAssistant = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      updateAssistant,
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
+    };
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    expect(updateAssistant).toHaveBeenCalledTimes(2);
+    const [firstCall, secondCall] = updateAssistant.mock.calls;
+    expect(firstCall?.[0]).toBe("first answer");
+    expect(secondCall?.[0]).toBe("second answer");
+    expect(firstCall?.[1]).toBeTruthy();
+    expect(secondCall?.[1]).toBeTruthy();
+    expect(firstCall?.[1]).not.toBe(secondCall?.[1]);
+  });
+
+  it("records a segment boundary for replayed tool calls even when verbose is off", async () => {
+    // Default verbose level hides tool cards on replay. The hidden card must
+    // still freeze the pre-tool assistant text (via the verbose-off activity
+    // path), or the turn's later cumulative text rewrites the earlier component
+    // in place, reproducing the chronology defect on the default resume path.
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        { role: "user", content: "question" },
+        { role: "assistant", content: [{ type: "text", text: "before tool" }] },
+        { role: "toolResult", toolCallId: "call-1", toolName: "read", content: [] },
+        { role: "assistant", content: [{ type: "text", text: "before tool\n\nafter tool" }] },
+      ],
+    });
+    const updateAssistant = vi.fn();
+    const startTool = vi.fn();
+    const recordToolActivity = vi.fn();
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      updateAssistant,
+      finalizeAssistant: vi.fn(),
+      startTool,
+      recordToolActivity,
+      clearAll: vi.fn(),
+      clearPendingUsers: vi.fn(),
+      reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restorePendingUsers: vi.fn(),
+      resetStreamingAssistantState: vi.fn(),
+    };
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    expect(startTool).not.toHaveBeenCalled();
+    expect(recordToolActivity).toHaveBeenCalledTimes(1);
+    const [activityRunId, toolName, toolCallId] = recordToolActivity.mock.calls[0] ?? [];
+    expect(toolName).toBe("read");
+    expect(toolCallId).toBe("call-1");
+    // The boundary must key to the same turn runId the surrounding assistant
+    // text streams under, or freezing it would not affect that text at all.
+    expect(updateAssistant).toHaveBeenCalledTimes(2);
+    expect(updateAssistant.mock.calls[0]?.[1]).toBe(activityRunId);
+    expect(updateAssistant.mock.calls[1]?.[1]).toBe(activityRunId);
+  });
+
+  it("replays tool cards with the live output policy: header-only below `full` verbosity", async () => {
+    // The live tool-event path blanks result content below `full` so cards stay
+    // header-only; replay must apply the same policy or resume renders louder
+    // than the run it replays.
+    const makeHarness = (verboseLevel: string) => {
+      const loadHistory = vi.fn().mockResolvedValue({
+        sessionId: "session-main",
+        messages: [
+          { role: "user", content: "question" },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "stored output" }],
+          },
+        ],
+      });
+      const setResult = vi.fn();
+      const startTool = vi.fn().mockReturnValue({ setResult });
+      const chatLog = {
+        addSystem: vi.fn(),
+        addUser: vi.fn(),
+        updateAssistant: vi.fn(),
+        finalizeAssistant: vi.fn(),
+        startTool,
+        recordToolActivity: vi.fn(),
+        clearAll: vi.fn(),
+        clearPendingUsers: vi.fn(),
+        reconcilePendingUsers: vi.fn().mockReturnValue([]),
+        restorePendingUsers: vi.fn(),
+        resetStreamingAssistantState: vi.fn(),
+      };
+      const state = createBaseState({
+        sessionInfo: { verboseLevel } as TuiStateAccess["sessionInfo"],
+      });
+      const { loadHistory: runLoadHistory } = createTestSessionActions({
+        client: { listSessions: vi.fn(), loadHistory } as unknown as TuiBackend,
+        chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+        state,
+      });
+      return { runLoadHistory, setResult };
+    };
+
+    const collapsed = makeHarness("on");
+    await collapsed.runLoadHistory();
+    expect(collapsed.setResult).toHaveBeenCalledWith({ content: [] }, { isError: false });
+
+    const full = makeHarness("full");
+    await full.runLoadHistory();
+    expect(full.setResult).toHaveBeenCalledWith(
+      { content: [{ type: "text", text: "stored output" }], details: undefined },
+      { isError: false },
+    );
   });
 
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {

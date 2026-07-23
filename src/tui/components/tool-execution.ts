@@ -1,5 +1,12 @@
 // Tool execution component renders tool call status and output in the TUI.
-import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+  Box,
+  type Component,
+  Container,
+  Markdown,
+  Text,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 import { sanitizeRenderableText } from "../tui-formatters.js";
@@ -19,6 +26,24 @@ type ToolResult = {
 };
 
 const PREVIEW_LINES = 12;
+
+// The condensed card gives the title+args header exactly one row; an over-wide
+// header must truncate at the render width (ANSI-aware), not word-wrap and push
+// the card layout open. pi-tui's TruncatedText does that but has no setter, so
+// this shim adds the setText() the refresh() cycle needs.
+class SingleLineText implements Component {
+  private text = "";
+
+  setText(text: string) {
+    this.text = text;
+  }
+
+  invalidate() {}
+
+  render(width: number): string[] {
+    return [truncateToWidth(this.text, Math.max(1, width), "…")];
+  }
+}
 
 // Prefer curated display summaries, then fall back to sanitized JSON args.
 function formatArgs(toolName: string, args: unknown): string {
@@ -59,7 +84,7 @@ function extractText(result?: ToolResult): string {
 /** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
   private box: Box;
-  private header: Text;
+  private header: SingleLineText;
   private argsLine: Text;
   private output: Markdown;
   private toolName: string;
@@ -73,13 +98,12 @@ export class ToolExecutionComponent extends Container {
     super();
     this.toolName = toolName;
     this.args = args;
-    this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
-    this.header = new Text("", 0, 0);
+    this.box = new Box(1, 0, (line) => theme.toolPendingBg(line));
+    this.header = new SingleLineText();
     this.argsLine = new Text("", 0, 0);
     this.output = new Markdown("", 0, 0, markdownTheme, {
       color: (line) => theme.toolOutput(line),
     });
-    this.addChild(new Spacer(1));
     this.addChild(this.box);
     this.box.addChild(this.header);
     this.box.addChild(this.argsLine);
@@ -127,10 +151,12 @@ export class ToolExecutionComponent extends Container {
       args: this.args,
     });
     const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
-    this.header.setText(theme.toolTitle(theme.bold(title)));
-
     const argLine = formatArgs(this.toolName, this.args);
-    this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
+    const combined = argLine
+      ? `${theme.toolTitle(theme.bold(title))}  ${theme.dim(argLine)}`
+      : theme.toolTitle(theme.bold(title));
+    this.header.setText(combined);
+    this.argsLine.setText("");
 
     const raw = extractText(this.result);
     const text = raw || (this.isPartial ? "…" : "");

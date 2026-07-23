@@ -1,15 +1,10 @@
 // Handles TUI keyboard, paste, backend, and command events.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import {
-  asString,
-  extractTextFromMessage,
-  isCommandMessage,
-  sanitizeRenderableText,
-} from "./tui-formatters.js";
+import { formatRunAbortedNotice } from "./run-abort-notice.js";
+import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import {
   clearPendingSubmit,
@@ -33,6 +28,7 @@ type EventHandlerChatLog = {
     result: unknown,
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
+  recordToolActivity: (runId: string, toolName: string, toolCallId: string) => void;
   addSystem: (text: string) => void;
   addPendingSystem: (runId: string, text: string) => void;
   dismissPendingSystem: (runId: string) => void;
@@ -49,20 +45,6 @@ type EventHandlerBtwPresenter = {
   showResult: (params: { question: string; text: string; isError?: boolean }) => void;
   clear: () => void;
 };
-
-const MAX_ABORT_DIAGNOSTIC_LENGTH = 160;
-
-function formatAbortDiagnostic(value: string | undefined): string | undefined {
-  const diagnostic = sanitizeRenderableText(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!diagnostic) {
-    return undefined;
-  }
-  return diagnostic.length > MAX_ABORT_DIAGNOSTIC_LENGTH
-    ? `${truncateUtf16Safe(diagnostic, MAX_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
-    : diagnostic;
-}
 
 type EventHandlerContext = {
   chatLog: EventHandlerChatLog;
@@ -794,8 +776,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      const diagnostic = formatAbortDiagnostic(evt.errorMessage);
-      chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
+      chatLog.addSystem(formatRunAbortedNotice(evt.errorMessage));
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -1034,16 +1015,21 @@ export function createEventHandlers(context: EventHandlerContext) {
         armStreamingWatchdog(evt.runId);
       }
       const verbose = state.sessionInfo.verboseLevel ?? "off";
-      const allowToolEvents = verbose !== "off";
       const allowToolOutput = verbose === "full";
-      if (!allowToolEvents) {
-        return;
-      }
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
       const toolName = asString(data.name, "tool");
       if (!toolCallId) {
+        return;
+      }
+      if (verbose === "off") {
+        // Full tool cards are suppressed entirely in this mode; fall back to a
+        // compact one-line fuzzy summary so the user still sees that tools ran.
+        if (phase === "start") {
+          chatLog.recordToolActivity(evt.runId, toolName, toolCallId);
+          tui.requestRender();
+        }
         return;
       }
       if (phase === "start") {

@@ -13,6 +13,7 @@ import {
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { sessionInfoUiEquals } from "./tui-session-info-equality.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -53,58 +54,6 @@ type SessionInfoEntry = SessionInfo & {
   modelOverride?: string;
   providerOverride?: string;
 };
-
-function thinkingLevelsEqual(
-  left?: Array<{ id: string; label: string }>,
-  right?: Array<{ id: string; label: string }>,
-): boolean {
-  if (left === right) {
-    return true;
-  }
-  if (!left || !right || left.length !== right.length) {
-    return false;
-  }
-  return left.every((level, index) => {
-    const other = right[index];
-    return other?.id === level.id && other.label === level.label;
-  });
-}
-
-function goalEquals(left: SessionInfo["goal"], right: SessionInfo["goal"]): boolean {
-  return left === right || JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
-}
-
-function agentRuntimeEquals(
-  left: SessionInfo["agentRuntime"],
-  right: SessionInfo["agentRuntime"],
-): boolean {
-  return (
-    left === right ||
-    (left?.id === right?.id && left?.source === right?.source && left?.fallback === right?.fallback)
-  );
-}
-
-function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
-  return (
-    left.thinkingLevel === right.thinkingLevel &&
-    thinkingLevelsEqual(left.thinkingLevels, right.thinkingLevels) &&
-    left.fastMode === right.fastMode &&
-    left.verboseLevel === right.verboseLevel &&
-    left.traceLevel === right.traceLevel &&
-    left.reasoningLevel === right.reasoningLevel &&
-    left.model === right.model &&
-    left.modelProvider === right.modelProvider &&
-    agentRuntimeEquals(left.agentRuntime, right.agentRuntime) &&
-    left.contextTokens === right.contextTokens &&
-    left.inputTokens === right.inputTokens &&
-    left.outputTokens === right.outputTokens &&
-    left.totalTokens === right.totalTokens &&
-    left.responseUsage === right.responseUsage &&
-    left.effectiveResponseUsage === right.effectiveResponseUsage &&
-    left.displayName === right.displayName &&
-    goalEquals(left.goal, right.goal)
-  );
-}
 
 function extractMessageTimestamp(message: Record<string, unknown>): number | null {
   const raw = message.timestamp;
@@ -525,6 +474,13 @@ export function createSessionActions(context: SessionActionContext) {
       chatLog.clearAll({ preservePendingUsers: true });
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
+      // Groups replayed assistant/toolResult entries by the user turn they
+      // answer. Each distinct turn must get its own chatLog runId: updateAssistant()
+      // reuses an existing component for a given runId, so two separate historical
+      // turns sharing one key would collapse into a single component showing only
+      // the later turn's text, stranded at the earlier turn's position (#onresume).
+      let historyTurnSeq = 0;
+      let historyTurnRunId = `history-turn-${historyTurnSeq}`;
       for (const entry of record.messages ?? []) {
         if (!entry || typeof entry !== "object") {
           continue;
@@ -546,6 +502,8 @@ export function createSessionActions(context: SessionActionContext) {
             });
             chatLog.addUser(text);
           }
+          historyTurnSeq += 1;
+          historyTurnRunId = `history-turn-${historyTurnSeq}`;
           continue;
         }
         if (message.role === "assistant") {
@@ -553,33 +511,48 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
-            chatLog.finalizeAssistant(text);
+            chatLog.updateAssistant(text, historyTurnRunId);
           }
           continue;
         }
         if (message.role === "toolResult") {
-          if (!showTools) {
-            continue;
-          }
           const toolCallId = asString(message.toolCallId, "");
           const toolName = asString(message.toolName, "tool");
-          const component = chatLog.startTool(toolCallId, toolName, {});
+          if (!showTools) {
+            // A hidden card is still a segment boundary. Route through the same
+            // verbose-off path a live run uses: it freezes the pre-tool text so
+            // this turn's later cumulative text starts a new component instead
+            // of rewriting the old one, and restores the activity summary line.
+            chatLog.recordToolActivity(historyTurnRunId, toolName, toolCallId);
+            continue;
+          }
+          // History rows do not persist tool args; undefined renders a clean title-only
+          // header instead of a literal "{}" args summary on every replayed card.
+          const component = chatLog.startTool(toolCallId, toolName, undefined);
+          // Mirror the live tool-event output policy: below `full` verbosity the
+          // live path blanks result content so cards stay header-only. Replaying
+          // stored content unfiltered would dump previews the live session
+          // suppressed, making resume render louder than the run it replays.
+          const allowToolOutput = (state.sessionInfo.verboseLevel ?? "off") === "full";
           component.setResult(
-            {
-              content: Array.isArray(message.content)
-                ? (message.content as Record<string, unknown>[])
-                : [],
-              details:
-                typeof message.details === "object" && message.details
-                  ? (message.details as Record<string, unknown>)
-                  : undefined,
-            },
+            allowToolOutput
+              ? {
+                  content: Array.isArray(message.content)
+                    ? (message.content as Record<string, unknown>[])
+                    : [],
+                  details:
+                    typeof message.details === "object" && message.details
+                      ? (message.details as Record<string, unknown>)
+                      : undefined,
+                }
+              : { content: [] },
             { isError: Boolean(message.isError) },
           );
         }
       }
       submit.reconcilePendingSubmitHistory(state, chatLog.reconcilePendingUsers(historyUsers));
       chatLog.restorePendingUsers();
+      chatLog.resetStreamingAssistantState();
       // Restore a run still streaming for this session+agent that the gateway
       // reports as in-flight. Its live deltas were delivered to a per-agent key
       // we stopped watching after switching away, so the persisted history above

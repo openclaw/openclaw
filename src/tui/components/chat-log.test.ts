@@ -75,6 +75,61 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("renders assistant text after a mid-run tool call below the tool card, not above it", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Let me check that for you.", "run-1");
+    chatLog.startTool("tool-1", "bash", { command: "ls" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "file1\nfile2" }] });
+    // Same runId: the underlying run streams one cumulative buffer across the
+    // whole tool-calling loop, so this includes the pre-tool text too.
+    chatLog.updateAssistant(
+      "Let me check that for you.\n\nHere's what I found: file1, file2.",
+      "run-1",
+    );
+
+    expect(chatLog.children.map((c) => c.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    const preToolIndex = rendered.indexOf("Let me check that for you.");
+    const toolIndex = rendered.indexOf("Bash");
+    const postToolIndex = rendered.indexOf("Here's what I found");
+    expect(preToolIndex).toBeGreaterThanOrEqual(0);
+    expect(toolIndex).toBeGreaterThan(preToolIndex);
+    expect(postToolIndex).toBeGreaterThan(toolIndex);
+  });
+
+  it("does not duplicate earlier segments across a second mid-run tool call", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.updateAssistant("Sure, let me look.", "run-1");
+    chatLog.startTool("tool-1", "bash", { command: "ls" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "a.txt" }] });
+    chatLog.updateAssistant("Sure, let me look.\n\nAlright, found a file.", "run-1");
+    chatLog.startTool("tool-2", "bash", { command: "cat a.txt" });
+    chatLog.updateToolResult("tool-2", { content: [{ type: "text", text: "hello" }] });
+    chatLog.updateAssistant(
+      "Sure, let me look.\n\nAlright, found a file.\n\nIt says hello.",
+      "run-1",
+    );
+
+    expect(chatLog.children.map((c) => c.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    const occurrences = (needle: string) => rendered.split(needle).length - 1;
+    expect(occurrences("Sure, let me look.")).toBe(1);
+    expect(occurrences("Alright, found a file.")).toBe(1);
+    expect(occurrences("It says hello.")).toBe(1);
+  });
+
   it("reserves assistant position without clearing existing streamed text", () => {
     const chatLog = new ChatLog(40);
     chatLog.startAssistant("partial", "run-active");
@@ -96,6 +151,73 @@ describe("ChatLog", () => {
     chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
 
     expect(chatLog.children.length).toBe(20);
+  });
+
+  it("shows a one-line fuzzy activity summary that updates in place as tools run", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.recordToolActivity("run-1", "read", "tool-1");
+    let rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("Read a file");
+    expect(chatLog.children.length).toBe(1);
+
+    chatLog.recordToolActivity("run-1", "bash", "tool-2");
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("Read a file and ran a command");
+    // Same run, same component: updates in place instead of adding a new row.
+    expect(chatLog.children.length).toBe(1);
+  });
+
+  it("does not double-count a repeated start event for the same tool call", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.recordToolActivity("run-1", "read", "tool-1");
+    chatLog.recordToolActivity("run-1", "read", "tool-1");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("Read a file");
+    expect(rendered).not.toContain("Read 2 files");
+  });
+
+  it("does not duplicate assistant text when history replay crosses tool boundaries", () => {
+    // Simulates loadHistory() replay: updateAssistant() for assistant messages,
+    // startTool() for tool results. Before the fix, the cumulative text from
+    // a run that spans tool calls would duplicate the pre-tool portion.
+    const chatLog = new ChatLog(40);
+
+    // Replay: assistant says something, then a tool call happens.
+    chatLog.updateAssistant("Let me look into that.", "replay-run");
+    chatLog.startTool("t1", "bash", { command: "ls" });
+    chatLog.updateToolResult("t1", { content: [{ type: "text", text: "a.txt b.txt" }] });
+    // Replay: assistant continues with cumulative text (includes pre-tool part).
+    chatLog.updateAssistant("Let me look into that.\n\nFound a.txt and b.txt.", "replay-run");
+    chatLog.startTool("t2", "bash", { command: "cat a.txt" });
+    chatLog.updateToolResult("t2", { content: [{ type: "text", text: "hello world" }] });
+    // Replay: final assistant message with full cumulative text.
+    chatLog.updateAssistant(
+      "Let me look into that.\n\nFound a.txt and b.txt.\n\nIt says hello world.",
+      "replay-run",
+    );
+
+    // Clean up streaming state as loadHistory does after replay.
+    chatLog["committedTextByRun"].clear();
+    chatLog["lastFullTextByRun"].clear();
+    chatLog["streamingRuns"].clear();
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    const occurrences = (needle: string) => rendered.split(needle).length - 1;
+    // Each segment should appear exactly once — no duplication.
+    expect(occurrences("Let me look into that.")).toBe(1);
+    expect(occurrences("Found a.txt and b.txt.")).toBe(1);
+    expect(occurrences("It says hello world.")).toBe(1);
+    // Correct ordering: pre-tool text, tool, post-tool text, tool, final text.
+    expect(chatLog.children.map((c) => c.constructor.name)).toEqual([
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+      "ToolExecutionComponent",
+      "AssistantMessageComponent",
+    ]);
   });
 
   it("clears visible tool entries and stale tool references", () => {
