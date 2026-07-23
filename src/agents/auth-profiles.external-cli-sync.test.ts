@@ -380,6 +380,68 @@ describe("external cli oauth resolution", () => {
     expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
   });
 
+  it("re-seeds a dead-marked codex profile from a different Codex CLI grant", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-fresh-refresh",
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(OPENAI_CODEX_DEFAULT_PROFILE_ID, {
+        ...makeOAuthCredential({
+          provider: "openai",
+          access: "dead-access",
+          refresh: "dead-refresh",
+          expires: Date.now() - 5_000,
+          accountId: "acct-codex",
+        }),
+        refreshDeadAt: Date.now() - 1_000,
+      }),
+      { providerIds: ["openai"] },
+    );
+
+    expectCredentialFields(
+      expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
+      {
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "codex-cli-fresh-refresh",
+        accountId: "acct-codex",
+      },
+    );
+  });
+
+  it("does not re-seed a dead-marked codex profile from the same dead grant", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai",
+        access: "codex-cli-access",
+        refresh: "dead-refresh",
+        accountId: "acct-codex",
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(OPENAI_CODEX_DEFAULT_PROFILE_ID, {
+        ...makeOAuthCredential({
+          provider: "openai",
+          access: "dead-access",
+          refresh: "dead-refresh",
+          expires: Date.now() - 5_000,
+          accountId: "acct-codex",
+        }),
+        refreshDeadAt: Date.now() - 1_000,
+      }),
+      { providerIds: ["openai"] },
+    );
+
+    expect(profiles).toStrictEqual([]);
+  });
+
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {
     mocks.readCodexCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({
