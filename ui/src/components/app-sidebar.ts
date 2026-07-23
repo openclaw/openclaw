@@ -127,7 +127,8 @@ class AppSidebar extends AppSidebarSessionListElement {
       return agentId !== cardAgentId && this.agentUnreadCount(agentId) > 0;
     });
     const cardName = cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId;
-    const approvalCount = this.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
+    const approvalCount =
+      this.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
     const cardAvatarText =
       (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
       (cardName || cardAgentId).slice(0, 1).toUpperCase();
@@ -184,7 +185,10 @@ class AppSidebar extends AppSidebarSessionListElement {
     const agentId = this.activeChipAgent().activeId;
     const mainKey = this.selectedAgentMainSessionKey(agentId);
     const mainRow = this.mainSessionRow(agentId);
-    const approvalNeeded = sessionHasPendingApproval(this.approvalBadgeSnapshot(), mainKey);
+    const approvalNeeded = sessionHasPendingApproval(
+      this.sessionData.approvalBadgeSnapshot(),
+      mainKey,
+    );
     const outboxCount = this.outboxCountForSessionKey(mainKey);
     const active =
       this.activeRouteId === "chat" &&
@@ -275,8 +279,8 @@ class AppSidebar extends AppSidebarSessionListElement {
     const selfUser = this.connected
       ? resolveCurrentSelfUser({
           snapshotUser: this.context?.gateway.snapshot.selfUser,
-          presenceEntries: readPresenceEntries(this.presencePayload),
-          presenceInstanceId: this.presenceInstanceId,
+          presenceEntries: readPresenceEntries(this.sessionData.presencePayload),
+          presenceInstanceId: this.sessionData.presenceInstanceId,
         })
       : null;
     const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
@@ -308,8 +312,8 @@ class AppSidebar extends AppSidebarSessionListElement {
             </openclaw-tooltip>`
           : nothing}
         <openclaw-viewer-facepile
-          .presencePayload=${this.presencePayload}
-          .selfInstanceId=${this.presenceInstanceId}
+          .presencePayload=${this.sessionData.presencePayload}
+          .selfInstanceId=${this.sessionData.presenceInstanceId}
           .buildInfo=${CONTROL_UI_BUILD_INFO}
           .gatewayVersion=${this.gatewayVersion}
           .maxVisible=${5}
@@ -439,9 +443,10 @@ class AppSidebar extends AppSidebarSessionListElement {
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${this.renderBrand()}
           <div
-            class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionsScrollState}"
+            class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
+              .sessionsScrollState}"
             @scroll=${(event: Event) =>
-              this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+              this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
           >
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               ${this.renderPagesHead()}
@@ -478,8 +483,11 @@ class AppSidebar extends AppSidebarSessionListElement {
             ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
-              .mode=${resolveLobsterPetMode(!this.offline, this.sessionsResult?.sessions)}
-              .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
+              .mode=${resolveLobsterPetMode(
+                !this.offline,
+                this.sessionData.sessionsResult?.sessions,
+              )}
+              .runOutcome=${resolveLobsterRunOutcome(this.sessionData.sessionsResult?.sessions)}
               .visitsEnabled=${this.lobsterPetVisits}
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}

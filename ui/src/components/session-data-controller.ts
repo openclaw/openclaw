@@ -1,4 +1,5 @@
-import { state } from "lit/decorators.js";
+import type { ReactiveController } from "lit";
+import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -8,6 +9,10 @@ import {
 } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
+import {
+  CATALOG_SESSION_CONTINUED_EVENT,
+  type CatalogSessionContinuedDetail,
+} from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -17,35 +22,56 @@ import {
   fetchSessionLineage,
   mergeChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
-import { AppSidebarSessionCatalogDataElement } from "./app-sidebar-session-catalog-data.ts";
+import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
+import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import {
   SIDEBAR_AGENT_SESSION_LIST_LIMIT,
   SIDEBAR_SESSION_PAGE_SIZE,
+  resolveSidebarSessionsScrollState,
   type SidebarSessionMutationScope,
   type SidebarSessionStatusFilter,
   type SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
-/** Gateway-backed session and external-catalog synchronization. */
-export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCatalogDataElement {
-  @state() protected visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
-  @state() protected sessionsResult: SessionsListResult | null = null;
-  @state() protected sessionsAgentId: string | null = null;
-  @state() protected sessionsLoading = false;
-  @state() protected childSessionRowsByParent: Readonly<
-    Record<string, readonly GatewaySessionRow[]>
-  > = {};
-  @state() protected loadedChildSessionKeys: ReadonlySet<string> = new Set();
-  @state() protected failedChildSessionKeys: ReadonlySet<string> = new Set();
-  @state() protected loadingChildSessionKeys: ReadonlySet<string> = new Set();
-  @state() protected activeSessionLineageRoot: GatewaySessionRow | null = null;
-  @state() protected sessionsScrollState: SidebarSessionsScrollState = "none";
-  @state() sessionMutationError: string | null = null;
-  @state() presencePayload: PresencePayload | undefined;
-  @state() presenceInstanceId?: string;
+import {
+  applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
+  loadMoreSessionCatalog as loadMoreSessionCatalogData,
+  refreshSessionCatalogs as refreshSessionCatalogData,
+  requestSessionCatalogRefresh as requestSessionCatalogDataRefresh,
+  synchronizeSessionCatalogAgent,
+  type SessionCatalogDataOwner,
+  type SessionDataControllerHost,
+  visibleSessionCatalogClient,
+} from "./session-data-controller-catalog.ts";
 
-  protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
-  protected sessionCreatedOrder = new Map<string, number>();
-  private readonly subscriptions = new SubscriptionsController(this);
+/** Gateway-backed session-list and external-catalog data ownership. */
+export class SessionDataController implements ReactiveController, SessionCatalogDataOwner {
+  sessionCatalogs: SessionCatalog[] = [];
+  loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
+  visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+  sessionsResult: SessionsListResult | null = null;
+  sessionsAgentId: string | null = null;
+  sessionsLoading = false;
+  childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>> = {};
+  loadedChildSessionKeys: ReadonlySet<string> = new Set();
+  failedChildSessionKeys: ReadonlySet<string> = new Set();
+  loadingChildSessionKeys: ReadonlySet<string> = new Set();
+  activeSessionLineageRoot: GatewaySessionRow | null = null;
+  sessionsScrollState: SidebarSessionsScrollState = "none";
+  sessionMutationError: string | null = null;
+  presencePayload: PresencePayload | undefined;
+  presenceInstanceId?: string;
+
+  // These caches were not Lit state on the element and stay non-reactive here.
+  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
+  sessionCreatedOrder = new Map<string, number>();
+
+  private readonly subscriptions: SubscriptionsController;
+  readonly sessionCatalogLive = new SessionCatalogLiveState();
+  sessionCatalogAgentId: string | null = null;
+  sessionCatalogGeneration = 0;
+  sessionCatalogRevision = 0;
+  readonly sessionCatalogPageDepths = new Map<string, number>();
+  readonly sessionCatalogRevisions = new Map<string, number>();
   private sessionsSource: SessionCapability | null = null;
   private childSessionGeneration = 0;
   private sidebarListRequestToken: symbol | null = null;
@@ -67,13 +93,18 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     [];
   private approvalBadges: ApprovalBadgeSnapshot = deriveApprovalBadgeSnapshot([]);
 
-  abstract dismissTransientMenus(): boolean;
-  protected abstract promoteCreatedSession(sessionKey: string): void;
-  protected abstract selectedAgentIdForSessions(): string;
-  protected abstract sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
-
-  constructor() {
-    super();
+  constructor(private readonly host: SessionDataControllerHost) {
+    host.addController(this);
+    // The element used to enter subscriptions before connecting catalog listeners,
+    // then tear subscriptions down after all session cleanup. Keep that ordering.
+    this.subscriptions = new SubscriptionsController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => host.requestUpdate(),
+      get updateComplete() {
+        return host.updateComplete;
+      },
+    });
     this.subscriptions
       .watch(
         () => this.context?.gateway,
@@ -87,7 +118,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       )
       .effect(
         () => this.context?.sessions,
-        (sessions) => sessions.subscribeCreated((key) => this.promoteCreatedSession(key)),
+        (sessions) => sessions.subscribeCreated((key) => host.promoteCreatedSession(key)),
       )
       .effect(
         () => this.context?.gateway,
@@ -100,6 +131,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
             if (event.event === "presence") {
               const presence = readPresenceEntries(event.payload);
               this.presencePayload = presence ? { presence } : undefined;
+              this.notify();
               this.handleSessionCatalogPresence(event.payload);
             }
           }),
@@ -118,27 +150,45 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       );
   }
 
-  approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
-    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
-    if (queue !== this.approvalBadgeQueue) {
-      this.approvalBadgeQueue = queue;
-      this.approvalBadges = deriveApprovalBadgeSnapshot(queue);
-    }
-    return this.approvalBadges;
+  get context(): ApplicationContext<RouteId> | undefined {
+    return this.host.sessionDataContext;
   }
 
-  protected sessionCatalogGatewayClient(): GatewayBrowserClient | null {
-    return this.gatewayClient;
+  get isSessionDataHostConnected(): boolean {
+    return this.host.isConnected;
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
+  get sessionDataHostConnected(): boolean {
+    return this.host.connected;
+  }
+
+  expandedAgentId(): string {
+    return this.host.expandedAgentId();
+  }
+
+  requestSessionDataUpdate(): void {
+    this.host.requestUpdate();
+  }
+
+  private readonly notify = () => this.requestSessionDataUpdate();
+
+  hostConnected(): void {
+    this.subscriptions.hostConnected();
     this.connectSessionCatalogListeners();
   }
 
-  override disconnectedCallback() {
+  hostUpdate(): void {
+    this.subscriptions.hostUpdate();
+  }
+
+  hostUpdated(): void {
+    this.syncSessionsScrollObserver();
+    this.updateSessionCatalogData();
+  }
+
+  hostDisconnected(): void {
     this.disconnectSessionCatalogListeners();
-    this.dismissTransientMenus();
+    this.host.dismissTransientMenus();
     this.invalidateSessionMutations();
     this.gatewaySource = null;
     this.gatewayClient = null;
@@ -155,16 +205,118 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
       this.activeSessionLineageRetryTimer = null;
     }
-    super.disconnectedCallback();
+    this.subscriptions.hostDisconnected();
   }
 
-  override updated() {
-    this.syncSessionsScrollObserver();
-    this.updateSessionCatalogData();
+  approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
+    const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
+    if (queue !== this.approvalBadgeQueue) {
+      this.approvalBadgeQueue = queue;
+      this.approvalBadges = deriveApprovalBadgeSnapshot(queue);
+    }
+    return this.approvalBadges;
   }
 
-  private syncSessionsScrollObserver() {
-    const element = this.querySelector<HTMLElement>(".sidebar-shell__body");
+  sessionCatalogGatewayClient(): GatewayBrowserClient | null {
+    return this.gatewayClient;
+  }
+
+  connectSessionCatalogListeners(): void {
+    // The chat pane announces catalog adoptions so the catalog row binds to
+    // the new session key before the next catalog poll.
+    document.addEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
+    document.addEventListener("visibilitychange", this.handleSessionCatalogPageActivation);
+    globalThis.addEventListener("focus", this.handleSessionCatalogPageActivation);
+  }
+
+  disconnectSessionCatalogListeners(): void {
+    document.removeEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
+    document.removeEventListener("visibilitychange", this.handleSessionCatalogPageActivation);
+    globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
+  }
+
+  retireSessionCatalogData(): void {
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogLive.clear();
+  }
+
+  resetSessionCatalogConnection(): void {
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
+    this.sessionCatalogLive.resetConnection();
+    this.sessionCatalogs = [];
+    this.loadingMoreSessionCatalogIds = new Set();
+    this.sessionCatalogPageDepths.clear();
+    this.sessionCatalogRevisions.clear();
+    this.notify();
+  }
+
+  updateSessionCatalogData(): void {
+    if (this.context) {
+      synchronizeSessionCatalogAgent(this, this.host.expandedAgentId());
+    }
+    if (
+      !visibleSessionCatalogClient(this) ||
+      this.sessionCatalogLive.timer ||
+      this.sessionCatalogLive.requestGeneration === this.sessionCatalogGeneration
+    ) {
+      return;
+    }
+    void this.refreshSessionCatalogs();
+  }
+
+  handleSessionCatalogHostEvent(payload: unknown): void {
+    applySessionCatalogHostEventToData(this, payload);
+  }
+
+  handleSessionCatalogPresence(payload: unknown): void {
+    if (this.sessionCatalogLive.observePresence(payload)) {
+      requestSessionCatalogDataRefresh(this);
+    }
+  }
+
+  private readonly handleCatalogSessionContinued = (
+    event: CustomEvent<CatalogSessionContinuedDetail>,
+  ) => {
+    const detail = event.detail;
+    if (!detail?.sessionKey) {
+      return;
+    }
+    this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
+    this.notify();
+    // Invalidate in-flight polls and load-more merges so a pre-adoption
+    // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
+    this.sessionCatalogRevision += 1;
+    this.sessionCatalogRevisions.set(
+      detail.catalogId,
+      (this.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
+    );
+  };
+
+  private readonly handleSessionCatalogPageActivation = () => {
+    if (document.visibilityState === "hidden") {
+      this.sessionCatalogLive.cancelScheduledRefreshes();
+      return;
+    }
+    this.sessionCatalogLive.scheduleActivation(() => requestSessionCatalogDataRefresh(this));
+  };
+
+  refreshSessionCatalogs(): Promise<void> {
+    return refreshSessionCatalogData(this);
+  }
+
+  loadMoreSessionCatalog(catalogId: string): Promise<void> {
+    return loadMoreSessionCatalogData(this, catalogId);
+  }
+
+  private syncSessionsScrollObserver(): void {
+    const element = this.host.querySelector(".sidebar-shell__body") as HTMLElement | null;
     if (element !== this.sessionsScrollElement) {
       this.sessionsScrollResizeObserver?.disconnect();
       this.sessionsScrollElement = element;
@@ -182,7 +334,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
   }
 
   // One rAF-coalesced scroll read rides paint layout instead of flushing every update.
-  private scheduleSessionsScrollStateSync() {
+  private scheduleSessionsScrollStateSync(): void {
     if (this.sessionsScrollStateFrame !== null) {
       return;
     }
@@ -195,20 +347,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     });
   }
 
-  protected updateSessionsScrollState(element: HTMLElement) {
-    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-    let nextState: SidebarSessionsScrollState = "none";
-    if (maxScrollTop > 1) {
-      if (element.scrollTop <= 1) {
-        nextState = "top";
-      } else if (element.scrollTop >= maxScrollTop - 1) {
-        nextState = "bottom";
-      } else {
-        nextState = "middle";
-      }
-    }
+  updateSessionsScrollState(element: HTMLElement): void {
+    const nextState = resolveSidebarSessionsScrollState(element);
     if (nextState !== this.sessionsScrollState) {
       this.sessionsScrollState = nextState;
+      this.notify();
     }
   }
 
@@ -230,9 +373,10 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
         globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
         this.activeSessionLineageRetryTimer = null;
       }
+      this.notify();
     }
     const snapshot = sessions.state;
-    if (this.sidebarSessionStatusFilter() !== "active") {
+    if (this.host.sidebarSessionStatusFilter() !== "active") {
       return;
     }
     const gateway = this.context?.gateway;
@@ -266,9 +410,10 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       }
     }
     this.sessionsLoading = snapshot.loading;
+    this.notify();
   };
 
-  private synchronizeSessions(sessions: SessionCapability) {
+  private synchronizeSessions(sessions: SessionCapability): void {
     if (sessions !== this.sessionsSource) {
       this.invalidateSessionMutations();
       this.clearSessionCache();
@@ -278,13 +423,13 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     if (this.context?.gateway.snapshot.connected) {
       // Group catalog hydration is idempotent per connection.
       void sessions.groupsLoad();
-      if (this.sidebarSessionStatusFilter() !== "active") {
+      if (this.host.sidebarSessionStatusFilter() !== "active") {
         void this.refreshSidebarSessions();
       }
     }
   }
 
-  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]): void {
     const client = gateway.snapshot.client;
     const connected = gateway.snapshot.connected;
     const clientChanged = client !== this.gatewayClient;
@@ -305,17 +450,18 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       const presence = readPresenceEntries(gateway.snapshot.hello?.snapshot);
       this.presencePayload = presence ? { presence } : undefined;
     }
+    this.notify();
     if (!sourceOrClientChanged) {
       return;
     }
     this.clearSessionCache();
     this.resetSessionCatalogConnection();
-    if (connected && this.sessionsSource && this.sidebarSessionStatusFilter() !== "active") {
+    if (connected && this.sessionsSource && this.host.sidebarSessionStatusFilter() !== "active") {
       void this.refreshSidebarSessions();
     }
   }
 
-  private clearSessionCache() {
+  private clearSessionCache(): void {
     this.sidebarListRequestToken = null;
     this.childSessionGeneration += 1;
     this.childSessionCanonicalListRevision = null;
@@ -337,14 +483,15 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     }
     this.sessionCreatedOrder.clear();
     this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.notify();
   }
 
-  protected async refreshSidebarSessions(agentId = this.expandedAgentId()): Promise<void> {
+  async refreshSidebarSessions(agentId = this.host.expandedAgentId()): Promise<void> {
     const sessions = this.context?.sessions;
     if (!sessions) {
       return;
     }
-    const archivedFilter = this.sidebarSessionStatusFilter();
+    const archivedFilter = this.host.sidebarSessionStatusFilter();
     const options = {
       agentId,
       archivedFilter,
@@ -364,12 +511,13 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     const token = Symbol(agentId);
     this.sidebarListRequestToken = token;
     this.sessionsLoading = true;
+    this.notify();
     try {
       const result = await sessions.list(options);
       if (
         token !== this.sidebarListRequestToken ||
         sessions !== this.context?.sessions ||
-        archivedFilter !== this.sidebarSessionStatusFilter()
+        archivedFilter !== this.host.sidebarSessionStatusFilter()
       ) {
         return;
       }
@@ -383,18 +531,21 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
           }
         }
       }
+      this.notify();
     } catch (error) {
       if (token === this.sidebarListRequestToken) {
         this.sessionMutationError = String(error);
+        this.notify();
       }
     } finally {
       if (token === this.sidebarListRequestToken) {
         this.sessionsLoading = false;
+        this.notify();
       }
     }
   }
 
-  protected async loadChildSessions(parentKey: string): Promise<void> {
+  async loadChildSessions(parentKey: string): Promise<void> {
     if (
       !parentKey ||
       this.loadedChildSessionKeys.has(parentKey) ||
@@ -409,14 +560,11 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     }
     const generation = this.childSessionGeneration;
     this.loadingChildSessionKeys = new Set([...this.loadingChildSessionKeys, parentKey]);
+    this.notify();
     try {
       const isCurrent = () =>
         generation === this.childSessionGeneration && sessions === this.context?.sessions;
-      const rows = await fetchChildSessionRows({
-        sessions,
-        parentKey,
-        isCurrent,
-      });
+      const rows = await fetchChildSessionRows({ sessions, parentKey, isCurrent });
       if (!rows || !isCurrent()) {
         return;
       }
@@ -432,6 +580,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
         failedKeys.delete(parentKey);
         this.failedChildSessionKeys = failedKeys;
       }
+      this.notify();
     } catch {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
         return;
@@ -443,16 +592,18 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
         [parentKey]: this.childSessionRowsByParent[parentKey] ?? [],
       };
       this.failedChildSessionKeys = new Set([...this.failedChildSessionKeys, parentKey]);
+      this.notify();
     } finally {
       if (generation === this.childSessionGeneration && sessions === this.context?.sessions) {
         const next = new Set(this.loadingChildSessionKeys);
         next.delete(parentKey);
         this.loadingChildSessionKeys = next;
+        this.notify();
       }
     }
   }
 
-  protected async loadActiveSessionLineage(sessionKey: string): Promise<void> {
+  async loadActiveSessionLineage(sessionKey: string): Promise<void> {
     const normalizedKey = sessionKey.trim();
     if (normalizedKey !== this.activeSessionLineageRouteKey) {
       this.activeSessionLineageRouteKey = normalizedKey;
@@ -463,6 +614,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
         globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
         this.activeSessionLineageRetryTimer = null;
       }
+      this.notify();
     }
     const gateway = this.context?.gateway;
     const client = gateway?.snapshot.client;
@@ -503,12 +655,13 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       lineage.rowsByParent,
     );
     this.activeSessionLineageRoot = lineage.topmostRow;
+    this.notify();
     this.activeSessionLineageRequestToken = null;
     if (lineage.lookupFailed) {
       this.activeSessionLineageRetryTimer = globalThis.setTimeout(() => {
         this.activeSessionLineageRetryTimer = null;
         if (this.activeSessionLineageRouteKey === normalizedKey) {
-          this.requestUpdate();
+          this.notify();
         }
       }, 5_000);
       return;
@@ -516,14 +669,61 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     this.activeSessionLineageLoaded = true;
   }
 
-  private invalidateSessionMutations() {
-    this.sessionMutationEpoch += 1;
-    this.sessionMutationError = null;
+  setVisibleSessionLimit(limit: number): void {
+    this.visibleSessionLimit = limit;
+    this.notify();
   }
 
-  protected beginSessionMutation(): SidebarSessionMutationScope | null {
+  dismissSessionMutationError(): void {
+    this.sessionMutationError = null;
+    this.notify();
+  }
+
+  resetForStatusFilter(statusFilter: SidebarSessionStatusFilter): void {
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.childSessionRowsByParent = {};
+    this.loadedChildSessionKeys = new Set();
+    this.failedChildSessionKeys = new Set();
+    this.loadingChildSessionKeys = new Set();
+    this.sessionRowsByAgent = {};
+    if (statusFilter === "active" && this.context) {
+      this.sessionsResult = this.context.sessions.state.result;
+      this.sessionsAgentId = this.context.sessions.state.agentId;
+    }
+    this.notify();
+  }
+
+  discardEmptyChildSessionSnapshot(sessionKey: string): void {
+    if (this.childSessionRowsByParent[sessionKey]?.length === 0) {
+      const childRows = { ...this.childSessionRowsByParent };
+      delete childRows[sessionKey];
+      this.childSessionRowsByParent = childRows;
+      const loadedKeys = new Set(this.loadedChildSessionKeys);
+      loadedKeys.delete(sessionKey);
+      this.loadedChildSessionKeys = loadedKeys;
+      this.notify();
+    }
+  }
+
+  retryChildSessions(sessionKey: string): void {
+    if (this.failedChildSessionKeys.has(sessionKey)) {
+      const failedKeys = new Set(this.failedChildSessionKeys);
+      failedKeys.delete(sessionKey);
+      this.failedChildSessionKeys = failedKeys;
+      this.notify();
+    }
+    void this.loadChildSessions(sessionKey);
+  }
+
+  private invalidateSessionMutations(): void {
+    this.sessionMutationEpoch += 1;
+    this.sessionMutationError = null;
+    this.notify();
+  }
+
+  beginSessionMutation(): SidebarSessionMutationScope | null {
     const context = this.context;
-    if (!context || !this.connected) {
+    if (!context || !this.host.connected) {
       return null;
     }
     const gateway = context.gateway;
@@ -532,21 +732,22 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       return null;
     }
     this.sessionMutationError = null;
+    this.notify();
     return {
       epoch: this.sessionMutationEpoch,
       context,
       gateway,
       sessions: context.sessions,
       client,
-      selectedAgentId: this.selectedAgentIdForSessions(),
+      selectedAgentId: this.host.selectedAgentIdForSessions(),
     };
   }
 
-  protected isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean {
+  isSessionMutationScopeCurrent(scope: SidebarSessionMutationScope): boolean {
     const context = this.context;
     const gateway = context?.gateway;
     return (
-      this.connected &&
+      this.host.connected &&
       this.sessionMutationEpoch === scope.epoch &&
       context === scope.context &&
       gateway === scope.gateway &&
@@ -556,9 +757,10 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     );
   }
 
-  protected publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown) {
+  publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
       this.sessionMutationError = String(error);
+      this.notify();
     }
   }
 }

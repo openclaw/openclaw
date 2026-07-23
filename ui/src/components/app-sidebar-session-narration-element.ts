@@ -1,3 +1,4 @@
+import type { PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -85,8 +86,8 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
     });
   }
 
-  override updated() {
-    super.updated();
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
     if (!this.narration) {
       if (this.sidebarLiveActivity) {
         this.ensureNarrationController();

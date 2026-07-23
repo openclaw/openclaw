@@ -2,10 +2,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ApprovalBadgeSnapshot } from "../app/approval-presentation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
-import type { PresencePayload } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
@@ -25,6 +23,7 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip } from "./session-owner-chip.ts";
@@ -44,8 +43,14 @@ export interface SessionListHost {
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly draggingSessionKey: string | null;
   readonly connected: boolean;
-  readonly presencePayload: PresencePayload | undefined;
-  readonly presenceInstanceId?: string;
+  readonly sessionData: Pick<
+    SessionDataController,
+    | "approvalBadgeSnapshot"
+    | "loadMoreSessionCatalog"
+    | "presenceInstanceId"
+    | "presencePayload"
+    | "sessionMutationError"
+  >;
   readonly fullyShownChildSessionKeys: ReadonlySet<string>;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
@@ -57,7 +62,6 @@ export interface SessionListHost {
   readonly sessionGroupMenu: { readonly group: string } | null;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionListRemovalDrop: boolean;
-  readonly sessionMutationError: string | null;
   readonly sessionOwnershipVisible: boolean;
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
@@ -69,7 +73,6 @@ export interface SessionListHost {
     sessionKey: string,
     worktreeId: string,
   ): SessionPullRequestIndicatorState;
-  approvalBadgeSnapshot(): ApprovalBadgeSnapshot;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
@@ -99,7 +102,6 @@ export interface SessionListHost {
   handleSessionListDrop(event: DragEvent): void;
   dismissSessionMutationError(): void;
   toggleCatalogProjectGrouping(): void;
-  loadMoreSessionCatalog(catalogId: string): Promise<void>;
   openCatalogMenu(
     request: CatalogSessionMenuRequest,
     x: number,
@@ -233,8 +235,8 @@ export function renderRecentSession(params: {
             >`
           : nothing}
         <openclaw-viewer-facepile
-          .presencePayload=${host.presencePayload}
-          .selfInstanceId=${host.presenceInstanceId}
+          .presencePayload=${host.sessionData.presencePayload}
+          .selfInstanceId=${host.sessionData.presenceInstanceId}
           .sessionKey=${session.key}
           .maxVisible=${3}
           variant="session"
@@ -242,7 +244,10 @@ export function renderRecentSession(params: {
         ${renderSessionRowBadges({
           ...session,
           pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(host.approvalBadgeSnapshot(), session.key),
+          hasApproval: sessionHasPendingApproval(
+            host.sessionData.approvalBadgeSnapshot(),
+            session.key,
+          ),
         })}
         ${pinnedState}
       </a>
