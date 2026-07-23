@@ -502,6 +502,25 @@ describe("discoverOpenClawPlugins", () => {
     expect(diagnostics).toStrictEqual([]);
   });
 
+  it("ignores TypeScript declaration files (.d.ts, .d.mts, .d.cts) in extension roots", async () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+
+    // Use distinct file names so deriveIdHint produces predictable idHints
+    fs.writeFileSync(path.join(globalExt, "alpha.d.ts"), "export type Foo = string;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "bravo.d.mts"), "export type Bar = number;", "utf-8");
+    fs.writeFileSync(path.join(globalExt, "charlie.d.cts"), "export type Baz = boolean;", "utf-8");
+
+    const { candidates, diagnostics } = await discoverWithStateDir(stateDir, { workspaceDir });
+
+    // deriveIdHint strips only the final extension, so alpha.d.ts -> "alpha.d", bravo.d.mts -> "bravo.d", etc.
+    // On old code, bravo.d.mts and charlie.d.cts would be accepted as candidates -> this assertion would FAIL
+    expectCandidateIds(candidates, { excludes: ["alpha.d", "bravo.d", "charlie.d"] });
+    expect(diagnostics).toStrictEqual([]);
+  });
+
   it("warns without blocking when a plugin requires a missing plugin", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "diffs-language-pack");
