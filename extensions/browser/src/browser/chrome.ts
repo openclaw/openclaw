@@ -55,7 +55,7 @@ import {
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
-  readChromeVersionWithCredentialFallback,
+  readChromeVersionWithPathFallback,
   safeChromeCdpErrorMessage,
 } from "./chrome.diagnostics.js";
 import {
@@ -902,7 +902,7 @@ async function fetchChromeVersion(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion | null> {
   try {
-    return await readChromeVersionWithCredentialFallback(cdpUrl, timeoutMs, ssrfPolicy);
+    return await readChromeVersionWithPathFallback(cdpUrl, timeoutMs, ssrfPolicy);
   } catch {
     return null;
   }
@@ -1006,8 +1006,8 @@ export async function launchOpenClawChrome(
   }
 
   // Surface `loopbackMode=block` before spawning Chrome. The CDP fetch and
-  // WebSocket helpers install exact-URL bypasses for `/json/version` and
-  // `ws://.../devtools/...`.
+  // WebSocket helpers install exact-URL bypasses for each discovery route and
+  // WebSocket endpoint.
   try {
     assertManagedProxyAllowsCdpUrl(profile.cdpUrl);
   } catch (err) {

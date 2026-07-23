@@ -1,6 +1,7 @@
 // Browser tests cover pw ai plugin behavior.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { connectOverCdpMock, getChromeWebSocketUrlMock } from "./pw-session.mock-setup.js";
+import { toTestCdpWebSocketUrl } from "./pw-session.test-support.js";
 
 type FakeSession = {
   send: ReturnType<typeof vi.fn>;
@@ -57,7 +58,9 @@ let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickVi
 let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
 
 beforeAll(async () => {
-  getChromeWebSocketUrlMock.mockResolvedValue(null);
+  getChromeWebSocketUrlMock.mockImplementation(async (cdpUrl: unknown) =>
+    toTestCdpWebSocketUrl(String(cdpUrl)),
+  );
   ({ snapshotAiViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
   ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
   ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));

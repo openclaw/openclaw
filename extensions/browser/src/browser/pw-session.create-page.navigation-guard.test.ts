@@ -13,6 +13,7 @@ import {
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
+import { toTestCdpWebSocketUrl } from "./pw-session.test-support.js";
 
 const {
   closePlaywrightBrowserConnection,
@@ -115,7 +116,7 @@ function installBrowserMocks() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketUrlSpy.mockImplementation(async (cdpUrl) => toTestCdpWebSocketUrl(cdpUrl));
 
   const getBrowserDisconnectedHandler = () =>
     browserOn.mock.calls.find((call) => call[0] === "disconnected")?.[1] as

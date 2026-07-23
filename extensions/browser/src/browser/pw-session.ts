@@ -24,7 +24,7 @@ import type {
 } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
-import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -1315,22 +1315,22 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
       }
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy).catch(
-          () => null,
-        );
+        const endpoint = await getChromeWebSocketUrl(normalized, timeout, ssrfPolicy);
         const hasUrlCredentials = stripCdpUrlCredentials(normalized) !== normalized;
-        if (!wsUrl && hasUrlCredentials && !isWebSocketUrl(normalized)) {
-          // Playwright preserves explicit headers across HTTP discovery redirects.
-          // Keep credentialed discovery in OpenClaw's guarded fetch path instead.
-          throw new Error("Authenticated CDP HTTP endpoint did not expose a usable WebSocket URL.");
+        if (!endpoint || !isWebSocketUrl(endpoint)) {
+          const prefix = hasUrlCredentials ? "Authenticated " : "";
+          // Never let Playwright derive an endpoint outside the exact managed-proxy leases.
+          throw new Error(`${prefix}CDP HTTP endpoint did not expose a usable WebSocket URL.`);
         }
-        const endpoint = wsUrl ?? normalized;
         const connectEndpoint = async (target: string) => {
           const headers = getHeadersWithAuth(target);
           const connectionUrl = stripCdpUrlCredentials(target);
-          // Bypass proxy for loopback CDP connections (#31219)
-          return await withNoProxyForCdpUrl(connectionUrl, () =>
-            chromium.connectOverCDP(connectionUrl, { timeout, headers }),
+          // Discovery owns exact HTTP leases; retain the exact WebSocket lease
+          // through Playwright's asynchronous handshake.
+          return await withManagedProxyForCdpUrl(connectionUrl, () =>
+            withNoProxyForCdpUrl(connectionUrl, () =>
+              chromium.connectOverCDP(connectionUrl, { timeout, headers }),
+            ),
           );
         };
         let browser: Browser;

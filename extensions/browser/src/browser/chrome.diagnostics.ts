@@ -20,7 +20,6 @@ import {
   openCdpWebSocket,
   redactCdpUrl,
   scopeCdpPolicyToConfiguredEndpoint,
-  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
@@ -127,18 +126,15 @@ async function readChromeVersion(
   }
 }
 
-/** Preserve authenticated providers that expose only Playwright's trailing-slash route. */
-export async function readChromeVersionWithCredentialFallback(
+/** Preserve providers that expose only Playwright's trailing-slash discovery route. */
+export async function readChromeVersionWithPathFallback(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
 ): Promise<ChromeVersion> {
   try {
     const primaryVersion = await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
-    if (
-      normalizeOptionalString(primaryVersion.webSocketDebuggerUrl) ||
-      stripCdpUrlCredentials(cdpUrl) === cdpUrl
-    ) {
+    if (normalizeOptionalString(primaryVersion.webSocketDebuggerUrl)) {
       return primaryVersion;
     }
     try {
@@ -147,9 +143,6 @@ export async function readChromeVersionWithCredentialFallback(
       return primaryVersion;
     }
   } catch (primaryError) {
-    if (stripCdpUrlCredentials(cdpUrl) === cdpUrl) {
-      throw primaryError;
-    }
     try {
       return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
     } catch {
@@ -399,11 +392,7 @@ export async function diagnoseChromeCdp(
     : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersionWithCredentialFallback(
-      discoveryUrl,
-      timeoutMs,
-      cdpControlPolicy,
-    );
+    version = await readChromeVersionWithPathFallback(discoveryUrl, timeoutMs, cdpControlPolicy);
   } catch (err) {
     if (isWebSocketUrl(cdpUrl)) {
       return await diagnoseCdpWebSocketEndpoint({

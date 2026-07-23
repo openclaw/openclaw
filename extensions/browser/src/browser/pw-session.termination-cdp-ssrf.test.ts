@@ -3,6 +3,7 @@ import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
+import { toTestCdpWebSocketUrl } from "./pw-session.test-support.js";
 
 const {
   closePlaywrightBrowserConnection,
@@ -78,7 +79,7 @@ function installBrowserMock() {
   } as unknown as import("playwright-core").Browser;
 
   connectOverCdpSpy.mockResolvedValue(browser);
-  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+  getChromeWebSocketUrlSpy.mockImplementation(async (cdpUrl) => toTestCdpWebSocketUrl(cdpUrl));
   return { browserClose };
 }
 

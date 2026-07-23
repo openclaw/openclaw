@@ -1,8 +1,9 @@
 // Browser tests cover pw session.connections plugin behavior.
 import { chromium } from "playwright-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
+import { toTestCdpWebSocketUrl } from "./pw-session.test-support.js";
 
 const {
   closePlaywrightBrowserConnection,
@@ -161,6 +162,10 @@ function makeMutatingDisconnectBrowser(): BrowserMockBundle & {
   return { browser, browserClose, newPage };
 }
 
+beforeEach(() => {
+  getChromeWebSocketUrlSpy.mockImplementation(async (cdpUrl) => toTestCdpWebSocketUrl(cdpUrl));
+});
+
 afterEach(async () => {
   connectOverCdpSpy.mockReset();
   getChromeWebSocketUrlSpy.mockReset();
@@ -175,7 +180,6 @@ describe("pw-session connection scoping", () => {
     const token = "browser-token";
     const cdpUrl = `wss://${username}:${password}@browserless.example/devtools/browser/id?token=${token}`;
     connectOverCdpSpy.mockRejectedValue(new Error(`connect failed for ${cdpUrl}`));
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     let message = "";
     try {
@@ -214,7 +218,6 @@ describe("pw-session connection scoping", () => {
   it("allows loopback CDP control without widening the navigation allowlist", async () => {
     const browser = makeBrowser("A", "https://example.com");
     connectOverCdpSpy.mockResolvedValue(browser.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     const ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["example.com"],
@@ -240,17 +243,16 @@ describe("pw-session connection scoping", () => {
 
     connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
       const endpointText = String(args[0]);
-      if (endpointText === "http://127.0.0.1:9222") {
+      if (endpointText === toTestCdpWebSocketUrl("http://127.0.0.1:9222")) {
         return await new Promise<import("playwright-core").Browser>((resolve) => {
           resolveA = resolve;
         });
       }
-      if (endpointText === "http://127.0.0.1:9333") {
+      if (endpointText === toTestCdpWebSocketUrl("http://127.0.0.1:9333")) {
         return browserB.browser;
       }
       throw new Error(`unexpected endpoint: ${endpointText}`);
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     const pendingA = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
     await Promise.resolve();
@@ -259,14 +261,22 @@ describe("pw-session connection scoping", () => {
     await vi.waitFor(() => {
       expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
     });
-    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(1, "http://127.0.0.1:9222", {
-      timeout: 5000,
-      headers: {},
-    });
-    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(2, "http://127.0.0.1:9333", {
-      timeout: 5000,
-      headers: {},
-    });
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
+      1,
+      toTestCdpWebSocketUrl("http://127.0.0.1:9222"),
+      {
+        timeout: 5000,
+        headers: {},
+      },
+    );
+    expect(connectOverCdpSpy).toHaveBeenNthCalledWith(
+      2,
+      toTestCdpWebSocketUrl("http://127.0.0.1:9333"),
+      {
+        timeout: 5000,
+        headers: {},
+      },
+    );
 
     resolveA?.(browserA.browser);
     const [pagesA, pagesB] = await Promise.all([pendingA, pendingB]);
@@ -280,15 +290,14 @@ describe("pw-session connection scoping", () => {
 
     connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
       const endpointText = String(args[0]);
-      if (endpointText === "http://127.0.0.1:9222") {
+      if (endpointText === toTestCdpWebSocketUrl("http://127.0.0.1:9222")) {
         return browserA.browser;
       }
-      if (endpointText === "http://127.0.0.1:9333") {
+      if (endpointText === toTestCdpWebSocketUrl("http://127.0.0.1:9333")) {
         return browserB.browser;
       }
       throw new Error(`unexpected endpoint: ${endpointText}`);
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9333" });
@@ -308,7 +317,6 @@ describe("pw-session connection scoping", () => {
           resolveConnect = resolve;
         }),
     );
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     const listing = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
     await vi.waitFor(() => expect(connectOverCdpSpy).toHaveBeenCalledOnce());
@@ -333,7 +341,6 @@ describe("pw-session connection scoping", () => {
       .mockRejectedValueOnce(new Error("disconnect failed"))
       .mockResolvedValue(undefined);
     connectOverCdpSpy.mockResolvedValue(browser.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
     await expect(
@@ -355,7 +362,6 @@ describe("pw-session connection scoping", () => {
     first.browserClose.mockReturnValue(closeGate);
     const second = makeBrowser("B", "https://b.example");
     connectOverCdpSpy.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(second.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
     expect(retirePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" })).toBe(true);
@@ -376,7 +382,6 @@ describe("pw-session connection scoping", () => {
     first.browserClose.mockReturnValue(closeGate);
     const successor = makeBrowser("B", "https://b.example");
     connectOverCdpSpy.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(successor.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
     const retirement = retirePlaywrightBrowserConnectionExact({
@@ -398,7 +403,6 @@ describe("pw-session connection scoping", () => {
     const first = makeBrowser("A", "https://a.example");
     const late = makeBrowser("B", "https://b.example");
     connectOverCdpSpy.mockResolvedValueOnce(first.browser).mockResolvedValueOnce(late.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
     const retirement = retirePlaywrightBrowserConnectionExact({
@@ -424,7 +428,6 @@ describe("pw-session connection scoping", () => {
     });
     browser.browserClose.mockReturnValue(closeGate);
     connectOverCdpSpy.mockResolvedValue(browser.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
     const closing = closePlaywrightBrowserConnection({ cdpUrl: "http://127.0.0.1:9222" });
@@ -446,16 +449,15 @@ describe("pw-session connection scoping", () => {
 
     connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
       const endpointText = String(args[0]);
-      if (endpointText === "http://127.0.0.1:9222") {
+      if (endpointText === toTestCdpWebSocketUrl("http://127.0.0.1:9222")) {
         callsForA += 1;
         return callsForA === 1 ? staleA.browser : refreshedA.browser;
       }
-      if (endpointText === "http://127.0.0.1:9333") {
+      if (endpointText === toTestCdpWebSocketUrl("http://127.0.0.1:9333")) {
         return browserB.browser;
       }
       throw new Error(`unexpected endpoint: ${endpointText}`);
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
     await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9333" });
@@ -478,13 +480,12 @@ describe("pw-session connection scoping", () => {
 
     connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
       const endpointText = String(args[0]);
-      if (endpointText !== "http://127.0.0.1:9222") {
+      if (endpointText !== toTestCdpWebSocketUrl("http://127.0.0.1:9222")) {
         throw new Error(`unexpected endpoint: ${endpointText}`);
       }
       connectCalls += 1;
       return connectCalls === 1 ? stale.browser : refreshed.browser;
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     const pages = await listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
 
@@ -501,13 +502,12 @@ describe("pw-session connection scoping", () => {
 
     connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
       const endpointText = String(args[0]);
-      if (endpointText !== "http://127.0.0.1:9222") {
+      if (endpointText !== toTestCdpWebSocketUrl("http://127.0.0.1:9222")) {
         throw new Error(`unexpected endpoint: ${endpointText}`);
       }
       connectCalls += 1;
       return connectCalls === 1 ? stuck.browser : refreshed.browser;
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await expect(
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
@@ -542,7 +542,6 @@ describe("pw-session connection scoping", () => {
         }
       });
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await expect(
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
@@ -580,7 +579,6 @@ describe("pw-session connection scoping", () => {
       connectCalls += 1;
       return connectCalls === 1 ? stuck.browser : refreshed.browser;
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await expect(
       listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222", timeoutMs: 20 }),
@@ -613,13 +611,12 @@ describe("pw-session connection scoping", () => {
 
     connectOverCdpSpy.mockImplementation((async (...args: unknown[]) => {
       const endpointText = String(args[0]);
-      if (endpointText !== "http://127.0.0.1:9222") {
+      if (endpointText !== toTestCdpWebSocketUrl("http://127.0.0.1:9222")) {
         throw new Error(`unexpected endpoint: ${endpointText}`);
       }
       connectCalls += 1;
       return connectCalls === 1 ? stale.browser : refreshed.browser;
     }) as never);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     await expect(
       createPageViaPlaywright({
