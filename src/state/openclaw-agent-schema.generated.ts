@@ -229,6 +229,12 @@ CREATE TABLE IF NOT EXISTS session_suggestions (
   text TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'dismissed')),
+  dispatch_token TEXT,
+  dispatch_started_at INTEGER,
+  CHECK (
+    (dispatch_token IS NULL AND dispatch_started_at IS NULL)
+    OR (dispatch_token IS NOT NULL AND dispatch_started_at IS NOT NULL)
+  ),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 

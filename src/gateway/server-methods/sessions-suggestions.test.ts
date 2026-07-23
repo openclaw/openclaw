@@ -126,14 +126,14 @@ describe("session suggestion handlers", () => {
       const alice = client("alice", "Alice");
       const add = await call(
         "session.suggestions.add",
-        { sessionKey, text: "Try the focused fix" },
+        { sessionKey, text: "  Try the focused fix\n" },
         alice,
       );
       expect(add.responses[0]?.[0]).toBe(true);
       expect(add.responses[0]?.[1]).toMatchObject({
         suggestion: {
           author: { id: "alice", label: "Alice" },
-          text: "Try the focused fix",
+          text: "  Try the focused fix\n",
           state: "pending",
         },
       });
@@ -147,7 +147,7 @@ describe("session suggestion handlers", () => {
       const listed = await call("session.suggestions.list", { sessionKey }, alice);
       expect(listed.responses[0]?.[1]).toMatchObject({
         role: "viewer",
-        suggestions: [{ author: { id: "alice" }, text: "Try the focused fix" }],
+        suggestions: [{ author: { id: "alice" }, text: "  Try the focused fix\n" }],
       });
     });
   });
@@ -409,7 +409,7 @@ describe("session suggestion handlers", () => {
     expect(unknownAdd.responses[0]?.[0]).toBe(false);
   });
 
-  it("restores a suggestion when chat dispatch throws", async () => {
+  it("keeps an uncertain dispatch claimed until retry reconciliation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntry(
         { agentId: "main", sessionKey },
@@ -425,10 +425,11 @@ describe("session suggestion handlers", () => {
         { sessionKey, text: "retry me" },
         client("alice", "Alice"),
       );
+      const id = responseSuggestionId(added);
       mocks.handleChatSend.mockRejectedValueOnce(new Error("dispatch exploded"));
       const resolved = await call(
         "session.suggestions.resolve",
-        { sessionKey, id: responseSuggestionId(added), resolution: "send" },
+        { sessionKey, id, resolution: "send" },
         client("owner", "Owner"),
       );
       expect(resolved.responses[0]?.[0]).toBe(false);
@@ -441,6 +442,13 @@ describe("session suggestion handlers", () => {
       expect(listed.responses[0]?.[1]).toMatchObject({
         suggestions: [{ state: "pending", text: "retry me" }],
       });
+      const alternate = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id, resolution: "dismiss" },
+        client("owner", "Owner"),
+      );
+      expect(alternate.responses[0]?.[0]).toBe(false);
+      expect(alternate.responses[0]?.[2]?.message).toMatch(/already in progress/);
     });
   });
 
@@ -482,6 +490,46 @@ describe("session suggestion handlers", () => {
       gate.resolve();
       expect((await first).responses[0]?.[0]).toBe(true);
       expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("releases a durable claim after a definite dispatch rejection", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-main",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const added = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "try again" },
+        client("alice", "Alice"),
+      );
+      const id = responseSuggestionId(added);
+      mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
+        respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: "dispatch rejected",
+        });
+      });
+      const rejected = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id, resolution: "send" },
+        client("owner", "Owner"),
+      );
+      expect(rejected.responses[0]?.[0]).toBe(false);
+      expect(rejected.responses[0]?.[2]?.message).toBe("dispatch rejected");
+
+      const edit = await call(
+        "session.suggestions.resolve",
+        { sessionKey, id, resolution: "edit" },
+        client("owner", "Owner"),
+      );
+      expect(edit.responses[0]?.[0]).toBe(true);
     });
   });
 

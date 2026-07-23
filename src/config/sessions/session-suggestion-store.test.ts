@@ -7,10 +7,13 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { upsertSessionEntry } from "./session-accessor.js";
 import {
   addSessionSuggestion,
+  claimSessionSuggestionDispatch,
+  finalizeSessionSuggestionClaim,
   listSessionSuggestions,
   MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR,
   MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
   resolveSessionSuggestion,
+  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "./session-suggestion-store.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -36,13 +39,15 @@ describe("session suggestion store", () => {
         id: "a",
         authorId: "alice",
         authorLabel: "Alice",
-        text: "first",
+        text: "  first\n",
         createdAt: 2,
         expectedSessionId: "session-a",
       });
 
       expect(listSessionSuggestions(scope).map((item) => item.id)).toEqual(["a", "b"]);
-      expect(listSessionSuggestions(scope, { authorId: "alice" })).toHaveLength(1);
+      expect(listSessionSuggestions(scope, { authorId: "alice" })).toEqual([
+        expect.objectContaining({ text: "  first\n" }),
+      ]);
       expect(
         resolveSessionSuggestion(scope, {
           id: "a",
@@ -148,6 +153,69 @@ describe("session suggestion store", () => {
         MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
       );
       expect(rows.some((row) => row.id === "resolved-0")).toBe(false);
+    });
+  });
+
+  it("durably claims dispatch and permits stale-claim recovery", async () => {
+    await withTempDir({ prefix: "openclaw-session-suggestions-claim-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
+      addSessionSuggestion(scope, {
+        id: "claimed",
+        authorId: "alice",
+        text: "dispatch me",
+        expectedSessionId: "session-a",
+      });
+
+      const first = claimSessionSuggestionDispatch(scope, {
+        id: "claimed",
+        expectedSessionId: "session-a",
+        now: 1_000,
+      });
+      expect(first?.kind).toBe("claimed");
+      expect(
+        claimSessionSuggestionDispatch(scope, {
+          id: "claimed",
+          expectedSessionId: "session-a",
+          now: 1_001,
+        }),
+      ).toEqual({ kind: "busy" });
+      expect(
+        resolveSessionSuggestion(scope, {
+          id: "claimed",
+          state: "dismissed",
+          expectedSessionId: "session-a",
+        }),
+      ).toBeNull();
+
+      const recovered = claimSessionSuggestionDispatch(scope, {
+        id: "claimed",
+        expectedSessionId: "session-a",
+        now: 1_000 + SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+      });
+      expect(recovered?.kind).toBe("claimed");
+      if (recovered?.kind !== "claimed") {
+        throw new Error("expected recovered claim");
+      }
+      expect(
+        first?.kind === "claimed"
+          ? finalizeSessionSuggestionClaim(scope, {
+              id: "claimed",
+              token: first.token,
+              state: "accepted",
+              expectedSessionId: "session-a",
+            })
+          : null,
+      ).toBeNull();
+      expect(
+        finalizeSessionSuggestionClaim(scope, {
+          id: "claimed",
+          token: recovered.token,
+          state: "accepted",
+          expectedSessionId: "session-a",
+        })?.state,
+      ).toBe("accepted");
     });
   });
 });

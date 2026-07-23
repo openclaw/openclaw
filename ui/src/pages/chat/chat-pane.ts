@@ -880,8 +880,13 @@ class ChatPane extends OpenClawLightDomElement {
 
   private async addCurrentSessionSuggestion(): Promise<void> {
     const scope = this.captureConnectionScope();
-    const text = scope?.state.chatMessage.trim() ?? "";
-    if (!scope || !text || this.sessionSuggestionAddOperation || !this.hasMultipleIdentities()) {
+    const text = scope?.state.chatMessage ?? "";
+    if (
+      !scope ||
+      !text.trim() ||
+      this.sessionSuggestionAddOperation ||
+      !this.hasMultipleIdentities()
+    ) {
       return;
     }
     if (scope.state.chatAttachments.length > 0) {
@@ -910,7 +915,7 @@ class ChatPane extends OpenClawLightDomElement {
       ) {
         return;
       }
-      if (scope.state.chatMessage.trim() === text) {
+      if (scope.state.chatMessage === text) {
         scope.state.handleChatDraftChange("");
       }
       this.sessionSuggestions = [

@@ -33,6 +33,7 @@ const ensuredDatabases = new WeakSet<DatabaseSync>();
 export const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 export const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
 export const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
+export const SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS = 30_000;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
   return toDatabaseOptions(resolveSqliteScope(scope));
@@ -146,8 +147,8 @@ export function addSessionSuggestion(
 ): StoredSessionSuggestion {
   const authorId = params.authorId.trim();
   const authorLabel = params.authorLabel?.trim() || undefined;
-  const text = params.text.trim();
-  if (!authorId || !text) {
+  const text = params.text;
+  if (!authorId || !text.trim()) {
     throw new Error("suggestion author and text are required");
   }
   const options = resolveDatabaseOptions(scope);
@@ -192,6 +193,8 @@ export function addSessionSuggestion(
         text: suggestion.text,
         created_at: suggestion.createdAt,
         state: suggestion.state,
+        dispatch_token: null,
+        dispatch_started_at: null,
       }),
     );
   }, options);
@@ -221,21 +224,136 @@ export function listSessionSuggestions(
   ).rows.map(toSuggestion);
 }
 
-export function getSessionSuggestion(
+export type SessionSuggestionDispatchClaim =
+  | { kind: "busy" }
+  | { kind: "claimed"; suggestion: StoredSessionSuggestion; token: string };
+
+export function claimSessionSuggestionDispatch(
   scope: SessionAccessScope,
-  id: string,
+  params: {
+    id: string;
+    expectedSessionId?: string;
+    now?: number;
+    claimTtlMs?: number;
+  },
+): SessionSuggestionDispatchClaim | null {
+  const options = resolveDatabaseOptions(scope);
+  ensureSuggestionSchema(options);
+  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  return runOpenClawAgentWriteTransaction((database) => {
+    assertSessionInstance(database, sessionKey, params.expectedSessionId);
+    const db = suggestionDb(database);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_suggestions")
+        .select([
+          "id",
+          "author_id",
+          "author_label",
+          "text",
+          "created_at",
+          "state",
+          "dispatch_token",
+          "dispatch_started_at",
+        ])
+        .where("session_key", "=", sessionKey)
+        .where("id", "=", params.id)
+        .where("state", "=", "pending"),
+    );
+    if (!row) {
+      return null;
+    }
+    const now = params.now ?? Date.now();
+    const claimTtlMs = params.claimTtlMs ?? SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
+    if (
+      row.dispatch_token &&
+      row.dispatch_started_at !== null &&
+      now - row.dispatch_started_at < claimTtlMs
+    ) {
+      return { kind: "busy" };
+    }
+    const token = randomUUID();
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_suggestions")
+        .set({ dispatch_token: token, dispatch_started_at: now })
+        .where("session_key", "=", sessionKey)
+        .where("id", "=", params.id)
+        .where("state", "=", "pending"),
+    );
+    return { kind: "claimed", suggestion: toSuggestion(row), token };
+  }, options);
+}
+
+export function releaseSessionSuggestionDispatch(
+  scope: SessionAccessScope,
+  params: { id: string; token: string; expectedSessionId?: string },
+): boolean {
+  const options = resolveDatabaseOptions(scope);
+  ensureSuggestionSchema(options);
+  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  return runOpenClawAgentWriteTransaction((database) => {
+    assertSessionInstance(database, sessionKey, params.expectedSessionId);
+    const result = executeSqliteQuerySync(
+      database.db,
+      suggestionDb(database)
+        .updateTable("session_suggestions")
+        .set({ dispatch_token: null, dispatch_started_at: null })
+        .where("session_key", "=", sessionKey)
+        .where("id", "=", params.id)
+        .where("state", "=", "pending")
+        .where("dispatch_token", "=", params.token),
+    );
+    return (result.numAffectedRows ?? 0n) > 0n;
+  }, options);
+}
+
+export function finalizeSessionSuggestionClaim(
+  scope: SessionAccessScope,
+  params: {
+    id: string;
+    token: string;
+    state: Exclude<StoredSessionSuggestionState, "pending">;
+    expectedSessionId?: string;
+  },
 ): StoredSessionSuggestion | null {
   const options = resolveDatabaseOptions(scope);
-  const database = ensureSuggestionSchema(options);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    suggestionDb(database)
-      .selectFrom("session_suggestions")
-      .select(["id", "author_id", "author_label", "text", "created_at", "state"])
-      .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-      .where("id", "=", id),
-  );
-  return row ? toSuggestion(row) : null;
+  ensureSuggestionSchema(options);
+  const sessionKey = resolveSqliteScope(scope).sessionKey;
+  return runOpenClawAgentWriteTransaction((database) => {
+    assertSessionInstance(database, sessionKey, params.expectedSessionId);
+    const db = suggestionDb(database);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_suggestions")
+        .select(["id", "author_id", "author_label", "text", "created_at", "state"])
+        .where("session_key", "=", sessionKey)
+        .where("id", "=", params.id)
+        .where("state", "=", "pending")
+        .where("dispatch_token", "=", params.token),
+    );
+    if (!row) {
+      return null;
+    }
+    const updated = executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_suggestions")
+        .set({ state: params.state, dispatch_token: null, dispatch_started_at: null })
+        .where("session_key", "=", sessionKey)
+        .where("id", "=", params.id)
+        .where("state", "=", "pending")
+        .where("dispatch_token", "=", params.token),
+    );
+    if ((updated.numAffectedRows ?? 0n) === 0n) {
+      return null;
+    }
+    pruneResolvedSessionSuggestions(database, sessionKey);
+    return { ...toSuggestion(row), state: params.state };
+  }, options);
 }
 
 export function resolveSessionSuggestion(
@@ -259,7 +377,8 @@ export function resolveSessionSuggestion(
         .select(["id", "author_id", "author_label", "text", "created_at", "state"])
         .where("session_key", "=", sessionKey)
         .where("id", "=", params.id)
-        .where("state", "=", "pending"),
+        .where("state", "=", "pending")
+        .where("dispatch_token", "is", null),
     );
     if (!row) {
       return null;
@@ -271,7 +390,8 @@ export function resolveSessionSuggestion(
         .set({ state: params.state })
         .where("session_key", "=", sessionKey)
         .where("id", "=", params.id)
-        .where("state", "=", "pending"),
+        .where("state", "=", "pending")
+        .where("dispatch_token", "is", null),
     );
     if ((updated.numAffectedRows ?? 0n) === 0n) {
       return null;

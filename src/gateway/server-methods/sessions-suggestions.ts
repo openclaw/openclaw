@@ -13,9 +13,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   addSessionSuggestion,
-  getSessionSuggestion,
+  claimSessionSuggestionDispatch,
+  finalizeSessionSuggestionClaim,
   listSessionSuggestions,
-  resolveSessionSuggestion,
+  releaseSessionSuggestionDispatch,
+  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
@@ -40,7 +42,6 @@ const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
 const typingBroadcastState = new Map<string, { at: number; typing: boolean }>();
 const typingConnections = new Map<string, Map<string, number>>();
-const dispatchingSuggestions = new Set<string>();
 
 function suggestionScope(target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>) {
   return {
@@ -273,8 +274,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const text = params.text.trim();
-    if (!text) {
+    const text = params.text;
+    if (!text.trim()) {
       respond(
         false,
         undefined,
@@ -378,98 +379,101 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       return;
     }
     const scope = suggestionScope(target);
-    const claimKey = `${target.storePath}\0${target.storeKey}\0${params.id}`;
-    if (dispatchingSuggestions.has(claimKey)) {
+    const dispatching = resolution === "send" || resolution === "queue";
+    const claim = claimSessionSuggestionDispatch(scope, {
+      id: params.id,
+      expectedSessionId: target.entry.sessionId,
+    });
+    if (!claim) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "pending suggestion not found"),
+      );
+      return;
+    }
+    if (claim.kind === "busy") {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, "suggestion resolution is already in progress", {
           retryable: true,
+          retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
         }),
       );
       return;
     }
-    dispatchingSuggestions.add(claimKey);
-    try {
-      const dispatching = resolution === "send" || resolution === "queue";
-      let suggestion: StoredSessionSuggestion | null;
-      if (dispatching && client) {
-        suggestion = getSessionSuggestion(scope, params.id);
-        if (!suggestion || suggestion.state !== "pending") {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "pending suggestion not found"),
-          );
-          return;
-        }
-        try {
-          const dispatched = await dispatchSuggestion({
-            context,
-            client,
-            req,
-            isWebchatConnect,
-            target,
-            suggestion,
-            resolution,
-          });
-          if (!dispatched.ok) {
-            respond(
-              false,
-              undefined,
-              dispatched.error ??
-                errorShape(ErrorCodes.INVALID_REQUEST, "suggestion dispatch failed"),
-            );
-            return;
-          }
-          suggestion = resolveSessionSuggestion(scope, {
-            id: suggestion.id,
-            state: "accepted",
+    if (dispatching && client) {
+      try {
+        const dispatched = await dispatchSuggestion({
+          context,
+          client,
+          req,
+          isWebchatConnect,
+          target,
+          suggestion: claim.suggestion,
+          resolution,
+        });
+        if (!dispatched.ok) {
+          releaseSessionSuggestionDispatch(scope, {
+            id: claim.suggestion.id,
+            token: claim.token,
             expectedSessionId: target.entry.sessionId,
           });
-        } catch (error) {
           respond(
             false,
             undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              error instanceof Error ? error.message : "suggestion dispatch failed",
-            ),
+            dispatched.error ??
+              errorShape(ErrorCodes.INVALID_REQUEST, "suggestion dispatch failed"),
           );
           return;
         }
-      } else {
-        suggestion = resolveSessionSuggestion(scope, {
-          id: params.id,
-          state: resolutionState(resolution),
-          expectedSessionId: target.entry.sessionId,
-        });
-      }
-      if (!suggestion) {
+      } catch (error) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "pending suggestion not found"),
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            error instanceof Error ? error.message : "suggestion dispatch outcome is unknown",
+            {
+              retryable: true,
+              retryAfterMs: SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+            },
+          ),
         );
         return;
       }
-      const projected = protocolSuggestion(target, suggestion);
-      const actor = actorIdentity(client);
-      try {
-        await appendSessionAudit({
-          cfg: context.getRuntimeConfig(),
-          target,
-          text: `${actor.label ?? actor.id} ${resolutionLabel(resolution)} suggestion from ${suggestion.authorLabel ?? suggestion.authorId}.`,
-          now: Date.now(),
-        });
-      } catch (error) {
-        context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
-      }
-      publishSuggestion(context, { action: "resolved", suggestion: projected });
-      respond(true, { suggestion: projected });
-    } finally {
-      dispatchingSuggestions.delete(claimKey);
     }
+    const suggestion = finalizeSessionSuggestionClaim(scope, {
+      id: claim.suggestion.id,
+      token: claim.token,
+      state: resolutionState(resolution),
+      expectedSessionId: target.entry.sessionId,
+    });
+    if (!suggestion) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "suggestion resolution could not be finalized", {
+          retryable: true,
+        }),
+      );
+      return;
+    }
+    const projected = protocolSuggestion(target, suggestion);
+    const actor = actorIdentity(client);
+    try {
+      await appendSessionAudit({
+        cfg: context.getRuntimeConfig(),
+        target,
+        text: `${actor.label ?? actor.id} ${resolutionLabel(resolution)} suggestion from ${suggestion.authorLabel ?? suggestion.authorId}.`,
+        now: Date.now(),
+      });
+    } catch (error) {
+      context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
+    }
+    publishSuggestion(context, { action: "resolved", suggestion: projected });
+    respond(true, { suggestion: projected });
   },
 
   "session.typing": ({ params, respond, client, context }) => {
