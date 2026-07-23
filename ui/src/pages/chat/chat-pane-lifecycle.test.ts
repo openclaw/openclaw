@@ -89,11 +89,12 @@ describe("chat pane session suggestion lifecycle", () => {
   it("retries a list invalidated by an event without hiding existing suggestions", async () => {
     const firstList = createDeferred<SessionSuggestionsListResult>();
     const secondList = createDeferred<SessionSuggestionsListResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(firstList.promise)
+      .mockReturnValueOnce(secondList.promise);
     const client = {
-      request: vi
-        .fn()
-        .mockReturnValueOnce(firstList.promise)
-        .mockReturnValueOnce(secondList.promise),
+      request,
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
@@ -135,7 +136,7 @@ describe("chat pane session suggestion lifecycle", () => {
     pane.handleSessionSuggestionEvent({ action: "added", suggestion: eventSuggestion });
     firstList.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
     await pending;
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     secondList.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
     await vi.waitFor(() =>
       expect(pane.sessionSuggestions).toEqual([existingSuggestion, eventSuggestion]),
@@ -269,8 +270,9 @@ describe("chat pane session suggestion lifecycle", () => {
   it("serializes edit resolutions so rejected suggestions cannot snapshot each other", async () => {
     const first = createDeferred<never>();
     const second = createDeferred<never>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const client = {
-      request: vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
+      request,
     } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({
       client,
@@ -292,7 +294,7 @@ describe("chat pane session suggestion lifecycle", () => {
 
     const firstPending = pane.resolveCurrentSessionSuggestion(suggestion("first", "first"), "edit");
     await pane.resolveCurrentSessionSuggestion(suggestion("second", "second"), "edit");
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
     expect(state.chatMessage).toBe("first");
 
     first.reject(
@@ -309,7 +311,7 @@ describe("chat pane session suggestion lifecycle", () => {
       new GatewayRequestError({ code: "INVALID_REQUEST", message: "second was rejected" }),
     );
     await secondPending;
-    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessage).toBe("owner draft");
   });
 });
