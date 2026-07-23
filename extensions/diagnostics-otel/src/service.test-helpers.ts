@@ -41,8 +41,10 @@ type OtelConfig = NonNullable<
 >;
 export type OtelContextFlags = Pick<
   OtelConfig,
-  "traces" | "metrics" | "logs" | "protocol" | "logsExporter" | "captureContent"
->;
+  "traces" | "metrics" | "logs" | "logsExporter" | "captureContent"
+> & {
+  protocol?: OtelConfig["protocol"] | "grpc";
+};
 
 type StartOtelServiceOptions = OtelContextFlags & {
   endpoint?: string;
@@ -74,7 +76,8 @@ export function createOtelContext(
         otel: {
           enabled: true,
           endpoint,
-          protocol,
+          // Some runtime tests inject legacy/raw values that config validation now rejects.
+          protocol: protocol as OtelConfig["protocol"],
           traces,
           metrics,
           logs,

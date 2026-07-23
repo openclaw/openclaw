@@ -88,7 +88,7 @@ stdout, or `both` for both.
       tracesEndpoint: "http://otel-collector:4318/v1/traces",
       metricsEndpoint: "http://otel-collector:4318/v1/metrics",
       logsEndpoint: "http://otel-collector:4318/v1/logs",
-      protocol: "http/protobuf", // grpc disables OTLP export
+      protocol: "http/protobuf",
       serviceName: "openclaw-gateway", // unset falls back to OTEL_SERVICE_NAME, then "openclaw"
       headers: { "x-collector-token": "..." },
       traces: true,
