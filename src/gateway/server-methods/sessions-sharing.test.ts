@@ -15,6 +15,7 @@ import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, listProfiles, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -122,6 +123,56 @@ async function call(
 }
 
 describe("session sharing handlers", () => {
+  it("keeps hidden incognito rows from changing non-owner list path metadata", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const incognitoKey = "agent:main:dashboard:incognito-private";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        { sessionId: "session-main", updatedAt: 1 },
+      );
+      const viewer = identifiedClient("viewer@example.com");
+      const owner = identifiedClient("owner@example.com");
+      const listFor = async (client: GatewayClient) => {
+        const responses: Parameters<RespondFn>[] = [];
+        await sessionReadHandlers["sessions.list"]?.({
+          params: {},
+          client,
+          context: {
+            ...context(vi.fn()),
+            loadGatewayModelCatalog: async () => [],
+          } as unknown as GatewayRequestContext,
+          respond: (...response: Parameters<RespondFn>) => responses.push(response),
+        } as never);
+        return responses[0]?.[1] as
+          | { path?: string; sessions?: Array<{ key: string }> }
+          | undefined;
+      };
+
+      const before = await listFor(viewer);
+      await upsertSessionEntry(
+        {
+          agentId: "main",
+          sessionKey: incognitoKey,
+          storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        },
+        {
+          sessionId: "session-incognito",
+          updatedAt: 2,
+          incognito: true,
+          visibility: "shared",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+
+      const hidden = await listFor(viewer);
+      expect(hidden?.path).toBe(before?.path);
+      expect(hidden?.sessions?.some((session) => session.key === incognitoKey)).toBe(false);
+      const visible = await listFor(owner);
+      expect(visible?.sessions?.some((session) => session.key === incognitoKey)).toBe(true);
+      expect(visible?.path).not.toBe(before?.path);
+    });
+  });
+
   it("rejects a visibility mutation when the queued session instance changed", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:stale-sharing-mutation";

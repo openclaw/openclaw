@@ -16,6 +16,7 @@ import {
   isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
+  resolveStorePath,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
@@ -27,9 +28,14 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
+  canAccessIncognitoSession,
   filterDraftSessionsForClient,
   isGatewayAdmin,
   resolveSessionSharingRole,
@@ -70,7 +76,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
-  "sessions.search": async ({ params, respond, context }) => {
+  "sessions.search": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsSearchParams, "sessions.search", respond)) {
       return;
     }
@@ -80,6 +86,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
+    const restrictIncognito =
+      Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
+    const canSearchSessionKey = (sessionKey: string) =>
+      !isIncognitoSessionKey(sessionKey) ||
+      canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey });
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const sessionKeys = params.sessionKeys?.map((sessionKey) =>
       requestedAgentId
@@ -115,7 +126,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const scopedSessionKeys = configured
+    const scopedSessionKeysRaw = configured
       ? sessionKeys
       : sessionKeys?.filter((sessionKey) => {
           const sessionAgentId =
@@ -124,6 +135,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               : resolveSessionStoreAgentId(cfg, sessionKey);
           return sessionAgentId === agentId;
         });
+    const scopedSessionKeys = scopedSessionKeysRaw?.filter(canSearchSessionKey);
     if (!configured && scopedSessionKeys?.length === 0) {
       respond(true, { results: [] }, undefined);
       return;
@@ -136,14 +148,27 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const configuredVisibleSessionKeys =
+        restrictIncognito && configured && scopedSessionKeys === undefined
+          ? listSessionEntriesReadOnly({
+              agentId,
+              storePath: resolveStorePath(cfg.session?.store, { agentId }),
+            })
+              .map((entry) => entry.sessionKey)
+              .filter(canSearchSessionKey)
+          : undefined;
       const searchTargets = configured ? [undefined] : existingTargets;
       const targetResults = searchTargets.flatMap((target) => {
         const targetSessionKeys =
           scopedSessionKeys ??
-          (target && !isPerAgentSessionStoreConfig(cfg.session?.store)
+          configuredVisibleSessionKeys ??
+          (target && (restrictIncognito || !isPerAgentSessionStoreConfig(cfg.session?.store))
             ? listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
                 .map((entry) => entry.sessionKey)
                 .filter((sessionKey) => {
+                  if (!canSearchSessionKey(sessionKey)) {
+                    return false;
+                  }
                   const parsed = parseAgentSessionKey(sessionKey);
                   return !parsed || normalizeAgentId(parsed.agentId) === agentId;
                 })
@@ -202,7 +227,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
-        const { storePath, store } = measureDiagnosticsTimelineSpanSync(
+        const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.store_load",
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
@@ -221,6 +246,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const listStore = configuredAgentsOnly
           ? filterSessionStoreToConfiguredAgents(cfg, visibleStore)
           : visibleStore;
+        const visibleStorePath = Object.entries(listStore).some(
+          ([sessionKey, entry]) => entry.incognito === true || isIncognitoSessionKey(sessionKey),
+        )
+          ? storePath
+          : (durableStorePath ?? storePath);
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
           () => loadOptionalServerMethodModelCatalog(context, "sessions.list"),
@@ -234,7 +264,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           () =>
             listSessionsFromStoreAsync({
               cfg,
-              storePath,
+              storePath: visibleStorePath,
               store: listStore,
               modelCatalog,
               opts: p,

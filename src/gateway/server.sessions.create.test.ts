@@ -429,7 +429,11 @@ test("incognito operator RPCs treat identityless connections as owner-equivalent
       await expect(rpcReq(ws, "sessions.subscribe", {})).resolves.toMatchObject({ ok: true });
     }
     for (const ws of [reader.ws, writer.ws]) {
-      const listed = await rpcReq<{ sessions?: Array<{ key?: string }> }>(ws, "sessions.list", {});
+      const listed = await rpcReq<{ path?: string; sessions?: Array<{ key?: string }> }>(
+        ws,
+        "sessions.list",
+        {},
+      );
       expect(listed.ok).toBe(true);
       expect(listed.payload?.sessions?.some((session) => session.key === sessionKey)).toBe(true);
     }

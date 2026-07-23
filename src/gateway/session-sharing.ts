@@ -196,6 +196,24 @@ function authorizeIncognitoSessionTarget(params: {
   return incognitoSessionNotFound(params.sessionKey);
 }
 
+export function canAccessIncognitoSession(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  sessionKey: string;
+  agentId?: string;
+}): boolean {
+  if (isGatewayAdmin(params.client)) {
+    return true;
+  }
+  return (
+    authorizeIncognitoSessionTarget({
+      client: params.client,
+      sessionKey: params.sessionKey,
+      target: resolveSessionSharingTarget(params),
+    }) === null
+  );
+}
+
 export function authorizeResolvedSessionMutation(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
