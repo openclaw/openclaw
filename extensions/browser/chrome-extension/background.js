@@ -1,3 +1,4 @@
+import { getConfig, getCopilotConfig } from "./modules/config.js";
 import { createCopilotController } from "./modules/copilot-background.js";
 import {
   buildPageSharePayload,
@@ -19,6 +20,14 @@ import {
   reconnectDelayMs,
   toRelayTabInfo,
 } from "./modules/relay-core.js";
+import {
+  addTabToOpenClawGroup,
+  focusWindowForTab,
+  isOpenClawGroupId,
+  isTabShared,
+  listSharedTabs,
+  removeTabFromOpenClawGroup,
+} from "./modules/tab-groups.js";
 
 const BADGE = {
   off: { text: "", color: "#000000" },
@@ -84,93 +93,6 @@ function flashPageShareBadge(ok) {
     },
     ok ? 2_000 : 3_000,
   );
-}
-
-async function getConfig() {
-  const stored = await chrome.storage.local.get(["relayUrl", "token", "groupColor"]);
-  return {
-    relayUrl: typeof stored.relayUrl === "string" ? stored.relayUrl : "",
-    token: typeof stored.token === "string" ? stored.token : "",
-    groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
-  };
-}
-
-async function getCopilotConfig() {
-  const config = await getConfig();
-  const stored = await chrome.storage.local.get(["gatewayUrl"]);
-  return {
-    ...config,
-    gatewayUrl: typeof stored.gatewayUrl === "string" ? stored.gatewayUrl : "",
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Tab group management (the consent boundary)
-// ---------------------------------------------------------------------------
-
-async function findOpenClawGroups() {
-  try {
-    return await chrome.tabGroups.query({ title: OPENCLAW_TAB_GROUP_TITLE });
-  } catch {
-    return [];
-  }
-}
-
-async function listSharedTabs() {
-  const groups = await findOpenClawGroups();
-  const tabs = [];
-  for (const group of groups) {
-    const groupTabs = await chrome.tabs.query({ groupId: group.id });
-    tabs.push(...groupTabs);
-  }
-  return tabs.filter((tab) => typeof tab.id === "number");
-}
-
-async function addTabToOpenClawGroup(tabId) {
-  const tab = await chrome.tabs.get(tabId);
-  const groups = await findOpenClawGroups();
-  const sameWindowGroup = groups.find((group) => group.windowId === tab.windowId);
-  if (sameWindowGroup) {
-    await chrome.tabs.group({ tabIds: [tabId], groupId: sameWindowGroup.id });
-    return;
-  }
-  const { groupColor } = await getConfig();
-  const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-  await chrome.tabGroups.update(groupId, {
-    title: OPENCLAW_TAB_GROUP_TITLE,
-    color: groupColor,
-  });
-}
-
-async function focusWindowForTab(tab) {
-  if (typeof tab.windowId === "number") {
-    await chrome.windows.update(tab.windowId, { focused: true });
-  }
-}
-
-async function removeTabFromOpenClawGroup(tabId) {
-  try {
-    await chrome.tabs.ungroup([tabId]);
-  } catch {
-    // tab may already be gone
-  }
-}
-
-async function isTabShared(tabId) {
-  const shared = await listSharedTabs();
-  return shared.some((tab) => tab.id === tabId);
-}
-
-async function isOpenClawGroupId(groupId) {
-  if (!Number.isInteger(groupId) || groupId < 0) {
-    return false;
-  }
-  try {
-    const group = await chrome.tabGroups.get(groupId);
-    return group.title === OPENCLAW_TAB_GROUP_TITLE;
-  } catch {
-    return false;
-  }
 }
 
 function scheduleTabsSync() {
