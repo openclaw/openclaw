@@ -839,6 +839,8 @@ async function prepareCronRunContext(params: {
       cfg: cfgWithAgentDefaults,
       provider: candidate.provider,
       model: candidate.model,
+      agentDir,
+      workspaceDir,
     });
     if (candidatePreflight.status === "available") {
       selectedPreflightCandidate = candidate;

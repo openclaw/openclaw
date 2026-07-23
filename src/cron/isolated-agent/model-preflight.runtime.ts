@@ -1,11 +1,20 @@
-/** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeModelHeaders } from "../../agents/embedded-agent-runner/model.inline-provider.js";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import {
+  resolveProviderRequestHeaders,
+  sanitizeConfiguredProviderRequest,
+} from "../../agents/provider-request-config.js";
+/** Preflights local model-provider endpoints before scheduled cron runner startup. */
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { logDebug } from "../../logger.js";
+import { resolveApiKeyForProvider } from "../../plugin-sdk/provider-auth-runtime.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
@@ -139,7 +148,7 @@ function formatUnavailableReason(params: {
   return [
     `Agent cron job uses ${params.provider}/${params.model} but the local provider endpoint is not reachable at ${params.baseUrl}.`,
     `Skipping this cron run; OpenClaw will retry the provider preflight on a later scheduled run.`,
-    `Last error: ${String(params.error)}`,
+    `Last error: ${formatErrorMessage(params.error)}`,
   ].join(" ");
 }
 
@@ -167,10 +176,16 @@ function buildUnavailableResult(params: {
 async function probeLocalProviderEndpoint(params: {
   api: PreflightApi;
   baseUrl: string;
+  headers?: Record<string, string>;
 }): Promise<void> {
   const { response, release } = await fetchWithSsrFGuard({
     url: buildProbeUrl(params.api, params.baseUrl),
-    init: { method: "GET" },
+    init: {
+      method: "GET",
+      ...(params.headers && Object.keys(params.headers).length > 0
+        ? { headers: params.headers }
+        : {}),
+    },
     policy: buildLocalProviderSsrFPolicy(params.baseUrl),
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
     auditContext: "cron-model-provider-preflight",
@@ -190,6 +205,8 @@ export async function preflightCronModelProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentDir?: string;
+  workspaceDir?: string;
   nowMs?: number;
 }): Promise<CronModelProviderPreflightResult> {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
@@ -221,12 +238,73 @@ export async function preflightCronModelProvider(params: {
     });
   }
 
+  // Auth resolution for preflight probe via shared resolveProviderRequestHeaders
+  // Always delegate — handles auth, request.headers, and provider-level headers
+  // in a single call, matching the normal model request path.
+  const requestOverrides = sanitizeConfiguredProviderRequest(providerConfig.request);
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
+    stripSecretRefMarkers: true,
+  });
+  let headers: Record<string, string> | undefined;
+
+  headers = resolveProviderRequestHeaders({
+    provider: params.provider,
+    api,
+    baseUrl,
+    defaultHeaders: providerHeaders,
+    request: requestOverrides,
+  });
+
+  // When the sanitized request has no auth override, try the provider credential
+  // profile as fallback. Preserve request-level headers from the sanitized
+  // requestOverrides so proxy/tenant headers are not lost when fallback auth
+  // is applied. Skip when request auth was provided — the resolver already
+  // handled it, and adding a Bearer token from the credential profile would
+  // incorrectly override custom header-mode auth. provider-default mode is
+  // treated as "use default provider auth" — the resolver does not inject
+  // headers for it, so fallback to credential lookup.
+  const hasExplicitAuth =
+    requestOverrides?.auth && requestOverrides.auth.mode !== "provider-default";
+  if (!hasExplicitAuth) {
+    try {
+      const resolved = await resolveApiKeyForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      });
+      if (
+        resolved.apiKey &&
+        resolved.mode !== "oauth" &&
+        !isNonSecretApiKeyMarker(resolved.apiKey)
+      ) {
+        headers = resolveProviderRequestHeaders({
+          provider: params.provider,
+          api,
+          baseUrl,
+          defaultHeaders: providerHeaders,
+          request: {
+            ...requestOverrides,
+            auth: { mode: "authorization-bearer", token: resolved.apiKey },
+          },
+        });
+      }
+    } catch (err) {
+      logDebug(
+        `[preflight] resolveApiKeyForProvider failed: ${String(err)} (non-fatal for preflight)`,
+      );
+    }
+  }
   let result: EndpointPreflightResult;
   try {
-    await probeLocalProviderEndpoint({ api, baseUrl });
+    await probeLocalProviderEndpoint({
+      api,
+      baseUrl,
+      headers,
+    });
     result = { status: "available" };
   } catch (error) {
-    result = { status: "unavailable", error };
+    result = { status: "unavailable", error: formatErrorMessage(error) };
   }
   preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
   if (result.status === "available") {
