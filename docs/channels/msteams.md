@@ -77,9 +77,6 @@ This creates an Entra ID (Azure AD) application, generates a client secret, buil
 
 ```json5
 {
-  agents: {
-    list: [{ id: "main", workspace: "~/.openclaw/workspace-main" }],
-  },
   bindings: [{ agentId: "main", match: { channel: "msteams", accountId: "default" } }],
   channels: {
     msteams: {
@@ -138,12 +135,6 @@ account provides its own bot identity and webhook port.
 
 ```json5
 {
-  agents: {
-    list: [
-      { id: "main", workspace: "~/.openclaw/workspace-main" },
-      { id: "support", workspace: "~/.openclaw/workspace-support" },
-    ],
-  },
   bindings: [
     { agentId: "main", match: { channel: "msteams", accountId: "default" } },
     { agentId: "support", match: { channel: "msteams", accountId: "support" } },
