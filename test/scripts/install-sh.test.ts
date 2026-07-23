@@ -1821,6 +1821,86 @@ NODE
     expect(result.stdout).toContain("main=main");
   });
 
+  it("does not fall back to an older base tag for npm correction releases", () => {
+    // Silent vX.Y.Z-N -> vX.Y.Z substitution installs different code than npm
+    // latest and was rejected (openclaw.ai#218 / openclaw#112754 review).
+    expect(script).not.toContain("npm_republish_git_tag_fallback");
+    expect(script).not.toMatch(/trying \$\{fallback_ref\}|trying v\$\{/);
+    expect(script).toContain("Correction releases must publish an immutable tag");
+    expect(script).toContain("assert_git_checkout_matches_ref");
+    expect(script).toContain("Skipping git checkout/update (--no-git-update)");
+  });
+
+  it("asserts package.json version matches the checked-out version tag", () => {
+    const home = (() => {
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        tmp="$(mktemp -d)"
+        printf '%s\\n' '{"name":"openclaw","version":"2026.7.1"}' > "$tmp/package.json"
+        if assert_git_checkout_matches_ref "$tmp" v2026.7.1-2; then
+          printf 'mismatch_allowed=1\\n'
+        else
+          printf 'mismatch_rejected=1\\n'
+        fi
+        printf '%s\\n' '{"name":"openclaw","version":"2026.7.1-2"}' > "$tmp/package.json"
+        if assert_git_checkout_matches_ref "$tmp" v2026.7.1-2; then
+          printf 'match_ok=1\\n'
+        else
+          printf 'match_failed=1\\n'
+        fi
+        if assert_git_checkout_matches_ref "$tmp" main; then
+          printf 'main_skip=1\\n'
+        fi
+        rm -rf "$tmp"
+      `);
+      return result;
+    })();
+
+    expect(home.status).toBe(0);
+    expect(home.stdout).toContain("mismatch_rejected=1");
+    expect(home.stdout).not.toContain("mismatch_allowed=1");
+    expect(home.stdout).toContain("match_ok=1");
+    expect(home.stdout).toContain("main_skip=1");
+    expect(home.stderr + home.stdout).toMatch(/version mismatch|expected 2026\.7\.1-2/i);
+  });
+
+  it("fails closed when a version tag is missing instead of downgrading", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      git() {
+        if [[ "$1" == "-C" && "$3" == "ls-remote" ]]; then
+          return 1
+        fi
+        if [[ "$1" == "-C" && "$3" == "fetch" ]]; then
+          return 0
+        fi
+        if [[ "$1" == "-C" && "$3" == "rev-parse" ]]; then
+          return 1
+        fi
+        return 1
+      }
+      run_quiet_step() {
+        shift
+        "$@"
+      }
+      ui_error() { printf 'error=%s\\n' "$*" >&2; }
+      ui_info() { printf 'info=%s\\n' "$*"; }
+      set +e
+      checkout_git_openclaw_ref /repo v2026.7.1-2
+      code=$?
+      set -e
+      printf 'exit=%s\\n' "$code"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("exit=1");
+    expect(result.stderr + result.stdout).toContain("Requested git version not found: v2026.7.1-2");
+    expect(result.stderr + result.stdout).toMatch(/immutable tag|install-method npm/i);
+    expect(result.stderr + result.stdout).not.toMatch(/trying v2026\.7\.1[^-]/);
+  });
+
   it("fetches moving git refs without tags for git installs", () => {
     expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
     expect(script).toContain(
