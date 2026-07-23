@@ -1,6 +1,3 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "./cli-shared.js";
@@ -11,7 +8,6 @@ import {
   firstRecord,
   parseStdoutJson,
   setupCli,
-  stubMeetArtifactsApi,
 } from "./test-support/cli-harness.js";
 
 describe("google-meet CLI", () => {
@@ -22,6 +18,57 @@ describe("google-meet CLI", () => {
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
     vi.resetModules();
+  });
+
+  it("prints setup checks as text and JSON", async () => {
+    {
+      const stdout = captureStdout();
+      try {
+        await setupCli({
+          runtime: {
+            setupStatus: async () => ({
+              ok: true,
+              checks: [
+                {
+                  id: "audio-bridge",
+                  ok: true,
+                  message: "Chrome command-pair talk-back audio bridge configured (pcm16-24khz)",
+                },
+              ],
+            }),
+          },
+        }).parseAsync(["googlemeet", "setup"], { from: "user" });
+        expect(stdout.output()).toContain("Google Meet setup: OK");
+        expect(stdout.output()).toContain(
+          "[ok] audio-bridge: Chrome command-pair talk-back audio bridge configured (pcm16-24khz)",
+        );
+        expect(stdout.output()).not.toContain('"checks"');
+      } finally {
+        stdout.restore();
+      }
+    }
+
+    {
+      const stdout = captureStdout();
+      try {
+        await setupCli({
+          runtime: {
+            setupStatus: async () => ({
+              ok: false,
+              checks: [{ id: "twilio-voice-call-plugin", ok: false, message: "missing" }],
+            }),
+          },
+        }).parseAsync(["googlemeet", "setup", "--json"], { from: "user" });
+        const payload = parseStdoutJson(stdout);
+        expectFields(payload, { ok: false });
+        expectFields(firstRecord(payload.checks), {
+          id: "twilio-voice-call-plugin",
+          ok: false,
+        });
+      } finally {
+        stdout.restore();
+      }
+    }
   });
 
   it("accepts --json on session status", async () => {
@@ -416,58 +463,5 @@ describe("google-meet CLI", () => {
     expect(testing.resolveGoogleMeetGatewayTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
-  });
-
-  it("prints a dry-run export manifest without writing files", async () => {
-    stubMeetArtifactsApi();
-    const stdout = captureStdout();
-    const parentDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-dry-run-"));
-    const outputDir = path.join(parentDir, "bundle");
-
-    try {
-      await setupCli({}).parseAsync(
-        [
-          "googlemeet",
-          "export",
-          "--access-token",
-          "token",
-          "--expires-at",
-          String(Date.now() + 120_000),
-          "--conference-record",
-          "rec-1",
-          "--include-doc-bodies",
-          "--output",
-          outputDir,
-          "--dry-run",
-        ],
-        { from: "user" },
-      );
-      const payload = JSON.parse(stdout.output());
-      expectFields(payload, {
-        dryRun: true,
-        tokenSource: "cached-access-token",
-      });
-      expectFields(payload.manifest.request, {
-        conferenceRecord: "rec-1",
-        includeDocumentBodies: true,
-      });
-      expectFields(payload.manifest.counts, {
-        attendanceRows: 1,
-        transcriptEntries: 1,
-        warnings: 0,
-      });
-      expect(payload.manifest.files).toEqual([
-        "summary.md",
-        "attendance.csv",
-        "transcript.md",
-        "artifacts.json",
-        "attendance.json",
-        "manifest.json",
-      ]);
-      expect(existsSync(outputDir)).toBe(false);
-    } finally {
-      stdout.restore();
-      rmSync(parentDir, { recursive: true, force: true });
-    }
   });
 });
