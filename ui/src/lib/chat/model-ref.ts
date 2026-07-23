@@ -260,7 +260,7 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   return displayLookup;
 }
 
-function formatCatalogEntryDisplay(
+export function formatCatalogEntryDisplay(
   entry: ModelCatalogEntry,
   displayLookup: ChatModelDisplayLookup,
 ): string {

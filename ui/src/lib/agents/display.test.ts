@@ -12,6 +12,7 @@ import {
   buildAgentContext,
   formatBytes,
   listSelectableAgents,
+  resolveConfiguredModels,
   resolveEffectiveModelFallbacks,
 } from "./display.ts";
 
@@ -25,6 +26,36 @@ describe("listSelectableAgents", () => {
 
     expect(listSelectableAgents(agents)).toEqual([agents[0], agents[2]]);
     expect(agents).toHaveLength(3);
+  });
+});
+
+describe("resolveConfiguredModels (model picker labels)", () => {
+  const catalog = [
+    { id: "claude-opus-4-8", provider: "anthropic", name: "Opus 4.8" },
+  ] as unknown as ModelCatalogEntry[];
+
+  it("labels an aliased configured model with its catalog display name, not the alias (regression #111884)", () => {
+    const configForm = {
+      agents: { defaults: { models: { "anthropic/claude-opus-4-8": { alias: "opus" } } } },
+    };
+    const [option] = resolveConfiguredModels(configForm, catalog);
+    expect(option?.label).toBe("Opus 4.8");
+  });
+
+  it("preserves an intentional custom alias the catalog name does not convey", () => {
+    const configForm = {
+      agents: { defaults: { models: { "anthropic/claude-opus-4-8": { alias: "smart" } } } },
+    };
+    const [option] = resolveConfiguredModels(configForm, catalog);
+    expect(option?.label).toBe("smart (Opus 4.8)");
+  });
+
+  it("falls back to the raw id when the model is not in the catalog", () => {
+    const configForm = {
+      agents: { defaults: { models: { "openai/mystery-model": {} } } },
+    };
+    const [option] = resolveConfiguredModels(configForm, catalog);
+    expect(option?.label).toBe("openai/mystery-model");
   });
 });
 
