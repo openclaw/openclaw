@@ -711,8 +711,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         latestVisibleTracker.recordPending(roomId, event);
       };
+      const recordSerializedLatestVisibleNoiseIfFreshnessEnabled = async () => {
+        if (accountConfig?.freshness?.enabled !== true) {
+          return;
+        }
+        await runRoomIngress(roomId, recordLatestVisibleNoiseIfFreshnessEnabled);
+      };
       if (eventType === EventType.RoomRedaction) {
-        await recordLatestVisibleNoiseIfFreshnessEnabled();
+        await recordSerializedLatestVisibleNoiseIfFreshnessEnabled();
         return;
       }
 
@@ -734,7 +740,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         `matrix: inbound event room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
       );
       if (event.unsigned?.redacted_because) {
-        await recordLatestVisibleNoiseIfFreshnessEnabled();
+        await recordSerializedLatestVisibleNoiseIfFreshnessEnabled();
         return;
       }
       const senderId = event.sender;

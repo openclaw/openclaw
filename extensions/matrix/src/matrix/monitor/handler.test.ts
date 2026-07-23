@@ -1197,6 +1197,114 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
   });
 
+  it("serializes raw redactions with freshness trigger snapshots", async () => {
+    type DeliverFn = (payload: { text?: string }, info: { kind: string }) => Promise<void>;
+    type BeforeDeliverFn = (
+      payload: { text?: string },
+      info: { kind: string },
+    ) => Promise<{ text?: string } | null>;
+    let capturedDeliver: DeliverFn | undefined;
+    let capturedBeforeDeliver: BeforeDeliverFn | undefined;
+    let resolveCaptured: (() => void) | undefined;
+    const captured = new Promise<void>((resolve) => {
+      resolveCaptured = resolve;
+    });
+    let releaseFirstDispatch: (() => void) | undefined;
+    const firstDispatchGate = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    let releaseFirstDirectLookup: (() => void) | undefined;
+    const firstDirectLookupGate = new Promise<void>((resolve) => {
+      releaseFirstDirectLookup = resolve;
+    });
+    let resolveFirstDirectLookupStarted: (() => void) | undefined;
+    const firstDirectLookupStarted = new Promise<void>((resolve) => {
+      resolveFirstDirectLookupStarted = resolve;
+    });
+    let directLookupCount = 0;
+    const directTracker = {
+      isDirectMessage: vi.fn(async () => {
+        directLookupCount += 1;
+        if (directLookupCount === 1) {
+          resolveFirstDirectLookupStarted?.();
+          await firstDirectLookupGate;
+        }
+        return false;
+      }),
+    };
+    const dispatchInboundMessage = vi.fn(async () => {
+      await firstDispatchGate;
+      return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
+    });
+    const { handler } = createMatrixHandlerTestHarness({
+      directTracker,
+      historyLimit: 0,
+      accountConfig: {
+        freshness: {
+          enabled: true,
+          mode: "suppress",
+        },
+      },
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      createReplyDispatcherWithTyping: (options: Record<string, unknown> | undefined) => {
+        if (!capturedDeliver) {
+          capturedDeliver = options?.deliver as DeliverFn | undefined;
+          capturedBeforeDeliver = options?.beforeDeliver as BeforeDeliverFn | undefined;
+          resolveCaptured?.();
+        }
+        return {
+          dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      dispatchInboundMessage: dispatchInboundMessage as never,
+    });
+
+    const firstDone = handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$fresh-trigger",
+        body: "initial question",
+      }),
+    );
+    await firstDirectLookupStarted;
+
+    let redactionSettled = false;
+    const redactionDone = handler("!room:example.org", {
+      event_id: "$redact-trigger",
+      sender: "@moderator:example.org",
+      type: EventType.RoomRedaction,
+      origin_server_ts: Date.now(),
+      content: {},
+      redacts: "$fresh-trigger",
+    }).then(() => {
+      redactionSettled = true;
+    });
+    await Promise.resolve();
+    expect(redactionSettled).toBe(false);
+
+    releaseFirstDirectLookup?.();
+    await captured;
+    await redactionDone;
+
+    deliverMatrixRepliesMock.mockClear();
+    const deliveryPayload = await capturedBeforeDeliver?.(
+      { text: "original final reply" },
+      { kind: "final" },
+    );
+    if (deliveryPayload) {
+      await capturedDeliver?.(deliveryPayload, { kind: "final" });
+    }
+    releaseFirstDispatch?.();
+    await firstDone;
+
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+  });
+
   it("redrafts with latest-visible context when Matrix room history is disabled", async () => {
     await runMatrixFreshnessScenario({
       mode: "revise",
