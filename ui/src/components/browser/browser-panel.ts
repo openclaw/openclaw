@@ -150,8 +150,9 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.closePanel();
       return;
     }
-    const url = typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
-    if (url || detail?.open === true) {
+    const normalizedRequestedUrl =
+      typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
+    if (normalizedRequestedUrl || detail?.open === true) {
       if (!this.available) {
         return;
       }
@@ -159,8 +160,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.open = true;
       this.syncLayoutReservation();
       this.persistLayout();
-      if (url) {
-        void this.browserPanelController.openUrl(url, { newTab: true });
+      if (normalizedRequestedUrl) {
+        void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
       } else if (!wasOpen) {
         void this.browserPanelController.refreshAll();
       }
