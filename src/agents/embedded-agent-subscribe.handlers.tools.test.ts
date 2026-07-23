@@ -1702,6 +1702,77 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 
+  it("does not record lastToolError for zero-exit exec when event isError is a false positive", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-syntax-ok",
+        args: { command: "shellcheck script.sh" },
+      } as never,
+    );
+
+    // Upstream can set isError=true from stderr noise while exitCode is 0 and
+    // stdout is benign (shellcheck "SYNTAX OK"). Structured success must win.
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-syntax-ok",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "SYNTAX OK\n" }],
+          details: {
+            status: "completed",
+            exitCode: 0,
+            durationMs: 42,
+            aggregated: "SYNTAX OK\n",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+    expect(ctx.state.toolMetas.at(-1)).toMatchObject({
+      toolName: "exec",
+    });
+    expect(ctx.state.toolMetas.at(-1)?.isError).toBeUndefined();
+  });
+
+  it("still records lastToolError for genuine unstructured exec failures", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-unstructured-fail",
+        args: { command: "shellcheck" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-unstructured-fail",
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "command not found: shellcheck" }],
+        },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      error: "command not found: shellcheck",
+    });
+  });
+
   it("emits a prepared validation diagnostic without model arguments", async () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =

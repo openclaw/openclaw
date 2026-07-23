@@ -9,6 +9,7 @@ import {
   extractToolResultText,
   extractToolErrorCode,
   extractToolErrorMessage,
+  isStructuredToolSuccess,
   isToolResultError,
   sanitizeToolArgs,
   sanitizeToolResult,
@@ -31,6 +32,46 @@ describe("extractToolErrorMessage", () => {
     expect(
       extractToolErrorMessage({ content: [{ type: "text", text: "plugin execution failed" }] }),
     ).toBe("plugin execution failed");
+  });
+
+  it("does not promote zero-exit success stdout as an error message", () => {
+    // shellcheck / date / true style: structured success + benign first-line text
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "SYNTAX OK\n" }],
+        details: { status: "completed", exitCode: 0, aggregated: "SYNTAX OK\n" },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "SYNTAX OK" }],
+        details: { exitCode: 0 },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "Wed Jul 17 23:00:00 UTC 2026" }],
+        details: { status: "completed", exitCode: 0 },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("still surfaces unstructured failure text without structured success", () => {
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "command not found: shellcheck" }],
+      }),
+    ).toBe("command not found: shellcheck");
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "fatal: not a git repository" }],
+        details: {
+          status: "failed",
+          exitCode: 128,
+          aggregated: "fatal: not a git repository",
+        },
+      }),
+    ).toBe("fatal: not a git repository");
   });
 
   it("keeps error-like status values", () => {
@@ -203,6 +244,28 @@ describe("isToolResultError", () => {
     expect(isToolResultError({ details: { ok: true, status: "cancelled", timedOut: true } })).toBe(
       true,
     );
+  });
+});
+
+describe("isStructuredToolSuccess", () => {
+  it("recognizes zero-exit and completed structured successes", () => {
+    expect(
+      isStructuredToolSuccess({
+        content: [{ type: "text", text: "SYNTAX OK" }],
+        details: { status: "completed", exitCode: 0 },
+      }),
+    ).toBe(true);
+    expect(isStructuredToolSuccess({ details: { exitCode: 0 } })).toBe(true);
+    expect(isStructuredToolSuccess({ details: { status: "completed" } })).toBe(true);
+    expect(isStructuredToolSuccess({ details: { ok: true } })).toBe(true);
+  });
+
+  it("rejects failures and unstructured text-only results", () => {
+    expect(isStructuredToolSuccess({ details: { status: "failed" } })).toBe(false);
+    expect(isStructuredToolSuccess({ details: { exitCode: 1 } })).toBe(false);
+    expect(
+      isStructuredToolSuccess({ content: [{ type: "text", text: "plugin execution failed" }] }),
+    ).toBe(false);
   });
 });
 

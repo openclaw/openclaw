@@ -112,6 +112,33 @@ export function isToolResultError(result: unknown): boolean {
   return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
 }
 
+/**
+ * True when the tool result carries structured success provenance.
+ * Callers should prefer this over a misleading event-level `isError` flag so
+ * zero-exit exec outcomes (shellcheck "SYNTAX OK", date, true) are not
+ * reclassified as tool failures by upstream heuristics/stderr noise.
+ */
+export function isStructuredToolSuccess(result: unknown): boolean {
+  if (isToolResultError(result)) {
+    return false;
+  }
+  const details = readToolResultDetails(result);
+  if (!details) {
+    return false;
+  }
+  const ok = readToolErrorField(details, "ok");
+  const success = readToolErrorField(details, "success");
+  if (ok === true || success === true) {
+    return true;
+  }
+  const exitCode = readToolErrorField(details, "exitCode");
+  if (typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode === 0) {
+    return true;
+  }
+  const status = readToolResultStatus(result);
+  return status === "completed" || status === "ok" || status === "success" || status === "0";
+}
+
 export type ToolResultFailureKind = "blocked" | "cancelled" | "failed" | "timed_out";
 
 /** Classify a thrown tool error without inferring cancellation from message text. */

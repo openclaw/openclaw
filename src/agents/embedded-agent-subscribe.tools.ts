@@ -30,12 +30,13 @@ import type {
 } from "./embedded-agent-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
+  isStructuredToolSuccess,
   isToolResultError,
   readToolResultDetails,
   readToolResultStatus,
 } from "./tool-result-error.js";
 
-export { isToolResultError };
+export { isStructuredToolSuccess, isToolResultError };
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
@@ -869,6 +870,11 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
+  // Structured success (exitCode 0 / completed / ok) must never become an error
+  // message — including when aggregated stdout is present (shellcheck "SYNTAX OK").
+  if (isStructuredToolSuccess(result)) {
+    return undefined;
+  }
   const record = result as Record<string, unknown>;
   const fromDetails = extractDirectErrorField(record.details);
   if (fromDetails) {
@@ -904,6 +910,11 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   }
   const status = readToolResultStatus(result);
   if (status && !isToolResultError(result)) {
+    return undefined;
+  }
+  // Structured success (exitCode 0 / completed) must not surface stdout as an
+  // error message even when the event producer already set isError=true.
+  if (isStructuredToolSuccess(result)) {
     return undefined;
   }
   return text ? normalizeToolErrorText(text) : undefined;

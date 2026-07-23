@@ -80,6 +80,7 @@ import {
   extractToolErrorMessage,
   extractToolResultText,
   filterToolResultMediaUrls,
+  isStructuredToolSuccess,
   isToolResultError,
   isToolResultTimedOut,
   sanitizeToolArgs,
@@ -1382,7 +1383,11 @@ export async function handleToolExecutionEnd(
   const isError = evt.isError;
   const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
-  const observerIsError = isError || isToolResultError(result);
+  // Prefer structured success over a false-positive event isError. Upstream
+  // producers can mark isError from stderr noise while exitCode remains 0
+  // (shellcheck "SYNTAX OK", date, true) and must not become lastToolError.
+  const observerIsError =
+    isToolResultError(result) || (isError && !isStructuredToolSuccess(result));
   const sanitizedResult = sanitizeToolResult(result);
   const approvalUnavailable =
     isExecToolName(toolName) &&
