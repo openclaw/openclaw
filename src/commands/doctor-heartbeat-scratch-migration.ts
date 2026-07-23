@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatMonitorSpecs } from "../cron/heartbeat-monitor.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import {
+  deleteCronJobScratch,
   hashCronScratchSource,
   readCronJobScratchState,
   writeCronJobScratch,
@@ -157,6 +158,7 @@ type HeartbeatSourceClaim = {
 };
 
 const HEARTBEAT_CLAIM_INFIX = ".doctor-importing-";
+const HEARTBEAT_CLAIM_CHANGED_ERROR = "HeartbeatClaimChangedError";
 
 /** Newest interrupted-claim sibling for a missing canonical heartbeat path. */
 async function findStaleHeartbeatClaim(heartbeatPath: string): Promise<string | undefined> {
@@ -244,6 +246,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
       });
       if (hashCronScratchSource(utf8Decoder.decode(finalBytes.buffer)) !== source.sha256) {
         const error = new Error("HEARTBEAT.md changed while the migration claim was held");
+        error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
         await restore(error);
         throw error;
       }
@@ -495,17 +498,30 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         importedAll = false;
       }
     }
-    if (!importedAll) {
-      // The restored legacy file is authoritative again, so this run's partial
-      // scratch imports must revert too — otherwise those agents keep serving
-      // the imported copy and ignore later edits to the restored file.
+    // The restored legacy file is authoritative again after any rollback, so
+    // this run's scratch imports must revert too — otherwise those agents keep
+    // serving the imported copy and ignore later edits to the restored file.
+    // A monitor that had no row before must return to no-row (not a tombstone),
+    // or the runner's legacy fallback and future migrations stay suppressed.
+    const rollbackCommitted = () => {
       for (const commit of committedThisRun.toReversed()) {
+        const state = readCronJobScratchState(storePath, commit.monitor.id, { env });
+        if (state.currentRevision !== commit.newRevision) {
+          warnings.push(
+            `Agent "${commit.agentId}" scratch changed before the migration rollback; leaving current scratch in place.`,
+          );
+          continue;
+        }
+        if (!commit.previous) {
+          deleteCronJobScratch(storePath, commit.monitor.id, { env });
+          continue;
+        }
         const revert = writeCronJobScratch({
           storePath,
           jobId: commit.monitor.id,
-          content: commit.previous?.content ?? null,
+          content: commit.previous.content,
           expectedRevision: commit.newRevision,
-          sourceSha256: commit.previous?.sourceSha256,
+          sourceSha256: commit.previous.sourceSha256,
           options: { env },
         });
         if (!revert.ok) {
@@ -514,6 +530,9 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
           );
         }
       }
+    };
+    if (!importedAll) {
+      rollbackCommitted();
       try {
         await claim.restore(undefined);
       } catch (error) {
@@ -522,11 +541,19 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       continue;
     }
     try {
-      // release() re-verifies and restores the claim itself when the bytes
-      // changed, so no extra restore is needed on this failure path.
+      // release() re-verifies the claimed bytes; when they changed it restores
+      // the newer file itself and reports HeartbeatClaimChangedError.
       await claim.release();
       changes.push(...groupChanges);
     } catch (error) {
+      if (error instanceof Error && error.name === HEARTBEAT_CLAIM_CHANGED_ERROR) {
+        // The changed file is authoritative; committed scratch must not shadow it.
+        rollbackCommitted();
+        warnings.push(
+          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+        );
+        continue;
+      }
       changes.push(...groupChanges);
       warnings.push(
         `${shortenHomePath(source.path)} was migrated but not removed: ${errorMessage(error)}. Rerun doctor to retry safely.`,
