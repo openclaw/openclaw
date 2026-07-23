@@ -63,6 +63,14 @@ export const PNPM_FLAG_OPTIONS = new Set([
 ]);
 
 export const PNPM_DLX_OPTIONS_WITH_VALUE = new Set(["--allow-build", "--package", "-p"]);
+const PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE = new Set([
+  "--allow-build",
+  "--config",
+  "--dir",
+  "--filter",
+  "--package",
+  "-p",
+]);
 
 const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
 const PNPM_SCRIPT_RUN_SUBCOMMANDS = new Set(["restart", "run", "start", "stop", "test"]);
@@ -341,7 +349,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
       if (
         hasLeadingContextOption(argv, 1, {
           ...leadingOptions,
-          contextOptionsWithValue: new Set(["--dir", "--filter"]),
+          contextOptionsWithValue: PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
           contextCaseSensitiveOptionsWithValue: new Set(["-C"]),
           contextFlagOptions: new Set(["--recursive", "--workspace-root", "-r", "-w"]),
         })
@@ -353,7 +361,7 @@ export function hasKnownPackageManagerExecContextOptions(argv: string[]): boolea
         ? hasLeadingContextOption(argv, (subcommandIdx ?? 0) + 1, {
             optionsWithValue: PNPM_DLX_OPTIONS_WITH_VALUE,
             flagOptions: new Set(),
-            contextOptionsWithValue: new Set(["--allow-build", "--package", "-p"]),
+            contextOptionsWithValue: PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE,
           })
         : false;
     }

@@ -215,6 +215,32 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
+  it.each(["--allow-build=tsx", "--package=tsx", "--config ./npmrc"])(
+    "keeps leading pnpm dlx context approvals one-shot: %s",
+    async (contextOption) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "pnpm");
+      makeExecutable(dir, "tsx");
+      const env = makePathEnv(dir);
+      const command = `pnpm ${contextOption} dlx tsx ./run.ts`;
+      const plan = await planShellAuthorization({ command, cwd: dir, env });
+
+      const decision = resolveAllowAlwaysPersistenceDecision({
+        segments: plannedSegments(plan),
+        commandText: command,
+        cwd: dir,
+        env,
+        platform: process.platform,
+        authorizationPlan: plan,
+      });
+
+      expect(decision).toEqual({
+        kind: "one-shot",
+        reasons: expect.arrayContaining(["no-reusable-pattern"]),
+      });
+    },
+  );
+
   it("persists npm x approvals against the inner executable", async () => {
     const dir = makeTempDir();
     makeExecutable(dir, "npm");
