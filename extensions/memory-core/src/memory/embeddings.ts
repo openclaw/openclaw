@@ -242,6 +242,9 @@ async function createWithAdapter(
     model: resolveProviderModel(adapter, options.model),
   };
   const result = await adapter.create(createOptions);
+  if (result.provider && !result.provider.model) {
+    result.provider.model = createOptions.model;
+  }
   return {
     provider: result.provider,
     requestedProvider: options.provider,
