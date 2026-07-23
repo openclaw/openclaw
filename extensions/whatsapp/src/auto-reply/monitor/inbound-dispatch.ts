@@ -334,7 +334,7 @@ export async function buildWhatsAppInboundContext(params: {
     params.msg.payload.mediaItems ?? (params.msg.payload.media ? [params.msg.payload.media] : []);
   const media = toInboundMediaFacts(
     mediaInputs
-      .filter((entry) => entry.path || entry.url)
+      .filter((entry) => entry.path || entry.url || entry.type || entry.kind)
       .map((entry) => ({
         path: entry.path,
         url: entry.url ?? entry.path,

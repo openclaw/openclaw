@@ -475,6 +475,30 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
+  it("preserves type-only inbound media facts", async () => {
+    const ctx = await buildWhatsAppInboundContext({
+      combinedBody: "<audio>",
+      msg: makeMsg({
+        payload: {
+          body: "<audio>",
+          media: {
+            type: "audio/ogg",
+            kind: "audio",
+          },
+        },
+      }),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expectRecordFields(requireRecord(ctx, "type-only media inbound context"), {
+      MediaType: "audio/ogg",
+      MediaTypes: ["audio/ogg"],
+    });
+  });
+
   it("projects every media item preserved by an inbound debounce batch", async () => {
     const ctx = await buildWhatsAppInboundContext({
       combinedBody: "<media:image>\n<media:image>",

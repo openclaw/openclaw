@@ -1077,6 +1077,57 @@ describe("web monitor inbox", () => {
     expect(inboundMessage(onMessage).payload.body).toBe("held");
   });
 
+  it("keeps location context out of plugin-requested batches", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 0,
+      resolveDebounceDecision: async () => ({ action: "debounce", debounceMs: 50 }),
+    });
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: nextMessageId("plugin-debounce-location"),
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: {
+            locationMessage: {
+              degreesLatitude: 48.858844,
+              degreesLongitude: 2.294351,
+              name: "Eiffel Tower",
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    });
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("plugin-debounce-after-location"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "after location",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      }),
+    );
+    await settleInboundWork();
+    await waitForMessageCalls(onMessage, 2);
+
+    await listener.close();
+
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    const messages = onMessage.mock.calls.map((call) => call[0] as WebInboundMessage);
+    expect(messages.find((message) => message.payload.location)?.payload.location).toMatchObject({
+      latitude: 48.858844,
+      longitude: 2.294351,
+    });
+    expect(messages.some((message) => message.payload.body === "after location")).toBe(true);
+  });
+
   it("completes shutdown under a long durable debounce without waiting for the window", async () => {
     // Durable pump tasks await claim flush waiters; close must force-flush
     // debounced batches before waiting on those pumps (socket-close timeout).

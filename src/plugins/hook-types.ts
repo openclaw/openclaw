@@ -248,6 +248,7 @@ const CONVERSATION_HOOK_NAMES = [
   "before_agent_finalize",
   "agent_end",
   "before_agent_run",
+  "inbound_debounce",
 ] as const satisfies readonly PluginHookName[];
 
 const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES);

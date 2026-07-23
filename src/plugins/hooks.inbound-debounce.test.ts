@@ -129,4 +129,40 @@ describe("inbound_debounce hook", () => {
       runner?.runInboundDebounce(event, { ...context, conversationId: "other" }),
     ).resolves.toBeUndefined();
   });
+
+  it("blocks an external conversation policy without explicit access", () => {
+    const plugin = writePlugin({
+      id: "conversation-debounce-blocked",
+      filename: "conversation-debounce-blocked.cjs",
+      body: `module.exports = {
+        id: "conversation-debounce-blocked",
+        register(api) {
+          api.on("inbound_debounce", () => ({ action: "debounce", debounceMs: 12_000 }));
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: [plugin.id],
+          entries: {
+            [plugin.id]: { enabled: true },
+          },
+        },
+      },
+      cache: false,
+    });
+
+    expect(registry.typedHooks).toStrictEqual([]);
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("hooks.allowConversationAccess=true"),
+        }),
+      ]),
+    );
+  });
 });
