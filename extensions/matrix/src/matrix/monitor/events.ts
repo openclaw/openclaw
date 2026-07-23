@@ -390,7 +390,7 @@ export function registerMatrixMonitorEvents(params: {
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
       );
     }
-    if (eventType === EventType.Reaction || eventType === EventType.RoomRedaction) {
+    if (eventType === EventType.Reaction) {
       void runMonitorTask(
         `room event handler room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
         async () => {
