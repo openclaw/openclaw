@@ -637,7 +637,7 @@ describe("worker turn launcher", () => {
       sessionKey: SESSION_KEY,
       agentId: "main",
     });
-    expect(tunnel.reconcileWorkspace).toHaveBeenCalledWith(
+    expect(vi.mocked(tunnel.reconcileWorkspace)).toHaveBeenCalledWith(
       expect.objectContaining({ localPath: root }),
     );
     const conflictSummary =
