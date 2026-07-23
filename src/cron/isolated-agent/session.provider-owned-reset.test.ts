@@ -16,12 +16,13 @@ function providerOwnedEntry(): SessionEntry {
     lastInteractionAt: startedAt,
     model: "claude-opus-4-6",
     modelProvider: "claude-cli",
+    providerOverride: "anthropic",
     cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
   };
 }
 
 describe("resolveCronSession provider-owned daily reset", () => {
-  it("keeps a provider-owned CLI session with the default reset policy", () => {
+  it("keeps a provider-owned CLI session with a catalog provider override", () => {
     const sessionKey = "agent:main:cron:daily-job";
     const entry = providerOwnedEntry();
 

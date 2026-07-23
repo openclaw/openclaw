@@ -2,10 +2,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
+import { hasProviderOwnedSession, resolveSessionEntryResetFreshness } from "./entry-freshness.js";
 import { upsertSessionEntry } from "./session-accessor.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+describe("hasProviderOwnedSession", () => {
+  it("falls back to the backend provider when a catalog provider override is active", () => {
+    expect(
+      hasProviderOwnedSession({
+        sessionId: "session-provider-owned-override",
+        updatedAt: Date.now(),
+        providerOverride: "anthropic",
+        modelProvider: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "cli-session-provider-owned-override" },
+        },
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("resolveSessionEntryResetFreshness", () => {
   let tempDirs: string[] = [];
@@ -86,6 +102,36 @@ describe("resolveSessionEntryResetFreshness", () => {
         providerOverride: "claude-cli",
         cliSessionBindings: {
           "claude-cli": { sessionId: "cli-session-provider-owned" },
+        },
+      },
+    );
+
+    const result = resolveSessionEntryResetFreshness({
+      sessionKey,
+      storePath,
+      sessionCfg: {},
+      resetType: "thread",
+      now,
+    });
+
+    expect(result.state).toBe("fresh");
+    expect(result.freshness).toMatchObject({ fresh: true });
+  });
+
+  it("keeps provider-owned sessions fresh when a catalog provider override is active", async () => {
+    const sessionKey = "agent:main:main:thread:provider-owned-override";
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "session-provider-owned-override",
+        updatedAt: now,
+        sessionStartedAt: now - 2 * DAY_MS,
+        lastInteractionAt: now - 2 * DAY_MS,
+        providerOverride: "anthropic",
+        modelProvider: "claude-cli",
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "cli-session-provider-owned-override" },
         },
       },
     );
