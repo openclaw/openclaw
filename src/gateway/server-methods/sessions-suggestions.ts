@@ -163,7 +163,7 @@ async function dispatchSuggestion(params: {
     sessionId: params.target.entry.sessionId,
     message: params.suggestion.text,
     queueMode: params.resolution === "send" ? "steer" : "followup",
-    idempotencyKey: `session-suggestion:${params.suggestion.id}:${params.resolution}`,
+    idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({
     req: { ...params.req, method: "chat.send", params: chatParams },

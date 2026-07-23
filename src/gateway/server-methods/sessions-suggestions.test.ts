@@ -186,6 +186,7 @@ describe("session suggestion handlers", () => {
             params: expect.objectContaining({
               message: "Ship the focused change",
               queueMode,
+              idempotencyKey: `session-suggestion:${id}`,
             }),
             client: expect.objectContaining({
               authenticatedUserProfile: expect.objectContaining({
