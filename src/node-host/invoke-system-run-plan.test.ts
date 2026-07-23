@@ -1116,6 +1116,19 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
+  it("does not bind opaque shell command operands as mutable script files", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-operand-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const snapshot = resolveMutableFileOperandSnapshotSync({
+      argv: ["nu", "--commands", "./run.sh"],
+      cwd: tmp,
+      shellCommand: null,
+    });
+    expect(snapshot).toEqual({ ok: true, snapshot: null });
+  });
+
   it("captures fish script operands with plus-prefixed filenames", () => {
     const casesLocal = [
       {

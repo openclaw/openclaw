@@ -16,6 +16,7 @@ import { isInterpreterLikeSafeBin } from "../infra/exec-safe-bin-runtime-policy.
 import {
   isBlockedShellWrapperCommand,
   POSIX_PARSEABLE_SHELL_WRAPPERS,
+  POSIX_SHELL_WRAPPERS,
   normalizeExecutableToken,
   unwrapKnownDispatchWrapperInvocation,
   unwrapKnownShellMultiplexerInvocation,
@@ -683,7 +684,10 @@ function resolveMutableFileOperandIndex(argv: string[], cwd: string | undefined)
   if (unwrapped.opaqueMultiplexerSeen || OPAQUE_MUTABLE_SCRIPT_RUNNERS.has(executable)) {
     return null;
   }
-  if ((POSIX_PARSEABLE_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+  if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+    if (!(POSIX_PARSEABLE_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+      return null;
+    }
     const shellIndex = resolvePosixShellScriptOperandIndex(unwrapped.argv, executable);
     return shellIndex === null ? null : unwrapped.baseIndex + shellIndex;
   }
@@ -778,7 +782,7 @@ function requiresStableInterpreterApprovalBindingWithShellCommand(params: {
   if (!executable) {
     return false;
   }
-  if ((POSIX_PARSEABLE_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
+  if ((POSIX_SHELL_WRAPPERS as ReadonlySet<string>).has(executable)) {
     return false;
   }
   return isMutableScriptRunner(executable);

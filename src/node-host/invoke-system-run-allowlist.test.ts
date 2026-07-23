@@ -309,4 +309,51 @@ describe("resolveSystemRunExecArgv", () => {
       expect(result?.[2]).toBe(expectedCommand.command);
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed instead of rewriting opaque shell transports",
+    async () => {
+      const env = { PATH: "/usr/bin:/bin" };
+      const authorizationPlan = await planShellAuthorization({
+        command: "head -c 16",
+        env,
+        platform: process.platform,
+      });
+      expect(authorizationPlan.ok).toBe(true);
+      if (!authorizationPlan.ok) {
+        throw new Error(authorizationPlan.reason);
+      }
+      const safeBinPolicy = resolveExecSafeBinRuntimePolicy({
+        global: { safeBins: ["head"] },
+      });
+
+      const result = await resolveSystemRunExecArgv({
+        plannedAllowlistArgv: undefined,
+        argv: ["nu", "--commands", "head -c 16"],
+        security: "allowlist",
+        approvals: resolveAllowlistApprovals(),
+        safeBins: safeBinPolicy.safeBins,
+        safeBinProfiles: safeBinPolicy.safeBinProfiles,
+        trustedSafeBinDirs: safeBinPolicy.trustedSafeBinDirs,
+        skillBins: [],
+        autoAllowSkills: false,
+        isWindows: false,
+        policy: {
+          approvedByAsk: false,
+          analysisOk: true,
+          allowlistSatisfied: true,
+        },
+        shellCommand: "head -c 16",
+        segments: authorizationPlan.groups.flatMap((group) =>
+          group.candidates.map((candidate) => candidate.sourceSegment),
+        ),
+        segmentSatisfiedBy: ["safeBins"],
+        authorizationPlan,
+        cwd: undefined,
+        env,
+      });
+
+      expect(result).toBeNull();
+    },
+  );
 });
