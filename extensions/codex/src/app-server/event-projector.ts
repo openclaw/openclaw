@@ -30,8 +30,7 @@ import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript
 import {
   normalizeCodexResponseTokenUsage,
   normalizeCodexThreadTokenUsage,
-  readCodexThreadContextSnapshot,
-  readCodexThreadTokenUsage,
+  projectCodexThreadUsageUpdate,
 } from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
@@ -58,7 +57,6 @@ import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
-export { CodexNativeToolLifecycleProjector };
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 
 type CodexAppServerToolTelemetry = {
@@ -276,14 +274,14 @@ export class CodexAppServerEventProjector {
       case "hook/completed":
         this.eventProjection.handleHook(notification.method, params);
         break;
-      case "thread/tokenUsage/updated": {
-        this.tokenUsage = readCodexThreadTokenUsage(params) ?? this.tokenUsage;
-        const context = readCodexThreadContextSnapshot(params);
-        if (context.modelContextWindow !== undefined || context.promptTokens !== undefined) {
-          this.emitAgentEvent({ stream: "codex_app_server.usage", data: context });
-        }
+      case "thread/tokenUsage/updated":
+        projectCodexThreadUsageUpdate(
+          params,
+          this.tokenUsage,
+          (usage) => (this.tokenUsage = usage),
+          (data) => this.emitAgentEvent({ stream: "codex_app_server.usage", data }),
+        );
         break;
-      }
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;

@@ -4298,6 +4298,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Live: APNs HTTP/2 proxy reachability
   - H2: Live: ACP bind smoke (/acp spawn ... --bind here)
   - H2: Live: Codex app-server harness smoke
+  - H2: Live: OpenAI repeated compaction
   - H3: Recommended live recipes
   - H2: Live: model matrix (what we cover)
   - H3: Aggregators / alternate gateways
@@ -5793,6 +5794,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervise Codex sessions
   - H2: Configuration
   - H3: Compaction
+  - H3: Direct API long context
   - H2: Verify Codex runtime
   - H2: Routing and model selection
   - H2: Deployment patterns

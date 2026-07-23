@@ -29,6 +29,19 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   };
 }
 
+export function projectCodexThreadUsageUpdate(
+  params: JsonObject,
+  currentUsage: ReturnType<typeof normalizeUsage>,
+  applyUsage: (usage: ReturnType<typeof normalizeUsage>) => void,
+  emitContext: (context: ReturnType<typeof readCodexThreadContextSnapshot>) => void,
+): void {
+  applyUsage(readCodexThreadTokenUsage(params) ?? currentUsage);
+  const context = readCodexThreadContextSnapshot(params);
+  if (context.modelContextWindow !== undefined || context.promptTokens !== undefined) {
+    emitContext(context);
+  }
+}
+
 export function normalizeCodexThreadTokenUsage(
   record: JsonObject,
 ): ReturnType<typeof normalizeUsage> {
