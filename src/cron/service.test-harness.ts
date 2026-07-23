@@ -46,13 +46,13 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   }
 
   afterEach(async () => {
-    for (const [storePath, dir] of [...stores]) {
+    for (const [storePath, dir] of stores) {
       await cleanupStore(storePath, dir);
     }
   });
 
   afterAll(async () => {
-    for (const [storePath, dir] of [...stores]) {
+    for (const [storePath, dir] of stores) {
       await cleanupStore(storePath, dir);
     }
     if (!fixtureRoot) {
