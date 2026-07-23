@@ -1049,7 +1049,7 @@ function resolveShellWrapperScriptCandidatePath(params: {
       idx += 1;
       break;
     }
-    if (token === "-c" || token === "--command") {
+    if (!isPowerShell && POSIX_INLINE_COMMAND_FLAGS.has(token)) {
       return undefined;
     }
     if (!isPowerShell && /^-[^-]*c[^-]*$/i.test(token)) {

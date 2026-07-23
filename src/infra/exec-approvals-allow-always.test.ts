@@ -539,6 +539,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     }
     const dir = makeTempDir();
     const tool = makeExecutable(dir, "openclaw-ok");
+    makeExecutable(dir, "yash");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
     const safeBins = resolveSafeBins(undefined);
 
@@ -549,6 +550,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       `bash --login -c '$0 "$1"' ${tool} marker`,
       `bash -i -c '$0 "$1"' ${tool} marker`,
       `bash -lc '$0 "$1"' ${tool} marker`,
+      `yash -i --cmdline ${tool}`,
     ]) {
       const { persisted } = await resolvePersistedPatterns({
         command,
