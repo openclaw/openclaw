@@ -65,8 +65,8 @@ The Kotlin generators ran successfully; their tracked outputs were byte-identica
 ## Key decisions and ambiguity resolution
 
 1. `visibility` is optional and additive in `SessionsCreateParamsSchema`. The service rejects a disallowed visibility with the existing `SESSION_VISIBILITY_DISABLED` error shape and rejects create-time visibility when an existing keyed session would be adopted or reset in place.
-2. The hello `policy` object now exposes optional `allowedSessionVisibilities` and `sessionSharingIdentityCount`. Current Gateways always populate both. Optional schema fields preserve compatibility with older Gateway/client pairs.
-3. Identity count comes from canonical non-merged user profiles, not loaded session creators. This was an accepted autoreview finding: session history and pagination are not a reliable proxy for a two-person Gateway.
+2. The hello `policy` object now exposes optional `allowedSessionVisibilities` and `hasMultipleSessionSharingIdentities`. Current Gateways always populate both. Optional schema fields preserve compatibility with older Gateway/client pairs.
+3. The multi-user boolean comes from canonical non-merged user profiles, not loaded session creators. It reveals only whether the draft UI's two-identity threshold is met, not the exact profile count.
 4. The new-session UI rechecks the hello policy at submit time. A stale checked control cannot submit draft visibility after policy/identity availability disappears.
 5. Admin ownership styling compares the session creator id with the current authenticated user id because `sharingRole: "admin"` intentionally wins over `"owner"` for administrators.
 6. Promotion remains one existing `session.visibility.set` call with `visibility: "shared"`; no parallel publish method, event, audit path, or invite workflow was introduced.
@@ -143,7 +143,7 @@ All final commands below ran against feature HEAD `5f4e34fe9ef4859a4d0064802e67c
 ### Autoreview
 
 - Full feature command: `.agents/skills/autoreview/scripts/autoreview --mode uncommitted --stream-engine-output`.
-  - Accepted finding: loaded session creators were an invalid proxy for Gateway identities. Fixed by adding canonical `sessionSharingIdentityCount`, with handshake and browser coverage.
+  - Accepted finding: loaded session creators were an invalid proxy for Gateway identities. Fixed with the canonical, privacy-preserving `hasMultipleSessionSharingIdentities` boolean, with handshake and browser coverage.
   - Final source pass: no findings; explanation explicitly confirmed atomic visibility, policy/identity gating, sidebar treatment, and promotion reuse.
   - Cleanup branch review finding: REPORT.md still claimed the ignored schema should be committed. The report was corrected to match `origin/main` tracking policy.
 - Final focused correction command used the same helper with an explicit prompt to review only `ui/src/e2e/session-ownership.e2e.test.ts` and treat untracked `SPEC.md` as context.
