@@ -69,6 +69,84 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-haiku-4-5" });
   });
+
+  test("uses the configured subagent model for spawned session projections", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "openai/gpt-5.6-luna" } },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSessionModelRef(cfg, { spawnDepth: 1 }, "main")).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+  });
+
+  test("keeps explicit child overrides ahead of configured subagent defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "openai/gpt-5.6-luna" } },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSessionModelRef(
+        cfg,
+        {
+          spawnDepth: 1,
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-7",
+        },
+        "main",
+      ),
+    ).toEqual({ provider: "anthropic", model: "claude-sonnet-4-7" });
+  });
+
+  test("does not retarget model-locked subagent sessions", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "openai/gpt-5.6-luna" } },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSessionModelRef(cfg, { modelSelectionLocked: true, subagentRole: "leaf" }, "main"),
+    ).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
+
+  test("resolves configured subagent aliases with static normalization", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: {
+            "openai/gpt-5.6-luna": { alias: "luna" },
+          },
+          subagents: { model: "luna" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSessionModelRef(cfg, { subagentRole: "leaf" }, "main", {
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({ provider: "openai", model: "gpt-5.6-luna" });
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {

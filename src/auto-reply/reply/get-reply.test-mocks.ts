@@ -56,6 +56,7 @@ vi.mock("./directive-handling.defaults.js", () => ({
     defaultModel: "gpt-4o-mini",
     aliasIndex: new Map(),
   })),
+  resolveSubagentSessionDefaultModel: vi.fn(() => null),
 }));
 
 vi.mock("./get-reply-run.js", () => ({

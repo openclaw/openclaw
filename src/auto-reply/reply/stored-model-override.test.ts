@@ -27,4 +27,52 @@ describe("resolveStoredModelOverride", () => {
     });
     expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
   });
+
+  it.each([
+    { sessionEntry: { spawnDepth: 1 }, label: "spawn depth" },
+    { sessionEntry: { subagentRole: "orchestrator" }, label: "subagent role" },
+  ] as const)(
+    "does not inherit parent overrides for subagents identified by $label",
+    ({ sessionEntry }) => {
+      const loadSessionEntry = vi.fn(() => ({
+        sessionId: "parent-session",
+        updatedAt: 1782259200000,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-7",
+      }));
+
+      expect(
+        resolveStoredModelOverride({
+          defaultProvider: "openai",
+          loadSessionEntry,
+          parentSessionKey: "agent:main:telegram:dm:parent",
+          sessionEntry: {
+            sessionId: "child-session",
+            updatedAt: 1782259200000,
+            ...sessionEntry,
+          },
+        }),
+      ).toBeNull();
+      expect(loadSessionEntry).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a direct child override ahead of the subagent inheritance guard", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: {
+          sessionId: "child-session",
+          updatedAt: 1782259200000,
+          spawnDepth: 1,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+        },
+      }),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      source: "session",
+    });
+  });
 });

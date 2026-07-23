@@ -4,17 +4,29 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
+  buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolvePersistedSelectedModelRef,
+  resolveSubagentConfiguredModelSelection,
 } from "./model-selection.js";
 
 type SessionModelEntry =
   | SessionEntry
-  | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">;
+  | Pick<
+      SessionEntry,
+      | "model"
+      | "modelProvider"
+      | "modelOverride"
+      | "providerOverride"
+      | "modelSelectionLocked"
+      | "spawnDepth"
+      | "subagentRole"
+    >;
 
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
@@ -61,7 +73,34 @@ export function resolveSessionModelRef(
     overrideModel: normalizedOverride.modelOverride,
     allowPluginNormalization: options?.allowPluginNormalization,
   });
-  return persisted ?? resolved;
+  if (persisted) {
+    return persisted;
+  }
+  const isSubagent =
+    (typeof entry?.spawnDepth === "number" && entry.spawnDepth >= 1) ||
+    Boolean(entry?.subagentRole);
+  if (agentId && isSubagent && entry?.modelSelectionLocked !== true) {
+    const configured = resolveSubagentConfiguredModelSelection({ cfg, agentId });
+    if (configured) {
+      const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
+      const aliasIndex = buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
+      const subagentRef = resolveModelRefFromString({
+        cfg,
+        raw: configured,
+        defaultProvider,
+        aliasIndex,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
+      if (subagentRef) {
+        return subagentRef.ref;
+      }
+    }
+  }
+  return resolved;
 }
 
 export function resolveSessionModelIdentityRef(

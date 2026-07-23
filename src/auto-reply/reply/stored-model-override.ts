@@ -77,6 +77,13 @@ export function resolveStoredModelOverride(params: {
   if (direct) {
     return { ...direct, source: "session" };
   }
+  const isSubagent =
+    (typeof params.sessionEntry?.spawnDepth === "number" && params.sessionEntry.spawnDepth >= 1) ||
+    Boolean(params.sessionEntry?.subagentRole);
+  if (isSubagent) {
+    // Spawned subagents use their configured model unless the child has a direct override.
+    return null;
+  }
   const parentKey = resolveParentSessionKeyCandidate({
     sessionKey: params.sessionKey,
     parentSessionKey: params.parentSessionKey,
