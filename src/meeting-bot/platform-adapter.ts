@@ -8,6 +8,7 @@ import type {
   MeetingPlatformAdapter as MeetingPlatformAdapterContract,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
+import { createMeetingPluginEntryOptions } from "./plugin-entry.js";
 import { createMeetingRuntimeProbes } from "./runtime-probes.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
@@ -362,6 +363,7 @@ export const MeetingPlatformAdapter = {
   createChromeTransport: createMeetingChromeTransport,
   createRuntimeProbes: createMeetingRuntimeProbes,
   createNodeHostHandler: createMeetingConfiguredNodeHost,
+  createPluginEntry: createMeetingPluginEntryOptions,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
 };
