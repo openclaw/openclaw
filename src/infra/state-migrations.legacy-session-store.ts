@@ -66,7 +66,7 @@ export type LegacySessionStoreSaveOptions = {
   requireWriteSuccess?: boolean;
 };
 
-export type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
+type LegacySessionStoreUpdateOptions<T> = LegacySessionStoreSaveOptions & {
   reentrant?: boolean;
   skipSaveWhenResult?: (result: T) => boolean;
   resolveSingleEntryPersistence?: (

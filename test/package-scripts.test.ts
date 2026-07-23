@@ -169,9 +169,9 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs SQLite transcript archive durability coverage in Windows CI", () => {
+  it("runs legacy session importer atomicity coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "src/config/sessions/store.session-lifecycle-mutation.test.ts",
+      "src/infra/state-migrations.legacy-session-store.test.ts",
     );
   });
 

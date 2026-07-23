@@ -20,7 +20,6 @@ export {
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
 export { resolveSessionStoreEntry } from "./sessions/store-entry.js";
-export { clearSessionStoreCacheForTest } from "./sessions/store-writer-state.js";
 export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-file.js";
