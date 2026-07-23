@@ -129,7 +129,7 @@ export function parseRestoredRecoveryPointRequest(raw: string): RestoredRecovery
   return request;
 }
 
-export function parseRestoredAdmissionDescriptor(value: unknown): RestoredAdmissionDescriptor {
+function parseRestoredAdmissionDescriptor(value: unknown): RestoredAdmissionDescriptor {
   const parsed = descriptorSchema.safeParse(value);
   if (!parsed.success) {
     throw conflict(`Restored-admission startup descriptor is invalid: ${parsed.error.message}`);

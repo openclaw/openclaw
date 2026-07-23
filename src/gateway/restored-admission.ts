@@ -13,8 +13,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
-export const RESTORED_ADMISSION_FILE_ENV = "OPENCLAW_RFC0013_RESTORED_ADMISSION_FILE";
-export const RESTORED_ADMISSION_READY_VERSION = "openclaw-restored-admission-ready/v1";
+const RESTORED_ADMISSION_READY_VERSION = "openclaw-restored-admission-ready/v1";
 
 const MAX_RECORD_BYTES = 1024 * 1024;
 const PRIVATE_FILE_MODE = 0o600;
@@ -36,9 +35,9 @@ const readyRecordSchema = z
   })
   .strict();
 
-export type RestoredAdmissionReadyRecord = z.infer<typeof readyRecordSchema>;
+type RestoredAdmissionReadyRecord = z.infer<typeof readyRecordSchema>;
 
-export class RestoredAdmissionCompletionError extends Error {
+class RestoredAdmissionCompletionError extends Error {
   constructor(
     public readonly code:
       | "restored-admission.target-conflict"
