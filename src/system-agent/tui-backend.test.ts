@@ -1,5 +1,5 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -7,6 +7,16 @@ import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.
 import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
+
+const preparedCatalogMocks = vi.hoisted(() => ({
+  getSnapshot:
+    vi.fn<typeof import("../agents/prepared-model-catalog.js").getPreparedModelCatalogSnapshot>(),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+  getPreparedModelCatalogSnapshot: preparedCatalogMocks.getSnapshot,
+}));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
@@ -90,6 +100,11 @@ function createRuntime(): RuntimeEnv {
 }
 
 describe("runSystemAgentTui", () => {
+  beforeEach(() => {
+    preparedCatalogMocks.getSnapshot.mockReset();
+    preparedCatalogMocks.getSnapshot.mockReturnValue(undefined);
+  });
+
   it("rejects a missing inference binding before overview, planner, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
     const planWithAssistant = vi.fn(async () => ({ reply: "ready" }));
@@ -235,6 +250,60 @@ describe("runSystemAgentTui", () => {
       },
       createRuntime(),
     );
+  });
+
+  it("reuses prepared reasoning metadata without starting catalog discovery", async () => {
+    const config = {
+      agents: { defaults: { model: "demo-binary/reasoning-model" } },
+      models: {
+        providers: {
+          "demo-binary": {
+            baseUrl: "https://example.invalid/v1",
+            apiKey: "test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    preparedCatalogMocks.getSnapshot.mockReturnValue({
+      entries: [
+        {
+          id: "reasoning-model",
+          name: "Reasoning Model",
+          provider: "demo-binary",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
+    });
+    const verified = await createVerifiedTuiOptions(
+      {
+        loadOverview: async () => ({
+          ...overview,
+          defaultModel: "demo-binary/reasoning-model",
+        }),
+      },
+      config,
+    );
+
+    await runSystemAgentTui(
+      {
+        ...verified,
+        runTui: async (opts) => {
+          const backend = opts.backend as unknown as {
+            loadHistory: () => Promise<{ thinkingLevel: string }>;
+          };
+
+          await expect(backend.loadHistory()).resolves.toMatchObject({
+            thinkingLevel: "medium",
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+    expect(preparedCatalogMocks.getSnapshot).toHaveBeenCalledOnce();
   });
 
   it("reports that /model cannot replace the active verified inference route", async () => {
