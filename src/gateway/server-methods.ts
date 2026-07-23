@@ -44,6 +44,7 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { authorizeSessionMutation } from "./session-sharing.js";
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -80,6 +81,10 @@ const loadAttachHandlers = lazyHandlerModule(
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
+);
+const loadChannelPairingHandlers = lazyHandlerModule(
+  () => import("./server-methods/channel-pairing.js"),
+  (module) => module.channelPairingHandlers,
 );
 const loadChatHandlers = lazyHandlerModule(
   () => import("./server-methods/chat.js"),
@@ -228,6 +233,10 @@ const loadSessionCatalogHandlers = lazyHandlerModule(
 const loadSessionDiscussionHandlers = lazyHandlerModule(
   () => import("./server-methods/session-discussion.js"),
   (module) => module.sessionDiscussionHandlers,
+);
+const loadSessionObserverHandlers = lazyHandlerModule(
+  () => import("./session-observer-rpc.js"),
+  (module) => module.sessionObserverHandlers,
 );
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
@@ -421,6 +430,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["channels.status", "channels.start", "channels.stop", "channels.logout"],
     loadHandlers: loadChannelsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
+    loadHandlers: loadChannelPairingHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -695,6 +708,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSessionDiscussionHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["sessions.observer.ask", "sessions.observer.visibility"],
+    loadHandlers: loadSessionObserverHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "sessions.list",
       "sessions.search",
@@ -730,6 +747,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.delete",
       "sessions.dispatch",
       "sessions.reclaim",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -912,6 +933,22 @@ export async function handleGatewayRequest(
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  // Best-effort pre-dispatch participation gate. Session ownership/visibility are
+  // usability features, not a security boundary (docs/concepts/multi-user.md,
+  // SECURITY.md), so this check is intentionally not commit-bound to the resolved
+  // instance: a concurrent reset/recreate can still race an in-flight mutation.
+  // Sharing-membership writes re-verify the instance in their own transaction;
+  // real isolation is separate agents/hosts.
+  const sessionMutationError = authorizeSessionMutation({
+    client: client ?? null,
+    method: req.method,
+    requestParams: req.params,
+    context,
+  });
+  if (sessionMutationError) {
+    respond(false, undefined, sessionMutationError);
     return;
   }
   if (

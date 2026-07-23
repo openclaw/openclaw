@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "../infra/file-read.js";
-import { getResolvedLoggerSettings } from "../logging.js";
 import { clamp } from "../utils.js";
+import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
+import "./logger.js";
+import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
 import { redactSensitiveLines, resolveRedactOptions } from "./redact.js";
 
 // Tail reader for the active log file, with cursor reset and line redaction.
@@ -11,7 +13,6 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
-const ROLLING_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
 
 /** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
@@ -24,17 +25,16 @@ export type LogTailPayload = {
   skippedBytes?: number;
 };
 
-function isRollingLogFile(file: string): boolean {
-  return ROLLING_LOG_RE.test(path.basename(file));
-}
-
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-export async function resolveLogFile(file: string): Promise<string> {
+export async function resolveLogFile(
+  file: string,
+  options?: { rolling?: boolean },
+): Promise<string> {
   const stat = await fs.stat(file).catch(() => null);
   if (stat) {
     return file;
   }
-  if (!isRollingLogFile(file)) {
+  if (!(options?.rolling ?? isRollingLogFilePath(file))) {
     return file;
   }
 
@@ -46,7 +46,7 @@ export async function resolveLogFile(file: string): Promise<string> {
 
   const candidates = await Promise.all(
     entries
-      .filter((entry) => entry.isFile() && ROLLING_LOG_RE.test(entry.name))
+      .filter((entry) => entry.isFile() && isSameRollingLogFileFamily(file, entry.name))
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
         const fileStat = await fs.stat(fullPath).catch(() => null);
@@ -100,9 +100,13 @@ async function readLogSlice(params: {
       start = cursor;
       if (size - start > maxBytes) {
         // The file grew faster than --max-bytes between polls. The cursor is
-        // still valid (we are reading forward from it), but we have to skip
-        // bytes to fit the budget; the caller should report this as a tail
-        // truncation and re-anchor, not a rotation.
+        // still valid (we read forward from it), but we must skip bytes to fit
+        // the budget. `reset` stays the backward-compatible re-anchor signal so
+        // older `logs.tail` clients (which only understand `reset`) discard their
+        // retained buffer instead of appending a discontinuous suffix; the
+        // additive `skippedBytes` lets newer clients tell a budget skip apart
+        // from a true rotation (skippedBytes === 0).
+        reset = true;
         truncated = true;
         const boundedStart = Math.max(0, size - maxBytes);
         skippedBytes = Math.max(0, boundedStart - start);
@@ -171,7 +175,8 @@ export async function readConfiguredLogTail(params?: {
   limit?: number;
   maxBytes?: number;
 }): Promise<LogTailPayload> {
-  const file = await resolveLogFile(getResolvedLoggerSettings().file);
+  const target = getResolvedLoggerFileTarget();
+  const file = await resolveLogFile(target.file, { rolling: target.rolling });
   const result = await readLogSlice({
     file,
     cursor: params?.cursor,

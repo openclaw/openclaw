@@ -7,6 +7,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
@@ -21,6 +22,7 @@ type ChatPaneHeaderProps = {
   mergedChrome: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
+  showOwnerChip?: boolean;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -38,7 +40,9 @@ type ChatPaneHeaderProps = {
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
+  presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
+  sharingControl?: TemplateResult | typeof nothing;
   boardDockAction?: TemplateResult | typeof nothing;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
@@ -192,6 +196,10 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             >
               ${props.title}
             </button>`}
+      ${renderSessionOwnerChip(
+        props.showOwnerChip ? props.session?.createdActor : undefined,
+        "header",
+      )}
       ${!props.catalog && props.workspaceLabel
         ? html`
             <wa-dropdown
@@ -233,7 +241,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </wa-dropdown>
           `
         : nothing}
-      ${props.faceControl ?? nothing}
+      ${props.presence ?? nothing} ${props.faceControl ?? nothing}
+      ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <wa-dropdown

@@ -85,7 +85,7 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
 
-  it("reports skipped bytes without reset when the file grew faster than --max-bytes between polls", async () => {
+  it("re-anchors with skippedBytes when the file grew faster than --max-bytes between polls", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
@@ -96,9 +96,10 @@ describe("readConfiguredLogTail", () => {
 
     // The file grows by far more than maxBytes between polls (e.g. a burst of
     // log activity). The cursor is still valid — readConfiguredLogTail should
-    // fast-forward and report `truncated: true` plus `skippedBytes` so callers
-    // know lines were skipped and can re-anchor, but `reset` must stay false
-    // because the log was not rotated.
+    // fast-forward and report `truncated: true` plus `skippedBytes`. `reset`
+    // stays the backward-compatible re-anchor signal so older clients discard
+    // their buffer; `skippedBytes > 0` distinguishes this budget skip from a
+    // true rotation.
     const burst = `${"x".repeat(40)}\n`.repeat(200);
     await fs.appendFile(file, burst);
 
@@ -108,12 +109,12 @@ describe("readConfiguredLogTail", () => {
     });
 
     expect(result.truncated).toBe(true);
-    expect(result.reset).toBe(false);
+    expect(result.reset).toBe(true);
     expect(result.skippedBytes).toBeGreaterThan(0);
     expect(result.lines.length).toBeGreaterThan(0);
   });
 
-  it("reports reset when the file shrank below the previous cursor (rotation)", async () => {
+  it("reports reset without skippedBytes when the file shrank below the previous cursor (rotation)", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
     const file = path.join(tempDir, "openclaw-2026-01-22.log");
@@ -130,5 +131,34 @@ describe("readConfiguredLogTail", () => {
 
     expect(result.reset).toBe(true);
     expect(result.skippedBytes).toBe(0);
+  });
+
+  it("falls back only within the active profile's rolling log family", async () => {
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const missing = path.join(tempDir, "openclaw-dev-2026-01-22.log");
+    const devLog = path.join(tempDir, "openclaw-dev-2026-01-21.log");
+    const defaultLog = path.join(tempDir, "openclaw-2026-01-21.log");
+    await fs.writeFile(devLog, "dev profile\n");
+    await fs.writeFile(defaultLog, "default profile\n");
+    await fs.utimes(devLog, new Date(0), new Date(0));
+    await fs.utimes(defaultLog, new Date(), new Date());
+    const { resolveLogFile } = await import("./log-tail.js");
+    const result = await resolveLogFile(missing, { rolling: true });
+
+    expect(result).toBe(devLog);
+  });
+
+  it("does not reinterpret an explicit profile-shaped logging.file as rolling", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const configured = path.join(tempDir, "openclaw-dev-2026-01-22.log");
+    const sibling = path.join(tempDir, "openclaw-dev-2026-01-21.log");
+    await fs.writeFile(sibling, "sibling profile log\n");
+    setLoggerOverride({ file: configured });
+
+    const result = await readConfiguredLogTail();
+
+    expect(result.file).toBe(configured);
+    expect(result.lines).toEqual([]);
   });
 });

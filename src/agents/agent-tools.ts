@@ -120,13 +120,6 @@ import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-contex
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
-function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
-  return (
-    Array.isArray(policy?.deny) &&
-    policy.deny.some((entry) => typeof entry === "string" && entry.trim())
-  );
-}
-
 type GuardContainerMount = {
   containerRoot: string;
   hostRoot: string;
@@ -765,13 +758,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         scopeKey,
         sessionKey: options?.sessionKey,
         runId: options?.runId,
+        // Detached completions return to the live session, not the sandbox policy scope.
+        notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
         sessionId: options?.sessionId,
         sessionStore: options?.config?.session?.store,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
         eventRouting: resolveEventSessionRoutingPolicy({
           cfg: options?.config,
-          sessionKey: options?.sessionKey,
+          sessionKey: options?.runSessionKey ?? options?.sessionKey,
           channel: options?.messageProvider,
           accountId: options?.agentAccountId,
         }),
@@ -845,9 +840,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
-  const shouldCaptureCronCreatorToolAllowlist = toolPolicyInheritanceSources.some(
-    (policy) => hasRestrictiveAllowPolicy(policy) || hasExplicitDenyPolicy(policy),
-  );
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
   const pluginToolCallerIdentity =
@@ -997,9 +989,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             toolBindings: options?.toolBindings,
             pluginToolAllowlist,
             pluginToolDenylist,
-            cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
-              ? cronCreatorToolAllowlist
-              : undefined,
+            cronCreatorToolAllowlist,
             currentChannelId: options?.currentChannelId,
             currentChatType: options?.chatType,
             currentMessagingTarget: options?.currentMessagingTarget,
@@ -1141,6 +1131,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       workspaceDir: workspaceRoot,
       toolDenylist: pluginToolDenylist,
     }),
@@ -1167,13 +1158,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     // never filters the mandatory structured_output tool from this turn.
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
-  if (shouldCaptureCronCreatorToolAllowlist) {
-    replaceWithEffectiveCronCreatorToolAllowlist(
-      cronCreatorToolAllowlist,
-      authorizedTools,
-      (tool) => getPluginToolMeta(tool),
-    );
-  }
+  replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
+    getPluginToolMeta(tool),
+  );
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to OpenClaw model runtime.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.

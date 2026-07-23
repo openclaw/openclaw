@@ -14,6 +14,7 @@ import {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
@@ -99,6 +100,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
   cancellationRequested: boolean;
+  preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
@@ -160,7 +162,13 @@ export async function dispatchEmbeddedRunAttempt(input: {
   };
 
   let cancellationRequested = false;
-  const rawAttempt = await runEmbeddedAttemptWithBackend({
+  const promptMedia = await preparePluginHarnessPromptImages({
+    runParams: params,
+    runtime,
+    pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
+  });
+  const attemptParams: EmbeddedRunAttemptParams = {
+    operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
@@ -221,8 +229,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
-    images: params.images,
-    imageOrder: params.imageOrder,
+    images: promptMedia.images,
+    imageOrder: promptMedia.imageOrder,
+    media: promptMedia.media,
     clientTools: params.clientTools,
     disableTools: params.disableTools,
     provider: runtime.provider,
@@ -364,7 +373,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersisted: control.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
-  })
+  };
+  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })
@@ -379,5 +389,5 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
-  return { rawAttempt, cancellationRequested };
+  return { rawAttempt, cancellationRequested, preparedAttempt: attemptParams };
 }
