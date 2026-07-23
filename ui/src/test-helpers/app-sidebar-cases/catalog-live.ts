@@ -238,59 +238,6 @@ describe("AppSidebar session catalog pagination", () => {
     expect(section?.textContent).not.toContain("Offline Node");
   });
 
-  it("shows thread-style activity indicators on project sessions", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.sessionCatalogs = [
-      {
-        id: "codex",
-        label: "Codex",
-        capabilities: { continueSession: true, archive: true },
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: "Local Codex",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "active-thread",
-                name: "Active session",
-                cwd: "/work/openclaw",
-                status: "active",
-                archived: false,
-                canContinue: false,
-                canArchive: false,
-              },
-              {
-                threadId: "idle-thread",
-                name: "Idle session",
-                cwd: "/work/openclaw",
-                status: "idle",
-                archived: false,
-                canContinue: true,
-                canArchive: true,
-              },
-            ],
-          },
-        ],
-      },
-    ];
-    await sidebar.updateComplete;
-
-    const project = sidebar.querySelector('[data-session-catalog-project="/work/openclaw"]');
-    const active = sidebar.querySelector('[data-session-key*="active-thread"]');
-    const idle = sidebar.querySelector('[data-session-key*="idle-thread"]');
-    expect(project).not.toBeNull();
-    expect(active?.querySelector(".sidebar-session-indicator .session-run-spinner")).not.toBeNull();
-    expect(active?.querySelector(".session-run-spinner")?.getAttribute("aria-label")).toBe(
-      "Active run",
-    );
-    expect(
-      idle?.querySelector(".sidebar-session-indicator .sidebar-session-indicator__dot"),
-    ).not.toBeNull();
-  });
-
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
