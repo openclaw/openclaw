@@ -14,6 +14,12 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
 
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+  // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
+  loadPreparedModelCatalog: vi.fn(async () => []),
+}));
+
 const overview: SystemAgentOverview = {
   defaultAgentId: "main",
   defaultModel: "openai/gpt-5.5",

@@ -74,9 +74,8 @@ function expiredApproval(): ExpiredApprovalSnapshot {
 function createGateway(client: GatewayBrowserClient, connected = true) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
+    phase: connected ? "connected" : "stopped",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",
@@ -350,8 +349,8 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
-    source.update({ connected: true, reconnecting: false });
+    source.update({ phase: "reconnecting" });
+    source.update({ phase: "connected" });
     await settle(page);
     resolveFirst({ approval: pendingApproval() });
     await settle(page);
@@ -417,7 +416,7 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
+    source.update({ phase: "reconnecting" });
     await page.updateComplete;
 
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
