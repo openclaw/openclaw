@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -66,7 +67,7 @@ describe("incognito agent database", () => {
 
     fs.rmSync(sentinel);
     const database = openOpenClawAgentDatabase({ agentId: "main", env, path: sentinel });
-    expect(database.db.prepare("SELECT count(*) AS count FROM sessions").get()).toEqual({
+    expect(database.db.prepare("SELECT count(*) AS count FROM session_nodes").get()).toEqual({
       count: 0,
     });
     expect(fs.existsSync(sentinel)).toBe(false);
@@ -94,10 +95,12 @@ describe("incognito agent database", () => {
     ).toEqual({ found: true, value: true });
     expect(
       first.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'sessions'")
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_nodes'")
         .get(),
-    ).toEqual({ name: "sessions" });
-    expect(first.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 13 });
+    ).toEqual({ name: "session_nodes" });
+    expect(first.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
     expect(fs.existsSync(sentinel)).toBe(false);
     expect(fs.existsSync(path.dirname(sentinel))).toBe(false);
   });
