@@ -14,7 +14,7 @@ import type {
   MeetingBrowserRequestCaller,
   MeetingPlatformAdapter,
   MeetingPlatformRuntimeMetadata,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
 import type {
   startMeetingRealtimeEngine,
