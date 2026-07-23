@@ -1,13 +1,13 @@
 import { state } from "lit/decorators.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { compareSessionRowsByUpdatedAt } from "../lib/sessions/index.ts";
-import { AppSidebarSessionAttentionElement } from "./app-sidebar-session-attention.ts";
 import { adoptedCatalogSessionKeys } from "./app-sidebar-session-catalogs.ts";
+import { AppSidebarSessionDataElement } from "./app-sidebar-session-data.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession, SidebarSessionSortMode } from "./app-sidebar-session-types.ts";
 
 /** Shared ordering and PR-state projection used by sidebar navigation. */
-export abstract class AppSidebarSessionProjectionElement extends AppSidebarSessionAttentionElement {
+export abstract class AppSidebarSessionProjectionElement extends AppSidebarSessionDataElement {
   @state() protected sessionSortMode: SidebarSessionSortMode = "created";
 
   private readonly sessionPullRequestIndicators = new SessionPullRequestIndicatorsController(this, {

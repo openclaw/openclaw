@@ -52,6 +52,7 @@ import {
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import { SessionAttentionController } from "./session-attention-controller.ts";
 import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
@@ -68,6 +69,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   private sessionSelectionAnchor: string | null = null;
   private collapsedActiveRouteKey: string | null = null;
   private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
+  private readonly attention = new SessionAttentionController(this);
+
+  get sessionAttentionContext() {
+    return this.context;
+  }
 
   override updated() {
     super.updated();
@@ -190,8 +196,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         unread: row.archived !== true && row.unread === true,
         lastReadAt: row.lastReadAt,
         attention:
-          row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : this.resolveSessionAttention(row),
-        agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
+          row.archived === true
+            ? SIDEBAR_SESSION_NO_ATTENTION
+            : this.attention.resolveSessionAttention(row),
+        agentStatusNote: this.attention.resolveSessionAgentStatus(row)?.note,
         observerDigest: row.observerDigest,
         spawnedBy: row.spawnedBy,
         status: row.status,
@@ -626,7 +634,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       agentRows: rows,
       childRowsByParent: this.childSessionRowsByParent,
       loadingChildKeys: this.loadingChildSessionKeys,
-      knownSessionAttention: this.knownSessionAttention(),
+      knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,
     });
     const creatorFacet =
