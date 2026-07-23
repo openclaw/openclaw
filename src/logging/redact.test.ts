@@ -801,6 +801,7 @@ describe("redactSensitiveText", () => {
     const secretKey = ["django", "secret", "key", "1234567890"].join("-");
     const passphrase = ["tls", "passphrase", "fixture", "1234567890"].join("-");
     const dbPass = ["db", "pass", "fixture", "1234567890"].join("-");
+    const readonlyDbPassword = ["readonly", "db", "password", "fixture", "1234567890"].join("-");
     const jwtValue = ["jwt", "fixture", "1234567890"].join("-");
     const accessToken = ["access", "token", "fixture", "1234567890"].join("-");
     const secretValue = ["bare", "secret", "fixture", "1234567890"].join("-");
@@ -825,6 +826,8 @@ describe("redactSensitiveText", () => {
       `secret_key=${secretKey}`,
       `tls.passphrase: ${passphrase}`,
       `tls_passphrase=${passphrase}`,
+      `readonly_db_password = ${readonlyDbPassword}`,
+      ["service_tls_passphrase", ": ", quoted(passphrase, "'")].join(""),
       `db_pass=${dbPass}`,
       `jwt: ${jwtValue}`,
       ["access-token", "=", accessToken].join(""),
@@ -855,6 +858,8 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("secret_key=django…7890");
     expect(output).toContain("tls.passphrase: tls-pa…7890");
     expect(output).toContain("tls_passphrase=tls-pa…7890");
+    expect(output).toContain("readonly_db_password = readon…7890");
+    expect(output).toContain("service_tls_passphrase: 'tls-pa…7890'");
     expect(output).toContain("db_pass=db-pas…7890");
     expect(output).toContain("jwt: jwt-fi…7890");
     expect(output).toContain("access-token=access…7890");
@@ -870,6 +875,7 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(secretKey);
     expect(output).not.toContain(passphrase);
     expect(output).not.toContain(dbPass);
+    expect(output).not.toContain(readonlyDbPassword);
     expect(output).not.toContain(jwtValue);
     expect(output).not.toContain(accessToken);
     expect(output).not.toContain(secretValue);

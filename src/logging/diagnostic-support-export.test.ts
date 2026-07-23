@@ -736,6 +736,10 @@ describe("diagnostic support export", () => {
         "config db_password = suppor…7890",
       ],
       [
+        `config readonly_db_password = ${["support", "password", "1234567890"].join("-")}`,
+        "config readonly_db_password = suppor…7890",
+      ],
+      [
         `config jdbc.password=${["support", "password", "1234567890"].join("-")}`,
         "config jdbc.password=suppor…7890",
       ],
