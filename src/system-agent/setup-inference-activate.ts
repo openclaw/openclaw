@@ -513,36 +513,38 @@ async function activateSetupInferenceUnredacted(
         deps,
       });
     }
-    const persistenceState: SetupInferenceActivationPersistenceState = {
-      committedConfig,
-      autoLocalModelLeanApplied,
-      codexInstallOwnership,
-    };
-    const persistenceFailure = await persistActivatedSetupInference({
-      params,
-      deps,
-      plan,
-      testPlan,
-      test,
-      codexPluginPatch,
-      pendingCodexInstall,
-      cfg,
-      sourceCfg,
-      verifiedRoute,
-      baselineRoute,
-      stagedRoute,
-      stagedOwnerPluginArtifacts,
-      baselineTargetModelMetadata,
-      sourceTargetModelMetadata,
-      readSnapshot,
-      hasPreparedAuthProfiles,
-      state: persistenceState,
-      revalidateOwner: revalidateStableSetupInferenceOwner,
-    });
-    if (persistenceFailure) {
-      return persistenceFailure;
+    if (needsPersistence) {
+      const persistenceState: SetupInferenceActivationPersistenceState = {
+        committedConfig,
+        autoLocalModelLeanApplied,
+        codexInstallOwnership,
+      };
+      const persistenceFailure = await persistActivatedSetupInference({
+        params,
+        deps,
+        plan,
+        testPlan,
+        test,
+        codexPluginPatch,
+        pendingCodexInstall,
+        cfg,
+        sourceCfg,
+        verifiedRoute,
+        baselineRoute,
+        stagedRoute,
+        stagedOwnerPluginArtifacts,
+        baselineTargetModelMetadata,
+        sourceTargetModelMetadata,
+        readSnapshot,
+        hasPreparedAuthProfiles,
+        state: persistenceState,
+        revalidateOwner: revalidateStableSetupInferenceOwner,
+      });
+      if (persistenceFailure) {
+        return persistenceFailure;
+      }
+      ({ committedConfig, autoLocalModelLeanApplied, codexInstallOwnership } = persistenceState);
     }
-    ({ committedConfig, autoLocalModelLeanApplied, codexInstallOwnership } = persistenceState);
     if (codexRegistryNeedsReload && committedConfig) {
       codexRegistryReloaded = await reloadCodexRegistryAfterActivation({
         readSnapshot,
