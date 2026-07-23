@@ -15,11 +15,18 @@ type PrefixFlagSpec = {
   prefix: string;
 };
 
+type AbbreviatedFlagSpec = {
+  label: string;
+  full: string;
+  min: string;
+};
+
 type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
   rawExactFlags?: ReadonlyMap<string, string>;
   rawPrefixFlags?: readonly PrefixFlagSpec[];
+  abbreviatedFlags?: readonly AbbreviatedFlagSpec[];
   joinedExactFlags?: ReadonlySet<string>;
   joinedRawExactFlags?: ReadonlyMap<string, string>;
   joinedFlagDenyExact?: ReadonlySet<string>;
@@ -215,7 +222,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     ],
   },
   { names: ["ghc", "ghci"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
-  { names: ["erl", "werl"], exactFlags: new Set(["-eval"]) },
+  { names: ["erl", "werl"], exactFlags: new Set(["-eval", "-run", "-s"]) },
   {
     names: ["gdb"],
     exactFlags: new Set([
@@ -226,6 +233,12 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       "-init-eval-command",
       "--init-eval-command",
     ]),
+    abbreviatedFlags: [
+      { label: "-eval-command", full: "-eval-command", min: "-eval" },
+      { label: "--eval-command", full: "--eval-command", min: "--eval" },
+      { label: "-init-eval-command", full: "-init-eval-command", min: "-init-eval" },
+      { label: "--init-eval-command", full: "--init-eval-command", min: "--init-eval" },
+    ],
     prefixFlags: [
       { label: "-ex", prefix: "-ex=" },
       { label: "-iex", prefix: "-iex=" },
@@ -391,6 +404,20 @@ function createInlineEvalHit(
   };
 }
 
+function matchAbbreviatedFlag(spec: InterpreterFlagSpec, lower: string): string | null {
+  const optionName = lower.split("=", 1)[0] ?? lower;
+  for (const flag of spec.abbreviatedFlags ?? []) {
+    if (
+      optionName.length >= flag.min.length &&
+      flag.full.startsWith(optionName) &&
+      flag.min.startsWith(optionName.slice(0, flag.min.length))
+    ) {
+      return flag.label;
+    }
+  }
+  return null;
+}
+
 function matchJoinedExactFlag(
   spec: InterpreterFlagSpec,
   token: string,
@@ -504,6 +531,10 @@ export function detectInterpreterInlineEvalArgv(
         return createInlineEvalHit(executable, argv, rawPrefixFlag.label);
       }
       const lower = normalizeLowercaseStringOrEmpty(token);
+      const abbreviatedFlag = matchAbbreviatedFlag(spec, lower);
+      if (abbreviatedFlag) {
+        return createInlineEvalHit(executable, argv, abbreviatedFlag);
+      }
       if (spec.exactFlags.has(lower)) {
         return createInlineEvalHit(executable, argv, lower);
       }

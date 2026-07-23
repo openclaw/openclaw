@@ -134,15 +134,27 @@ describe("exec inline eval detection", () => {
     { argv: ["ghc", "-e", 'System.Process.system "id"'], expected: "ghc -e" },
     { argv: ["ghci", "-e", 'System.Process.system "id"'], expected: "ghci -e" },
     { argv: ["erl", "-eval", 'os:cmd("id").'], expected: "erl -eval" },
+    { argv: ["erl", "-run", "os", "cmd", "id"], expected: "erl -run" },
+    { argv: ["erl", "-s", "os", "cmd", "id"], expected: "erl -s" },
+    { argv: ["erl", "-noshell", "-s", "init", "stop"], expected: "erl -s" },
     { argv: ["werl", "-eval", 'os:cmd("id").'], expected: "werl -eval" },
+    { argv: ["werl", "-run", "os", "cmd", "id"], expected: "werl -run" },
     { argv: ["gdb", "-ex", "shell id", "-ex", "quit"], expected: "gdb -ex" },
     { argv: ["gdb", "-ex=shell id", "-ex", "quit"], expected: "gdb -ex" },
     { argv: ["gdb", "-iex", "shell id"], expected: "gdb -iex" },
     { argv: ["gdb", "-iex=shell id"], expected: "gdb -iex" },
+    { argv: ["gdb", "-eval", "shell id"], expected: "gdb -eval-command" },
+    { argv: ["gdb", "-eval-c", "shell id"], expected: "gdb -eval-command" },
+    { argv: ["gdb", "-eval-c=shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval-command", "shell id"], expected: "gdb -eval-command" },
     { argv: ["gdb", "-eval-command=shell id"], expected: "gdb -eval-command" },
+    { argv: ["gdb", "--eval", "shell id"], expected: "gdb --eval-command" },
+    { argv: ["gdb", "--eval-c=shell id"], expected: "gdb --eval-command" },
     { argv: ["gdb", "--eval-command=shell id"], expected: "gdb --eval-command" },
+    { argv: ["gdb", "-init-eval", "shell id"], expected: "gdb -init-eval-command" },
+    { argv: ["gdb", "-init-eval-c=shell id"], expected: "gdb -init-eval-command" },
     { argv: ["gdb", "--init-eval-command=shell id"], expected: "gdb --init-eval-command" },
+    { argv: ["gdb", "--init-eval=shell id"], expected: "gdb --init-eval-command" },
     { argv: ["gdb", "-init-eval-command=shell id"], expected: "gdb -init-eval-command" },
     { argv: ["expect", "-c", "spawn id"], expected: "expect -c" },
     { argv: ["expect", "-cspawn id"], expected: "expect -c" },
@@ -228,7 +240,6 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["raku", "-e say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ghc", "Main.hs"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ghc", "-exclude-module", "Debug.Trace"])).toBeNull();
-    expect(detectInterpreterInlineEvalArgv(["erl", "-noshell", "-s", "init", "stop"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["gdb", "--command=commands.gdb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["expect", "script.exp"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();

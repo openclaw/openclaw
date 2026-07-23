@@ -1671,6 +1671,16 @@ $0 \\"$1\\"" touch {marker}`,
       second: "erl -eval 'os:cmd(\"id > {marker}\").' -noshell -s init stop",
     },
     {
+      executable: "erl",
+      first: "erl -noshell -run init stop",
+      second: "erl -noshell -run os cmd 'id > {marker}' -s init stop",
+    },
+    {
+      executable: "erl",
+      first: "erl -noshell -s init stop",
+      second: "erl -noshell -s os cmd 'id > {marker}' -s init stop",
+    },
+    {
       executable: "gdb",
       first: "gdb -ex 'print 1' -ex quit",
       second: "gdb -ex 'shell id > {marker}' -ex quit",
@@ -1679,6 +1689,11 @@ $0 \\"$1\\"" touch {marker}`,
       executable: "gdb",
       first: "gdb -iex 'print 1'",
       second: "gdb -iex 'shell id > {marker}'",
+    },
+    {
+      executable: "gdb",
+      first: "gdb -eval-c 'print 1'",
+      second: "gdb -eval-c 'shell id > {marker}'",
     },
     {
       executable: "expect",
