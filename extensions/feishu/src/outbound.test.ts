@@ -2637,4 +2637,68 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 });
+
+describe("feishuOutbound table-limit routing", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  function makeTableText(count: number): string {
+    return Array.from({ length: count }, (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`).join(
+      "\n\n",
+    );
+  }
+
+  it("routes 5 markdown tables to structured card when renderMode=auto", async () => {
+    const text = makeTableText(5);
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to post mode for 6 markdown tables when renderMode=auto", async () => {
+    const text = makeTableText(6);
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to post mode for 6 tables even with explicit renderMode=card", async () => {
+    const text = makeTableText(6);
+    await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("excludes tables inside code blocks from the table count", async () => {
+    const text = "```\n| a | b |\n| - | - |\n| 1 | 2 |\n```\n\n" + makeTableText(5);
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2399,5 +2399,61 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       nowSpy.mockRestore();
     }
   });
+
+  describe("table-limit routing", () => {
+    function makeTableText(count: number): string {
+      return Array.from(
+        { length: count },
+        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+      ).join("\n\n");
+    }
+
+    function setupDispatcher() {
+      createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        chatId: "oc_chat",
+        sendTarget: "oc_chat",
+      });
+      return firstTypingDispatcherOptions();
+    }
+
+    it("routes 5 markdown tables to static card when streaming is off", async () => {
+      useNonStreamingAutoAccount();
+      const options = setupDispatcher();
+      const text = makeTableText(5);
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to post mode for 6 markdown tables when streaming is off", async () => {
+      useNonStreamingAutoAccount();
+      const options = setupDispatcher();
+      const text = makeTableText(6);
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to post mode for 6 tables with explicit renderMode=card", async () => {
+      resolveFeishuAccountMock.mockReturnValue({
+        accountId: "main",
+        appId: "app_id",
+        appSecret: "app_secret",
+        domain: "feishu",
+        config: { renderMode: "card", streaming: { mode: "off" } },
+      });
+      const options = setupDispatcher();
+      const text = makeTableText(6);
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

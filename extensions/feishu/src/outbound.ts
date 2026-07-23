@@ -112,6 +112,13 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+/** Check whether the number of markdown tables is within Feishu card limits (≤5). */
+function withinCardTableLimit(text: string): boolean {
+  const stripped = text.replace(/```[\s\S]*?```/g, "");
+  const separators = stripped.match(/^[ \t]*\|[-:| \t]+\|[ \t]*$/gm);
+  return (separators?.length ?? 0) <= 5;
+}
+
 function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
   Object.defineProperty(card, RENDERED_FEISHU_CARD, {
     value: true,
@@ -399,7 +406,10 @@ async function sendOutboundText(params: {
   // Decide card routing on the original text so card content is never
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
-  if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
+  if (
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text)
+  ) {
     return sendMarkdownCardFeishu({
       cfg,
       to,
@@ -826,7 +836,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard =
+        (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+        withinCardTableLimit(text);
       if (useCard) {
         const header = identity
           ? {
