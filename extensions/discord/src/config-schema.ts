@@ -28,7 +28,7 @@ const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.
   progress: ChannelStreamingProgressSchema.optional(),
 }).strict();
 
-export const DiscordIdSchema = z
+const DiscordIdSchema = z
   .union([z.string(), z.number()])
   .transform((value, ctx) => {
     if (typeof value === "number") {
@@ -47,12 +47,12 @@ export const DiscordIdSchema = z
   })
   .pipe(z.string());
 
-export const DiscordIdListSchema = z.array(DiscordIdSchema);
-export const DiscordSnowflakeStringSchema = z
+const DiscordIdListSchema = z.array(DiscordIdSchema);
+const DiscordSnowflakeStringSchema = z
   .string()
   .regex(/^\d+$/, "Discord user ID must be numeric");
 
-export const DiscordDmSchema = z
+const DiscordDmSchema = z
   .object({
     enabled: z.boolean().optional(),
     groupEnabled: z.boolean().optional(),
@@ -60,7 +60,7 @@ export const DiscordDmSchema = z
   })
   .strict();
 
-export const DiscordPresenceEventsSchema = z
+const DiscordPresenceEventsSchema = z
   .object({
     enabled: z.boolean().optional(),
     channelId: DiscordSnowflakeStringSchema,
