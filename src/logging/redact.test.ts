@@ -1217,25 +1217,7 @@ describe("redactSensitiveText", () => {
       "ghs_abcdefghijklmnopqrstuvwxyz",
       "ghr_abcdefghijklmnopqrstuvwxyz",
       "glpat-abcdefghijklmnopqrstuvwxyz12.ab.abcdefghi",
-      `gloas-${"a".repeat(32)}`,
       `gloas-${"a".repeat(64)}`,
-      `gldt-${"A".repeat(20)}`,
-      `glcbt-a1B2_${"A".repeat(20)}`,
-      `glptt-${"A".repeat(40)}`,
-      `glft-${"A".repeat(20)}`,
-      "glft-a0b1-123_",
-      `glimt-${"A".repeat(25)}`,
-      `glagent-${"A".repeat(50)}`,
-      `glwt-${"A".repeat(20)}`,
-      `glsoat-${"A".repeat(20)}`,
-      `glffct-${"A".repeat(20)}`,
-      `glrt-t1_${"A".repeat(20)}`,
-      ["glrt", "2CR8_eVxiioB1QmzPZwa"].join("-"),
-      ["glrt", "ABCdef1234567890xyzW"].join("-"),
-      `glrt-${"A".repeat(27)}.01.${"a".repeat(9)}`,
-      `glrtr-${"A".repeat(27)}.01.${"a".repeat(9)}`,
-      `GR1348941${"A".repeat(20)}`,
-      `_gitlab_session=${"A".repeat(32)}`,
       ["xoxb", "1234567890", "abcdefghijklmnopqrstuvwxyz"].join("-"),
       "https://hooks.slack.com/services/T1234567890/B1234567890/abcdefghijklmnopqrstuvwxy",
       "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef",
@@ -1314,6 +1296,36 @@ describe("redactSensitiveText", () => {
     for (const { token, redacted } of fireworksTokens) {
       expect(redactSensitiveText(token, { mode: "tools" })).toBe(redacted);
       expect(redactSensitiveText(redacted, { mode: "tools" })).toBe(redacted);
+    }
+  });
+
+  it("masks additional GitLab token prefixes through the default fast path", () => {
+    const dashToken = (prefix: string, suffix: string): string => [prefix, suffix].join("-");
+    const repeatedDashToken = (prefix: string, length: number): string =>
+      dashToken(prefix, "A".repeat(length));
+    const tokens = [
+      dashToken("gloas", "a".repeat(32)),
+      repeatedDashToken("gldt", 20),
+      dashToken("glcbt", `a1B2_${"A".repeat(20)}`),
+      repeatedDashToken("glptt", 40),
+      repeatedDashToken("glft", 20),
+      dashToken("glft", "a0b1-123_"),
+      repeatedDashToken("glimt", 25),
+      repeatedDashToken("glagent", 50),
+      repeatedDashToken("glwt", 20),
+      repeatedDashToken("glsoat", 20),
+      repeatedDashToken("glffct", 20),
+      dashToken("glrt", `t1_${"A".repeat(20)}`),
+      dashToken("glrt", "2CR8_eVxiioB1QmzPZwa"),
+      dashToken("glrt", "ABCdef1234567890xyzW"),
+      dashToken("glrt", `${"A".repeat(27)}.01.${"a".repeat(9)}`),
+      dashToken("glrtr", `${"A".repeat(27)}.01.${"a".repeat(9)}`),
+      `GR1348941${"A".repeat(20)}`,
+      `_gitlab_session=${"A".repeat(32)}`,
+    ];
+
+    for (const token of tokens) {
+      expect(redactSensitiveText(token, { mode: "tools" }), token).not.toContain(token);
     }
   });
 
