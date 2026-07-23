@@ -21,7 +21,6 @@ import {
 } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -142,7 +141,10 @@ export function resolveInheritedToolPolicyForSession(
 }
 
 /** Filter runtime tools by sandbox allow/deny policy. */
-export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
+export function filterToolsByPolicy<TTool extends { name: string }>(
+  tools: TTool[],
+  policy?: SandboxToolPolicy,
+): TTool[] {
   if (!policy) {
     return tools;
   }

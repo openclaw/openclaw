@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunContext,
+  emitAgentEventIfCurrent,
   emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
@@ -43,6 +44,7 @@ type PendingLiveEvent = {
 type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
+  emissionMode: "exclusive" | "shared";
   lifecycleGeneration: string;
   trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
@@ -60,6 +62,7 @@ type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
 type WorkerLiveCredentialRotation = Readonly<{
   credentialHash: string;
   environmentId: string;
+  newProcessTurn?: boolean;
   previousCredentialHash: string;
   runEpoch: number;
   sessionId: string;
@@ -233,6 +236,18 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.environmentId === rotation.environmentId &&
       window.runEpoch === rotation.runEpoch
     ) {
+      if (rotation.newProcessTurn === true) {
+        // A per-turn credential is an unforgeable process boundary. Retire only
+        // the prior process's transient run claims/fences while preserving the
+        // durable ACK cursor; cron may intentionally reuse its durable run id.
+        for (const [runId, owned] of window.activeRuns) {
+          releaseAgentRunContext(runId, owned.claimId);
+        }
+        window.activeRuns.clear();
+        window.pending.clear();
+        window.pendingBytes = 0;
+        window.terminalRuns.clear();
+      }
       window.credentialHash = rotation.credentialHash;
       return true;
     }
@@ -552,12 +567,14 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
         existingContext.sessionKey !== window.target.sessionKey ||
-        existingContext.agentId !== window.target.agentId ||
+        (existingContext.agentId !== undefined &&
+          existingContext.agentId !== window.target.agentId) ||
         existingContext.lifecycleGeneration !== lifecycleGeneration)
     ) {
       return invalidEvent();
     }
-    const claimId = claimAgentRunContext(
+    let emissionMode: OwnedLiveRun["emissionMode"] = "exclusive";
+    let claimId = claimAgentRunContext(
       runId,
       {
         ...(window.target.agentId ? { agentId: window.target.agentId } : {}),
@@ -579,12 +596,40 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         trackOwner: true,
       },
     );
+    if (!claimId && existingContext) {
+      // Cron and other Gateway-owned handoffs retain a non-exclusive claim while the
+      // assigned worker runs. Share only that corroborated identity; exclusive owners
+      // still reject this claim and prevent a foreign execution from joining the run.
+      claimId = claimAgentRunContext(
+        runId,
+        {
+          ...(window.target.agentId ? { agentId: window.target.agentId } : {}),
+          isControlUiVisible: controlUiVisible,
+          lifecycleGeneration,
+          projectSessionActive: true,
+          sessionId: window.sessionId,
+          sessionKey: window.target.sessionKey,
+        },
+        {
+          exclusive: false,
+          onClearRequested: (clearedClaimId) => {
+            if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
+              fenceReleasedRun(window, runId);
+            }
+          },
+          ownsContext: false,
+          trackOwner: true,
+        },
+      );
+      emissionMode = "shared";
+    }
     if (!claimId) {
       return invalidEvent();
     }
     const claimed = {
       claimId,
       controlUiVisible,
+      emissionMode,
       lifecycleGeneration,
       trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
     };
@@ -607,14 +652,21 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Fence first so terminal delivery cannot reopen the run ID.
       window.terminalRuns.set(request.runId, request.seq);
     }
-    emitAgentEventForOwner(
-      {
-        runId: request.runId,
-        stream: request.event.kind,
-        data: prepareWorkerLiveEventData(request.event),
-      },
-      owned.claimId,
-    );
+    const event = {
+      runId: request.runId,
+      stream: request.event.kind,
+      data: prepareWorkerLiveEventData(request.event),
+    };
+    if (owned.emissionMode === "shared") {
+      if (!emitAgentEventIfCurrent(event)) {
+        if (definitiveTerminal) {
+          window.terminalRuns.delete(request.runId);
+        }
+        return invalidEvent();
+      }
+    } else {
+      emitAgentEventForOwner(event, owned.claimId);
+    }
     recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;

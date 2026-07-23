@@ -176,9 +176,6 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }
-  if (params.scheduledToolPolicy) {
-    throw new Error("Cloud worker turns do not yet preserve scheduled tool policy");
-  }
   const modelRef = resolveTurnModelRef(params);
   const explicitRuntime =
     normalizeOptionalAgentRuntimeId(params.agentHarnessId) ??

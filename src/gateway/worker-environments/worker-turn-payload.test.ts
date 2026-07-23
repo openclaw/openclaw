@@ -3,8 +3,8 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { assertSupportedTurn } from "./worker-turn-payload.js";
 
 describe("assertSupportedTurn", () => {
-  it("rejects scheduled authority before cloud-worker handoff", () => {
-    expect(() =>
+  it("accepts scheduled authority for the worker launch envelope", () => {
+    expect(
       assertSupportedTurn({
         sessionId: "session-1",
         sessionFile: "/tmp/session.jsonl",
@@ -14,9 +14,16 @@ describe("assertSupportedTurn", () => {
         runId: "run-1",
         provider: "openai",
         model: "gpt-5.4",
+        config: {
+          agents: {
+            defaults: {
+              models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+        },
         toolsAllow: ["write"],
         scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
       } as SessionPlacementTurnParams),
-    ).toThrow("Cloud worker turns do not yet preserve scheduled tool policy");
+    ).toEqual({ provider: "openai", model: "gpt-5.4" });
   });
 });

@@ -70,6 +70,10 @@ import {
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
+import {
+  buildConversationToolPolicyPipelineSteps,
+  resolveConversationToolPolicies,
+} from "./conversation-tool-policy-pipeline.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
 import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
@@ -92,14 +96,10 @@ import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
-import {
-  applyToolPolicyPipeline,
-  buildDefaultToolPolicyPipelineSteps,
-} from "./tool-policy-pipeline.js";
+import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
 import {
   expandToolGroups,
   hasRestrictiveAllowPolicy,
-  mergeAlsoAllowPolicy,
   normalizeToolName,
   replaceWithEffectiveToolAllowlist,
 } from "./tool-policy.js";
@@ -529,25 +529,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       trustedInternalHandoff: options?.trustedInternalHandoff,
       scheduledToolPolicy: options?.scheduledToolPolicy,
     });
-  const {
-    agentId,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profilePolicy,
-    providerProfilePolicy,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-    groupPolicy,
-    senderPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    runtimePluginToolGrant,
-    runtimeToolPolicyForInheritance,
-  } = capabilityProfile.policy;
+  const { agentId, runtimePluginToolGrant } = capabilityProfile.policy;
 
   const enableHeartbeatTool =
     options?.enableHeartbeatTool === true ||
@@ -565,9 +547,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         TOOL_CALL_RAW_TOOL_NAME,
       ]
     : [];
-  const mergeToolSearchControlAllowlist = <TPolicy extends { allow?: string[] }>(
-    policy: TPolicy | undefined,
-  ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
   ).some((toolName) => {
@@ -587,14 +566,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
-    ...(profileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
-    ...(providerProfileAlsoAllow ?? []),
-    ...runtimeProfileAlsoAllow,
-  ]);
+  const conversationToolPolicies = resolveConversationToolPolicies({
+    capabilityProfile,
+    additionalProfileAllow: runtimeProfileAlsoAllow,
+    additionalPolicyAllow: toolSearchControlAllowlist,
+  });
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey = resolveProcessToolScopeKey({
@@ -603,29 +579,18 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionId: options?.sessionId,
     agentId,
   });
-  const globalPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(globalPolicy);
-  const globalProviderPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(globalProviderPolicy);
-  const agentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(agentPolicy);
-  const agentProviderPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(agentProviderPolicy);
-  const groupPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(groupPolicy);
-  const senderPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(senderPolicy);
-  const sandboxToolPolicyWithToolSearchControls =
-    mergeToolSearchControlAllowlist(sandboxToolPolicy);
-  const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
   const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicyWithAlsoAllow,
-    providerProfilePolicyWithAlsoAllow,
-    globalPolicyWithToolSearchControls,
-    globalProviderPolicyWithToolSearchControls,
-    agentPolicyWithToolSearchControls,
-    agentProviderPolicyWithToolSearchControls,
-    groupPolicyWithToolSearchControls,
-    senderPolicyWithToolSearchControls,
-    sandboxToolPolicyWithToolSearchControls,
-    subagentPolicyWithToolSearchControls,
-    inheritedToolPolicy,
+    conversationToolPolicies.profilePolicy,
+    conversationToolPolicies.providerProfilePolicy,
+    conversationToolPolicies.globalPolicy,
+    conversationToolPolicies.globalProviderPolicy,
+    conversationToolPolicies.agentPolicy,
+    conversationToolPolicies.agentProviderPolicy,
+    conversationToolPolicies.groupPolicy,
+    conversationToolPolicies.senderPolicy,
+    conversationToolPolicies.sandboxPolicy,
+    conversationToolPolicies.subagentPolicy,
+    conversationToolPolicies.inheritedToolPolicy,
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecToolConfig({ cfg: options?.config, agentId });
@@ -1095,45 +1060,19 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     tools: toolsForModelProvider,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
-    steps: [
-      ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
-        profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy: globalPolicyWithToolSearchControls,
-        globalProviderPolicy: globalProviderPolicyWithToolSearchControls,
-        agentPolicy: agentPolicyWithToolSearchControls,
-        agentProviderPolicy: agentProviderPolicyWithToolSearchControls,
-        groupPolicy: groupPolicyWithToolSearchControls,
-        senderPolicy: senderPolicyWithToolSearchControls,
-        agentId,
-        unavailableCoreToolReason,
-      }),
-      {
-        policy: sandboxToolPolicyWithToolSearchControls,
-        label: "sandbox tools.allow",
-        unavailableCoreToolReason,
-      },
-      {
-        policy: ownerOnlyCoreToolPolicy,
-        label: "gateway sender owner-only tools",
-        unavailableCoreToolReason,
-      },
-      {
-        policy: subagentPolicyWithToolSearchControls,
-        label: "subagent tools.allow",
-        unavailableCoreToolReason,
-      },
-      {
-        policy: runtimeToolPolicyForInheritance,
-        label: "runtime tools.allow",
-        unavailableCoreToolReason,
-      },
-      { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
-    ],
+    steps: buildConversationToolPolicyPipelineSteps({
+      capabilityProfile,
+      policies: conversationToolPolicies,
+      additionalStepsAfterSandbox: [
+        {
+          policy: ownerOnlyCoreToolPolicy,
+          label: "gateway sender owner-only tools",
+          unavailableCoreToolReason,
+        },
+      ],
+      includeRuntimeToolPolicy: true,
+      unavailableCoreToolReason,
+    }),
     auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
