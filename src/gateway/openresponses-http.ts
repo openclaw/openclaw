@@ -1109,6 +1109,9 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  // The continuation body never throws, but the admission fence rejects when it
+  // has no live parent root and the gateway is draining. Nothing awaits this
+  // detached promise, so log instead of leaking an unhandled rejection.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1364,6 +1367,8 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     }
+  }).catch((err: unknown) => {
+    logWarn(`openresponses: streaming continuation failed: ${String(err)}`);
   });
 
   return true;
