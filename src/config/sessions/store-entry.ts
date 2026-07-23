@@ -1,7 +1,9 @@
 // Store entry lookup resolves canonical keys and safe legacy aliases.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
+  decodeLinkedCanonicalLabel,
   normalizeSessionKeyPreservingOpaquePeerIds,
+  parseSessionDeliveryRoute,
   parseThreadSessionSuffix,
   requiresFoldedSessionKeyAliasProof,
 } from "../../sessions/session-key-utils.js";
@@ -36,7 +38,7 @@ function normalizeEntryTarget(value: unknown): string {
     return "";
   }
   const trimmed = value.trim();
-  const sigilIndexes = ["!", "#"]
+  const sigilIndexes = ["!", "#", "@"]
     .map((sigil) => trimmed.indexOf(sigil))
     .filter((index) => index >= 0);
   if (sigilIndexes.length === 0) {
@@ -54,6 +56,48 @@ function entryDeliveryTargets(entry: SessionEntry | undefined): string[] {
     entry?.groupId,
   ];
   return candidates.map(normalizeEntryTarget).filter(Boolean);
+}
+
+/** A DM key embeds the peer id, not the room it was delivered in, so its folded
+ *  alias must be proven against the peer identity. Room targets never appear in a
+ *  direct key and would reject every legitimate DM session. */
+function entryProofTargets(entry: SessionEntry | undefined, normalizedBaseKey: string): string[] {
+  const peerKind = parseSessionDeliveryRoute(normalizedBaseKey)?.peerKind;
+  if (peerKind !== "direct" && peerKind !== "dm") {
+    return entryDeliveryTargets(entry);
+  }
+  return [entry?.origin?.nativeDirectUserId, entry?.origin?.from]
+    .map(normalizeEntryTarget)
+    .filter(Boolean);
+}
+
+/** Before this branch, an identity-link canonical label persisted its DM key with
+ *  a raw leading `@` (`...:direct:@person:...`); the branch now percent-encodes
+ *  that sigil (`%40`). Map an escaped key back to its pre-branch key so a returning
+ *  linked peer keeps continuity across the upgrade. Also returns the decoded native
+ *  identity, so the caller can refuse to adopt a native peer whose MXID is literally
+ *  the label text. */
+function preBranchLinkedLabelAlias(
+  normalizedKey: string,
+): { aliasKey: string; nativeTail: string } | undefined {
+  const route = parseSessionDeliveryRoute(normalizedKey);
+  if (!route || (route.peerKind !== "direct" && route.peerKind !== "dm")) {
+    return undefined;
+  }
+  const decodedTail = decodeLinkedCanonicalLabel(route.peerId);
+  if (decodedTail === route.peerId) {
+    return undefined;
+  }
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
+  const baseKey = baseSessionKey ?? normalizedKey;
+  if (!baseKey.endsWith(route.peerId)) {
+    return undefined;
+  }
+  const aliasBase = `${baseKey.slice(0, baseKey.length - route.peerId.length)}${decodedTail}`;
+  return {
+    aliasKey: threadId ? `${aliasBase}:thread:${threadId}` : aliasBase,
+    nativeTail: normalizeEntryTarget(decodedTail),
+  };
 }
 
 function normalizeEntryThreadId(value: unknown): string {
@@ -87,7 +131,7 @@ export function isConfirmedLowercasedLegacyAlias(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targetMatches = entryDeliveryTargets(entry).some((target) =>
+  const targetMatches = entryProofTargets(entry, normalizedBaseKey).some((target) =>
     normalizedBaseKey.includes(target),
   );
   if (!targetMatches) {
@@ -108,7 +152,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targets = entryDeliveryTargets(entry);
+  const targets = entryProofTargets(entry, normalizedBaseKey);
   // Existing delivery metadata is treated as proof against folding to a different opaque target.
   if (targets.length > 0 && !targets.some((target) => normalizedBaseKey.includes(target))) {
     return true;
@@ -160,6 +204,21 @@ export function resolveSessionEntryCandidates(params: {
       foldedLegacyUpdatedAt = updatedAt;
     }
   }
+  // Upgrade path: adopt a pre-branch raw-`@` identity-link DM row for its escaped
+  // `%40` key, but only when the row is provably a linked label (its origin is some
+  // other identity) and not a native peer whose MXID is literally the label text.
+  let preBranchLegacyEntry: SessionEntryCandidate | undefined;
+  const preBranch = preBranchLinkedLabelAlias(normalizedKey);
+  if (preBranch) {
+    const candidate = entries.get(preBranch.aliasKey);
+    const isNativePeerRow = entryProofTargets(candidate?.entry, normalizedKey).some(
+      (target) => target === preBranch.nativeTail,
+    );
+    if (candidate && !isNativePeerRow) {
+      legacyKeySet.add(preBranch.aliasKey);
+      preBranchLegacyEntry = candidate;
+    }
+  }
   // An exact (opaque-preserving-normalized) entry always wins over any folded
   // legacy alias, regardless of freshness (openclaw#75670). Only when no exact
   // entry exists do we fall back to a confirmed legacy alias.
@@ -174,11 +233,16 @@ export function resolveSessionEntryCandidates(params: {
       ? trimmedCandidate
       : undefined;
   let existing = exactKeyWins
-    ? (usableExactEntry ?? foldedLegacyEntry ?? fallbackLegacyEntry)
+    ? (usableExactEntry ?? foldedLegacyEntry ?? fallbackLegacyEntry ?? preBranchLegacyEntry)
     : undefined;
   let existingUpdatedAt = existing?.entry.updatedAt ?? 0;
   if (!exactKeyWins) {
-    for (const candidate of [usableExactEntry, foldedLegacyEntry, fallbackLegacyEntry]) {
+    for (const candidate of [
+      usableExactEntry,
+      foldedLegacyEntry,
+      fallbackLegacyEntry,
+      preBranchLegacyEntry,
+    ]) {
       const candidateUpdatedAt = candidate?.entry.updatedAt ?? 0;
       if (candidate && (!existing || candidateUpdatedAt > existingUpdatedAt)) {
         existing = candidate;

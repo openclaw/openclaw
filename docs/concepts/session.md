@@ -56,8 +56,20 @@ visible to Bob.
 <Tip>
 If the same person contacts you from multiple channels, use
 `session.identityLinks` to map their identities to one canonical peer id so
-they share a session.
+they share a session. A canonical label is treated as opaque config text: a
+leading `@` is percent-escaped so the label folds like any linked identity and
+cannot be read back as a native user id such as a Matrix MXID. Labels that differ
+only by a leading `@` (for example `@person` and `person`) stay on distinct
+sessions.
 </Tip>
+
+<Warning>
+`per-peer` keys are channel-agnostic by design, so peer ids that differ only by
+case always resolve to one session. On channels with opaque, case-sensitive user
+ids (Matrix MXIDs), two case-distinct users therefore share one DM session under
+`per-peer`. Use `per-channel-peer` or `per-account-channel-peer`, which keep such
+ids distinct.
+</Warning>
 
 ### Dock linked channels
 
