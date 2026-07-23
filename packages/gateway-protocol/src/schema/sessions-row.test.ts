@@ -8,12 +8,17 @@ describe("SessionRowSchema", () => {
       key: "agent:main:main",
       kind: "global",
       createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       visibility: "suggest",
       sharingRole: "owner",
     };
     const roundTripped = structuredClone(row);
 
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
-    expect(roundTripped).toMatchObject({ visibility: "suggest", sharingRole: "owner" });
+    expect(roundTripped).toMatchObject({
+      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      visibility: "suggest",
+      sharingRole: "owner",
+    });
   });
 });

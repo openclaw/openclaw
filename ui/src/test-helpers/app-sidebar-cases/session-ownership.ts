@@ -65,6 +65,49 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
   });
 
+  it("shows archive attribution only in collaborative archived-session lists", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:archived",
+      "agent:main:collaborator",
+    ]);
+    const result = harness.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const archived = result.sessions.find((row) => row.key.endsWith(":archived"));
+    const collaborator = result.sessions.find((row) => row.key.endsWith(":collaborator"));
+    if (!archived || !collaborator) {
+      throw new Error("expected archive attribution rows");
+    }
+    archived.archived = true;
+    archived.archivedBy = { type: "human", id: "profile-bob", label: "Bob" };
+    archived.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    collaborator.createdActor = { type: "human", id: "profile-bob", label: "Bob" };
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+    ];
+
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    Object.assign(sidebar, { sessionsStatusFilter: "archived" });
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    expect(
+      sidebar.querySelector('openclaw-session-owner-chip span[title="Archived by Bob"]'),
+    ).not.toBeNull();
+    expect(sidebar.querySelector('span[title="Created by Ada"]')).toBeNull();
+
+    collaborator.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    result.creators = [{ id: "profile-ada", label: "Ada" }];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
+  });
+
   it("filters by creator and hides custom groups without matching sessions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", [

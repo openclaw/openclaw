@@ -224,8 +224,13 @@ export function renderRecentSession(params: {
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
         <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
-          host.sessionOwnershipVisible ? session.createdActor : undefined,
+          host.sessionOwnershipVisible
+            ? host.sessionsStatusFilter === "archived"
+              ? session.archivedBy
+              : session.createdActor
+            : undefined,
           "row",
+          host.sessionsStatusFilter === "archived" ? "archived" : "created",
         )}
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"

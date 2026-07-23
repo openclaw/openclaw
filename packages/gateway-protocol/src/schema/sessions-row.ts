@@ -34,6 +34,7 @@ export const SessionRowSchema = Type.Object(
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
+    archivedBy: Type.Optional(SessionCreatedActorSchema),
     pinned: Type.Optional(Type.Boolean()),
     pinnedAt: Type.Optional(Type.Number()),
     icon: Type.Optional(Type.String()),

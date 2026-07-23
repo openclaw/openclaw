@@ -546,6 +546,7 @@ export type GatewaySessionRow = {
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;

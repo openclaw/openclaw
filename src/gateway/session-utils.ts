@@ -1938,7 +1938,7 @@ export function resolveSessionDisplayModelIdentityRef(params: {
 }
 
 /** Adds the current human profile label without persisting rename-prone display data. */
-function projectSessionCreatedActor(
+function projectSessionActor(
   actor: SessionEntry["createdActor"],
   userProfileLabelById: Map<string, string | undefined> = new Map(),
 ): SessionCreatedActor | undefined {
@@ -2284,7 +2284,7 @@ export function buildGatewaySessionRow(params: {
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
-    createdActor: projectSessionCreatedActor(entry?.createdActor, rowContext?.userProfileLabelById),
+    createdActor: projectSessionActor(entry?.createdActor, rowContext?.userProfileLabelById),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
@@ -2303,6 +2303,7 @@ export function buildGatewaySessionRow(params: {
     updatedAt,
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
+    archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileLabelById),
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     icon: entry?.icon,
@@ -2799,7 +2800,7 @@ function listSessionCreatorIdentities(
 ): Array<{ id: string; label?: string }> {
   const creators = new Map<string, { id: string; label?: string }>();
   for (const [, entry] of entries) {
-    const actor = projectSessionCreatedActor(entry.createdActor, userProfileLabelById);
+    const actor = projectSessionActor(entry.createdActor, userProfileLabelById);
     const id = normalizeOptionalString(actor?.id);
     if (!id) {
       continue;

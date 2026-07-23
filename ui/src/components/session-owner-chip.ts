@@ -35,11 +35,13 @@ export function listSessionCreators(
 export function renderSessionOwnerChip(
   createdActor: SessionCreatedActor | null | undefined,
   size: "row" | "header",
+  attribution: "created" | "archived" = "created",
 ) {
   return createdActor?.id
     ? html`<openclaw-session-owner-chip
         .createdActor=${createdActor}
         size=${size}
+        attribution=${attribution}
       ></openclaw-session-owner-chip>`
     : nothing;
 }
@@ -99,6 +101,7 @@ function ownerHue(id: string): number {
 class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
+  @property({ type: String }) attribution: "created" | "archived" = "created";
 
   override render() {
     const createdActor = this.createdActor;
@@ -110,7 +113,10 @@ class SessionOwnerChip extends OpenClawLightDomElement {
       return nothing;
     }
     const title = createdActor.label || createdActor.id;
-    const accessibleLabel = t("sessionsView.createdBy", { name: title });
+    const accessibleLabel = t(
+      this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
+      { name: title },
+    );
     return html`
       <span
         class="session-owner-chip session-owner-chip--${this.size}"

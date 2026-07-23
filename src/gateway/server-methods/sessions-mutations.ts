@@ -9,7 +9,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
-import { applySessionPatchProjection } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionEntryLifecycleMutation,
+  applySessionPatchProjection,
+} from "../../config/sessions/session-accessor.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
@@ -34,7 +37,9 @@ import {
   type SessionsPatchResult,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
@@ -59,6 +64,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
+    const archiveActor = gatewayClientSessionCreator(client);
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
@@ -107,6 +113,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       patchModelCatalog = catalog;
       return catalog;
     };
+    let entryBeforePatch: NonNullable<typeof lifecycleEntry> | undefined;
+    let patchedPrimaryKey = canonicalKey;
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
       // A reset queued ahead of archive can rotate the row before this mutation starts.
@@ -176,6 +184,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           return { primaryKey, candidateKeys: migratedTarget.storeKeys };
         },
         project: async ({ primaryKey, existingEntry, entries }) => {
+          patchedPrimaryKey = primaryKey;
+          entryBeforePatch = existingEntry ? structuredClone(existingEntry) : undefined;
           const projected = await projectSessionsPatchEntry({
             cfg,
             entries,
@@ -183,6 +193,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             storeKey: primaryKey,
             agentId: requestedAgentId,
             patch: p,
+            archivedBy: archiveActor,
             loadGatewayModelCatalog: loadPatchModelCatalog,
           });
           if (!projected.ok) {
@@ -210,7 +221,45 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     const applied = await runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: lifecycleIdentities,
-      run: applyPatch,
+      run: async () => {
+        const result = await applyPatch();
+        if (!result?.ok) {
+          return result;
+        }
+        const archiveStateChanged =
+          typeof p.archived === "boolean" &&
+          (entryBeforePatch?.archivedAt !== undefined) !== (result.entry.archivedAt !== undefined);
+        if (!archiveStateChanged || !archiveActor) {
+          return result;
+        }
+        const action = result.entry.archivedAt === undefined ? "unarchived" : "archived";
+        try {
+          await appendSessionAudit({
+            cfg,
+            target: { agentId: target.agentId, entry: result.entry, storePath },
+            text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
+            now: Date.now(),
+          });
+        } catch (error) {
+          await applySessionEntryLifecycleMutation({
+            agentId: target.agentId,
+            storePath,
+            ...(entryBeforePatch
+              ? { upserts: [{ sessionKey: patchedPrimaryKey, entry: entryBeforePatch }] }
+              : {
+                  removals: [
+                    {
+                      sessionKey: patchedPrimaryKey,
+                      expectedSessionId: result.entry.sessionId,
+                    },
+                  ],
+                }),
+            skipMaintenance: true,
+          });
+          throw error;
+        }
+        return result;
+      },
     });
     if (!applied) {
       return;
