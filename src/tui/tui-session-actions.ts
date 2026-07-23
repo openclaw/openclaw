@@ -4,6 +4,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -186,7 +187,7 @@ export function createSessionActions(context: SessionActionContext) {
       const result = await client.listAgents();
       applyAgentsResult(result);
     } catch (err) {
-      chatLog.addSystem(`agents list failed: ${String(err)}`);
+      chatLog.addSystem(`agents list failed: ${formatErrorMessage(err)}`);
     }
   };
 
@@ -382,7 +383,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      chatLog.addSystem(`sessions list failed: ${formatErrorMessage(err)}`);
     }
   };
 
@@ -611,7 +612,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentLoad()) {
         return { loaded: false };
       }
-      chatLog.addSystem(`history failed: ${String(err)}`);
+      chatLog.addSystem(`history failed: ${formatErrorMessage(err)}`);
       tui.requestRender(true);
       return { loaded: false };
     }
@@ -684,7 +685,7 @@ export function createSessionActions(context: SessionActionContext) {
       }
       setActivityStatus("aborted");
     } catch (err) {
-      chatLog.addSystem(`abort failed: ${String(err)}`);
+      chatLog.addSystem(`abort failed: ${formatErrorMessage(err)}`);
       setActivityStatus("abort failed");
     }
     tui.requestRender();

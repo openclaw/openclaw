@@ -89,6 +89,7 @@ import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logInfo, logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -202,7 +203,7 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
     });
     return { status: "warmed" };
   } catch (err) {
-    return { status: "failed", error: String(err) };
+    return { status: "failed", error: formatErrorMessage(err) };
   }
 }
 

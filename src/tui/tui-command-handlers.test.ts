@@ -1224,7 +1224,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/context detail");
 
-    expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
+    expect(addSystem).toHaveBeenCalledWith("send failed: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(state.pendingSubmit).toBeNull();
   });
@@ -1240,8 +1240,8 @@ describe("tui command handlers", () => {
     await handleCommand("/new");
     await handleCommand("/reset");
 
-    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: Error: boom");
-    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: Error: boom");
+    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: boom");
+    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: boom");
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {
