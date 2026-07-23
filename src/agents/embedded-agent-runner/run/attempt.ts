@@ -36,7 +36,10 @@ import {
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
-import type { EmbeddedAttemptSessionFileOwner } from "./attempt.session-lock.js";
+import type {
+  EmbeddedAttemptSessionFileOwner,
+  EmbeddedAttemptSessionLockController,
+} from "./attempt.session-lock.js";
 import {
   queueSessionsYieldInterruptMessage,
   SESSIONS_YIELD_ABORT_REASON,
@@ -84,6 +87,7 @@ export async function runEmbeddedAttempt(
   let emitDiagnosticRunCompleted: EmitDiagnosticRunCompleted | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
   let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
+  let sessionLockControllerRef: EmbeddedAttemptSessionLockController | undefined;
   let retainedSessionFileOwner: EmbeddedAttemptSessionFileOwner | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
@@ -317,6 +321,7 @@ export async function runEmbeddedAttempt(
         releaseRetainedSessionLock = release;
       },
     });
+    sessionLockControllerRef = sessionLockController;
 
     let session: AgentSession | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
@@ -487,7 +492,22 @@ export async function runEmbeddedAttempt(
       );
     }
     try {
-      await releaseRetainedSessionLock?.();
+      const LOCK_RELEASE_TIMEOUT_MS = 30_000;
+      const timeout = new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), LOCK_RELEASE_TIMEOUT_MS);
+      });
+      const release = releaseRetainedSessionLock
+        ? releaseRetainedSessionLock().then(() => "released" as const)
+        : Promise.resolve("released" as const);
+      const result = await Promise.race([release, timeout]);
+      if (result === "timeout") {
+        log.warn(
+          `retained session lock release timed out after ${LOCK_RELEASE_TIMEOUT_MS}ms, force-disposing: runId=${params.runId}`,
+        );
+        sessionLockControllerRef?.forceDisposeRetainedLock();
+        // Retry release after force-clearing retained use count
+        await releaseRetainedSessionLock?.().catch(() => {});
+      }
     } catch (releaseErr) {
       log.error(
         `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
