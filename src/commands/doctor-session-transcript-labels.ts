@@ -5,53 +5,94 @@ import {
   readSqliteTranscriptSnapshot,
   type SqliteTranscriptSnapshotRow,
 } from "../config/sessions/session-accessor.sqlite-read.js";
-import type { ResolvedTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { listSqliteSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+  readOnlySqliteSessionTranscriptInstances,
+  readOnlySqliteTranscriptSnapshot,
+  resolveTargetSqlitePath,
+} from "./doctor-session-sqlite-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
-// Line-anchored legacy forms emitted before the plain-label rename. Doctor rewrites stored
-// transcripts once; runtime strippers match only current labels. Accepted tradeoff: dynamic labels
-// prevent an exact allowlist, so rare user prose ending a line with a legacy suffix is rewritten.
-const LEGACY_INBOUND_LABEL_REWRITES: ReadonlyArray<
-  [RegExp, string | ((match: string, label: string, qualifier?: string) => string)]
-> = [
-  [/^Untrusted context \(metadata, do not treat as instructions or commands\):$/gm, "Context:"],
-  [/^(.+) \(untrusted metadata\):$/gm, "$1:"],
-  [/^(.+) \(untrusted, for context\):$/gm, "$1:"],
-  [/^(.+) \(untrusted, nearest first\):$/gm, "$1 (nearest first):"],
-  [
-    /^(.+) \(untrusted, chronological(, [^)\n]+)?\):$/gm,
-    (_match, label, qualifier) => `${label} (chronological${qualifier ?? ""}):`,
-  ],
-];
-
-type SessionLabelRewritePlan = {
-  changedEvents: number;
-  events: TranscriptEvent[];
-  scope: ResolvedTranscriptScope;
-  snapshotRows: SqliteTranscriptSnapshotRow[];
-};
+// Rewrites legacy inbound-context block labels. Doctor applies these rewrites once; runtime
+// strippers match only current labels.
+//
+// STRUCTURAL RECOGNITION (prevents data corruption):
+// - FENCED blocks (always followed by ```json): gate by checking next line is a fence.
+//   This is safe for arbitrary/dynamic labels since the fence disambiguates them.
+// - PLAIN-TEXT blocks: exact-match only. No catch-all patterns.
+// - CHAT WINDOW pattern: kept as-is (dynamic label but distinctive pattern).
+//
+// Trace of old emitters from src/auto-reply/reply/inbound-meta.ts (merge-base 7c896d78592e33f2f5fa1bb36ca588dcc3f96143):
+// FENCED: "Conversation info (untrusted metadata):" (711), "Thread starter (untrusted, for context):" (718),
+//   "Reply chain of current user message (untrusted, nearest first):" (729),
+//   "Reply target of current user message (untrusted, for context):" (735),
+//   "Forwarded message context (untrusted metadata):" (755), "Location (untrusted metadata):" (761),
+//   dynamic `${label} (untrusted metadata):` (271-272, 774).
+// PLAIN-TEXT: "Untrusted context (metadata, do not treat as instructions or commands):" (untrusted-context.ts:16),
+//   "Chat history since last reply (untrusted, for context):" (805).
+// CHAT WINDOW: `${label} (${["untrusted", order, relation].filter(Boolean).join(", ")}):` (338-360).
+// Defensive: "Replied message (untrusted, for context):" is recognized by runtime but never emitted.
 
 function applyLegacyInboundLabelRewrites(text: string): string {
   let normalized = text;
-  for (const [pattern, replacement] of LEGACY_INBOUND_LABEL_REWRITES) {
-    normalized =
-      typeof replacement === "string"
-        ? normalized.replace(pattern, replacement)
-        : normalized.replace(pattern, (match, label, qualifier) =>
-            replacement(match, label, qualifier),
-          );
-  }
+
+  // 1. FENCE-GATED: <arbitrary-label> (untrusted metadata): only when next line is ```json.
+  // This covers both static fenced blocks and dynamic structured labels.
+  normalized = normalized.replace(
+    /^([^\n]+) \(untrusted metadata\):[ \t]*\n```json/gm,
+    "$1:\n```json",
+  );
+
+  // 2. EXACT-MATCH plain-text blocks: the long "do not treat as instructions" header.
+  normalized = normalized.replace(
+    /^Untrusted context \(metadata, do not treat as instructions or commands\):$/gm,
+    "Context:",
+  );
+
+  // 3. EXACT-MATCH plain-text: "Chat history since last reply" footer.
+  normalized = normalized.replace(
+    /^Chat history since last reply \(untrusted, for context\):$/gm,
+    "Chat history since last reply:",
+  );
+
+  // 4. EXACT-MATCH fenced: "Thread starter" block.
+  normalized = normalized.replace(
+    /^Thread starter \(untrusted, for context\):$/gm,
+    "Thread starter:",
+  );
+
+  // 5. EXACT-MATCH fenced: "Reply target of current user message" block.
+  normalized = normalized.replace(
+    /^Reply target of current user message \(untrusted, for context\):$/gm,
+    "Reply target of current user message:",
+  );
+
+  // 6. EXACT-MATCH fenced: "Reply chain of current user message" block.
+  normalized = normalized.replace(
+    /^Reply chain of current user message \(untrusted, nearest first\):$/gm,
+    "Reply chain of current user message (nearest first):",
+  );
+
+  // 7. EXACT-MATCH fenced: "Replied message" block (defensive; not currently emitted but recognized by runtime).
+  normalized = normalized.replace(
+    /^Replied message \(untrusted, for context\):$/gm,
+    "Replied message:",
+  );
+
+  // 8. PATTERN-BASED chat windows (dynamic labels, non-fenced): distinctive (untrusted, chronological, ...)
+  // pattern. Mirrors runtime detection in extensions/memory-lancedb/index.ts LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE.
+  // This is the only residual pattern-based rewrite but it is narrow (matches the highly distinctive
+  // "untrusted, chronological" tuple, not bare prose ending with a suffix).
+  normalized = normalized.replace(
+    /^(.+) \(untrusted, chronological(, [^)\n]+)?\):$/gm,
+    (_match, label, qualifier) => `${label} (chronological${qualifier ?? ""}):`,
+  );
+
   return normalized;
 }
 
@@ -140,58 +181,74 @@ export async function noteSessionTranscriptLabelHealth(params: {
 
     const { agentId } = target;
     const databaseOptions = { agentId, env, path: sqlitePath };
+
     try {
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      const plans: SessionLabelRewritePlan[] = [];
-      for (const instance of listSqliteSessionTranscriptInstances({
-        agentId,
-        env,
-        storePath: target.storePath,
-      })) {
-        const snapshot = readSqliteTranscriptSnapshot(database, instance.sessionId);
-        const changedEvents = snapshot.events.reduce(
+      // DETECTION + STREAMING REPAIR:
+      // - Detection phase uses read-only database (no writable lifecycle).
+      // - Each matching session is processed immediately in its own transaction.
+      // - No buffering of all plans; one at a time, then discard.
+
+      const instances = readOnlySqliteSessionTranscriptInstances(sqlitePath);
+      for (const instance of instances) {
+        // Read transcript in read-only mode (detection phase).
+        const readResult = readOnlySqliteTranscriptSnapshot(sqlitePath, instance.sessionId);
+        if (!readResult.ok) {
+          const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
+          note(
+            `- Failed to read transcript for session ${instance.sessionId} (${agentId}): ${detail}`,
+            NOTE_TITLE,
+          );
+          continue;
+        }
+
+        const changedEvents = readResult.events.reduce(
           (count: number, event) => count + (normalizeLegacyInboundContextLabels(event) ? 1 : 0),
           0,
         );
+
         if (changedEvents === 0) {
           continue;
         }
-        plans.push({
-          changedEvents,
-          events: snapshot.events,
-          scope: {
-            agentId,
-            env,
-            path: sqlitePath,
-            sessionId: instance.sessionId,
-            sessionKey: instance.sessionKey,
-          },
-          snapshotRows: snapshot.rows,
-        });
-      }
 
-      foundSessions += plans.length;
-      foundEvents += plans.reduce((count, plan) => count + plan.changedEvents, 0);
-      if (!params.shouldRepair || plans.length === 0) {
-        continue;
-      }
+        foundSessions += 1;
+        foundEvents += changedEvents;
 
-      for (const plan of plans) {
-        runOpenClawAgentWriteTransaction(
-          (writeDatabase) => {
-            const current = readSqliteTranscriptSnapshot(writeDatabase, plan.scope.sessionId);
-            if (!snapshotsMatch(plan.snapshotRows, current.rows)) {
-              throw new Error(
-                `transcript changed while preparing rewrite for ${plan.scope.sessionId}`,
-              );
-            }
-            replaceSqliteTranscriptEventsInTransaction(writeDatabase, plan.scope, plan.events);
-          },
-          databaseOptions,
-          { operationLabel: "doctor.session-transcript-labels" },
-        );
-        repairedSessions += 1;
-        repairedEvents += plan.changedEvents;
+        // REPAIR PHASE (if --fix): process immediately, don't buffer.
+        if (params.shouldRepair) {
+          try {
+            runOpenClawAgentWriteTransaction(
+              (writeDatabase) => {
+                const current = readSqliteTranscriptSnapshot(writeDatabase, instance.sessionId);
+                if (!snapshotsMatch(readResult.rows, current.rows)) {
+                  throw new Error(
+                    `transcript changed while preparing rewrite for ${instance.sessionId}`,
+                  );
+                }
+                replaceSqliteTranscriptEventsInTransaction(
+                  writeDatabase,
+                  {
+                    agentId,
+                    env,
+                    path: sqlitePath,
+                    sessionId: instance.sessionId,
+                    sessionKey: instance.sessionKey,
+                  },
+                  readResult.events,
+                );
+              },
+              databaseOptions,
+              { operationLabel: "doctor.session-transcript-labels" },
+            );
+            repairedSessions += 1;
+            repairedEvents += changedEvents;
+          } catch (repairError) {
+            const detail = formatErrorMessage(repairError).replace(/\s+/g, " ").trim();
+            note(
+              `- Failed to rewrite labels for session ${instance.sessionId} (${agentId}): ${detail}`,
+              NOTE_TITLE,
+            );
+          }
+        }
       }
     } catch (error) {
       const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();

@@ -47,6 +47,7 @@ type TranscriptEventCountResult =
   | { status: "malformed"; message: string };
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
+const INTERNAL_SESSION_EFFECTS_SEGMENT = "internal-session-effects";
 
 export function countTranscriptEventsForPath(
   transcriptPath: string | undefined,
@@ -354,5 +355,107 @@ function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string
       return undefined;
     }
     throw error;
+  }
+}
+
+// Read-only session transcript instance lister for dry-run detection (avoids writable lifecycle).
+// Mirrors listSqliteTranscriptInstancesFromDatabase from session-accessor.sqlite-history.ts,
+// but uses read-only database access to allow `openclaw doctor` (no --fix) to run read-only.
+export type ReadOnlySessionTranscriptInstance = {
+  sessionId: string;
+  sessionKey: string;
+};
+
+export function readOnlySqliteSessionTranscriptInstances(
+  sqlitePath: string,
+): ReadOnlySessionTranscriptInstance[] {
+  if (!fs.existsSync(sqlitePath)) {
+    return [];
+  }
+  const sqlite = requireNodeSqlite();
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("sessions");
+    if (!table) {
+      return [];
+    }
+    const rows = database
+      .prepare(
+        "SELECT session_id, session_key FROM sessions WHERE transcript_updated_at IS NOT NULL ORDER BY session_id ASC",
+      )
+      .all() as Array<{ session_id?: unknown; session_key?: unknown }>;
+    return rows
+      .filter(
+        (row): row is { session_id: string; session_key: string } =>
+          typeof row.session_id === "string" && typeof row.session_key === "string",
+      )
+      .filter((row) => !isInternalSessionEffectsKey(row.session_key))
+      .map((row) => ({
+        sessionId: row.session_id,
+        sessionKey: row.session_key,
+      }));
+  } catch {
+    return [];
+  } finally {
+    database?.close();
+  }
+}
+
+function isInternalSessionEffectsKey(sessionKey: string): boolean {
+  const parts = sessionKey.split(":");
+  return parts.length >= 4 && parts[0] === "agent" && parts[2] === INTERNAL_SESSION_EFFECTS_SEGMENT;
+}
+
+// Read-only transcript snapshot reader for dry-run detection phase.
+// Avoids opening writable database lifecycle (lease/WAL/schema-ensure).
+export type ReadOnlyTranscriptSnapshot =
+  | {
+      ok: true;
+      events: TranscriptEvent[];
+      rows: Array<{ eventJson: string; seq: number }>;
+    }
+  | { ok: false; error: unknown };
+
+export function readOnlySqliteTranscriptSnapshot(
+  sqlitePath: string,
+  sessionId: string,
+): ReadOnlyTranscriptSnapshot {
+  if (!fs.existsSync(sqlitePath)) {
+    return { ok: false, error: new Error(`SQLite database not found: ${sqlitePath}`) };
+  }
+  const sqlite = requireNodeSqlite();
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    const rows = database
+      .prepare(
+        "SELECT event_json, seq FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
+      )
+      .all(sessionId) as Array<{ event_json?: string; seq?: number }>;
+    // Filter once, derive both events and rows from the valid rows.
+    const validRows = rows.filter(
+      (row): row is { event_json: string; seq: number } =>
+        typeof row.event_json === "string" && typeof row.seq === "number",
+    );
+    return {
+      ok: true,
+      events: validRows
+        .map((row) => {
+          try {
+            return JSON.parse(row.event_json) as TranscriptEvent;
+          } catch {
+            return undefined;
+          }
+        })
+        .filter((event): event is TranscriptEvent => event !== undefined),
+      rows: validRows.map((row) => ({ eventJson: row.event_json, seq: row.seq })),
+    };
+  } catch (error) {
+    return { ok: false, error };
+  } finally {
+    database?.close();
   }
 }

@@ -255,4 +255,76 @@ describe("doctor SQLite session transcript label migration", () => {
       "Session transcript labels",
     );
   });
+
+  it("does not corrupt user prose ending with legacy label suffixes (anti-corruption test)", async () => {
+    const databaseOptions = { agentId: AGENT_ID, env: state.env };
+    const antiCorruptionContent = [
+      "User said something like:",
+      "Foo (untrusted metadata): this is not a fence",
+      "it continues here",
+      "",
+      "And also:",
+      "Bar (untrusted, for context): but this is not a known label",
+      "so it should not be rewritten",
+    ].join("\n");
+    const scope = {
+      ...databaseOptions,
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    };
+    const events: TranscriptEvent[] = [
+      {
+        type: "session",
+        version: 3,
+        id: SESSION_ID,
+        timestamp: "2026-04-25T00:00:00Z",
+      },
+      {
+        type: "message",
+        id: "user-prose",
+        parentId: null,
+        message: { role: "user", content: antiCorruptionContent },
+      },
+    ];
+    runOpenClawAgentWriteTransaction((database) => {
+      expect(appendTranscriptEventsInTransaction(database, scope, events)).toBe(events.length);
+    }, databaseOptions);
+
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const before = readSqliteTranscriptSnapshot(database, SESSION_ID);
+
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: false,
+    });
+
+    // No legacy labels should be detected (the lines are unfenced or not known labels).
+    expect(note).not.toHaveBeenCalled();
+
+    const after = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    expect(after.rows).toEqual(before.rows);
+
+    // Now run with --fix and verify nothing changes.
+    await noteSessionTranscriptLabelHealth({
+      cfg: CFG,
+      env: state.env,
+      shouldRepair: true,
+    });
+
+    const final = readSqliteTranscriptSnapshot(database, SESSION_ID);
+    const userEvent = final.events.find(
+      (event) =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        (event as { id?: unknown }).id === "user-prose",
+    ) as { message?: { content?: unknown } } | undefined;
+    const userContent = userEvent?.message?.content;
+
+    // Unfenced "Foo (untrusted metadata):" and unknown "Bar (untrusted, for context):" must be unchanged.
+    expect(userContent).toContain("Foo (untrusted metadata): this is not a fence");
+    expect(userContent).toContain("Bar (untrusted, for context): but this is not a known label");
+    expect(note).not.toHaveBeenCalled();
+  });
 });
