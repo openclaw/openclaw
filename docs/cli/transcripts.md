@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw transcripts` (list, show, and locate stored transcripts)"
+summary: "CLI reference for `openclaw transcripts` (list, show, and export stored transcripts)"
 read_when:
   - You want to read stored transcript summaries from the terminal
   - You need the path to a transcripts markdown summary
@@ -9,10 +9,12 @@ title: "Transcripts CLI"
 
 # `openclaw transcripts`
 
-Read-only inspector for transcripts written by the `transcripts` agent tool.
-Capture, import, and summarization run through that tool, not this CLI.
+Inspector and export command for transcripts written by the `transcripts` agent
+tool. Capture, import, and summarization run through that tool, not this CLI.
 
-Artifacts live under the state directory:
+Canonical transcript state lives in the shared SQLite database at
+`$OPENCLAW_STATE_DIR/state/openclaw.sqlite`. `show` and `path` explicitly
+materialize user-facing artifacts under the state directory:
 
 ```text
 $OPENCLAW_STATE_DIR/transcripts/YYYY-MM-DD/<session>/
@@ -22,9 +24,11 @@ $OPENCLAW_STATE_DIR/transcripts/YYYY-MM-DD/<session>/
   summary.md
 ```
 
-Default state directory is `~/.openclaw`; override with `OPENCLAW_STATE_DIR`.
-The date directory comes from the session start time; the session directory is
-a filesystem-safe slug derived from the session id.
+These files are exports, not a second runtime store. OpenClaw does not read them
+back during capture, summarization, or listing. Default state directory is
+`~/.openclaw`; override with `OPENCLAW_STATE_DIR`. The date directory comes
+from the session start time; the session directory is a filesystem-safe slug
+derived from the session id.
 
 ## Commands
 
@@ -42,15 +46,15 @@ openclaw transcripts show <session> --json
 openclaw transcripts path <session> --json
 ```
 
-| Command                       | Description                                     |
-| ----------------------------- | ----------------------------------------------- |
-| `list`                        | List stored sessions.                           |
-| `show <session>`              | Print the stored `summary.md`.                  |
-| `path <session>`              | Print the `summary.md` path.                    |
-| `path <session> --dir`        | Print the session directory.                    |
-| `path <session> --metadata`   | Print `metadata.json`.                          |
-| `path <session> --transcript` | Print `transcript.jsonl`.                       |
-| `--json`                      | Print machine-readable output (any subcommand). |
+| Command                       | Description                                          |
+| ----------------------------- | ---------------------------------------------------- |
+| `list`                        | List stored sessions.                                |
+| `show <session>`              | Print and materialize `summary.md`.                  |
+| `path <session>`              | Materialize and print the `summary.md` path.         |
+| `path <session> --dir`        | Materialize all artifacts and print their directory. |
+| `path <session> --metadata`   | Materialize and print `metadata.json`.               |
+| `path <session> --transcript` | Materialize and print `transcript.jsonl`.            |
+| `--json`                      | Print machine-readable output (any subcommand).      |
 
 `<session>` accepts either a bare session id or a date-qualified selector
 (`YYYY-MM-DD/<session>`). Use the qualified form when the same session id
@@ -75,7 +79,9 @@ The selector is the safest value to pass back to `show` or `path`.
 `show --json` returns the stored session metadata, selector, session
 directory, summary path, and summary Markdown text.
 
-`path --json` returns the selected path and whether that file exists.
+`path --json` returns the selected path and whether that artifact could be
+materialized. Metadata and transcript exports always exist for a stored
+session; a summary path reports `exists: false` until the session has a summary.
 
 ## Many sessions per day
 
@@ -94,14 +100,29 @@ when it will not repeat on the same date.
 
 ## Missing summaries
 
-Live sessions write `summary.md` when the session stops; imported transcripts
-write it immediately after import. A session can appear in `list` without a
-summary while capture is still active, if a provider failed during stop, or if
-metadata was written before any utterances arrived.
+Live sessions store and materialize `summary.md` when the session stops;
+imported transcripts do so immediately after import. A session can appear in
+`list` without a summary while capture is still active, if a provider failed
+during stop, or if metadata was stored before any utterances arrived.
 
 Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
+
+## Upgrading the legacy file store
+
+OpenClaw releases that predate the SQLite store wrote canonical runtime state
+directly beneath `$OPENCLAW_STATE_DIR/transcripts/`. Run:
+
+```bash
+openclaw doctor --fix
+```
+
+Doctor imports the complete legacy tree into SQLite, verifies row counts and
+ordering, records migration receipts, and moves the verified source tree to a
+timestamped `transcripts.migrated-*` archive. Runtime commands do not fall back
+to the legacy files. Keep the archive until you have verified the imported
+sessions and any exports you rely on.
 
 ## Configuration
 
