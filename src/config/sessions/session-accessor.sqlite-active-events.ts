@@ -19,6 +19,10 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  readVisibleMessageRange,
+  resolveVisibleMessagePositions,
+} from "./session-accessor.sqlite-reset-window.js";
+import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -257,40 +261,14 @@ function parseMessageEventRow(row: {
   };
 }
 
-function readMessageRange(
-  projection: CurrentProjection,
-  start: number,
-  endExclusive: number,
-): SessionTranscriptMessageEvent[] {
-  if (endExclusive <= start) {
-    return [];
-  }
-  const db = getActiveTranscriptKysely(projection.database);
-  return executeSqliteQuerySync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select(["active.message_position", "event.event_json"])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.message_position", "is not", null)
-      .where("active.message_position", ">=", start)
-      .where("active.message_position", "<", endExclusive)
-      .orderBy("active.message_position", "asc"),
-  ).rows.map(parseMessageEventRow);
-}
-
 /** Reads every message event on the active path. Full callers remain intentionally O(output). */
 export function readSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptMessageEvent[] {
-  return withCurrentProjectionSnapshot(scope, (projection) =>
-    readMessageRange(projection, 0, projection.state.activeMessageCount),
-  );
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const visible = resolveVisibleMessagePositions(projection);
+    return readVisibleMessageRange(projection, 0, visible.total);
+  });
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */
@@ -464,6 +442,8 @@ export function readRecentSessionTranscriptMessageEvents(
   options: { maxBytes: number; maxLines: number; maxMessages: number },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
+    const visible = resolveVisibleMessagePositions(projection);
+    const keptPositions = new Set(visible.kept);
     const maxMessages = Math.max(
       0,
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
@@ -473,7 +453,7 @@ export function readRecentSessionTranscriptMessageEvents(
       Math.floor(Number.isFinite(options.maxLines) ? options.maxLines : 0),
     );
     if (maxMessages === 0 || maxLines === 0) {
-      return { events: [], totalMessages: projection.state.activeMessageCount };
+      return { events: [], totalMessages: visible.total };
     }
     const maxBytes = Math.max(
       1024,
@@ -507,10 +487,15 @@ export function readRecentSessionTranscriptMessageEvents(
     const events = selected
       .toReversed()
       .filter((row) => row.message_position !== null)
+      .filter(
+        (row) =>
+          (row.message_position ?? -1) >= visible.postStart ||
+          keptPositions.has(row.message_position ?? -1),
+      )
       .map(parseMessageEventRow);
     return {
       events: events.length > maxMessages ? events.slice(-maxMessages) : events,
-      totalMessages: projection.state.activeMessageCount,
+      totalMessages: visible.total,
     };
   });
 }
@@ -521,7 +506,8 @@ export function readSessionTranscriptMessageEventPage(
   options: { maxMessages: number; offset: number },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
-    const totalMessages = projection.state.activeMessageCount;
+    const visible = resolveVisibleMessagePositions(projection);
+    const totalMessages = visible.total;
     const offset = Math.min(
       Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
       totalMessages,
@@ -533,7 +519,7 @@ export function readSessionTranscriptMessageEventPage(
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
     return {
-      events: readMessageRange(projection, start, endExclusive),
+      events: readVisibleMessageRange(projection, start, endExclusive),
       totalMessages,
     };
   });
@@ -541,7 +527,10 @@ export function readSessionTranscriptMessageEventPage(
 
 /** Counts active-path messages from the transactionally maintained watermark. */
 export function readSessionTranscriptMessageEventCount(scope: SessionTranscriptReadScope): number {
-  return withCurrentProjectionSnapshot(scope, (projection) => projection.state.activeMessageCount);
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => resolveVisibleMessagePositions(projection).total,
+  );
 }
 
 /** Reads one active message by event id without materializing sibling rows. */
@@ -570,7 +559,13 @@ export function readSessionTranscriptMessageEventById(
         .where("identity.event_id", "=", messageId)
         .where("active.message_position", "is not", null),
     );
-    return row ? parseMessageEventRow(row) : undefined;
+    if (!row || row.message_position === null) {
+      return undefined;
+    }
+    const visible = resolveVisibleMessagePositions(projection);
+    return row.message_position >= visible.postStart || visible.kept.includes(row.message_position)
+      ? parseMessageEventRow(row)
+      : undefined;
   });
 }
 
@@ -595,8 +590,22 @@ export function readSessionTranscriptMessageAnchorPage(
         .where("identity.event_id", "=", options.messageId)
         .where("active.message_position", "is not", null),
     );
-    const totalMessages = projection.state.activeMessageCount;
+    const visible = resolveVisibleMessagePositions(projection);
+    const totalMessages = visible.total;
     if (anchor?.message_position === null || anchor?.message_position === undefined) {
+      return {
+        events: [],
+        found: false,
+        hasOverreadContext: false,
+        offset: 0,
+        totalMessages,
+      };
+    }
+    const anchorVisiblePosition =
+      anchor.message_position >= visible.postStart
+        ? visible.kept.length + anchor.message_position - visible.postStart
+        : visible.kept.indexOf(anchor.message_position);
+    if (anchorVisiblePosition < 0) {
       return {
         events: [],
         found: false,
@@ -612,11 +621,11 @@ export function readSessionTranscriptMessageAnchorPage(
     const newerMessages = Math.floor(pageSize / 2);
     const olderMessages = pageSize - newerMessages - 1;
     const latestStart = Math.max(0, totalMessages - pageSize);
-    const start = Math.min(Math.max(0, anchor.message_position - olderMessages), latestStart);
+    const start = Math.min(Math.max(0, anchorVisiblePosition - olderMessages), latestStart);
     const endExclusive = Math.min(totalMessages, start + pageSize);
     const readStart = Math.max(0, start - 1);
     return {
-      events: readMessageRange(projection, readStart, endExclusive),
+      events: readVisibleMessageRange(projection, readStart, endExclusive),
       found: true,
       hasOverreadContext: readStart < start,
       offset: totalMessages - endExclusive,

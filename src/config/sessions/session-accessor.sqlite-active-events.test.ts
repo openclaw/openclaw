@@ -213,6 +213,61 @@ describe("SQLite active transcript event projection", () => {
     ).toEqual({ needs_rebuild: 0 });
   });
 
+  it("projects reset kept-tail and post-boundary messages without rewriting raw positions", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept-user",
+          parentId: "old",
+          message: { role: "user", content: "kept question" },
+        },
+        {
+          eventId: "kept-tool",
+          parentId: "kept-user",
+          message: { role: "toolResult", content: "hidden tool" },
+        },
+        {
+          eventId: "kept-assistant",
+          parentId: "kept-tool",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept-assistant",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept-user",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "new turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+
+    expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
+    ]);
+    expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
+    expect(page.totalMessages).toBe(3);
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
+    expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
+    expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
+  });
+
   it("reconciles work scheduled while an earlier pass is yielding", async () => {
     const secondScope = { ...scope, sessionId: "session-2", sessionKey: "agent:main:second" };
     for (const target of [scope, secondScope]) {
