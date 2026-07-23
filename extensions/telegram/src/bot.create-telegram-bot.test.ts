@@ -262,8 +262,9 @@ async function dispatchSpooledPrivateText(
   },
 ) {
   const ctx = makePrivateTextContext(params);
+  const update = ctx.update ?? {};
   const replayUpdate =
-    params.replayUpdate === "full" ? { ...ctx.update, message: ctx.message } : (ctx.update ?? {});
+    params.replayUpdate === "full" ? Object.assign({}, update, { message: ctx.message }) : update;
   return await runWithTelegramSpooledReplayUpdate(replayUpdate, async () => {
     await runTelegramMiddlewareChain({ ctx, finalHandler: messageHandler });
   });
@@ -271,7 +272,7 @@ async function dispatchSpooledPrivateText(
 
 function setupUpdateOffsetTracker(params: {
   lastUpdateId: number;
-  onUpdateId?: ReturnType<typeof vi.fn>;
+  onUpdateId?: ReturnType<typeof vi.fn<(updateId: number) => void | Promise<void>>>;
   runtime?: TelegramBotOptions["runtime"];
 }) {
   sequentializeSpy.mockImplementationOnce(
@@ -279,7 +280,7 @@ function setupUpdateOffsetTracker(params: {
       await next();
     },
   );
-  const onUpdateId = params.onUpdateId ?? vi.fn();
+  const onUpdateId = params.onUpdateId ?? vi.fn<(updateId: number) => void | Promise<void>>();
   createTelegramBot({
     token: "tok",
     runtime: params.runtime,
@@ -2786,7 +2787,7 @@ describe("createTelegramBot", () => {
     releaseUpdate101?.();
     await p101;
 
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([102]);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([102]);
   });
   it("logs and swallows update watermark persistence failures", async () => {
     const onUpdateId = vi.fn().mockRejectedValueOnce(new Error("disk boom"));
@@ -2845,7 +2846,7 @@ describe("createTelegramBot", () => {
 
     await flushTelegramTestMicrotasks();
     expect(retryHandler).toHaveBeenCalledTimes(1);
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([202]);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([202]);
   });
 
   it("persists recorded dispatch failures during normal polling", async () => {
@@ -2861,11 +2862,11 @@ describe("createTelegramBot", () => {
       });
     });
     await flushTelegramTestMicrotasks();
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([501]);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([501]);
 
     await runMiddlewareChain({ update: { update_id: 502 } }, async () => {});
     await flushTelegramTestMicrotasks();
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([501, 502]);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([501, 502]);
   });
 
   it("rejects recorded dispatch failures during isolated spool replay", async () => {
@@ -2929,7 +2930,7 @@ describe("createTelegramBot", () => {
     });
     await flushTelegramTestMicrotasks();
     expect(retried).toBe(true);
-    expect(onUpdateId.mock.calls.map((call) => Number(call[0]))).toEqual([701]);
+    expect(onUpdateId.mock.calls.map((call) => call[0])).toEqual([701]);
   });
 
   it("skips replayed update ids even when the semantic update key differs", async () => {
@@ -3384,7 +3385,7 @@ describe("createTelegramBot", () => {
       groups: {
         "*": { requireMention: true },
         "-1001234567890": { requireMention: true, topics: { "99": { requireMention: false } } },
-      },
+      } as Record<string, TelegramGroupConfig>,
       topicId: 99,
       expectedGroup: { requireMention: true },
       expectedTopic: { requireMention: false },
@@ -3398,7 +3399,7 @@ describe("createTelegramBot", () => {
           allowFrom: ["123456789"],
           topics: { "99": {} },
         },
-      },
+      } as Record<string, TelegramGroupConfig>,
       topicId: 99,
       expectedGroup: { requireMention: false, allowFrom: ["123456789"] },
       expectedTopic: {},
@@ -3411,7 +3412,7 @@ describe("createTelegramBot", () => {
           allowFrom: ["999999999"],
           topics: { "*": { allowFrom: ["123456789"], agentId: "zu" } },
         },
-      },
+      } as Record<string, TelegramGroupConfig>,
       topicId: 77,
       expectedGroup: { allowFrom: ["999999999"] },
       expectedTopic: { allowFrom: ["123456789"], agentId: "zu" },
@@ -3426,7 +3427,7 @@ describe("createTelegramBot", () => {
             "77": { allowFrom: ["555555555"], agentId: "main" },
           },
         },
-      },
+      } as Record<string, TelegramGroupConfig>,
       topicId: 77,
       expectedGroup: undefined,
       expectedTopic: { allowFrom: ["555555555"], agentId: "main" },
@@ -3441,7 +3442,7 @@ describe("createTelegramBot", () => {
             "77": { agentId: "main" },
           },
         },
-      },
+      } as Record<string, TelegramGroupConfig>,
       topicId: 77,
       expectedGroup: undefined,
       expectedTopic: { allowFrom: ["123456789"], requireMention: false, agentId: "main" },
