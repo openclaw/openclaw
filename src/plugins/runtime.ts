@@ -6,6 +6,7 @@ import {
   dispatchPluginAgentEventSubscriptions,
 } from "./host-hook-runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { settlePreparedMessageToolCatalog } from "./prepared-message-tool-catalog.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -205,8 +206,10 @@ export function setActivePluginRegistry(
   state.activeRegistry = registry;
   markPluginRegistryActive(registry);
   state.activeVersion += 1;
+  settlePreparedMessageToolCatalog(registry, state.activeVersion);
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
+  settlePreparedMessageToolCatalog();
   syncTrackedSurface(state.sessionExtension, registry, true);
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
@@ -234,8 +237,10 @@ export function requireActivePluginRegistry(): PluginRegistry {
     state.activeRegistry = createEmptyPluginRegistry();
     markPluginRegistryActive(state.activeRegistry);
     state.activeVersion += 1;
+    settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
+    settlePreparedMessageToolCatalog();
     syncTrackedSurface(state.sessionExtension, state.activeRegistry);
   }
   return asPluginRegistry(state.activeRegistry)!;
@@ -300,6 +305,7 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
   const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, registry, true);
+  settlePreparedMessageToolCatalog();
   markPluginRegistryActive(registry);
   syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
@@ -313,6 +319,7 @@ export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
   }
   const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, state.activeRegistry, false);
+  settlePreparedMessageToolCatalog();
   syncPluginAgentEventBridge();
   if (retirePluginRegistryIfUnused(previousRegistry)) {
     cleanupRetiredPluginHostRegistry(previousRegistry!);
@@ -449,6 +456,7 @@ export function resetPluginRuntimeStateForTest(): void {
   state.activeVersion += 1;
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
+  settlePreparedMessageToolCatalog();
   installSurfaceRegistry(state.sessionExtension, null, false);
   state.key = null;
   state.workspaceDir = null;
