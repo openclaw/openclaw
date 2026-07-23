@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  canonicalizeUrlCacheDimension,
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   normalizeCacheKey,
@@ -586,7 +587,7 @@ export async function runFirecrawlScrape(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "firecrawl-scrape",
-      url: params.url,
+      url: canonicalizeUrlCacheDimension(params.url),
       extractMode: params.extractMode,
       baseUrl,
       onlyMainContent,

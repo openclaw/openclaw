@@ -6,6 +6,7 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 const postTrustedWebToolsJson = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", () => ({
+  canonicalizeUrlCacheDimension: (v: string) => v,
   DEFAULT_CACHE_TTL_MINUTES: 5,
   normalizeCacheKey: (k: string) => k,
   postTrustedWebToolsJson,

@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  canonicalizeUrlCacheDimension,
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
   postTrustedWebToolsJson,
@@ -223,7 +224,7 @@ export async function runTavilyExtract(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-extract",
-      urls: params.urls,
+      urls: params.urls.map(canonicalizeUrlCacheDimension),
       baseUrl,
       query: params.query,
       extractDepth: params.extractDepth,
