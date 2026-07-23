@@ -1,0 +1,456 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createQueuedWizardPrompter,
+  createRuntimeEnv,
+  runSetupWizardFinalize,
+  runSetupWizardPrepare,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { WizardCancelledError } from "openclaw/plugin-sdk/setup";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSignalAccount } from "./accounts.js";
+import type { SignalInstallResult } from "./install-signal-cli.js";
+import type { SignalTransportProbeResult } from "./setup-transport.js";
+
+const mocks = vi.hoisted(() => ({
+  detectBinary: vi.fn(async (_cliPath: string) => false),
+  detectSignalTransport: vi.fn(
+    async (params: {
+      url: string;
+    }): Promise<{ kind: "external-native" | "container"; url: string }> => ({
+      kind: "external-native",
+      url: params.url,
+    }),
+  ),
+  installSignalCli: vi.fn(
+    async (): Promise<SignalInstallResult> => ({
+      ok: true,
+      cliPath: "/opt/openclaw/signal-cli",
+    }),
+  ),
+  prepareSignalManagedNativeTransport: vi.fn(() => ({
+    kind: "managed-native" as const,
+    cliPath: "/opt/openclaw/signal-cli",
+    configPath: "/var/lib/signal-cli",
+    httpHost: "127.0.0.1",
+    httpPort: 8080,
+  })),
+  probeSignalTransport: vi.fn(
+    async (): Promise<SignalTransportProbeResult> => ({ ok: true, status: 200 }),
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/setup-tools", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup-tools")>(
+    "openclaw/plugin-sdk/setup-tools",
+  );
+  return { ...actual, detectBinary: mocks.detectBinary };
+});
+
+vi.mock("./install-signal-cli.js", () => ({
+  installSignalCli: mocks.installSignalCli,
+}));
+
+vi.mock("./setup-transport.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./setup-transport.js")>("./setup-transport.js");
+  return {
+    ...actual,
+    detectSignalTransport: mocks.detectSignalTransport,
+    prepareSignalManagedNativeTransport: mocks.prepareSignalManagedNativeTransport,
+    probeSignalTransport: mocks.probeSignalTransport,
+  };
+});
+
+import { createSignalSetupWizardProxy, signalNumberTextInputs } from "./setup-core.js";
+import { signalSetupWizard } from "./setup-surface.js";
+
+describe("signalSetupWizard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.detectSignalTransport.mockImplementation(async ({ url }: { url: string }) => ({
+      kind: "external-native",
+      url,
+    }));
+    mocks.probeSignalTransport.mockResolvedValue({ ok: true, status: 200 });
+  });
+
+  it("prepares local signal-cli only after the persistent-effect boundary", async () => {
+    mocks.detectBinary.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const beforePersistentEffect = vi.fn(async () => undefined);
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["managed-native"],
+      confirmValues: [true],
+      textValues: ["/var/lib/signal-cli"],
+    });
+
+    const prepared = await runSetupWizardPrepare({
+      prepare: signalSetupWizard.prepare,
+      cfg: {},
+      accountId: "work",
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+      options: { allowSignalInstall: true, beforePersistentEffect },
+    });
+
+    expect(queued.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: "managed-native", label: "Use local signal-cli" }),
+          expect.objectContaining({
+            value: "existing-server",
+            label: "Connect to an existing Signal server",
+          }),
+        ]),
+      }),
+    );
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(mocks.installSignalCli).toHaveBeenCalledOnce();
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.installSignalCli.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(prepared).toEqual({
+      credentialValues: {
+        signalTransportKind: "managed-native",
+        signalCliPath: "/opt/openclaw/signal-cli",
+        signalCliConfigPath: "/var/lib/signal-cli",
+      },
+    });
+  });
+
+  it("probes and writes a prepared managed transport for the selected account", async () => {
+    const queued = createQueuedWizardPrompter({ textValues: ["+15555550123"] });
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {},
+      accountId: "work",
+      credentialValues: {
+        signalTransportKind: "managed-native",
+        signalCliPath: "/opt/openclaw/signal-cli",
+        signalCliConfigPath: "/var/lib/signal-cli",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(mocks.prepareSignalManagedNativeTransport).toHaveBeenCalledWith({
+      cfg: {},
+      accountId: "work",
+      overrides: {
+        cliPath: "/opt/openclaw/signal-cli",
+        configPath: "/var/lib/signal-cli",
+      },
+    });
+    expect(mocks.probeSignalTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "work",
+        transport: expect.objectContaining({ kind: "managed-native" }),
+        account: "+15555550123",
+      }),
+    );
+    expect(finalized?.cfg?.channels?.signal?.accounts?.work?.transport).toEqual(
+      expect.objectContaining({ kind: "managed-native" }),
+    );
+  });
+
+  it("detects, probes, and writes a concrete existing container transport", async () => {
+    mocks.detectSignalTransport.mockResolvedValue({
+      kind: "container",
+      url: "http://signal-helper:8080",
+    });
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["existing-server"],
+      textValues: ["http://signal-helper:8080"],
+    });
+
+    const prepared = await runSetupWizardPrepare({
+      prepare: signalSetupWizard.prepare,
+      cfg: {},
+      accountId: "work",
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {
+        channels: {
+          signal: {
+            accounts: { work: { account: "+15555550123" } },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      credentialValues: Object.fromEntries(
+        Object.entries(prepared?.credentialValues ?? {}).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      ),
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(mocks.detectSignalTransport).toHaveBeenCalledOnce();
+    expect(mocks.detectSignalTransport).toHaveBeenCalledWith({
+      url: "http://signal-helper:8080",
+    });
+    expect(mocks.probeSignalTransport).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      accountId: "work",
+      transport: { kind: "container", url: "http://signal-helper:8080" },
+      account: "+15555550123",
+    });
+    expect(finalized?.cfg?.channels?.signal?.accounts?.work?.transport).toEqual({
+      kind: "container",
+      url: "http://signal-helper:8080",
+    });
+  });
+
+  it("requires a Signal account before probing a container", async () => {
+    const queued = createQueuedWizardPrompter({ textValues: ["+15555550123"] });
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {},
+      accountId: "work",
+      credentialValues: {
+        signalTransportKind: "container",
+        signalServerUrl: "http://signal-helper:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(queued.text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Signal phone number" }),
+    );
+    expect(mocks.probeSignalTransport).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      accountId: "work",
+      transport: { kind: "container", url: "http://signal-helper:8080" },
+      account: "+15555550123",
+    });
+    expect(
+      resolveSignalAccount({ cfg: finalized?.cfg ?? {}, accountId: "work" }).config.account,
+    ).toBe("+15555550123");
+  });
+
+  it("changes the Signal account and retries after a failed probe", async () => {
+    mocks.probeSignalTransport
+      .mockResolvedValueOnce({ ok: false, error: "account not registered" })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["account"],
+      textValues: ["+15555550124"],
+    });
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {
+        channels: {
+          signal: {
+            accounts: { work: { account: "+15555550123" } },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "work",
+      credentialValues: {
+        signalTransportKind: "external-native",
+        signalServerUrl: "http://signal-helper:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(mocks.probeSignalTransport).toHaveBeenCalledTimes(2);
+    expect(mocks.probeSignalTransport).toHaveBeenLastCalledWith(
+      expect.objectContaining({ account: "+15555550124" }),
+    );
+    expect(
+      resolveSignalAccount({ cfg: finalized?.cfg ?? {}, accountId: "work" }).config.account,
+    ).toBe("+15555550124");
+  });
+
+  it("changes and re-detects the server URL after a failed probe", async () => {
+    mocks.probeSignalTransport
+      .mockResolvedValueOnce({ ok: false, error: "receive probe failed" })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["url"],
+      textValues: ["http://signal-helper-new:8080"],
+    });
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {},
+      accountId: "default",
+      credentialValues: {
+        signalTransportKind: "external-native",
+        signalServerUrl: "http://signal-helper-old:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(mocks.detectSignalTransport).toHaveBeenCalledOnce();
+    expect(mocks.detectSignalTransport).toHaveBeenCalledWith({
+      url: "http://signal-helper-new:8080",
+    });
+    expect(finalized?.cfg?.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://signal-helper-new:8080",
+    });
+  });
+
+  it("retries the same candidate without re-detecting it", async () => {
+    mocks.probeSignalTransport
+      .mockResolvedValueOnce({ ok: false, error: "not ready" })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    const queued = createQueuedWizardPrompter({ selectValues: ["retry"] });
+
+    await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {},
+      credentialValues: {
+        signalTransportKind: "external-native",
+        signalServerUrl: "http://signal-helper:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(mocks.probeSignalTransport).toHaveBeenCalledTimes(2);
+    expect(mocks.detectSignalTransport).not.toHaveBeenCalled();
+  });
+
+  it("retries failed server detection without prompting for the URL again", async () => {
+    mocks.detectSignalTransport
+      .mockRejectedValueOnce(new Error("server starting"))
+      .mockResolvedValueOnce({
+        kind: "external-native",
+        url: "http://signal-helper:8080",
+      });
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["existing-server", "retry"],
+      textValues: ["http://signal-helper:8080"],
+    });
+
+    const prepared = await runSetupWizardPrepare({
+      prepare: signalSetupWizard.prepare,
+      cfg: {},
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(queued.text).toHaveBeenCalledOnce();
+    expect(mocks.detectSignalTransport).toHaveBeenCalledTimes(2);
+    expect(mocks.detectSignalTransport).toHaveBeenNthCalledWith(1, {
+      url: "http://signal-helper:8080",
+    });
+    expect(mocks.detectSignalTransport).toHaveBeenNthCalledWith(2, {
+      url: "http://signal-helper:8080",
+    });
+    expect(prepared?.credentialValues).toMatchObject({
+      signalTransportKind: "external-native",
+    });
+  });
+
+  it("allows an unambiguous external-native server without a Signal account", async () => {
+    const queued = createQueuedWizardPrompter();
+
+    const finalized = await runSetupWizardFinalize({
+      finalize: signalSetupWizard.finalize,
+      cfg: {},
+      credentialValues: {
+        signalTransportKind: "external-native",
+        signalServerUrl: "http://signal-helper:8080",
+      },
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(queued.text).not.toHaveBeenCalled();
+    expect(mocks.probeSignalTransport).toHaveBeenCalledWith({
+      cfg: {},
+      accountId: "default",
+      transport: { kind: "external-native", url: "http://signal-helper:8080" },
+      account: undefined,
+    });
+    expect(finalized?.cfg?.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://signal-helper:8080",
+    });
+  });
+
+  it("stops failed setup with the generic wizard cancellation", async () => {
+    mocks.probeSignalTransport.mockResolvedValue({ ok: false, error: "not ready" });
+    const queued = createQueuedWizardPrompter({ selectValues: ["stop"] });
+
+    await expect(
+      runSetupWizardFinalize({
+        finalize: signalSetupWizard.finalize,
+        cfg: {},
+        credentialValues: {
+          signalTransportKind: "external-native",
+          signalServerUrl: "http://signal-helper:8080",
+        },
+        prompter: queued.prompter,
+        runtime: createRuntimeEnv({ throwOnExit: false }),
+      }),
+    ).rejects.toBeInstanceOf(WizardCancelledError);
+  });
+
+  it("rejects a URL that aliases an OpenClaw-managed daemon", async () => {
+    const queued = createQueuedWizardPrompter({
+      selectValues: ["existing-server", "url"],
+      textValues: ["http://localhost:8080", "http://signal-helper:8080"],
+    });
+
+    const prepared = await runSetupWizardPrepare({
+      prepare: signalSetupWizard.prepare,
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15555550123",
+            transport: {
+              kind: "managed-native",
+              httpHost: "127.0.0.1",
+              httpPort: 8080,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: queued.prompter,
+      runtime: createRuntimeEnv({ throwOnExit: false }),
+    });
+
+    expect(mocks.detectSignalTransport).toHaveBeenCalledTimes(2);
+    expect(prepared?.credentialValues).toMatchObject({
+      signalTransportKind: "external-native",
+      signalServerUrl: "http://signal-helper:8080",
+    });
+  });
+
+  it("propagates generic Back navigation without Signal-specific catches", async () => {
+    const back = new Error("wizard back");
+    const queued = createQueuedWizardPrompter();
+    queued.select.mockRejectedValueOnce(back);
+
+    await expect(
+      runSetupWizardPrepare({
+        prepare: signalSetupWizard.prepare,
+        prompter: queued.prompter,
+        runtime: createRuntimeEnv({ throwOnExit: false }),
+      }),
+    ).rejects.toBe(back);
+  });
+
+  it("allows an accountless external-native selection and delegates lazy finalization", () => {
+    const optionalAccountInput = signalNumberTextInputs.find(
+      (input) => input.message === "Signal phone number (optional)",
+    );
+    const proxy = createSignalSetupWizardProxy(async () => signalSetupWizard);
+
+    expect(optionalAccountInput?.required).toBe(false);
+    expect(proxy.finalize).toBeTypeOf("function");
+  });
+});

@@ -37,7 +37,12 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
     ```bash
     openclaw channels add
     ```
-    The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures. It then prompts for the bot number and `signal-cli` path.
+    Signal uses a real Signal account/device, not a bot token. The wizard asks whether OpenClaw should manage a local `signal-cli` or connect to an existing Signal server.
+
+    - **Local `signal-cli`:** the wizard can install or reuse `signal-cli`, accepts an optional custom config directory, requires the Signal phone number, and validates the prepared daemon before saving it.
+    - **Existing server:** enter the server URL. The wizard detects the native or container protocol, asks for a Signal phone number when the server requires one, and probes the concrete transport before saving it. An external native server may remain accountless only when the probe confirms the server is unambiguous.
+
+    If detection or validation fails, the wizard can retry, change the account or URL, or stop without persisting the candidate transport.
 
     For non-interactive setup, `openclaw channels add --channel signal` also accepts `--signal-number <e164>` for the bot phone number, plus `--http-host <host>` and `--http-port <port>` for the Signal daemon endpoint (default `127.0.0.1:8080`).
 

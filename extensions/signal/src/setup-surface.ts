@@ -7,13 +7,11 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
-import { installSignalCli } from "./install-signal-cli.js";
+import { signalCompletionNote, signalDmPolicy, signalNumberTextInputs } from "./setup-core.js";
 import {
-  createSignalCliPathTextInput,
-  signalCompletionNote,
-  signalDmPolicy,
-  signalNumberTextInput,
-} from "./setup-core.js";
+  finalizeSignalInteractiveSetup,
+  prepareSignalInteractiveSetup,
+} from "./setup-interactive.js";
 
 const t = createSetupTranslator();
 
@@ -66,55 +64,17 @@ export const signalSetupWizard: ChannelSetupWizard = {
       return params.configured ? 1 : 0;
     },
   },
-  prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
-    if (!options?.allowSignalInstall) {
-      return undefined;
-    }
-    const transport = resolveSignalAccount({ cfg, accountId }).transport;
-    if (transport.kind !== "managed-native") {
-      return undefined;
-    }
-    const currentCliPath =
-      (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
-      (transport.kind === "managed-native" ? transport.cliPath : undefined) ??
-      "signal-cli";
-    const cliDetected = await detectBinary(currentCliPath);
-    const wantsInstall = await prompter.confirm({
-      message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
-      initialValue: !cliDetected,
-    });
-    if (!wantsInstall) {
-      return undefined;
-    }
-    try {
-      await options?.beforePersistentEffect?.();
-      const result = await installSignalCli(runtime);
-      if (result.ok && result.cliPath) {
-        await prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
-        return {
-          credentialValues: {
-            cliPath: result.cliPath,
-          },
-        };
-      }
-      if (!result.ok) {
-        await prompter.note(result.error ?? "signal-cli install failed.", "Signal");
-      }
-    } catch (error) {
-      await prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
-    }
-    return undefined;
+  introNote: {
+    title: "Signal",
+    lines: [
+      "Signal uses a real Signal account/device, not a bot token.",
+      "A dedicated Signal number is recommended for bot-like operation.",
+    ],
   },
+  prepare: prepareSignalInteractiveSetup,
   credentials: [],
-  textInputs: [
-    createSignalCliPathTextInput(async ({ cfg, accountId, currentValue }) => {
-      if (resolveSignalAccount({ cfg, accountId }).transport.kind !== "managed-native") {
-        return false;
-      }
-      return !(await detectBinary(currentValue ?? "signal-cli"));
-    }),
-    signalNumberTextInput,
-  ],
+  textInputs: signalNumberTextInputs,
+  finalize: finalizeSignalInteractiveSetup,
   completionNote: signalCompletionNote,
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),

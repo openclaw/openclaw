@@ -4,7 +4,6 @@ import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
-  createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
@@ -335,6 +334,25 @@ export const signalNumberTextInput: ChannelSetupWizardTextInput = {
   normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
 };
 
+export const signalNumberTextInputs: ChannelSetupWizardTextInput[] = [
+  {
+    ...signalNumberTextInput,
+    shouldPrompt: ({ credentialValues }) =>
+      credentialValues.signalTransportKind !== "external-native",
+  },
+  {
+    ...signalNumberTextInput,
+    message: "Signal phone number (optional)",
+    required: false,
+    shouldPrompt: ({ credentialValues }) =>
+      credentialValues.signalTransportKind === "external-native",
+    validate: ({ value }) =>
+      normalizeOptionalString(value) && !normalizeSignalAccountInput(value)
+        ? INVALID_SIGNAL_ACCOUNT_ERROR
+        : undefined,
+  },
+];
+
 export const signalCompletionNote = {
   title: t("wizard.signal.nextStepsTitle"),
   lines: [
@@ -481,16 +499,9 @@ export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSe
       unconfiguredScore: 0,
     },
     delegatePrepare: true,
+    delegateFinalize: true,
     credentials: [],
-    textInputs: [
-      createSignalCliPathTextInput(
-        createDelegatedTextInputShouldPrompt({
-          loadWizard,
-          inputKey: "cliPath",
-        }),
-      ),
-      signalNumberTextInput,
-    ],
+    textInputs: signalNumberTextInputs,
     completionNote: signalCompletionNote,
     dmPolicy: signalDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
