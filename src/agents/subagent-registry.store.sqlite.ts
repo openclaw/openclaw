@@ -11,6 +11,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { readSubagentAnnounceTarget } from "./subagent-announce-target.types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type {
   PendingFinalDeliveryPayload,
@@ -180,6 +181,7 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
       }
     : undefined;
   const delivery = createDeliveryFromTypedColumns(row, payload.delivery);
+  const announceTarget = readSubagentAnnounceTarget(row.announce_target);
   const requesterSettleWake = createRequesterSettleWakeFromTypedColumns(
     row,
     payload.requesterSettleWake,
@@ -235,6 +237,7 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
     ...(sqliteBool(row.expects_completion_message) !== undefined
       ? { expectsCompletionMessage: sqliteBool(row.expects_completion_message) }
       : {}),
+    ...(announceTarget ? { announceTarget } : {}),
     ...(row.ended_reason
       ? { endedReason: row.ended_reason as SubagentRunRecord["endedReason"] }
       : {}),
@@ -301,6 +304,7 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
     cleanup_handled: boolToSqlite(normalized.cleanupHandled),
     suppress_announce_reason: normalized.suppressAnnounceReason ?? null,
     expects_completion_message: boolToSqlite(normalized.expectsCompletionMessage),
+    announce_target: normalized.announceTarget ?? null,
     announce_retry_count: delivery?.attemptCount ?? null,
     last_announce_retry_at: delivery?.lastAttemptAt ?? null,
     last_announce_delivery_error: delivery?.lastError ?? null,

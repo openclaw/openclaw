@@ -1446,6 +1446,7 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   cleanup_handled INTEGER,
   suppress_announce_reason TEXT,
   expects_completion_message INTEGER,
+  announce_target TEXT,
   announce_retry_count INTEGER,
   last_announce_retry_at INTEGER,
   last_announce_delivery_error TEXT,

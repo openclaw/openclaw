@@ -15,7 +15,7 @@ import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -30,7 +30,10 @@ import {
   resolveSubagentAnnounceTimeoutMs,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
-import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import type {
+  RunSubagentAnnounceFlowParams,
+  SubagentAnnounceType,
+} from "./subagent-announce-flow-params.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
@@ -52,7 +55,6 @@ import {
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
@@ -83,7 +85,7 @@ export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceType = "subagent task" | "cron job";
+export type { SubagentAnnounceType } from "./subagent-announce-flow-params.js";
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -234,35 +236,9 @@ async function wakeSubagentRunAfterDescendants(params: {
   });
 }
 
-export async function runSubagentAnnounceFlow(params: {
-  childSessionKey: string;
-  childRunId: string;
-  requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
-  requesterDisplayKey: string;
-  task: string;
-  timeoutMs: number;
-  cleanup: "delete" | "keep";
-  roundOneReply?: string;
-  /**
-   * Fallback text preserved from the pre-wake run when a wake continuation
-   * completes with NO_REPLY despite an earlier final summary already existing.
-   */
-  fallbackReply?: string;
-  waitForCompletion?: boolean;
-  startedAt?: number;
-  endedAt?: number;
-  label?: string;
-  outcome?: SubagentRunOutcome;
-  announceType?: SubagentAnnounceType;
-  expectsCompletionMessage?: boolean;
-  spawnMode?: SpawnSubagentMode;
-  wakeOnDescendantSettle?: boolean;
-  signal?: AbortSignal;
-  bestEffortDeliver?: boolean;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
-  onBeforeDeleteChildSession?: () => boolean;
-}): Promise<boolean> {
+export async function runSubagentAnnounceFlow(
+  params: RunSubagentAnnounceFlowParams,
+): Promise<boolean> {
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
@@ -592,6 +568,7 @@ export async function runSubagentAnnounceFlow(params: {
       sourceTool: "subagent_announce",
       targetRequesterSessionKey,
       requesterIsSubagent,
+      announceTarget: params.announceTarget,
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,

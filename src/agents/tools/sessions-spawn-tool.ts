@@ -48,6 +48,10 @@ import {
   ToolInputError,
 } from "./common.js";
 import {
+  readSessionsSpawnAnnounceTarget,
+  sessionsSpawnAnnounceTargetSchema,
+} from "./sessions-spawn-announce-target.js";
+import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
   VISIBLE_SESSIONS_SPAWN_SCHEMA,
@@ -174,6 +178,7 @@ function createSessionsSpawnToolSchema(params: {
       description:
         "Native: omit/isolated clean; fork only needing requester transcript; visible fork requires same agent.",
     }),
+    announceTarget: sessionsSpawnAnnounceTargetSchema(),
     lightContext: Type.Optional(
       Type.Boolean({
         description: "Light bootstrap; subagent only; unavailable with visible=true.",
@@ -356,6 +361,7 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+      const announceTarget = readSessionsSpawnAnnounceTarget(params);
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
@@ -505,6 +511,7 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           context,
+          announceTarget,
           lightContext,
           expectsCompletionMessage,
           attachments,

@@ -1,0 +1,34 @@
+import type { AgentInternalEvent } from "./internal-events.js";
+import type { DeliveryContext } from "./subagent-announce-origin.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.types.js";
+
+export type SendSubagentAnnounceDirectlyParams = {
+  requesterSessionKey: string;
+  targetRequesterSessionKey: string;
+  triggerMessage: string;
+  internalEvents?: AgentInternalEvent[];
+  expectsCompletionMessage: boolean;
+  bestEffortDeliver?: boolean;
+  directIdempotencyKey: string;
+  completionDirectOrigin?: DeliveryContext;
+  directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
+  sourceSessionKey?: string;
+  sourceChannel?: string;
+  sourceTool?: string;
+  requesterIsSubagent: boolean;
+  announceTarget?: SubagentAnnounceTarget;
+  durableGeneratedMediaHandoff?: boolean;
+  allowGeneratedMediaDirectFallback: boolean;
+  signal?: AbortSignal;
+};
+
+export type DeliverSubagentAnnouncementParams = Omit<
+  SendSubagentAnnounceDirectlyParams,
+  "allowGeneratedMediaDirectFallback"
+> & {
+  announceId?: string;
+  steerMessage: string;
+  summaryLine?: string;
+  requesterOrigin?: DeliveryContext;
+};

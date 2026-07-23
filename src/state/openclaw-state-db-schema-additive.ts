@@ -327,6 +327,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "subagent_runs", "announce_target TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_status TEXT");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_attempt_count INTEGER");
   ensureColumn(db, "subagent_runs", "requester_settle_wake_replay_count INTEGER");

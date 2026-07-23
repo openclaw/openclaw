@@ -2317,6 +2317,48 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(columns.map((column) => column.name)).toContain("startup_reason");
   });
 
+  it("adds subagent announce target column to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE subagent_runs DROP COLUMN announce_target");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db.prepare("PRAGMA table_info(subagent_runs)").all() as Array<{
+      name?: unknown;
+    }>;
+
+    expect(columns.map((column) => column.name)).toContain("announce_target");
+
+    reopened.db
+      .prepare(
+        "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, requester_display_key, task, cleanup, created_at, announce_target) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "legacy-upgrade-run",
+        "agent:child",
+        "agent:main",
+        "agent:main",
+        "do work",
+        "keep",
+        1,
+        "parent",
+      );
+    const row = reopened.db
+      .prepare("SELECT announce_target FROM subagent_runs WHERE run_id = ?")
+      .get("legacy-upgrade-run") as { announce_target?: unknown };
+    expect(row.announce_target).toBe("parent");
+  });
+
   it("adds and backfills Claw package update timestamps in existing state databases", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
