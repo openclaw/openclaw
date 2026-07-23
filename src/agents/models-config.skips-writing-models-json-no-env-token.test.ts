@@ -102,7 +102,11 @@ let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-
 type ParsedProviderConfig = {
   baseUrl?: string;
   apiKey?: string;
-  models?: Array<{ id: string }>;
+  auth?: string;
+  authHeader?: boolean;
+  headers?: Record<string, string>;
+  request?: unknown;
+  models?: Array<{ id: string; headers?: Record<string, string>; request?: unknown }>;
 };
 
 async function readGeneratedProviders(
@@ -209,6 +213,287 @@ describe("models-config", () => {
         expect(providers["openai"]).toBeUndefined();
         expect(providers["minimax"]).toBeUndefined();
         expect(providers["synthetic"]).toBeUndefined();
+      });
+    });
+  });
+
+  it("inherits models.json from main agent for new secondary agents when plan skips", async () => {
+    await withTempHome(async (home) => {
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
+
+        const mainModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              apiKey: "main-agent-api-key",
+              auth: "api-key",
+              authHeader: true,
+              api: "openai-completions",
+              headers: {
+                Authorization: "Bearer main-agent-token",
+              },
+              request: {
+                proxy: "http://proxy.example:8080",
+                tls: {
+                  cert: "main-agent-cert",
+                  key: "main-agent-key",
+                },
+              },
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                  headers: {
+                    "x-model-token": "main-model-token",
+                  },
+                },
+              ],
+            },
+          },
+        };
+        const expectedInheritedModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              auth: "api-key",
+              authHeader: true,
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        };
+
+        const mainAgentDir = resolveDefaultAgentDir({});
+        await fs.mkdir(mainAgentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(mainAgentDir, "models.json"),
+          `${JSON.stringify(mainModels, null, 2)}\n`,
+          "utf8",
+        );
+
+        const secondaryAgentDir = path.join(home, ".openclaw", "agents", "email-expert", "agent");
+
+        vi.resetModules();
+        const planOpenClawModelsJson = vi.fn(async () => ({ action: "skip" as const }));
+        vi.doMock("./models-config.plan.js", () => ({
+          planOpenClawModelsJson,
+        }));
+
+        try {
+          const { ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip } =
+            await import("./models-config.js");
+
+          const result = await ensureOpenClawModelsJsonForSkip(
+            { models: { providers: {} } },
+            secondaryAgentDir,
+          );
+          expect(result.wrote).toBe(true);
+          expect(planOpenClawModelsJson).toHaveBeenCalled();
+
+          const copiedRaw = await fs.readFile(path.join(secondaryAgentDir, "models.json"), "utf8");
+          const copied = JSON.parse(copiedRaw) as unknown;
+          expect(copied).toEqual(expectedInheritedModels);
+          expect(copiedRaw).not.toContain("main-agent-api-key");
+          expect(copiedRaw).not.toContain("main-agent-token");
+          expect(copiedRaw).not.toContain("proxy.example");
+          expect(copiedRaw).not.toContain("main-agent-cert");
+          expect(copiedRaw).not.toContain("main-agent-key");
+          expect(copiedRaw).not.toContain("main-model-token");
+        } finally {
+          vi.doUnmock("./models-config.plan.js");
+          vi.resetModules();
+        }
+      });
+    });
+  });
+
+  it("does not overwrite models.json created concurrently during non-main bootstrap", async () => {
+    await withTempHome(async (home) => {
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
+
+        const mainModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              apiKey: "main-agent-api-key",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        };
+        const concurrentModels = {
+          providers: {
+            workerOnly: {
+              baseUrl: "https://worker-only.example/v1",
+              apiKey: "worker-only-api-key",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        };
+
+        const mainAgentDir = resolveDefaultAgentDir({});
+        await fs.mkdir(mainAgentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(mainAgentDir, "models.json"),
+          `${JSON.stringify(mainModels, null, 2)}\n`,
+          "utf8",
+        );
+
+        const secondaryAgentDir = path.join(home, ".openclaw", "agents", "email-expert", "agent");
+        const secondaryModelsPath = path.join(secondaryAgentDir, "models.json");
+
+        vi.resetModules();
+        const planOpenClawModelsJson = vi.fn(async () => ({ action: "skip" as const }));
+        vi.doMock("./models-config.plan.js", () => ({
+          planOpenClawModelsJson,
+        }));
+
+        const linkSpy = vi.spyOn(fs, "link").mockImplementationOnce(async (_source, target) => {
+          const targetPath = typeof target === "string" ? target : target.toString();
+          await fs.mkdir(path.dirname(targetPath), { recursive: true });
+          await fs.writeFile(targetPath, `${JSON.stringify(concurrentModels, null, 2)}\n`, "utf8");
+          const error = new Error("target already exists") as NodeJS.ErrnoException;
+          error.code = "EEXIST";
+          throw error;
+        });
+
+        try {
+          const { ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip } =
+            await import("./models-config.js");
+
+          const result = await ensureOpenClawModelsJsonForSkip(
+            { models: { providers: {} } },
+            secondaryAgentDir,
+          );
+          expect(result.wrote).toBe(false);
+          expect(planOpenClawModelsJson).toHaveBeenCalled();
+
+          const existing = JSON.parse(await fs.readFile(secondaryModelsPath, "utf8")) as unknown;
+          expect(existing).toEqual(concurrentModels);
+        } finally {
+          linkSpy.mockRestore();
+          vi.doUnmock("./models-config.plan.js");
+          vi.resetModules();
+        }
+      });
+    });
+  });
+
+  it("retries non-main bootstrap when main models.json appears after an initial skip", async () => {
+    await withTempHome(async (home) => {
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
+
+        const mainModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              apiKey: "main-agent-api-key",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        };
+        const expectedInheritedModels = {
+          providers: {
+            botzhipin: {
+              baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deep",
+                  name: "Deep",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131072,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        };
+
+        const mainAgentDir = resolveDefaultAgentDir({});
+        const secondaryAgentDir = path.join(home, ".openclaw", "agents", "email-expert", "agent");
+
+        vi.resetModules();
+        const planOpenClawModelsJson = vi.fn(async () => ({ action: "skip" as const }));
+        vi.doMock("./models-config.plan.js", () => ({
+          planOpenClawModelsJson,
+        }));
+
+        try {
+          const { ensureOpenClawModelsJson: ensureOpenClawModelsJsonForSkip } =
+            await import("./models-config.js");
+
+          const first = await ensureOpenClawModelsJsonForSkip(
+            { models: { providers: {} } },
+            secondaryAgentDir,
+          );
+          expect(first.wrote).toBe(false);
+          expect(planOpenClawModelsJson).toHaveBeenCalledTimes(1);
+
+          await fs.mkdir(mainAgentDir, { recursive: true });
+          await fs.writeFile(
+            path.join(mainAgentDir, "models.json"),
+            `${JSON.stringify(mainModels, null, 2)}\n`,
+            "utf8",
+          );
+
+          const second = await ensureOpenClawModelsJsonForSkip(
+            { models: { providers: {} } },
+            secondaryAgentDir,
+          );
+          expect(second.wrote).toBe(true);
+          expect(planOpenClawModelsJson).toHaveBeenCalledTimes(2);
+
+          const copied = JSON.parse(
+            await fs.readFile(path.join(secondaryAgentDir, "models.json"), "utf8"),
+          ) as unknown;
+          expect(copied).toEqual(expectedInheritedModels);
+        } finally {
+          vi.doUnmock("./models-config.plan.js");
+          vi.resetModules();
+        }
       });
     });
   });
