@@ -46,6 +46,7 @@ function errorMessage(error: unknown): string {
 async function readHeartbeatSource(
   cfg: OpenClawConfig,
   agentId: string,
+  options?: { recoverClaims?: boolean },
 ): Promise<HeartbeatSource | undefined> {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
@@ -53,10 +54,23 @@ async function readHeartbeatSource(
   try {
     sourceStat = await fs.lstat(heartbeatPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    // Crash recovery: a killed run can leave the only copy at a claim path
+    // after the rename but before scratch release. Surface it here so both
+    // findings and repair see the interrupted migration instead of "no file".
+    const staleClaim = await findStaleHeartbeatClaim(heartbeatPath);
+    if (!staleClaim) {
       return undefined;
     }
-    throw error;
+    if (!options?.recoverClaims) {
+      throw new Error(
+        `an interrupted migration claim exists at ${staleClaim}; run openclaw doctor --fix to restore it`,
+      );
+    }
+    await restoreClaimNoClobber(staleClaim, heartbeatPath);
+    sourceStat = await fs.lstat(heartbeatPath);
   }
   if (!sourceStat.isFile() && !sourceStat.isSymbolicLink()) {
     throw new Error("HEARTBEAT.md must be a regular file or contained symlink");
@@ -142,6 +156,25 @@ type HeartbeatSourceClaim = {
   release(): Promise<void>;
 };
 
+const HEARTBEAT_CLAIM_INFIX = ".doctor-importing-";
+
+/** Newest interrupted-claim sibling for a missing canonical heartbeat path. */
+async function findStaleHeartbeatClaim(heartbeatPath: string): Promise<string | undefined> {
+  const dir = path.dirname(heartbeatPath);
+  const claimPrefix = `${path.basename(heartbeatPath)}${HEARTBEAT_CLAIM_INFIX}`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    return undefined;
+  }
+  const claims = entries
+    .filter((entry) => entry.startsWith(claimPrefix) && !entry.includes(".conflict-"))
+    .toSorted();
+  const newest = claims.at(-1);
+  return newest ? path.join(dir, newest) : undefined;
+}
+
 /**
  * Restore a claim without clobbering: `link` fails with EEXIST when another
  * process recreated the destination while we held the claim, so both files
@@ -170,7 +203,7 @@ async function restoreClaimNoClobber(claimPath: string, destinationPath: string)
  * leave stale content committed while the replacement file is restored.
  */
 async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatSourceClaim> {
-  const claimPath = `${source.path}.doctor-importing-${process.pid}-${source.sha256.slice(0, 12)}`;
+  const claimPath = `${source.path}${HEARTBEAT_CLAIM_INFIX}${process.pid}-${source.sha256.slice(0, 12)}`;
   await fs.rename(source.path, claimPath);
   const restore = async (cause: unknown) => {
     await restoreClaimNoClobber(claimPath, source.path).catch((restoreError) => {
@@ -344,7 +377,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   for (const [agentId, monitor] of monitors) {
     let source: HeartbeatSource | undefined;
     try {
-      source = await readHeartbeatSource(params.cfg, agentId);
+      source = await readHeartbeatSource(params.cfg, agentId, { recoverClaims: true });
     } catch (error) {
       warnings.push(`Agent "${agentId}" HEARTBEAT.md was not migrated: ${errorMessage(error)}`);
       continue;
@@ -416,6 +449,12 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
 
     let importedAll = true;
     const groupChanges: string[] = [];
+    const committedThisRun: Array<{
+      agentId: string;
+      monitor: CronJob;
+      previous: ReturnType<typeof readCronJobScratchState>["scratch"];
+      newRevision: number;
+    }> = [];
     for (const [agentId, monitor] of agents) {
       try {
         const state = readCronJobScratchState(storePath, monitor.id, { env });
@@ -431,6 +470,12 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
           if (!write.ok) {
             throw new Error("scratch changed during migration");
           }
+          committedThisRun.push({
+            agentId,
+            monitor,
+            previous: state.scratch,
+            newRevision: write.currentRevision,
+          });
         }
         const verified = readCronJobScratchState(storePath, monitor.id, { env }).scratch;
         if (
@@ -451,6 +496,24 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       }
     }
     if (!importedAll) {
+      // The restored legacy file is authoritative again, so this run's partial
+      // scratch imports must revert too — otherwise those agents keep serving
+      // the imported copy and ignore later edits to the restored file.
+      for (const commit of committedThisRun.toReversed()) {
+        const revert = writeCronJobScratch({
+          storePath,
+          jobId: commit.monitor.id,
+          content: commit.previous?.content ?? null,
+          expectedRevision: commit.newRevision,
+          sourceSha256: commit.previous?.sourceSha256,
+          options: { env },
+        });
+        if (!revert.ok) {
+          warnings.push(
+            `Agent "${commit.agentId}" scratch changed before the migration rollback; leaving current scratch in place.`,
+          );
+        }
+      }
       try {
         await claim.restore(undefined);
       } catch (error) {

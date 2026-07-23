@@ -149,12 +149,14 @@ export function resolveHeartbeatScratchProposalFromReplyResult(
   }
   const payloads = Array.isArray(replyResult) ? replyResult : [replyResult];
   for (let idx = payloads.length - 1; idx >= 0; idx -= 1) {
-    const scratch = (payloads[idx] as HeartbeatReplyPayload | undefined)?.[
-      HEARTBEAT_SCRATCH_PROPOSAL
-    ];
-    if (scratch !== undefined) {
-      return scratch;
+    const payload = payloads[idx];
+    // Anchor to the newest heartbeat-response payload: a later corrected
+    // response without scratch must supersede an earlier scratch proposal,
+    // so the scan stops at the first response payload either way.
+    if (!getHeartbeatToolResponseFromPayload(payload)) {
+      continue;
     }
+    return (payload as HeartbeatReplyPayload | undefined)?.[HEARTBEAT_SCRATCH_PROPOSAL];
   }
   return undefined;
 }

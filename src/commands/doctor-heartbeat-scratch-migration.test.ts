@@ -271,6 +271,35 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     );
   });
 
+  it("recovers an interrupted migration claim on the next doctor --fix", async () => {
+    const fixture = await createFixture();
+    const content = "interrupted checklist\n";
+    // Simulate a crash after the claim rename: only the claim file exists.
+    await fs.writeFile(
+      `${fixture.heartbeatPath}.doctor-importing-1234-deadbeefdead`,
+      content,
+      "utf8",
+    );
+
+    const findings = await collectHeartbeatScratchMigrationFindings(fixture.cfg);
+    expect(findings).toEqual([
+      expect.objectContaining({ requirement: "heartbeat-file-migration-blocked" }),
+    ]);
+    expect(findings[0]!.message).toContain("interrupted migration claim");
+
+    const result = await maybeMigrateHeartbeatFilesToScratch({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    const { monitor, storePath } = await loadMonitor();
+    expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(content);
+    const workspaceEntries = await fs.readdir(fixture.workspace);
+    expect(workspaceEntries.filter((entry) => entry.includes(".doctor-importing-"))).toEqual([]);
+  });
+
   it("rejects external symlink targets without importing or removing them", async () => {
     const fixture = await createFixture();
     const external = path.join(fixture.root, "outside.md");
