@@ -745,7 +745,9 @@ describe("channel turn kernel", () => {
       await params.dispatcherOptions.deliver({ text: "requested final" }, { kind: "final" });
       expect(catchSpy).toHaveBeenCalledOnce();
       rejectFinalization(partialError);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
     }) as DispatchReplyWithBufferedBlockDispatcher;
 
