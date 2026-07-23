@@ -59,10 +59,11 @@ Override under `agents.defaults`:
 [WhatsApp +1555 +30s Sun 2026-01-18T05:19:00Z] follow-up
 ```
 
-## System prompt: current date and time
+## System prompt: time zone
 
-The system prompt includes a **Current Date & Time** section with the **time zone only**
-(no clock or time format) so prompt caching stays stable:
+If the user timezone is known, the system prompt includes a dedicated
+**Time Zone** section with the **time zone only** (no clock/time format)
+to keep prompt caching stable:
 
 ```
 Time zone: America/Chicago
@@ -95,7 +96,7 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` sets the **user-local timezone** for prompt context (and for `envelopeTimezone: "user"`).
-- `timeFormat` controls **12h/24h display** in prompt-facing times. `auto` follows OS preferences.
+- `timeFormat` controls **12h/24h display** in rendered time strings. `auto` follows OS prefs.
 
 ## Time format detection (auto)
 
