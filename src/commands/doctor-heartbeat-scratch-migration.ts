@@ -238,30 +238,48 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     claimPath,
     restore,
     release: async () => {
+      // Every verification failure here means "do not trust the import":
+      // restore the claim and tag the error so the caller rolls scratch back.
+      const failChanged = async (message: string, cause?: unknown): Promise<never> => {
+        const error = new Error(message, cause !== undefined ? { cause } : undefined);
+        error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
+        await restore(error).catch(() => undefined);
+        throw error;
+      };
       // A holder of an already-open descriptor can still mutate the claimed
       // inode; re-verify the bytes so release never deletes an unseen edit.
-      const finalBytes = await readRegularFile({
-        filePath: claimPath,
-        maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-      });
-      if (hashCronScratchSource(utf8Decoder.decode(finalBytes.buffer)) !== source.sha256) {
-        const error = new Error("HEARTBEAT.md changed while the migration claim was held");
-        error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
-        await restore(error);
+      let finalContent: string;
+      try {
+        const finalBytes = await readRegularFile({
+          filePath: claimPath,
+          maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+        });
+        finalContent = utf8Decoder.decode(finalBytes.buffer);
+      } catch (error) {
+        await failChanged("claimed HEARTBEAT.md could not be re-verified before removal", error);
         throw error;
+      }
+      if (hashCronScratchSource(finalContent) !== source.sha256) {
+        await failChanged("HEARTBEAT.md changed while the migration claim was held");
       }
       // An editor atomic-save can recreate the original path while the claim
       // is held. That recreation is the newest instruction set; treat it like
       // a changed claim so the import rolls back instead of shadowing it.
-      const recreated = await fs
-        .lstat(source.path)
-        .then(() => true)
-        .catch(() => false);
+      let recreated: boolean;
+      try {
+        await fs.lstat(source.path);
+        recreated = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          await failChanged(
+            "could not verify the original HEARTBEAT.md path before removal",
+            error,
+          );
+        }
+        recreated = false;
+      }
       if (recreated) {
-        const error = new Error("HEARTBEAT.md was recreated while the migration claim was held");
-        error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
-        await restore(error).catch(() => undefined);
-        throw error;
+        await failChanged("HEARTBEAT.md was recreated while the migration claim was held");
       }
       await fs.unlink(claimPath);
     },
