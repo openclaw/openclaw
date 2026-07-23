@@ -171,24 +171,20 @@ export function createMeetingOutputLoopbackVerifier(options: {
   };
 
   const consumePendingOutput = (allowShortReference: boolean) => {
-    if (outputFingerprint && !allowShortReference) {
-      const candidate = pendingOutputPcm.subarray(pendingOutputPcm.byteLength - fullReferenceBytes);
-      pendingOutputPcm = Buffer.alloc(0);
+    const pendingBytes = pendingOutputPcm.byteLength;
+    for (let end = pendingBytes; end >= fullReferenceBytes; end -= fullReferenceBytes) {
+      const candidate = pendingOutputPcm.subarray(end - fullReferenceBytes, end);
       const fingerprint = createOutputFingerprint(candidate, fullReferenceBytes);
       if (fingerprint) {
-        refreshFingerprint(fingerprint);
-      }
-      return;
-    }
-    while (pendingOutputPcm.byteLength >= fullReferenceBytes) {
-      const candidate = pendingOutputPcm.subarray(0, fullReferenceBytes);
-      pendingOutputPcm = pendingOutputPcm.subarray(fullReferenceBytes);
-      const fingerprint = createOutputFingerprint(candidate, fullReferenceBytes);
-      if (fingerprint) {
+        pendingOutputPcm = Buffer.alloc(0);
         refreshFingerprint(fingerprint);
         return;
       }
     }
+    pendingOutputPcm =
+      pendingBytes > fullReferenceBytes
+        ? pendingOutputPcm.subarray(pendingBytes - fullReferenceBytes)
+        : pendingOutputPcm;
     if (!outputFingerprint && allowShortReference && pendingOutputPcm.byteLength > 0) {
       const fingerprint = createOutputFingerprint(pendingOutputPcm, fullReferenceBytes);
       if (fingerprint) {

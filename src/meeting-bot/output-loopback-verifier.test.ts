@@ -168,6 +168,20 @@ describe("meeting output loopback verifier", () => {
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(recentOutput.byteLength);
   });
 
+  it("uses a bounded recent reference from one long output buffer", () => {
+    const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "pcm16-24khz" });
+    const longOutput = pcmEnergyFrames(
+      Array.from({ length: 600 }, (_, index) => 400 + ((index * 4561) % 10_000)),
+    );
+    const recentOutput = longOutput.subarray(longOutput.byteLength - 48_000);
+
+    verifier.beginOutput();
+    verifier.recordOutput(longOutput);
+    verifier.recordInput(recentOutput);
+
+    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(recentOutput.byteLength);
+  });
+
   it("detects mu-law loopback energy without treating silence as signal", () => {
     const verifier = createMeetingOutputLoopbackVerifier({ audioFormat: "g711-ulaw-8khz" });
     const silence = Buffer.alloc(80 * 80, 0xff);
