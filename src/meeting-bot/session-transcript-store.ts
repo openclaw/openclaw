@@ -170,7 +170,7 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         try {
           await this.#flushPending(session);
         } catch (error) {
-          if (pendingOnly || options.finalize !== true) {
+          if (pendingOnly) {
             throw error;
           }
           pendingError = error as MeetingTranscriptDeliveryError;
@@ -286,10 +286,10 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
         },
       };
     });
-    this.#pendingLines.set(sessionId, [
-      ...(append ? (this.#pendingLines.get(sessionId) ?? []) : []),
-      ...pending,
-    ]);
+    const combined = [...(append ? (this.#pendingLines.get(sessionId) ?? []) : []), ...pending];
+    // Undelivered rows are the only copy once the browser rolls its caption buffer.
+    // Preserve them until durable delivery succeeds; retirement clears the queue.
+    this.#pendingLines.set(sessionId, combined);
   }
 
   retire(sessionId: string): void {

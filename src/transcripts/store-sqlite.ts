@@ -28,24 +28,33 @@ export function meetingTranscriptDb(db: DatabaseSync) {
   return getNodeSqliteKysely<MeetingTranscriptsDatabase>(db);
 }
 
-function hasMeetingTranscriptUtteranceId(params: {
+function hasExactMeetingTranscriptUtterance(params: {
   database: DatabaseSync;
+  metadataJson: string | null;
   sessionId: string;
   sessionStartedAt: string;
-  utteranceId: string;
+  utterance: TranscriptUtterance & { id: string };
 }): boolean {
   const db = meetingTranscriptDb(params.database);
-  return Boolean(
-    executeSqliteQueryTakeFirstSync(
-      params.database,
-      db
-        .selectFrom("meeting_transcript_utterances")
-        .select("sequence")
-        .where("session_id", "=", params.sessionId)
-        .where("session_started_at", "=", params.sessionStartedAt)
-        .where("utterance_id", "=", params.utteranceId)
-        .limit(1),
-    ),
+  const rows = executeSqliteQuerySync(
+    params.database,
+    db
+      .selectFrom("meeting_transcript_utterances")
+      .selectAll()
+      .where("session_id", "=", params.sessionId)
+      .where("session_started_at", "=", params.sessionStartedAt)
+      .where("utterance_id", "=", params.utterance.id),
+  ).rows;
+  const utterance = params.utterance;
+  return rows.some(
+    (row) =>
+      row.started_at === (utterance.startedAt ?? null) &&
+      row.ended_at === (utterance.endedAt ?? null) &&
+      row.speaker_id === (utterance.speaker?.id ?? null) &&
+      row.speaker_label === (utterance.speaker?.label ?? null) &&
+      row.text === utterance.text &&
+      row.final === (utterance.final === undefined ? null : utterance.final ? 1 : 0) &&
+      row.metadata_json === params.metadataJson,
   );
 }
 
@@ -60,11 +69,12 @@ export function appendMeetingTranscriptUtterance(params: {
   const db = meetingTranscriptDb(database);
   if (
     utterance.id &&
-    hasMeetingTranscriptUtteranceId({
+    hasExactMeetingTranscriptUtterance({
       database,
+      metadataJson: params.metadataJson,
       sessionId: session.sessionId,
       sessionStartedAt: session.startedAt,
-      utteranceId: utterance.id,
+      utterance: { ...utterance, id: utterance.id },
     })
   ) {
     return;

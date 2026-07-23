@@ -290,6 +290,32 @@ describe("MeetingSessionTranscriptStore", () => {
     expect(delivered).toEqual(["A", "B"]);
   });
 
+  it("keeps polling snapshots while durable delivery is pending", async () => {
+    const session = createSession();
+    let unavailable = true;
+    const delivered: string[] = [];
+    const store = createStore(
+      session,
+      [
+        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }] },
+        { droppedLines: 0, epoch: "page-1", lines: [{ text: "A" }, { text: "B" }] },
+      ],
+      async (lines) => {
+        if (unavailable) {
+          throw new Error("store unavailable");
+        }
+        delivered.push(...lines.map((line) => line.text));
+      },
+    );
+
+    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
+    await expect(store.captureNotes(session)).rejects.toThrow("store unavailable");
+    unavailable = false;
+    await store.flushPending(session);
+
+    expect(delivered).toEqual(["A", "B"]);
+  });
+
   it("preserves pending delivery when the final browser snapshot also fails", async () => {
     const session = createSession();
     let captureCount = 0;
