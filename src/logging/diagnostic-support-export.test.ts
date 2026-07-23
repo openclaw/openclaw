@@ -35,15 +35,15 @@ async function readZipTextEntries(file: string): Promise<Record<string, string>>
 }
 
 function fakeAwsSecretAccessKey(): string {
-  return Array.from({ length: 40 }, (_entry, index) => "Ab9/"[index % 4] ?? "A").join("");
+  return fakeRepeatedToken(["A", "b", "9", "/"]);
 }
 
 function fakeAwsSecretAccessKeyWithPadding(): string {
-  return Array.from({ length: 40 }, (_entry, index) => "Ab9="[index % 4] ?? "A").join("");
+  return fakeRepeatedToken(["A", "b", "9", "="]);
 }
 
 function fakeJwtAwsSecretShapedSegment(): string {
-  return Array.from({ length: 40 }, (_entry, index) => "Ab9C"[index % 4] ?? "A").join("");
+  return fakeRepeatedToken(["A", "b", "9", "C"]);
 }
 
 function fakeCommitHash(): string {
@@ -56,6 +56,10 @@ function fakeLowercaseBase36Identifier(): string {
 
 function fakeFlyTokenWithAwsShapedBody(): string {
   return `FlyV1 fm123_${fakeAwsSecretAccessKeyWithPadding()}_${"tail".repeat(20)}`;
+}
+
+function fakeRepeatedToken(chars: readonly string[], length = 40): string {
+  return Array.from({ length }, (_entry, index) => chars[index % chars.length] ?? "A").join("");
 }
 
 describe("diagnostic support export", () => {

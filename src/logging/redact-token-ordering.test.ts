@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { redactSensitiveText } from "./redact.js";
 
 function fakeJwtCredentialShapedSegment(): string {
-  return Array.from({ length: 40 }, (_entry, index) => "Ab9C"[index % 4] ?? "A").join("");
+  return fakeRepeatedToken(["A", "b", "9", "C"]);
 }
 
 function fakeAwsCredentialWithPadding(): string {
-  return Array.from({ length: 40 }, (_entry, index) => "Ab9="[index % 4] ?? "A").join("");
+  return fakeRepeatedToken(["A", "b", "9", "="]);
 }
 
 function fakeCommitHash(): string {
@@ -22,9 +22,12 @@ function fakeFlyTokenWithAwsShapedBody(): string {
   return `FlyV1 fm123_${fakeAwsCredentialWithPadding()}_${"tail".repeat(20)}`;
 }
 
-function fakeBase64LikePayload(length: number): string {
-  const chars = ["A", "b", "9", "+"] as const;
+function fakeRepeatedToken(chars: readonly string[], length = 40): string {
   return Array.from({ length }, (_entry, index) => chars[index % chars.length] ?? "A").join("");
+}
+
+function fakeBase64LikePayload(length: number): string {
+  return fakeRepeatedToken(["A", "b", "9", "+"], length);
 }
 
 describe("redactSensitiveText token ordering", () => {

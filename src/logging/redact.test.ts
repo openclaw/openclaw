@@ -37,6 +37,10 @@ afterEach(() => {
   tempDirs = [];
 });
 
+function fakeRepeatedToken(chars: readonly string[], length = 40): string {
+  return Array.from({ length }, (_entry, index) => chars[index % chars.length] ?? "A").join("");
+}
+
 describe("registered exact secret values", () => {
   it("masks registered values in text and nested structured data", () => {
     const secret = "registered-exact-secret";
@@ -163,25 +167,26 @@ describe("redactSensitiveText", () => {
   });
 
   it("masks AWS secret access keys in labeled and bare credential text", () => {
-    const secret = ["wJalrXUtnFEMI", "/K7MDENG", "/bPxRfiCY", "EXAMPLEKEY"].join("");
+    const secret = fakeRepeatedToken(["W", "j", "7", "/"]);
     const input = [
       `aws_secret_access_key = ${secret}`,
       JSON.stringify({ SecretAccessKey: secret }),
       `bare ${secret}`,
     ].join("\n");
     const output = redactSensitiveText(input, { mode: "tools" });
+    const masked = `${secret.slice(0, 6)}…${secret.slice(-4)}`;
 
-    expect(output).toContain("aws_secret_access_key = wJalrX…EKEY");
-    expect(output).toContain('"SecretAccessKey":"wJalrX…EKEY"');
-    expect(output).toContain("bare wJalrX…EKEY");
+    expect(output).toContain(`aws_secret_access_key = ${masked}`);
+    expect(output).toContain(`"SecretAccessKey":"${masked}"`);
+    expect(output).toContain(`bare ${masked}`);
     expect(output).not.toContain(secret);
   });
 
   it("masks structured AWS secret access key fields", () => {
-    const secret = ["AbCdEfGhIj", "KlMnOpQrSt", "UvWxYz01/+", "23456789AB"].join("");
+    const secret = fakeRepeatedToken(["A", "b", "C", "d", "0", "/", "+"]);
 
     expect(redactSecrets({ awsSecretAccessKey: secret })).toEqual({
-      awsSecretAccessKey: "AbCdEf…89AB",
+      awsSecretAccessKey: `${secret.slice(0, 6)}…${secret.slice(-4)}`,
     });
   });
 
@@ -1376,10 +1381,7 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(dataUrlWithPlusBoundary, { mode: "tools" })).toBe(
       dataUrlWithPlusBoundary,
     );
-    const awsShapedPayload = Array.from(
-      { length: 40 },
-      (_entry, index) => (["A", "b", "9", "+"] as const)[index % 4] ?? "A",
-    ).join("");
+    const awsShapedPayload = fakeRepeatedToken(["A", "b", "9", "+"]);
     const dataUrlWithAwsShapedPayload = `data:application/octet-stream;base64,${awsShapedPayload}`;
     expect(redactSensitiveText(dataUrlWithAwsShapedPayload, { mode: "tools" })).toBe(
       dataUrlWithAwsShapedPayload,
