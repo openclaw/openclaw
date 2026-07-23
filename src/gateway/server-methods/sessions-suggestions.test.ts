@@ -3,6 +3,7 @@ import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import {
   addSessionSuggestion,
+  listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -643,6 +644,63 @@ describe("session suggestion handlers", () => {
       gate.resolve();
       expect((await first).responses[0]?.[0]).toBe(true);
       expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("returns a structured error when the session is replaced after dispatch", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-before-dispatch",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const added = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "dispatch before reset" },
+        client("alice", "Alice"),
+      );
+      const dispatched = createDeferred<void>();
+      mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
+        await dispatched.promise;
+        respond(true, { runId: "suggestion-run", status: "started" });
+      });
+      const broadcast = vi.fn();
+      const resolving = call(
+        "session.suggestions.resolve",
+        { sessionKey, id: responseSuggestionId(added), resolution: "send" },
+        client("owner", "Owner"),
+        context(broadcast),
+      );
+      await vi.waitFor(() => expect(mocks.handleChatSend).toHaveBeenCalledOnce());
+
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-after-dispatch",
+          updatedAt: 2,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      expect(listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([]);
+      dispatched.resolve(undefined);
+      const result = await resolving;
+
+      expect(result.responses).toHaveLength(1);
+      expect(result.responses[0]?.[0]).toBe(false);
+      expect(result.responses[0]?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        retryable: false,
+        details: {
+          code: "SESSION_SUGGESTION_SESSION_CHANGED",
+          sessionKey,
+        },
+      });
+      expect(broadcast).not.toHaveBeenCalled();
     });
   });
 

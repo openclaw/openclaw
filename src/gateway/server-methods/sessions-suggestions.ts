@@ -558,6 +558,32 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const currentTarget = resolveSessionSharingTarget({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+    if (!currentTarget || currentTarget.entry.sessionId !== target.entry.sessionId) {
+      // Session replacement clears session_suggestions in the same entry-store
+      // write, so the old claim is already terminal. Never finalize or publish it
+      // against the replacement instance after an accepted dispatch.
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "session changed before suggestion resolution could be finalized",
+          {
+            retryable: false,
+            details: {
+              code: "SESSION_SUGGESTION_SESSION_CHANGED",
+              sessionKey: params.sessionKey,
+            },
+          },
+        ),
+      );
+      return;
+    }
     const suggestion = finalizeSessionSuggestionClaim(scope, {
       id: claim.suggestion.id,
       token: claim.token,
