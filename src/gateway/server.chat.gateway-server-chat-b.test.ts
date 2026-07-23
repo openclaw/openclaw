@@ -900,6 +900,78 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.startup keeps model metadata for an equivalent config replacement", async () => {
+    const initialConfig = {
+      agents: {
+        defaults: { models: { "test/initial": {} } },
+        list: [{ id: "main", default: true }],
+      },
+      models: {
+        providers: {
+          test: {
+            baseUrl: "https://test.example.com/v1",
+            models: [{ id: "initial", name: "Initial" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const equivalentConfig = structuredClone(initialConfig);
+    let currentConfig = initialConfig;
+    const context = {
+      getRuntimeConfig: () => currentConfig,
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => {
+        currentConfig = equivalentConfig;
+        return {
+          agentId: "main",
+          agentDir: "/tmp/chat-main-agent",
+          config: initialConfig,
+          entries: [{ id: "initial", name: "Initial", provider: "test" }],
+          routeVariants: [],
+        };
+      }),
+      logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatRunBuffers: new Map(),
+    } as unknown as GatewayRequestContext;
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "startup-config-equivalent",
+          method: "chat.startup",
+          params: { sessionKey: "main" },
+        },
+        params: { sessionKey: "main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      expect(
+        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "initial", provider: "test" })]),
+      );
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.startup does not wait for slow optional model catalog metadata", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {

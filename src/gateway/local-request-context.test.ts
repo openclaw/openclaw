@@ -60,11 +60,12 @@ describe("local gateway request context", () => {
         if (!context) {
           throw new Error("expected local gateway request context");
         }
-        await context.loadGatewayModelCatalogSnapshot();
+        const snapshot = await context.loadGatewayModelCatalogSnapshot({ agentId: "worker" });
+        expect(snapshot).not.toHaveProperty("agentId");
       },
     );
 
-    expect(loadOwner).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+    expect(loadOwner).toHaveBeenCalledWith({ agentId: "worker", config: cfg, readOnly: true });
     loadOwner.mockRestore();
   });
 

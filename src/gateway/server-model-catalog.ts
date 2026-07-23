@@ -64,10 +64,9 @@ export async function loadGatewayModelCatalogSnapshot(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelCatalogSnapshot> {
   const owner = await loadGatewayModelCatalogOwnerSnapshot(params);
-  const agentId = owner.agentId ?? params?.agentId;
   return {
     ...owner.modelCatalog,
-    ...(agentId ? { agentId } : {}),
+    ...(owner.agentId ? { agentId: owner.agentId } : {}),
     agentDir: owner.agentDir,
     ...(owner.workspaceDir ? { workspaceDir: owner.workspaceDir } : {}),
     config: owner.config,

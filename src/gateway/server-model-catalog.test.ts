@@ -12,8 +12,17 @@ const snapshot: ModelCatalogSnapshot = {
   routeVariants: [],
 };
 
-function ownerSnapshot(config: OpenClawConfig, modelCatalog: ModelCatalogSnapshot = snapshot) {
-  return { agentDir: "/tmp/gateway-agent", config, modelCatalog };
+function ownerSnapshot(
+  config: OpenClawConfig,
+  modelCatalog: ModelCatalogSnapshot = snapshot,
+  agentId?: string,
+) {
+  return {
+    ...(agentId ? { agentId } : {}),
+    agentDir: "/tmp/gateway-agent",
+    config,
+    modelCatalog,
+  };
 }
 
 describe("gateway prepared model catalog", () => {
@@ -36,7 +45,7 @@ describe("gateway prepared model catalog", () => {
   it("forwards the requested agent lifecycle owner", async () => {
     const config = {};
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ({
-      ...ownerSnapshot(config),
+      ...ownerSnapshot(config, snapshot, "worker"),
       workspaceDir: "/tmp/gateway-workspace",
     }));
 
@@ -62,6 +71,19 @@ describe("gateway prepared model catalog", () => {
       readOnly: true,
       workspaceDir: "/tmp/gateway-workspace",
     });
+  });
+
+  it("does not infer agent identity when the published owner omits it", async () => {
+    const config = {};
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        agentId: "worker",
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+      }),
+    ).resolves.not.toHaveProperty("agentId");
   });
 
   it("returns an equivalent replacement owner without repeating discovery", async () => {

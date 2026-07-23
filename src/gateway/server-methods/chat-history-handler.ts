@@ -17,6 +17,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { hashRuntimeConfigValue } from "../../config/runtime-snapshot.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
@@ -75,6 +76,17 @@ type ChatMetadataResult = {
   commands?: unknown[];
   models?: unknown[];
 };
+
+function runtimeConfigsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
+  if (left === right) {
+    return true;
+  }
+  try {
+    return hashRuntimeConfigValue(left) === hashRuntimeConfigValue(right);
+  } catch {
+    return false;
+  }
+}
 
 async function handleChatMetadataRequest({
   params,
@@ -166,7 +178,7 @@ async function buildChatStartupMetadataResult(params: {
     const { buildModelsListResult } = await import("./models-list-result.js");
     if (
       params.modelCatalog.agentId !== params.agentId ||
-      params.context.getRuntimeConfig() !== params.cfg
+      !runtimeConfigsMatch(params.context.getRuntimeConfig(), params.cfg)
     ) {
       return undefined;
     }
