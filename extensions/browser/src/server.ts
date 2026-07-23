@@ -18,6 +18,7 @@ import {
   resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth,
 } from "./browser/control-auth.js";
+import { startControlStateExtensionRelays } from "./browser/extension-relay/control-startup.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
 import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
 import type { BrowserServerState } from "./browser/server-context.js";
@@ -113,6 +114,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
     throw err;
   }
   setBridgeAuthForPort(port, browserAuth);
+  await startControlStateExtensionRelays(state, (message) => logServer.warn(message));
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
