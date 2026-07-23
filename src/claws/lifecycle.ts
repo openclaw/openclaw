@@ -8,7 +8,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
-import { digestClawMcpServer } from "./mcp.js";
+import { digestClawMcpServer, portableMcpServerToConfig } from "./mcp.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -444,10 +444,14 @@ export async function buildClawAddPlan(params: {
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
   for (const [name, server] of Object.entries(params.manifest.mcpServers)) {
+    // Compare and persist in canonical config shape (manifest seconds → config
+    // milliseconds); digesting the raw manifest would falsely collide with an
+    // equivalent installed server.
+    const configServer = portableMcpServerToConfig(server);
     const existingServer = context.existingMcpServers?.[name];
     const exactExisting =
       existingServer !== undefined &&
-      digestClawMcpServer(existingServer) === digestClawMcpServer(server);
+      digestClawMcpServer(existingServer) === digestClawMcpServer(configServer);
     const blocked =
       !exactExisting && (existingMcpServerNames.has(name) || existingServer !== undefined);
     if (blocked) {
@@ -477,7 +481,7 @@ export async function buildClawAddPlan(params: {
       action: "configure",
       target: `mcp.servers.${name}`,
       details: {
-        ...server,
+        ...configServer,
         expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
           (requirement) => requirement.mcpServer === name,
