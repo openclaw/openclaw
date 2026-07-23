@@ -31,6 +31,12 @@ const managedImageCacheProofDir = path.join(
   "control-ui-e2e",
   "managed-image-cache",
 );
+const workspaceManagedImageProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "workspace-managed-image",
+);
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -1631,6 +1637,162 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBe(true);
       expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
       expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("previews authorized workspace images and contains denied managed URLs", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const allowedUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    const deniedUrl =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full";
+    const observedRequests: Array<{
+      authorization?: string;
+      pathname: string;
+      requesterSessionKey?: string;
+      status: number;
+    }> = [];
+    await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      const request = route.request();
+      const pathname = new URL(request.url()).pathname;
+      const allowed = pathname.endsWith("11111111-1111-4111-8111-111111111111/full");
+      observedRequests.push({
+        authorization: request.headers().authorization,
+        pathname,
+        requesterSessionKey: request.headers()["x-openclaw-requester-session-key"],
+        status: allowed ? 200 : 401,
+      });
+      await route.fulfill(
+        allowed
+          ? {
+              body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="18" fill="#7c3aed"/><text x="160" y="98" text-anchor="middle" fill="white" font-family="sans-serif" font-size="22">authorized preview</text></svg>',
+              contentType: "image/svg+xml",
+              status: 200,
+            }
+          : {
+              body: '{"error":{"message":"Forbidden"}}',
+              contentType: "application/json",
+              status: 401,
+            },
+      );
+    });
+    const artifact = (id: string, title: string, url: string) => ({
+      artifact: {
+        download: { mode: "url" },
+        id,
+        messageSeq: 1,
+        mimeType: "image/png",
+        sessionKey: "agent:main:main",
+        source: "session-transcript",
+        title,
+        type: "image",
+      },
+      url,
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "artifacts.list": {
+          artifacts: [
+            artifact("artifact-allowed", "allowed-preview.png", allowedUrl).artifact,
+            artifact("artifact-denied", "denied-preview.png", deniedUrl).artifact,
+          ],
+        },
+        "artifacts.download": {
+          cases: [
+            {
+              match: { artifactId: "artifact-allowed" },
+              response: {
+                artifact: {
+                  ...artifact("artifact-allowed", "allowed-preview.png", allowedUrl).artifact,
+                  download: { mode: "bytes" },
+                  mimeType: "image/svg+xml",
+                },
+                encoding: "base64",
+                data: Buffer.from(
+                  '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="18" fill="#7c3aed"/><text x="160" y="98" text-anchor="middle" fill="white" font-family="sans-serif" font-size="22">authorized preview</text></svg>',
+                ).toString("base64"),
+              },
+            },
+            {
+              match: { artifactId: "artifact-denied" },
+              response: artifact("artifact-denied", "denied-preview.png", deniedUrl),
+            },
+          ],
+        },
+        "sessions.files.list": {
+          browser: { entries: [], path: "" },
+          files: [],
+          root: "/workspace",
+          sessionKey: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".chat-workspace-toggle").click();
+      await page
+        .locator(".chat-workspace-rail__file-name", { hasText: "allowed-preview.png" })
+        .click();
+      const preview = page.locator('.chat-tool-card__preview-image[alt="allowed-preview.png"]');
+      await preview.waitFor({ timeout: 10_000 });
+      await expect
+        .poll(() => preview.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+        .toBe(320);
+      if (captureUiProofEnabled) {
+        await mkdir(workspaceManagedImageProofDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(workspaceManagedImageProofDir, "allowed-preview.png"),
+        });
+      }
+
+      await page
+        .locator(".chat-workspace-rail__file-name", { hasText: "denied-preview.png" })
+        .click();
+      await page
+        .getByText("This generated image could not be loaded with the current authorization.")
+        .waitFor({
+          timeout: 10_000,
+        });
+      expect(await page.getByText("Open artifact").count()).toBe(0);
+      expect(observedRequests).toEqual([
+        {
+          authorization: "Bearer e2e-device-token",
+          pathname: deniedUrl,
+          requesterSessionKey: "agent:main:main",
+          status: 401,
+        },
+      ]);
+      expect(await gateway.getRequests("artifacts.download")).toHaveLength(2);
+
+      const proof = {
+        allowedTransport: "artifact-rpc-bytes",
+        allowedRenderedWidth: 320,
+        deniedContained: true,
+        requests: observedRequests,
+      };
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(workspaceManagedImageProofDir, "denied-recovery.png"),
+        });
+        await writeFile(
+          path.join(workspaceManagedImageProofDir, "allowed-and-denied.json"),
+          `${JSON.stringify(proof, null, 2)}\n`,
+          "utf8",
+        );
+      }
+      if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+        process.stdout.write(`${JSON.stringify({ proof: "workspace-managed-image", ...proof })}\n`);
+      }
     } finally {
       await closeBrowserContext(context);
     }

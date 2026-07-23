@@ -9,6 +9,11 @@ const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
+  readManagedOutgoingImageDownloadUrl: vi.fn(),
+}));
+
+vi.mock("../managed-image-attachments-download.js", () => ({
+  readManagedOutgoingImageDownloadUrl: hoisted.readManagedOutgoingImageDownloadUrl,
 }));
 
 vi.mock("../../tasks/task-status-access.js", () => ({
@@ -61,13 +66,13 @@ type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
 async function invokeArtifactHandler(
   method: ArtifactMethod,
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown } = {},
+  options: { id?: string; context?: unknown; client?: unknown } = {},
 ) {
   const responder = createResponder();
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
-    client: null,
+    client: (options.client ?? null) as never,
     isWebchatConnect: () => false,
     respond: responder.respond,
     context: (options.context ?? {}) as never,
@@ -91,9 +96,13 @@ async function getArtifact(
 
 async function downloadArtifact(
   params: Record<string, unknown>,
-  options: { id?: string; context?: unknown } = {},
+  options: { id?: string; context?: unknown; client?: unknown } = {},
 ) {
   return await invokeArtifactHandler("artifacts.download", params, options);
+}
+
+function clientWithScopes(scopes: string[]) {
+  return { connect: { scopes } };
 }
 
 function runtimeContext(config: Record<string, unknown>) {
@@ -355,6 +364,79 @@ describe("artifacts RPC handlers", () => {
       data: "aGVsbG8=",
     });
     expectFields(downloadPayload.artifact, { id: artifactId });
+  });
+
+  it("returns session-bound managed image bytes to admin callers", async () => {
+    const url =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full";
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", url, mimeType: "image/png", alt: "generated.png" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    hoisted.readManagedOutgoingImageDownloadUrl.mockResolvedValueOnce({
+      data: Buffer.from("managed-image"),
+      contentType: "image/png",
+      sizeBytes: 13,
+    });
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifactId = requireNonEmptyString(
+      expectArtifactList(listed.calls).artifacts?.[0]?.id,
+      "expected managed artifact id",
+    );
+
+    const download = await downloadArtifact(
+      { sessionKey: "agent:main:main", artifactId },
+      { client: clientWithScopes(["operator.read", "operator.admin"]) },
+    );
+
+    const payload = expectOkPayload(download.calls) as {
+      artifact?: Record<string, unknown>;
+    };
+    expectFields(payload, {
+      encoding: "base64",
+      data: Buffer.from("managed-image").toString("base64"),
+    });
+    expectFields(payload.artifact, {
+      mimeType: "image/png",
+      sizeBytes: 13,
+    });
+    expectFields(payload.artifact?.download, { mode: "bytes" });
+    expect(hoisted.readManagedOutgoingImageDownloadUrl).toHaveBeenCalledWith(
+      expect.objectContaining({ url, expectedSessionKey: "agent:main:main" }),
+    );
+  });
+
+  it("does not expose managed image bytes to read-only callers", async () => {
+    const url =
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full";
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", url, mimeType: "image/png", alt: "generated.png" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+    const artifactId = requireNonEmptyString(
+      expectArtifactList(listed.calls).artifacts?.[0]?.id,
+      "expected managed artifact id",
+    );
+
+    const download = await downloadArtifact(
+      { sessionKey: "agent:main:main", artifactId },
+      { client: clientWithScopes(["operator.read"]) },
+    );
+
+    const payload = expectOkPayload(download.calls) as {
+      artifact?: Record<string, unknown>;
+    };
+    expectFields(payload, { url });
+    expectFields(payload.artifact?.download, { mode: "url" });
+    expect(payload).not.toHaveProperty("data");
+    expect(hoisted.readManagedOutgoingImageDownloadUrl).not.toHaveBeenCalled();
   });
 
   it("can scan artifact summaries without retaining inline data", async () => {

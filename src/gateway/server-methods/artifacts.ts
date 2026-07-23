@@ -14,6 +14,7 @@ import {
   validateArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
@@ -21,6 +22,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -34,6 +36,11 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ArtifactDownloadMode = ArtifactSummary["download"]["mode"];
+
+const loadReadManagedOutgoingImageDownloadUrl = createLazyRuntimeNamedExport(
+  () => import("../managed-image-attachments-download.js"),
+  "readManagedOutgoingImageDownloadUrl",
+);
 
 type ArtifactRecord = ArtifactSummary & {
   data?: string;
@@ -586,6 +593,36 @@ function toSummary(artifact: ArtifactRecord): ArtifactSummary {
   return summary;
 }
 
+/** Resolves protected managed-image URLs to local bytes for admin-only download. */
+async function resolveManagedOutgoingArtifactDownload(
+  artifact: ArtifactRecord,
+  sessionKey: string,
+): Promise<{ artifact: ArtifactRecord; data: string } | null> {
+  if (artifact.download.mode !== "url" || !artifact.url) {
+    return null;
+  }
+  const readManagedOutgoingImageDownloadUrl = await loadReadManagedOutgoingImageDownloadUrl();
+  const download = await readManagedOutgoingImageDownloadUrl({
+    url: artifact.url,
+    expectedSessionKey: sessionKey,
+    stateDir: resolveStateDir(),
+  });
+  if (!download) {
+    return null;
+  }
+  const data = download.data.toString("base64");
+  return {
+    artifact: {
+      ...artifact,
+      mimeType: download.contentType,
+      sizeBytes: download.sizeBytes,
+      download: { mode: "bytes" },
+      data,
+    },
+    data,
+  };
+}
+
 /** Gateway handlers for listing, summarizing, and downloading transcript artifacts. */
 export const artifactsHandlers: GatewayRequestHandlers = {
   "artifacts.list": async ({ params, respond, context }) => {
@@ -630,7 +667,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifact: toSummary(artifact) });
   },
-  "artifacts.download": async ({ params, respond, context }) => {
+  "artifacts.download": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(params, validateArtifactsDownloadParams, "artifacts.download", respond)
     ) {
@@ -639,7 +676,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
+    const { artifact, sessionKey } = await findArtifact(params, context.getRuntimeConfig?.(), {
       downloadArtifactId: params.artifactId,
     });
     if (!artifact) {
@@ -660,6 +697,20 @@ export const artifactsHandlers: GatewayRequestHandlers = {
           artifactId: artifact.id,
         }),
       );
+      return;
+    }
+    // Managed image bytes retain the existing owner/admin boundary. Read-only
+    // artifact callers still receive the protected URL rather than local bytes.
+    const managedDownload =
+      sessionKey && client?.connect?.scopes?.includes("operator.admin") === true
+        ? await resolveManagedOutgoingArtifactDownload(artifact, sessionKey)
+        : null;
+    if (managedDownload) {
+      respond(true, {
+        artifact: toSummary(managedDownload.artifact),
+        encoding: "base64" as const,
+        data: managedDownload.data,
+      });
       return;
     }
     respond(true, {

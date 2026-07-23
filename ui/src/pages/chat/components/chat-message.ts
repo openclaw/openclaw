@@ -62,6 +62,13 @@ import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { isPendingSendMessage, persistedMessageEntryId } from "../chat-thread.ts";
+import {
+  isManagedOutgoingImageUrl,
+  readManagedOutgoingImageBlobUrl,
+  resolveManagedOutgoingImageBlobUrl,
+  resolveManagedOutgoingImageBlobUrlCacheKey,
+  retainManagedImageBlobUrl,
+} from "../managed-image-blob.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -277,104 +284,6 @@ type RenderableImageBlock = ImageBlock & {
 };
 
 type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
-
-const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
-const managedImageBlobUrlResolvedCache = new Map<string, string>();
-const managedImageBlobUrlMissCache = new Map<string, number>();
-const managedImageBlobUrlRetainCounts = new Map<string, number>();
-const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
-const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
-const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
-
-function readManagedImageBlobUrl(cacheKey: string): string | undefined {
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
-  if (!cached) {
-    return undefined;
-  }
-  managedImageBlobUrlResolvedCache.delete(cacheKey);
-  managedImageBlobUrlResolvedCache.set(cacheKey, cached);
-  return cached;
-}
-
-function trimManagedImageBlobUrlCache() {
-  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
-    const evictable = [...managedImageBlobUrlResolvedCache.keys()].find(
-      (cacheKey) => (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) === 0,
-    );
-    if (!evictable) {
-      return;
-    }
-    const evicted = managedImageBlobUrlResolvedCache.get(evictable);
-    managedImageBlobUrlResolvedCache.delete(evictable);
-    if (evicted) {
-      URL.revokeObjectURL(evicted);
-    }
-  }
-}
-
-function retainManagedImageBlobUrl(cacheKey: string): (() => void) | undefined {
-  if (!managedImageBlobUrlResolvedCache.has(cacheKey)) {
-    return undefined;
-  }
-  managedImageBlobUrlRetainCounts.set(
-    cacheKey,
-    (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) + 1,
-  );
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    const remaining = (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 1) - 1;
-    if (remaining <= 0) {
-      managedImageBlobUrlRetainCounts.delete(cacheKey);
-    } else {
-      managedImageBlobUrlRetainCounts.set(cacheKey, remaining);
-    }
-    trimManagedImageBlobUrlCache();
-  };
-}
-
-function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
-  const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
-  managedImageBlobUrlResolvedCache.delete(cacheKey);
-  managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-  managedImageBlobUrlMissCache.delete(cacheKey);
-  if (previous && previous !== blobUrl) {
-    URL.revokeObjectURL(previous);
-  }
-
-  // Blob URLs retain browser-managed image data. Keep recent previews reusable,
-  // but protect an image while its lightbox still uses that object URL.
-  trimManagedImageBlobUrlCache();
-}
-
-function hasRecentManagedImageBlobUrlMiss(cacheKey: string): boolean {
-  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
-  if (missAt === undefined) {
-    return false;
-  }
-  if (Date.now() - missAt >= MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
-    managedImageBlobUrlMissCache.delete(cacheKey);
-    return false;
-  }
-  managedImageBlobUrlMissCache.delete(cacheKey);
-  managedImageBlobUrlMissCache.set(cacheKey, missAt);
-  return true;
-}
-
-function cacheManagedImageBlobUrlMiss(cacheKey: string) {
-  managedImageBlobUrlMissCache.delete(cacheKey);
-  managedImageBlobUrlMissCache.set(cacheKey, Date.now());
-  while (managedImageBlobUrlMissCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
-    const oldest = managedImageBlobUrlMissCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    managedImageBlobUrlMissCache.delete(oldest.value);
-  }
-}
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -1711,7 +1620,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   const openImage = (img: RenderableImageBlock, previewUrl: string) => {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
     const requestVersion = opts?.onRequestOpenImage?.();
-    const managedSource = isManagedOutgoingImageSource(img.displayUrl);
+    const managedSource = isManagedOutgoingImageUrl(img.displayUrl);
     const cacheKey = managedSource
       ? resolveManagedOutgoingImageBlobUrlCacheKey(img.displayUrl, opts)
       : undefined;
@@ -1776,7 +1685,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   };
 
   const renderImage = (img: RenderableImageBlock) => {
-    if (!isManagedOutgoingImageSource(img.displayUrl)) {
+    if (!isManagedOutgoingImageUrl(img.displayUrl)) {
       return renderImageElement(img, img.displayUrl);
     }
     const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts).then((previewUrl) => {
@@ -1963,124 +1872,6 @@ function buildAssistantAttachmentUrl(
     params.set("mediaTicket", normalizedMediaTicket);
   }
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
-}
-
-function isManagedOutgoingImageSource(source: string): boolean {
-  const trimmed = source.trim();
-  if (trimmed.startsWith("/api/chat/media/outgoing/")) {
-    return true;
-  }
-  try {
-    const parsed = new URL(trimmed, window.location.origin);
-    return (
-      parsed.origin === window.location.origin &&
-      parsed.pathname.startsWith("/api/chat/media/outgoing/")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function resolveManagedOutgoingImageRequesterSessionKey(source: string): string | null {
-  try {
-    const parsed = new URL(source, window.location.origin);
-    const parts = parsed.pathname.split("/");
-    const encodedSessionKey = parts[5];
-    return encodedSessionKey ? decodeURIComponent(encodedSessionKey) : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): string {
-  if (!source.startsWith("/")) {
-    return source;
-  }
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return `${normalizedBasePath}${source}`;
-}
-
-function resolveManagedOutgoingImageBlobUrlCacheKey(
-  source: string,
-  opts?: ImageRenderOptions,
-): string {
-  const authToken = opts?.authToken?.trim() ?? "";
-  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  return `${fetchUrl}::${authToken}`;
-}
-
-function readManagedOutgoingImageBlobUrl(
-  source: string,
-  opts?: ImageRenderOptions,
-): string | undefined {
-  return readManagedImageBlobUrl(resolveManagedOutgoingImageBlobUrlCacheKey(source, opts));
-}
-
-async function resolveManagedOutgoingImageBlobUrl(
-  source: string,
-  opts?: ImageRenderOptions,
-): Promise<string | null> {
-  const authToken = opts?.authToken?.trim() ?? "";
-  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
-  const cached = readManagedImageBlobUrl(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  if (hasRecentManagedImageBlobUrlMiss(cacheKey)) {
-    return null;
-  }
-  let pending = managedImageBlobUrlCache.get(cacheKey);
-  if (!pending) {
-    pending = (async () => {
-      const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
-      const headers = new Headers({ Accept: "image/*" });
-      if (authToken) {
-        headers.set("Authorization", `Bearer ${authToken}`);
-      }
-      if (requesterSessionKey) {
-        headers.set("x-openclaw-requester-session-key", requesterSessionKey);
-      }
-      const controller = new AbortController();
-      const timeout = setTimeout(() => {
-        controller.abort(
-          new DOMException("managed outgoing image fetch timed out", "TimeoutError"),
-        );
-      }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
-      try {
-        const res = await fetch(fetchUrl, {
-          method: "GET",
-          headers,
-          credentials: "same-origin",
-          signal: controller.signal,
-        });
-        if (!res.ok) {
-          cacheManagedImageBlobUrlMiss(cacheKey);
-          return null;
-        }
-        const blob = await res.blob();
-        if (!blob.type.startsWith("image/")) {
-          cacheManagedImageBlobUrlMiss(cacheKey);
-          return null;
-        }
-        const blobUrl = URL.createObjectURL(blob);
-        cacheManagedImageBlobUrl(cacheKey, blobUrl);
-        return blobUrl;
-      } catch {
-        // The render path treats a missing preview as `nothing`; never reject
-        // its `until` promise for an optional image fetch or body failure.
-        cacheManagedImageBlobUrlMiss(cacheKey);
-        return null;
-      } finally {
-        clearTimeout(timeout);
-      }
-    })().finally(() => {
-      managedImageBlobUrlCache.delete(cacheKey);
-    });
-    managedImageBlobUrlCache.set(cacheKey, pending);
-  }
-  return pending;
 }
 
 function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
