@@ -1152,11 +1152,10 @@ function buildScriptArgPatternFromArgv(
 }
 
 function buildArgPatternFromArgv(argv: string[], platform?: string | null): string | undefined {
-  if (!isWindowsPlatform(platform ?? process.platform)) {
-    return undefined;
-  }
   const args = argv.slice(1);
-  const normalized = args.map((a) => a.replace(/\//g, "\\"));
+  const normalized = isWindowsPlatform(platform ?? process.platform)
+    ? args.map((a) => a.replace(/\//g, "\\"))
+    : args;
   if (normalized.length === 0) {
     return "^\x00\x00$";
   }
