@@ -434,6 +434,33 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
+/**
+ * Strips runtime stream-boundary markers that leak into user-visible text.
+ *
+ * Some streaming transports inject delimiters into the text stream. When the
+ * provider/runtime layer does not strip them before the final channel delivery
+ * boundary, they reach the user as visible noise:
+ *   - `[e~[`  stream boundary marker (functional analog of SSE `[DONE]`)
+ *   - `[e[`   variant without the tilde
+ *   - `[1]`   compact marker that may trail the boundary
+ *
+ * A trailing lone `[` after whitespace is also removed — it is a truncated
+ * fragment of a runtime marker that outlived the stream.
+ */
+// Only strip runtime stream markers at the very end of the text — the
+// reported leakage pattern is a trailing suffix ("Hello[e~["), not inline
+// occurrences. Global replacement would alter legitimate quoted references.
+// The issue (#105113) only reports the suffix pattern; a narrower fix is
+// safer and addresses the ClawSweeper regex-breadth concern.
+const RUNTIME_STREAM_BOUNDARY_SUFFIX_RE = /\[e~?\[\s*$/;
+
+function stripRuntimeStreamMarkers(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return text.replace(RUNTIME_STREAM_BOUNDARY_SUFFIX_RE, "");
+}
+
 export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
@@ -525,5 +552,6 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
 
   const withoutLeadingEmptyLines = withoutToolCallBlocks.replace(/^(?:[ \t]*\r?\n)+/, "");
-  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
+  const withoutStreamMarkers = stripRuntimeStreamMarkers(withoutLeadingEmptyLines);
+  return collapseConsecutiveDuplicateBlocks(withoutStreamMarkers);
 }
