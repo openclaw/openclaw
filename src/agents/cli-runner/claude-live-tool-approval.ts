@@ -7,9 +7,9 @@ import {
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { callGatewayTool } from "../tools/gateway.js";
 
-export type ClaudeNativeToolApprovalPlan = "allow" | "deny" | "prompt";
-export type ClaudeNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
-export type ClaudeNativeToolApprovalOutcome =
+type ClaudeNativeToolApprovalPlan = "allow" | "deny" | "prompt";
+type ClaudeNativeToolApprovalDecision = "allow-once" | "allow-always" | "deny";
+type ClaudeNativeToolApprovalOutcome =
   | { kind: "allow"; grantAlways: boolean }
   | { kind: "deny"; reason: "policy-oversized" | "user" | "unavailable" };
 
