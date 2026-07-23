@@ -8110,6 +8110,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## providers/google-vertex.md
+
+- Route: /providers/google-vertex
+- Headings:
+  - H2: Getting started
+  - H2: Configuration
+  - H2: Environment variables
+  - H2: Available models
+  - H2: Troubleshooting
+  - H2: Related
+
 ## providers/google.md
 
 - Route: /providers/google

@@ -5,6 +5,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
+  "nonSecretAuthMarkers": ["gcp-vertex-credentials"],
   "providers": ["google", "google-gemini-cli", "google-vertex"],
   "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
@@ -46,8 +47,20 @@
     }
   },
   "modelCatalog": {
+    "providers": {
+      "google-vertex": {
+        "api": "google-vertex",
+        "models": [
+          { "id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536, "tags": ["default"] },
+          { "id": "gemini-3.6-flash", "name": "Gemini 3.6 Flash", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 },
+          { "id": "gemini-3.5-flash-lite", "name": "Gemini 3.5 Flash-Lite", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 },
+          { "id": "gemini-3.1-pro", "name": "Gemini 3.1 Pro", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 }
+        ]
+      }
+    },
     "discovery": {
-      "google": "runtime"
+      "google": "runtime",
+      "google-vertex": "static"
     },
     "suppressions": [
       {
@@ -662,7 +675,7 @@
     "providers": [
       {
         "id": "google-vertex",
-        "authMethods": ["api-key"],
+        "authMethods": ["adc"],
         "envVars": ["GOOGLE_CLOUD_API_KEY"],
         "authEvidence": [
           {
@@ -673,9 +686,14 @@
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
             "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
-            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
             "credentialMarker": "gcp-vertex-credentials",
             "source": "gcloud adc"
+          },
+          {
+            "type": "env-vars-with-marker",
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "gcp adc (metadata server / workload identity)"
           }
         ]
       },
@@ -714,6 +732,14 @@
       "groupLabel": "Google",
       "groupHint": "Gemini API key + OAuth",
       "onboardingFeatured": true
+    },
+    {
+      "provider": "google-vertex",
+      "method": "adc",
+      "choiceId": "google-vertex-adc",
+      "choiceLabel": "Google Vertex AI",
+      "groupId": "google-vertex",
+      "groupLabel": "Google Vertex AI"
     }
   ],
   "uiHints": {

@@ -5662,6 +5662,49 @@ describe("verifySetupInference", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
+  it("applies the candidate config env to the probe and restores it afterward", async () => {
+    // Providers like google-vertex read GOOGLE_CLOUD_PROJECT from process.env at
+    // request time; the gateway applies the config `env` section on startup, so the
+    // onboarding probe must do the same or the AI access test fails for a config that
+    // works everywhere else. It must also restore the env so later steps are unaffected.
+    const priorProject = process.env.GOOGLE_CLOUD_PROJECT;
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    const profiles = {
+      "openai:default": { type: "api_key" as const, provider: "openai", key: "key-1" },
+    };
+    let projectDuringProbe: string | undefined;
+    const runEmbeddedAgent = vi.fn(async () => {
+      projectDuringProbe = process.env.GOOGLE_CLOUD_PROJECT;
+      return successfulRun("openai", "gpt-5.5");
+    });
+
+    try {
+      const result = await verifySetupInferenceConfig({
+        config: {
+          agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+          auth: { profiles: { "openai:default": { provider: "openai", mode: "api_key" } } },
+          env: { vars: { GOOGLE_CLOUD_PROJECT: "probe-project" } },
+        } satisfies OpenClawConfig,
+        runtime,
+        deps: {
+          loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(projectDuringProbe).toBe("probe-project");
+      expect(process.env.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    } finally {
+      if (priorProject === undefined) {
+        delete process.env.GOOGLE_CLOUD_PROJECT;
+      } else {
+        process.env.GOOGLE_CLOUD_PROJECT = priorProject;
+      }
+    }
+  });
+
   it("returns a refreshed staged profile without changing the configured agent store", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "configured-agent");
