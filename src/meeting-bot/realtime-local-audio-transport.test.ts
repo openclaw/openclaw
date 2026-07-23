@@ -35,7 +35,6 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       processes.set(command, proc);
       return proc;
     });
-    spawn.stderrLifecycle = "stream";
     const debug = vi.fn();
     const transport = createLocalMeetingRealtimeAudioTransport({
       inputCommand: ["input"],
@@ -124,7 +123,6 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
       processes.set(command, proc);
       return proc;
     }) as MeetingRealtimeAudioSpawn;
-    spawn.stderrLifecycle = "stream";
     createLocalMeetingRealtimeAudioTransport({
       inputCommand: ["input"],
       outputCommand: ["output"],
@@ -173,7 +171,7 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
     expect(trailingMessage).not.toContain("�");
   });
 
-  it("flushes an injected stderr adapter when its child exits", async () => {
+  it("preserves injected stderr that arrives after child exit", async () => {
     const processes = new Map<string, TestBridgeProcess>();
     const debug = vi.fn();
     createLocalMeetingRealtimeAudioTransport({
@@ -197,6 +195,40 @@ describe("createLocalMeetingRealtimeAudioTransport", () => {
 
     outputProcess.stderr.write("before exit ");
     outputProcess.emit("exit", 0, null);
-    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit");
+    outputProcess.stderr.write("after exit");
+    outputProcess.stderr.end();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
+  });
+
+  it("preserves exit-following diagnostics from a data-only stderr adapter", async () => {
+    const processes = new Map<string, TestBridgeProcess>();
+    const debug = vi.fn();
+    createLocalMeetingRealtimeAudioTransport({
+      inputCommand: ["input"],
+      outputCommand: ["output"],
+      bargeInRmsThreshold: 10,
+      bargeInPeakThreshold: 10,
+      bargeInCooldownMs: 1,
+      logger: { debug, info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logScope: "[meeting]",
+      spawn: (command) => {
+        const proc = createTestBridgeProcess();
+        proc.stderr = new EventEmitter() as unknown as PassThrough;
+        processes.set(command, proc);
+        return proc;
+      },
+    });
+    const outputProcess = processes.get("output");
+    if (!outputProcess) {
+      throw new Error("Expected output process");
+    }
+
+    outputProcess.stderr.emit("data", "before exit ");
+    outputProcess.emit("exit", 0, null);
+    outputProcess.stderr.emit("data", "after exit");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(debug).toHaveBeenCalledWith("[meeting] audio output: before exit after exit");
   });
 });

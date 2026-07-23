@@ -46,11 +46,11 @@ type BridgeProcess = {
   ): unknown;
 };
 
-type MeetingRealtimeAudioSpawn = ((
+type MeetingRealtimeAudioSpawn = (
   command: string,
   args: string[],
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
-) => BridgeProcess) & { stderrLifecycle?: "stream" };
+) => BridgeProcess;
 
 function splitCommand(argv: string[]): { command: string; args: string[] } {
   const [command, ...args] = argv;
@@ -63,7 +63,6 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
 function attachStderrLineLogger(params: {
   proc: Pick<BridgeProcess, "on">;
   stderr: BridgeProcess["stderr"];
-  useStderrLifecycle: boolean;
   debug: RuntimeLogger["debug"];
   prefix: string;
 }): void {
@@ -76,7 +75,8 @@ function attachStderrLineLogger(params: {
   }
   const debug = params.debug;
   const accumulator = createUtf8LineAccumulator();
-  let flushed = false;
+  let finalized = false;
+  let exitFlushScheduled = false;
   const logLine = ({ line, truncated }: AccumulatedUtf8Line) => {
     const trimmed = line.trim();
     if (!trimmed && !truncated) {
@@ -93,29 +93,38 @@ function attachStderrLineLogger(params: {
       splitOnCarriageReturn: true,
     }).forEach(logLine);
   };
-  // ChildProcess exit can precede its stdio streams' final data. Use the stream
-  // lifecycle for real Node streams, while retaining exit as a compatibility
-  // fallback for injected adapters that only implement data/error handlers.
-  const flush = () => {
-    if (flushed) {
+  // ChildProcess exit can precede its stdio streams' final data. A stream end
+  // finalizes the accumulator, while the exit fallback only snapshots a tail:
+  // injected adapters can still emit later stderr data without losing it.
+  const flush = (final = false) => {
+    if (finalized) {
       return;
     }
-    flushed = true;
+    finalized = final;
     const trailing = flushUtf8Line(accumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
     if (trailing) {
       logLine(trailing);
     }
   };
+  const scheduleExitFlush = () => {
+    if (finalized || exitFlushScheduled) {
+      return;
+    }
+    exitFlushScheduled = true;
+    setImmediate(() => {
+      exitFlushScheduled = false;
+      flush();
+    });
+  };
   params.stderr.on("data", (chunk) => {
-    if (!flushed) {
+    if (!finalized) {
       append(chunk);
     }
   });
-  if (params.useStderrLifecycle && params.stderr instanceof Readable) {
-    params.stderr.once("end", flush);
-    params.stderr.once("close", flush);
-  } else {
-    params.proc.on("exit", flush);
+  params.proc.on("exit", scheduleExitFlush);
+  if (params.stderr instanceof Readable) {
+    params.stderr.once("end", () => flush(true));
+    params.stderr.once("close", () => flush(true));
   }
 }
 
@@ -135,7 +144,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const spawnFn: MeetingRealtimeAudioSpawn =
     params.spawn ??
     ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
-  const useStderrLifecycle = params.spawn?.stderrLifecycle === "stream" || !params.spawn;
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();
@@ -182,7 +190,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     attachStderrLineLogger({
       proc,
       stderr: proc.stderr,
-      useStderrLifecycle,
       debug: params.logger.debug,
       prefix: `${params.logScope} audio output`,
     });
@@ -205,7 +212,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   attachStderrLineLogger({
     proc: inputProcess,
     stderr: inputProcess.stderr,
-    useStderrLifecycle,
     debug: params.logger.debug,
     prefix: `${params.logScope} audio input`,
   });
@@ -324,7 +330,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       attachStderrLineLogger({
         proc: bargeInInputProcess,
         stderr: bargeInInputProcess.stderr,
-        useStderrLifecycle,
         debug: params.logger.debug,
         prefix: `${params.logScope} barge-in input`,
       });
