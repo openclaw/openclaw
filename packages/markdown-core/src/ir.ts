@@ -474,7 +474,7 @@ function appendListPrefix(state: RenderState, isTask: boolean): MarkdownListItem
   const stack = state.env.listStack;
   const top = stack[stack.length - 1];
   if (!top) {
-    return;
+    return undefined;
   }
   top.index += 1;
   const indent = "  ".repeat(Math.max(0, stack.length - 1));
