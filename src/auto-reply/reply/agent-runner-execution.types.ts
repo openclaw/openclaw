@@ -1,6 +1,6 @@
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
+import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";

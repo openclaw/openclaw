@@ -16,7 +16,7 @@ import {
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import type { FinalizedTemplateContext as TemplateContext, MsgContext } from "../templating.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   modelKey,
   resolveModelDirectiveSelection,

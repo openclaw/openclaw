@@ -63,11 +63,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import type {
-  FinalizedTemplateContext as TemplateContext,
-  MsgContext,
-  OriginatingChannelType,
-} from "../templating.js";
+import type { MsgContext, OriginatingChannelType, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
   formatThinkingLevels,
@@ -776,7 +772,7 @@ export async function runPreparedReply(
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
-  const baseBody = sessionCtx.agentText;
+  const baseBody = sessionCtx.agentText ?? "";
   const rawBodyTrimmed = (ctx.commandText ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();

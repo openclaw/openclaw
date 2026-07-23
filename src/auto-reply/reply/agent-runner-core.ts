@@ -29,7 +29,7 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import type { FinalizedTemplateContext as TemplateContext } from "../templating.js";
+import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -289,7 +289,7 @@ export function enqueueCommitmentExtractionForTurn(params: {
   if (params.isHeartbeat) {
     return;
   }
-  const userText = params.commandBody.trim() || params.sessionCtx.agentText.trim() || "";
+  const userText = params.commandBody.trim() || params.sessionCtx.agentText?.trim() || "";
   const assistantText = joinCommitmentAssistantText(params.payloads);
   const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   const channel =

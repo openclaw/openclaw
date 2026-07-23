@@ -19,7 +19,7 @@ import {
 } from "../../skills/discovery/chat-commands.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
-import type { FinalizedTemplateContext as TemplateContext, MsgContext } from "../templating.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
