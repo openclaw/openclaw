@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
-import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
+import { MANAGED_CODEX_APP_SERVER_PACKAGE, MAX_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
@@ -205,8 +205,8 @@ function resolveManagedCodexAppServerCommandCandidates(
   const commandName = platform === "win32" ? "codex.cmd" : "codex";
   const roots = resolveManagedCodexAppServerCandidateRoots(pluginRoot, platform);
   const packageCommandPaths = [
-    ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
     ...resolveManagedCodexPackageBinCandidates(roots, platform),
+    ...roots.map((root) => pathApi.join(root, "node_modules", ".bin", commandName)),
   ];
   const desktopCommandPaths = resolveDesktopCodexAppServerCommandCandidates(platform);
   // Ordinary turns must honor the pinned package version. Computer Use opts
@@ -275,15 +275,17 @@ function resolveManagedCodexPackageBinCandidates(
   roots: readonly string[],
   platform: NodeJS.Platform,
 ): string[] {
-  if (platform === "win32") {
-    return [];
-  }
-
+  // Windows spawn normalization wraps package .js bins with process.execPath;
+  // retaining the exact package path avoids falling back to an unpinned .cmd shim.
   const candidates: string[] = [];
   for (const root of roots) {
-    const candidate = resolveManagedCodexPackageBinCandidate(root);
-    if (candidate) {
-      candidates.push(candidate);
+    for (const candidate of [
+      resolveManagedCodexPackageBinCandidate(root),
+      resolveManagedCodexPnpmStoreBinCandidate(root, platform),
+    ]) {
+      if (candidate) {
+        candidates.push(candidate);
+      }
     }
   }
   return candidates;
@@ -295,17 +297,53 @@ function resolveManagedCodexPackageBinCandidate(root: string): string | null {
     const packageJsonPath = requireFromRoot.resolve(
       `${MANAGED_CODEX_APP_SERVER_PACKAGE}/package.json`,
     );
-    const packageRoot = path.dirname(packageJsonPath);
+    return resolveManagedCodexBinFromPackageJson(packageJsonPath);
+  } catch {
+    return null;
+  }
+}
+
+function resolveManagedCodexPnpmStoreBinCandidate(
+  root: string,
+  platform: NodeJS.Platform,
+): string | null {
+  const pathApi = pathForPlatform(platform);
+  const packageStoreName = `${MANAGED_CODEX_APP_SERVER_PACKAGE.replace("/", "+")}@${MAX_CODEX_APP_SERVER_VERSION}`;
+  const packageJsonPath = pathApi.join(
+    root,
+    "node_modules",
+    ".pnpm",
+    packageStoreName,
+    "node_modules",
+    ...MANAGED_CODEX_APP_SERVER_PACKAGE.split("/"),
+    "package.json",
+  );
+  return resolveManagedCodexBinFromPackageJson(packageJsonPath, pathApi);
+}
+
+function resolveManagedCodexBinFromPackageJson(
+  packageJsonPath: string,
+  pathApi: typeof path = path,
+): string | null {
+  try {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      name?: unknown;
+      version?: unknown;
       bin?: unknown;
     };
+    if (
+      packageJson.name !== MANAGED_CODEX_APP_SERVER_PACKAGE ||
+      packageJson.version !== MAX_CODEX_APP_SERVER_VERSION
+    ) {
+      return null;
+    }
     const binPath =
       typeof packageJson.bin === "string"
         ? packageJson.bin
         : isRecord(packageJson.bin) && typeof packageJson.bin.codex === "string"
           ? packageJson.bin.codex
           : null;
-    return binPath ? path.resolve(packageRoot, binPath) : null;
+    return binPath ? pathApi.resolve(pathApi.dirname(packageJsonPath), binPath) : null;
   } catch {
     return null;
   }

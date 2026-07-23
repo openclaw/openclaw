@@ -241,6 +241,7 @@ describe("managed Codex app-server binary", () => {
       path.join(packageRoot, "package.json"),
       JSON.stringify({
         name: "@openai/codex",
+        version: "0.145.0",
         bin: {
           codex: "bin/codex.js",
         },
@@ -261,6 +262,54 @@ describe("managed Codex app-server binary", () => {
       ...startOptions("managed"),
       command: resolvedPackageBin,
       commandSource: "resolved-managed",
+    });
+  });
+
+  it("prefers the pinned pnpm-store package over a conflicting hoisted shim", async () => {
+    const installRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-pnpm-store-"));
+    const pluginRoot = path.join(installRoot, "extensions", "codex");
+    const hoistedPackageRoot = path.join(installRoot, "node_modules", "@openai", "codex");
+    const exactPackageRoot = path.join(
+      installRoot,
+      "node_modules",
+      ".pnpm",
+      "@openai+codex@0.145.0",
+      "node_modules",
+      "@openai",
+      "codex",
+    );
+    const exactPackageBin = path.join(exactPackageRoot, "bin", "codex.js");
+    const hoistedCommand = managedCommandPath(installRoot, "linux");
+    for (const [packageRoot, version] of [
+      [hoistedPackageRoot, "0.144.6"],
+      [exactPackageRoot, "0.145.0"],
+    ] as const) {
+      await mkdir(path.join(packageRoot, "bin"), { recursive: true });
+      await writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "@openai/codex",
+          version,
+          bin: { codex: "bin/codex.js" },
+        }),
+      );
+      await writeFile(path.join(packageRoot, "bin", "codex.js"), "#!/usr/bin/env node\n");
+    }
+    const pathExists = vi.fn(
+      async (filePath: string) => filePath === exactPackageBin || filePath === hoistedCommand,
+    );
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: exactPackageBin,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [hoistedCommand],
     });
   });
 
