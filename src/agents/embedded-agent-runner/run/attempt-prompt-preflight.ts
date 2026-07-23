@@ -82,8 +82,6 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
-      cfg: attempt.config,
-      agentId: input.sessionAgentId,
     });
     const truncationResult = truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,

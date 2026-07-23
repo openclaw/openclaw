@@ -1366,6 +1366,11 @@ export const en: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Browser-local chat preferences.",
+      messageWidth: "Message width",
+      messageWidthHint:
+        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+      messageWidthInvalid:
+        "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Sidebar",

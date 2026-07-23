@@ -566,19 +566,11 @@ The chat transcript uses a centered readable frame aligned with the composer. As
 
 ## Chat message width
 
-Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `ui.prefs.chatMessageMaxWidth`:
-
-```json5
-{
-  gateway: {
-    controlUi: {
-      chatMessageMaxWidth: "min(1280px, 82%)",
-    },
-  },
-}
-```
-
-The value is validated before it reaches the browser. Supported forms include plain lengths and percentages such as `960px` or `82%`, plus constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and `fit-content(...)` width expressions.
+Wide-monitor users can override the transcript width under **Settings → Chat →
+Message width**. The preference stays in that browser's local storage. Supported
+forms include plain lengths and percentages such as `960px` or `82%`, plus
+constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and
+`fit-content(...)` width expressions.
 
 ## Tailnet access (recommended)
 

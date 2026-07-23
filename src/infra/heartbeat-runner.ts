@@ -560,10 +560,8 @@ function isHeartbeatTypingEnabled(params: {
   return typingMode !== "never";
 }
 
-function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig, agentId: string) {
-  const configured =
-    resolveAgentConfig(cfg, agentId)?.typingIntervalSeconds ??
-    cfg.agents?.defaults?.typingIntervalSeconds;
+function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
+  const configured = cfg.agents?.defaults?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
@@ -1692,7 +1690,7 @@ export async function runHeartbeatOnce(opts: {
   const hasChatDelivery = Boolean(
     delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
   );
-  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg, agentId);
+  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg);
   const heartbeatChannelPlugin =
     delivery.channel !== "none" ? resolveHeartbeatChannelPlugin(delivery.channel) : undefined;
   const heartbeatTyping =

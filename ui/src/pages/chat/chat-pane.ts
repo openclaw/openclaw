@@ -2764,15 +2764,13 @@ class ChatPane extends OpenClawLightDomElement {
       !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
-      state.chatMessageMaxWidth === config.chatMessageMaxWidth
+      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls
     ) {
       return;
     }
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
-    state.chatMessageMaxWidth = config.chatMessageMaxWidth;
     state.requestUpdate?.();
   }
 
@@ -3947,7 +3945,7 @@ class ChatPane extends OpenClawLightDomElement {
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      chatMessageMaxWidth: state.chatMessageMaxWidth,
+      chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
       gatewayUrl: state.settings.gatewayUrl,

@@ -416,24 +416,6 @@ describe("calculateMaxToolResultChars", () => {
     expect(result).toBe(32_000);
   });
 
-  it("resolves per-agent tool-result cap overrides", () => {
-    const result = resolveLiveToolResultMaxChars({
-      contextWindowTokens: 128_000,
-      cfg: {
-        agents: {
-          defaults: {
-            contextLimits: {
-              toolResultMaxChars: 24_000,
-            },
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      agentId: "writer",
-    });
-    expect(result).toBe(24_000);
-  });
-
   it.each([
     { contextWindowTokens: 20_000, perResultMaxChars: 16_000, aggregateMaxChars: 64_000 },
     { contextWindowTokens: 128_000, perResultMaxChars: 32_000, aggregateMaxChars: 256_000 },

@@ -9,6 +9,7 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  resolveLiveToolResultMaxChars,
   type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
@@ -20,6 +21,14 @@ import type {
 const { loadResearchAutocapture } = vi.hoisted(() => ({
   loadResearchAutocapture: vi.fn(),
 }));
+
+describe("resolveLiveToolResultMaxChars", () => {
+  it("scales the automatic cap and applies the context-share ceiling", () => {
+    expect(resolveLiveToolResultMaxChars({ contextWindowTokens: 8_000 })).toBe(9_600);
+    expect(resolveLiveToolResultMaxChars({ contextWindowTokens: 128_000 })).toBe(32_000);
+    expect(resolveLiveToolResultMaxChars({ contextWindowTokens: 200_000 })).toBe(64_000);
+  });
+});
 
 vi.mock("../skills/research/autocapture.js", () => {
   loadResearchAutocapture();
