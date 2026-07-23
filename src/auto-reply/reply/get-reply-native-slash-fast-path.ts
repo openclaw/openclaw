@@ -61,9 +61,7 @@ function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return undefined;
   }
-  const commandText = stripStructuralPrefixes(
-    ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
-  ).trim();
+  const commandText = stripStructuralPrefixes(ctx.commandText ?? "").trim();
   const match = commandText.match(/^\/([^\s:]+)(?::|\s|$)/);
   return normalizeOptionalString(match?.[1])?.toLowerCase();
 }

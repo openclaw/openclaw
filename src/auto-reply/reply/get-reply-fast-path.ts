@@ -183,7 +183,7 @@ export function initFastReplySessionState(params: {
     listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource = ctx.commandText ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
     : stripStructuralPrefixes(commandSource).trim();
@@ -206,7 +206,7 @@ export function initFastReplySessionState(params: {
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
   const bodyStripped = resetTriggered
     ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
-    : (ctx.BodyForAgent ?? ctx.Body ?? "");
+    : (ctx.agentText ?? "");
   const now = Date.now();
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
@@ -277,6 +277,9 @@ export function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
+    commandText: ctx.commandText ?? "",
+    agentText: bodyStripped,
+    rawText: ctx.rawText ?? "",
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

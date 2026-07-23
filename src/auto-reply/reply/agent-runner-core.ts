@@ -289,14 +289,7 @@ export function enqueueCommitmentExtractionForTurn(params: {
   if (params.isHeartbeat) {
     return;
   }
-  const userText =
-    params.commandBody.trim() ||
-    params.sessionCtx.BodyStripped?.trim() ||
-    params.sessionCtx.BodyForCommands?.trim() ||
-    params.sessionCtx.CommandBody?.trim() ||
-    params.sessionCtx.RawBody?.trim() ||
-    params.sessionCtx.Body?.trim() ||
-    "";
+  const userText = params.commandBody.trim() || params.sessionCtx.agentText.trim() || "";
   const assistantText = joinCommitmentAssistantText(params.payloads);
   const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   const channel =

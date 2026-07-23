@@ -43,7 +43,11 @@ import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.j
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
-import { stripLegacyMediaContextFields } from "./inbound-context.js";
+import {
+  finalizeInboundContext,
+  isFinalizedInboundContext,
+  stripLegacyMediaContextFields,
+} from "./inbound-context.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
@@ -54,8 +58,12 @@ export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
 ) {
-  const state = { params, messageAuditTerminal };
-  const { ctx, cfg, dispatcher } = params;
+  const ctx = isFinalizedInboundContext(params.ctx)
+    ? params.ctx
+    : finalizeInboundContext(params.ctx);
+  const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
+  const state = { params: normalizedParams, messageAuditTerminal };
+  const { cfg, dispatcher } = normalizedParams;
   if (params.replyOptions?.abortSignal?.aborted) {
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {

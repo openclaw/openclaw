@@ -46,10 +46,20 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
-import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
+import {
+  initSessionState as initSessionStateRaw,
+  resolveReplySessionPreprocessingState,
+} from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: Record<string, unknown>;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -323,7 +333,7 @@ describe("resolveReplySessionPreprocessingState", () => {
   function resolvePreprocessingState(storePath: string) {
     return resolveReplySessionPreprocessingState({
       cfg: { session: { store: storePath } } as OpenClawConfig,
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "<media:audio>",
         RawBody: "<media:audio>",
         CommandBody: "<media:audio>",
@@ -333,7 +343,7 @@ describe("resolveReplySessionPreprocessingState", () => {
         SessionKey: sessionKey,
         Provider: "telegram",
         Surface: "telegram",
-      },
+      }),
     });
   }
 

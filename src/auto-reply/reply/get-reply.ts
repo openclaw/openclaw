@@ -140,7 +140,7 @@ function loadCommandsCoreRuntime() {
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
-  const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
+  const message = ctx.commandText;
   if (!message) {
     return false;
   }
@@ -530,7 +530,7 @@ export async function getReplyFromConfig(
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
-    userMessage: finalized.BodyForAgent ?? finalized.Body,
+    userMessage: finalized.agentText,
     opts: optsWithSkillFilter,
     disabled: sessionModelSelectionLocked,
   });
@@ -739,15 +739,12 @@ export async function getReplyFromConfig(
         sessionCfg,
         commandAuthorized,
         command: fastCommand,
-        commandSource:
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
+        commandSource: finalized.commandText,
         allowTextCommands: shouldHandleFastReplyTextCommands({
           cfg,
           commandSource: finalized.CommandSource,
         }),
-        directives: clearInlineDirectives(
-          finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? "",
-        ),
+        directives: clearInlineDirectives(finalized.commandText),
         defaultActivation: "always",
         resolvedThinkLevel: undefined,
         resolvedVerboseLevel: normalizeVerboseLevel(agentCfg?.verboseDefault),
