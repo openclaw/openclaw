@@ -244,15 +244,14 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
 ]);
 
 function resolveSessionGroupMutationTargets(params: {
-  context: GatewayRequestContext;
+  getCfg: () => OpenClawConfig;
   requestParams: unknown;
 }): SessionMutationTarget[] | undefined {
   const groupName = readStringParam(params.requestParams, "name");
   if (!groupName) {
     return undefined;
   }
-  const cfg = params.context.getRuntimeConfig();
-  return resolveAllAgentSessionStoreTargetsSync(cfg).flatMap((storeTarget) =>
+  return resolveAllAgentSessionStoreTargetsSync(params.getCfg()).flatMap((storeTarget) =>
     listSessionEntries({
       agentId: storeTarget.agentId,
       storePath: storeTarget.storePath,
@@ -296,10 +295,11 @@ function resolveSessionMutationTargets(params: {
   method: string;
   requestParams: unknown;
   context: GatewayRequestContext;
+  getCfg: () => OpenClawConfig;
 }): SessionMutationTarget[] | undefined {
   if (params.method === "sessions.groups.rename" || params.method === "sessions.groups.delete") {
     return resolveSessionGroupMutationTargets({
-      context: params.context,
+      getCfg: params.getCfg,
       requestParams: params.requestParams,
     });
   }
@@ -361,10 +361,17 @@ export function authorizeSessionMutation(params: {
   if (isGatewayAdmin(params.client)) {
     return null;
   }
+  // Resolve runtime config at most once per request and only when a path needs it. The context
+  // getter reloads/resolves gateway config, so non-session requests (the vast majority) must not
+  // pay it. Group discovery and the authorization loop then share one snapshot, so a mid-request
+  // config change cannot split target discovery from authorization.
+  let cachedCfg: OpenClawConfig | undefined;
+  const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
   const targetRefs = resolveSessionMutationTargets({
     method: params.method,
     requestParams: params.requestParams,
     context: params.context,
+    getCfg,
   });
   if (!targetRefs) {
     if (REQUIRED_SESSION_TARGET_METHODS.has(params.method)) {
@@ -374,10 +381,7 @@ export function authorizeSessionMutation(params: {
     }
     return null;
   }
-  // Resolve runtime config only once a real session-mutation target exists. The context getter
-  // reloads/resolves gateway config, so reading it for every non-session request would tax the
-  // authorization hot path (most requests never reach here).
-  const cfg = params.context.getRuntimeConfig();
+  const cfg = getCfg();
   for (const targetRef of targetRefs) {
     const error = authorizeResolvedSessionMutation({
       cfg,
