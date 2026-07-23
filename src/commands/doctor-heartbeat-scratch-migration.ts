@@ -56,6 +56,15 @@ async function readHeartbeatSource(
   let sourceStat;
   try {
     sourceStat = await fs.lstat(heartbeatPath);
+    // A claim sibling next to an existing canonical file means an interrupted
+    // migration raced a recreation. Neither copy is provably authoritative, so
+    // stop instead of migrating one and silently resurrecting the other later.
+    const orphanClaim = await findStaleHeartbeatClaim(heartbeatPath);
+    if (orphanClaim) {
+      throw new Error(
+        `both ${heartbeatPath} and an interrupted migration claim at ${orphanClaim} exist; reconcile them manually before rerunning doctor`,
+      );
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
@@ -157,7 +166,7 @@ function archivePathForSource(agentId: string, sha256: string, env: NodeJS.Proce
 type HeartbeatSourceClaim = {
   claimPath: string;
   restore(cause: unknown): Promise<void>;
-  release(): Promise<void>;
+  release(params: { archivePath: string }): Promise<void>;
 };
 
 const HEARTBEAT_CLAIM_INFIX = ".doctor-importing-";
@@ -272,7 +281,7 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
   return {
     claimPath,
     restore,
-    release: async () => {
+    release: async ({ archivePath }) => {
       // Every verification failure here means "do not trust the import":
       // restore the claim and tag the error so the caller rolls scratch back.
       const failChanged = async (message: string, cause?: unknown): Promise<never> => {
@@ -326,7 +335,29 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
       if (recreated) {
         await failChanged("HEARTBEAT.md was recreated while the migration claim was held");
       }
-      await fs.unlink(claimPath);
+      // Retire the claim by moving the inode into the archive instead of
+      // unlinking it: a writer holding an open descriptor that lands a write
+      // after the hash check above still writes into the preserved archive
+      // file, never into a deleted inode.
+      const claimStat = await fs.lstat(claimPath);
+      if (claimStat.isSymbolicLink()) {
+        // The removable entry is the symlink itself; its target file stays in
+        // the workspace, so no open-descriptor write can be lost here.
+        await fs.unlink(claimPath);
+        return;
+      }
+      try {
+        await fs.rename(claimPath, archivePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EXDEV") {
+          throw error;
+        }
+        // Cross-device archive: the pre-written archive copy already holds the
+        // verified bytes. Accepted tradeoff: the unlink below reopens the
+        // microsecond open-descriptor window only when workspace and state dir
+        // sit on different filesystems.
+        await fs.unlink(claimPath);
+      }
     },
   };
 }
@@ -634,7 +665,9 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     try {
       // release() re-verifies the claimed bytes; when they changed it restores
       // the newer file itself and reports HeartbeatClaimChangedError.
-      await claim.release();
+      await claim.release({
+        archivePath: archivePathForSource(agents[0]![0], source.sha256, env),
+      });
       changes.push(...groupChanges);
     } catch (error) {
       if (error instanceof Error && error.name === HEARTBEAT_CLAIM_CHANGED_ERROR) {
