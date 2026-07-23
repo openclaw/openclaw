@@ -65,6 +65,8 @@ async function writeListToolsMcpServer(params: {
   notifyListChangedAfterFirstList?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
+  listToolsErrorCode?: number;
+  listToolsErrorMessage?: string;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
@@ -86,6 +88,8 @@ const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized =
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
+const listToolsErrorCode = ${params.listToolsErrorCode ?? -32601};
+const listToolsErrorMessage = ${JSON.stringify(params.listToolsErrorMessage ?? "Method not found")};
 const tools = ${JSON.stringify(
       params.tools ?? [
         {
@@ -159,7 +163,7 @@ function handle(message) {
       send({
         jsonrpc: "2.0",
         id: message.id,
-        error: { code: -32601, message: "Method not found" },
+        error: { code: listToolsErrorCode, message: listToolsErrorMessage },
       });
       return;
     }
@@ -1530,6 +1534,99 @@ process.on("SIGINT", shutdown);`,
         resources: { listChanged: true },
       });
       await waitForFileText(logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps resource-only MCP servers available on Unknown method tools/list errors", async () => {
+    // Some resource-only servers/proxies report an unsupported optional
+    // tools/list request with JSON-RPC code -32000 and message "Unknown method"
+    // instead of the standard -32601 / "Method not found". The catalog must
+    // treat that as an unsupported optional method and keep the server.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-only-unknown-"));
+    const serverPath = path.join(tempDir, "resource-only-unknown.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { resources: { listChanged: true } },
+      listToolsMethodNotFound: true,
+      listToolsErrorCode: -32000,
+      listToolsErrorMessage: "Unknown method",
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-resource-only-unknown",
+      sessionKey: "agent:test:session-resource-only-unknown",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            notes: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.servers.notes).toMatchObject({
+        serverName: "notes",
+        toolCount: 0,
+        resources: { listChanged: true },
+      });
+      await waitForFileText(logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not keep resource-only MCP servers when tools/list fails with a non-method error", async () => {
+    // Scope guard for the unsupported-method matcher: broadening it to accept
+    // "Unknown method" must not swallow a genuine server error. A tools/list
+    // failure that is not an unsupported-method response must still drop the
+    // server so the failure is not hidden.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-only-internal-"));
+    const serverPath = path.join(tempDir, "resource-only-internal.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { resources: { listChanged: true } },
+      listToolsMethodNotFound: true,
+      listToolsErrorCode: -32603,
+      listToolsErrorMessage: "Internal error",
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-resource-only-internal",
+      sessionKey: "agent:test:session-resource-only-internal",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            notes: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.servers.notes).toBeUndefined();
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
