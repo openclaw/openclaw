@@ -703,6 +703,42 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("keeps an absolute buffer deadline while a later decision is pending", async () => {
+    vi.useFakeTimers();
+    let releaseSecond!: () => void;
+    const secondPending = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{
+      key: string;
+      id: string;
+      rich: boolean;
+    }>({
+      debounceMs: 1_000,
+      buildKey: (item) => item.key,
+      resolveDecision: async (item) => {
+        if (item.id === "2") {
+          await secondPending;
+        }
+        return { action: "debounce" };
+      },
+      resolveMaxBufferAgeMs: (item) => (item.rich ? 100 : undefined),
+      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1", rich: true });
+    const second = debouncer.enqueue({ key: "a", id: "2", rich: false });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls).toEqual([["1"]]);
+
+    releaseSecond();
+    await second;
+    expect(debouncer.cancelKey("a")).toBe(true);
+    vi.useRealTimers();
+  });
+
   it("reports buffered items when cancelling a key", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

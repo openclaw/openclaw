@@ -255,7 +255,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
-    if ((pendingDecisionCounts.get(key) ?? 0) > 0) {
+    const hasPendingDecision = (pendingDecisionCounts.get(key) ?? 0) > 0;
+    if (hasPendingDecision && buffer.deadlineAt === undefined) {
       return;
     }
     const remainingLifetime =
@@ -266,7 +267,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       () => {
         void flushBuffer(key, buffer);
       },
-      Math.min(buffer.debounceMs, remainingLifetime),
+      hasPendingDecision ? remainingLifetime : Math.min(buffer.debounceMs, remainingLifetime),
     );
     buffer.timeout.unref?.();
   };
@@ -458,6 +459,11 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (heldBuffer?.timeout) {
       clearTimeout(heldBuffer.timeout);
       heldBuffer.timeout = null;
+    }
+    if (heldBuffer) {
+      // Pending policy work pauses trailing debounce, but never the absolute
+      // lifetime of an existing batch (for example one retaining media).
+      scheduleFlush(key, heldBuffer);
     }
     let releasePending!: () => void;
     const released = new Promise<undefined>((resolve) => {
