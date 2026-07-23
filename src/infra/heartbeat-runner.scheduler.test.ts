@@ -46,47 +46,21 @@ describe("startHeartbeatRunner", () => {
     } as OpenClawConfig;
   }
 
-  it("keeps a local fallback timer when cron is disabled, none when cron owns cadence", async () => {
+  it("does not self-fire when cron is disabled", async () => {
     useFakeHeartbeatTime();
-    const cronDisabledRun = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const disabledCfg = {
       ...heartbeatConfig(),
       cron: { enabled: false },
     } as OpenClawConfig;
-    const fallbackRunner = startHeartbeatRunner({
-      cfg: disabledCfg,
-      runOnce: cronDisabledRun,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
-    });
-    // Shipped contract: cron.enabled=false gateways still get scheduled
-    // heartbeats — the runner self-fires without any external poke.
-    await vi.advanceTimersByTimeAsync(31 * 60_000);
-    expect(cronDisabledRun).toHaveBeenCalled();
-    fallbackRunner.stop();
-
-    const cronOwnedRun = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const cronOwnedRunner = startDefaultRunner(cronOwnedRun);
-    // With cron owning cadence there is no self-firing timer.
-    await vi.advanceTimersByTimeAsync(31 * 60_000);
-    expect(cronOwnedRun).not.toHaveBeenCalled();
-    cronOwnedRunner.stop();
-  });
-
-  it("chains clamped fallback timers past Node's setTimeout cap to long due times", async () => {
-    useFakeHeartbeatTime();
-    const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
-      cfg: {
-        agents: { defaults: { heartbeat: { every: "60d" } } },
-        cron: { enabled: false },
-      } as OpenClawConfig,
+      cfg: disabledCfg,
       runOnce,
       stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
-    // 60d exceeds the ~24.85d setTimeout cap: each clamped firing defers
-    // not-due and must re-arm until the real due slot inside 60d passes.
-    await vi.advanceTimersByTimeAsync(61 * 24 * 60 * 60 * 1000);
-    expect(runOnce).toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(runOnce).not.toHaveBeenCalled();
     runner.stop();
   });
 
@@ -268,6 +242,44 @@ describe("startHeartbeatRunner", () => {
       startIndex: 1,
     });
 
+    runner.stop();
+  });
+
+  it("uses the persisted monitor cadence for scheduled ticks and later cooldown", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startDefaultRunner(runSpy);
+    const monitorAnchorMs = resolveHeartbeatPhaseMs({
+      schedulerSeed: TEST_SCHEDULER_SEED,
+      agentId: "main",
+      intervalMs: 5 * 60_000,
+    });
+    const monitorDueMs = resolveDueFromNow(0, 5 * 60_000, "main");
+    await vi.advanceTimersByTimeAsync(monitorDueMs);
+
+    requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 5 * 60_000,
+      scheduledAnchorMs: monitorAnchorMs,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect((getRunCall(runSpy, 0).heartbeat as { every?: string }).every).toBe("300000ms");
+
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    requestHeartbeat(wake("exec-event", { agentId: "main", coalesceMs: 0 }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(2);
     runner.stop();
   });
 

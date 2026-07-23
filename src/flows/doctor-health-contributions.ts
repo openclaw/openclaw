@@ -1136,6 +1136,16 @@ async function runHeartbeatTemplateRepairHealth(ctx: DoctorHealthFlowContext): P
   });
 }
 
+async function runHeartbeatCadenceMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-cadence-migration.js");
+  await maybeMigrateHeartbeatCadenceToCron({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
 async function runHeartbeatScratchMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeMigrateHeartbeatFilesToScratch } =
     await import("../commands/doctor-heartbeat-scratch-migration.js");
@@ -2206,6 +2216,21 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runHeartbeatTemplateRepairHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-cadence-migration",
+      label: "Heartbeat cadence migration",
+      healthChecks: {
+        id: "core/doctor/heartbeat-cadence-migration",
+        description: "Heartbeat cadence config must be materialized in cron monitor rows.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectHeartbeatCadenceMigrationFindings } =
+            await import("../commands/doctor-heartbeat-cadence-migration.js");
+          return await collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
+        },
+      },
+      run: runHeartbeatCadenceMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:heartbeat-scratch-migration",

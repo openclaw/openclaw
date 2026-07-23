@@ -2609,6 +2609,10 @@ async function executeJobCore(
       intent: "scheduled",
       reason: "interval",
       agentId: effectiveJob.agentId,
+      scheduledEveryMs:
+        effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
+      scheduledAnchorMs:
+        effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.anchorMs : undefined,
     });
     const result = { status: "ok" as const, summary: "heartbeat wake requested" };
     return triggerEval ? { ...result, triggerEval } : result;

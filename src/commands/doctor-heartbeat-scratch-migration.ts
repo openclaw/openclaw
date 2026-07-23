@@ -3,12 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatMonitorSpecs } from "../cron/heartbeat-monitor.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../cron/scratch-contract.js";
 import {
   deleteCronJobScratch,
@@ -16,7 +15,6 @@ import {
   readCronJobScratchState,
   writeCronJobScratch,
 } from "../cron/scratch-store.js";
-import { CronService } from "../cron/service.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -25,6 +23,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { shortenHomePath } from "../utils.js";
+import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 
 const HEARTBEAT_SCRATCH_MIGRATION_CHECK_ID = "core/doctor/heartbeat-scratch-migration";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
@@ -113,44 +112,6 @@ async function readHeartbeatSource(
     content,
     sha256: hashCronScratchSource(content),
   };
-}
-
-function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronService {
-  const noop = () => {};
-  const log = { debug: noop, info: noop, warn: noop, error: noop };
-  return new CronService({
-    storePath,
-    cronEnabled: false,
-    cronConfig: cfg.cron,
-    defaultAgentId: resolveDefaultAgentId(cfg),
-    log,
-    enqueueSystemEvent: () => false,
-    requestHeartbeat: noop,
-    runIsolatedAgentJob: async () => ({
-      status: "skipped",
-      error: "doctor does not execute cron jobs",
-    }),
-  });
-}
-
-async function ensureHeartbeatMonitorJobs(
-  cfg: OpenClawConfig,
-  storePath: string,
-): Promise<Map<string, CronJob>> {
-  const cron = createDoctorCronService(storePath, cfg);
-  const jobs = await cron.list({ includeDisabled: true });
-  const specs = resolveHeartbeatMonitorSpecs(cfg, jobs);
-  const monitors = new Map<string, CronJob>();
-  for (const spec of specs) {
-    const result = await cron.add(spec.input, {
-      enabledExplicit: true,
-      systemOwned: true,
-      matchesExisting: (job) => job.payload.kind === "heartbeat",
-    });
-    const job = "job" in result ? result.job : result;
-    monitors.set(spec.agentId, job);
-  }
-  return monitors;
 }
 
 function archivePathForSource(agentId: string, sha256: string, env: NodeJS.ProcessEnv): string {
@@ -472,7 +433,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
 
   let monitors: Map<string, CronJob>;
   try {
-    monitors = await ensureHeartbeatMonitorJobs(params.cfg, storePath);
+    monitors = await ensureHeartbeatMonitorJobs(params.cfg, storePath, env);
   } catch (error) {
     return {
       changes,
