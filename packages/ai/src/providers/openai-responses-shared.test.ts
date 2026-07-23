@@ -345,6 +345,56 @@ describe("Responses reasoning effort", () => {
     expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
   });
 
+  it("uses provider-native reasoning effort values declared by model compat", () => {
+    const providerNativeModel = {
+      ...nativeOpenAIModel,
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["none", "default"],
+        reasoningEffortMap: {
+          off: "none",
+          low: "default",
+          medium: "default",
+          high: "default",
+        },
+      },
+    } as unknown as Model<"openai-responses">;
+
+    const enabled = {} as never;
+    applyCommonResponsesParams(
+      enabled,
+      providerNativeModel,
+      { messages: [] },
+      {
+        reasoningEffort: "medium",
+      },
+    );
+
+    const summaryOnly = {} as never;
+    applyCommonResponsesParams(
+      summaryOnly,
+      providerNativeModel,
+      { messages: [] },
+      {
+        reasoningSummary: "concise",
+      },
+    );
+
+    const disabled = {} as never;
+    applyCommonResponsesParams(disabled, providerNativeModel, { messages: [] });
+
+    expect(enabled).toMatchObject({ reasoning: { effort: "default", summary: "auto" } });
+    expect(summaryOnly).toMatchObject({
+      reasoning: { effort: "default", summary: "concise" },
+    });
+    expect(disabled).toMatchObject({ reasoning: { effort: "none" } });
+    expect(disabled).not.toHaveProperty("include");
+  });
+
   it("keeps max clamped to xhigh for earlier models", () => {
     const gpt55WithXHigh = {
       ...nativeOpenAIModel,
