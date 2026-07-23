@@ -1105,6 +1105,7 @@
               {
                 "group": "Hosting",
                 "pages": [
+                  "install/agent37",
                   "install/azure",
                   "install/digitalocean",
                   "install/docker-vm-runtime",

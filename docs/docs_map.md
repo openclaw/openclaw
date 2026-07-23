@@ -4387,6 +4387,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Start here
   - H2: Learn more
 
+## install/agent37.md
+
+- Route: /install/agent37
+- Headings:
+  - H2: Prerequisites
+  - H2: Deploy
+  - H2: Manage the instance
+  - H2: Verify your setup
+  - H2: Troubleshooting
+  - H2: Next steps
+  - H2: Related
+
 ## install/ansible.md
 
 - Route: /install/ansible
