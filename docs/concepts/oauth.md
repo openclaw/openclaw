@@ -44,6 +44,10 @@ OAuth providers commonly mint a new refresh token on every login/refresh.
 Some providers invalidate the previous refresh token when a new one is
 issued for the same user/app. Practical symptom: log in via OpenClaw _and_
 via Claude Code / Codex CLI, and one of them randomly gets logged out later.
+The bundled `coding-agent` skill can trigger the same class of failure when it
+launches external `codex exec` against the ambient Codex home (`$CODEX_HOME` or
+`~/.codex`) while OpenClaw holds ChatGPT OAuth for the same account — use a
+command-scoped worker `CODEX_HOME` as documented in the skill.
 
 To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 

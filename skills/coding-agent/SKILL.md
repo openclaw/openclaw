@@ -41,6 +41,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - Always launch with `background:true`.
 - Codex and OpenCode: use `pty:true`.
 - Claude Code: no PTY; use `claude --permission-mode bypassPermissions --print`.
+- **Codex credential home:** never launch ambient `codex exec` against the default `~/.codex` (or an ambient process `$CODEX_HOME`) when OpenClaw also uses ChatGPT OAuth. Use a **dedicated worker `CODEX_HOME`**, authorize it once with `codex login`, preflight with `codex login status`, and scope `CODEX_HOME` only on the Codex worker command so OpenClaw keeps owning its OAuth profile. See [Codex credential isolation](#codex-credential-isolation).
 - Capture a real notification route before spawning.
 - Worker must send completion/failure via `openclaw message send`.
 - Do not rely on heartbeat, system events, or notify-on-exit.
@@ -104,6 +105,35 @@ Do not use openclaw system event or heartbeat.
 
 If no trustworthy route exists, say completion auto-notify is unavailable.
 
+## Codex credential isolation
+
+OpenClaw ChatGPT OAuth and the external Codex CLI both mint refresh tokens for the same provider app. Launching a coding-agent Codex worker against the ambient Codex home (`$CODEX_HOME` if already set in the process environment, otherwise `~/.codex`) can invalidate OpenClaw's stored refresh token (`refresh_token_reused` / login-expired guidance). OpenClaw remains the canonical owner of its own OAuth profile; the worker must use a **separate** Codex home. See also [OAuth](/concepts/oauth).
+
+One-time setup (worker home only; do **not** export this into the OpenClaw gateway process):
+
+```bash
+CODEX_HOME="${CODEX_HOME_CODING_AGENT:-$HOME/.codex-coding-agent}"
+mkdir -p "$CODEX_HOME"
+CODEX_HOME="$CODEX_HOME" codex login
+CODEX_HOME="$CODEX_HOME" codex login status   # preflight: must report logged in under this home
+```
+
+The dedicated home is a fully independent Codex profile, not only an authentication directory. It does not inherit the ambient profile's `config.toml`, profile overrides, MCP/plugin setup, skills or instructions, hooks, memories, logs, history, or sessions.
+
+When moving an existing worker off the ambient profile:
+
+1. Start with an empty dedicated home and run `codex login` there. Do not copy or symlink the ambient home, `auth.json`, `.credentials.json`, or platform-keyring credentials.
+2. Recreate only the settings the worker needs. Review and copy known non-secret configuration, instruction, or skill files individually; configure MCP servers under the dedicated home and authorize any credential-bearing integration separately.
+3. Leave logs, history, memories, and sessions behind. They are not required for the worker profile and may contain sensitive context.
+
+Rules:
+
+- Prefer a stable path such as `~/.codex-coding-agent` (or another dedicated directory you control).
+- Set `CODEX_HOME_CODING_AGENT` when using a non-default worker home; the Codex launch forms below honor it.
+- Scope `CODEX_HOME` **only** on Codex worker commands (`codex login`, `codex login status`, `codex exec`). Do not set it on the OpenClaw gateway, agent runtime, or unrelated shells that should keep using OpenClaw's auth store.
+- If `codex login status` fails for the worker home, re-run `CODEX_HOME=… codex login` before spawning work. Do not fall back to ambient `~/.codex` to "just make it work."
+- Claude Code and OpenCode launches are unchanged by this section; apply the isolation only to Codex CLI workers.
+
 ## Launch forms
 
 Write the worker prompt to a temp file first. This avoids shell quoting bugs when the required notification block contains quotes or newlines.
@@ -120,10 +150,11 @@ printf 'prompt file: %s\n' "$PROMPT"
 
 Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
 
-Codex:
+Codex (dedicated worker home — required):
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec - < \"$PROMPT\""
+# Scope CODEX_HOME only on this command (override or default worker home).
+bash pty:true background:true workdir:/path/isolated-worktree command:"CODEX_HOME=\"${CODEX_HOME_CODING_AGENT:-$HOME/.codex-coding-agent}\" codex exec - < \"$PROMPT\""
 ```
 
 Claude Code:
@@ -148,7 +179,7 @@ bash pty:true background:true workdir:/path/isolated-worktree command:"opencode 
 
 ## Scratch Codex
 
-Codex needs a trusted git repo. This throwaway scaffold is not project work and has no canonical remote, so the Git preparation block does not apply:
+Codex needs a trusted git repo. This throwaway scaffold is not project work and has no canonical remote, so the Git preparation block does not apply. Still use a **dedicated worker `CODEX_HOME`** (never ambient `~/.codex`) when OpenClaw ChatGPT OAuth is also in use:
 
 ```bash
 SCRATCH=$(mktemp -d)
@@ -159,7 +190,7 @@ Build X.
 <notification block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
-bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:$SCRATCH command:"CODEX_HOME=\"${CODEX_HOME_CODING_AGENT:-$HOME/.codex-coding-agent}\" codex exec - < \"$PROMPT\""
 ```
 
 ## Process actions
