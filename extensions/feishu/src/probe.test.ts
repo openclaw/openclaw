@@ -295,6 +295,28 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse cached identity when an account is reassigned to another app", async () => {
+    const requestFn = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        bot: { app_name: "OldBot", open_id: "ou_old" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        bot: { app_name: "NewBot", open_id: "ou_new" },
+      });
+    createFeishuClientMock.mockReturnValue({ request: requestFn });
+
+    await expect(
+      probeFeishu({ accountId: "acct-switch", appId: "cli_old", appSecret: "secret_old" }), // pragma: allowlist secret
+    ).resolves.toMatchObject({ ok: true, appId: "cli_old", botOpenId: "ou_old" });
+    await expect(
+      probeFeishu({ accountId: "acct-switch", appId: "cli_new", appSecret: "secret_new" }), // pragma: allowlist secret
+    ).resolves.toMatchObject({ ok: true, appId: "cli_new", botOpenId: "ou_new" });
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
   it("handles standard bot info nested under data", async () => {
     setupClient({
       code: 0,

@@ -90,7 +90,8 @@ export async function fetchBotIdentityForMonitor(
     timeoutMs,
     abortSignal: options.abortSignal,
   });
-  if (result.ok) {
+  const resultAppId = normalizeOptionalString(result.appId);
+  if (result.ok && resultAppId === account.appId) {
     // AI-agent registration is provider metadata, not channel identity. Keep it
     // best-effort so its quota or availability cannot suppress message ingress.
     void registerFeishuAiAgent(account, { abortSignal: options.abortSignal })
@@ -119,6 +120,13 @@ export async function fetchBotIdentityForMonitor(
       botName: normalizeOptionalString(result.botName),
       source: "provider",
     };
+  }
+
+  if (result.ok) {
+    const log = options.runtime?.log ?? console.log;
+    log(
+      `feishu[${account.accountId}]: bot info probe returned identity for a different app; ignoring stale result`,
+    );
   }
 
   const probeError = result.error ?? undefined;

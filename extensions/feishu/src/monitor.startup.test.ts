@@ -36,7 +36,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  registerFeishuAiAgentMock.mockResolvedValue({ ok: true });
+  registerFeishuAiAgentMock.mockReset().mockResolvedValue({ ok: true });
   readCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(null);
   writeCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(undefined);
 });
@@ -108,13 +108,13 @@ describe("Feishu monitor startup preflight", () => {
       throw new Error("Expected probe release callback to be initialized");
     }
     const releaseStartedProbes = releaseProbes;
-    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+    probeFeishuMock.mockImplementation(async (account: { accountId: string; appId: string }) => {
       started.push(account.accountId);
       inFlight += 1;
       maxInFlight = Math.max(maxInFlight, inFlight);
       await probesReleased;
       inFlight -= 1;
-      return { ok: true, botOpenId: `bot_${account.accountId}` };
+      return { ok: true, appId: account.appId, botOpenId: `bot_${account.accountId}` };
     });
 
     const abortController = new AbortController();
@@ -145,13 +145,13 @@ describe("Feishu monitor startup preflight", () => {
     }
     const releaseStartedBetaProbe = releaseBetaProbe;
 
-    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+    probeFeishuMock.mockImplementation(async (account: { accountId: string; appId: string }) => {
       started.push(account.accountId);
       if (account.accountId === "alpha") {
         return { ok: false };
       }
       await betaProbeReleased;
-      return { ok: true, botOpenId: `bot_${account.accountId}` };
+      return { ok: true, appId: account.appId, botOpenId: `bot_${account.accountId}` };
     });
 
     const abortController = new AbortController();
@@ -184,12 +184,16 @@ describe("Feishu monitor startup preflight", () => {
     }
     const releaseStartedBetaProbe = releaseBetaProbe;
 
-    probeFeishuMock.mockImplementation((account: { accountId: string }) => {
+    probeFeishuMock.mockImplementation((account: { accountId: string; appId: string }) => {
       started.push(account.accountId);
       if (account.accountId === "alpha") {
         return Promise.resolve({ ok: false, error: "probe timed out after 10000ms" });
       }
-      return betaProbeReleased.then(() => ({ ok: true, botOpenId: `bot_${account.accountId}` }));
+      return betaProbeReleased.then(() => ({
+        ok: true,
+        appId: account.appId,
+        botOpenId: `bot_${account.accountId}`,
+      }));
     });
 
     const abortController = new AbortController();
@@ -216,6 +220,7 @@ describe("Feishu monitor startup preflight", () => {
   it("returns standard bot identity without waiting for AI-agent registration", async () => {
     probeFeishuMock.mockResolvedValue({
       ok: true,
+      appId: "cli_alpha",
       botOpenId: "bot_alpha",
       botName: "Alpha",
     });
@@ -239,6 +244,7 @@ describe("Feishu monitor startup preflight", () => {
   it("keeps standard bot identity when AI-agent registration is unavailable", async () => {
     probeFeishuMock.mockResolvedValue({
       ok: true,
+      appId: "cli_alpha",
       botOpenId: "bot_alpha",
       botName: "Alpha",
     });
@@ -287,6 +293,33 @@ describe("Feishu monitor startup preflight", () => {
     );
   });
 
+  it("rejects a provider result from another app before persistence", async () => {
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      appId: "cli_old",
+      botOpenId: "bot_old",
+      botName: "Old",
+    });
+    readCachedFeishuBotIdentityMock.mockResolvedValue(null);
+    const runtime = createNonExitingRuntimeEnv();
+
+    await expect(
+      fetchBotIdentityForMonitor(
+        {
+          accountId: "alpha",
+          appId: "cli_alpha",
+          appSecret: "secret_alpha", // pragma: allowlist secret
+        } as never,
+        { runtime },
+      ),
+    ).resolves.toEqual({});
+    expect(writeCachedFeishuBotIdentityMock).not.toHaveBeenCalled();
+    expect(registerFeishuAiAgentMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "feishu[alpha]: bot info probe returned identity for a different app; ignoring stale result",
+    );
+  });
+
   it("bypasses cached identity during background provider refresh", async () => {
     probeFeishuMock.mockResolvedValue({ ok: false, error: "rate limited" });
 
@@ -307,6 +340,7 @@ describe("Feishu monitor startup preflight", () => {
     const runtime = createNonExitingRuntimeEnv();
     probeFeishuMock.mockResolvedValueOnce({
       ok: true,
+      appId: "cli_alpha",
       botOpenId: "bot_alpha",
       botName: "Alpha",
     });
