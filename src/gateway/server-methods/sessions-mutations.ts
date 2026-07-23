@@ -10,8 +10,9 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
-  applySessionEntryLifecycleMutation,
   applySessionPatchProjection,
+  captureSessionEntryCandidateLayout,
+  restoreSessionEntryCandidateLayout,
 } from "../../config/sessions/session-accessor.js";
 import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -114,7 +115,9 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return catalog;
     };
     let entryBeforePatch: NonNullable<typeof lifecycleEntry> | undefined;
-    let patchedPrimaryKey = canonicalKey;
+    let candidateLayoutBeforePatch:
+      | ReturnType<typeof captureSessionEntryCandidateLayout>
+      | undefined;
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
       // A reset queued ahead of archive can rotate the row before this mutation starts.
@@ -181,10 +184,19 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             store,
             agentId: requestedAgentId,
           });
+          const candidateKeysBeforePatch = [
+            ...new Set(
+              migratedTarget.storeKeys.map((candidate) => candidate.trim()).filter(Boolean),
+            ),
+          ];
+          candidateLayoutBeforePatch = captureSessionEntryCandidateLayout({
+            agentId: target.agentId,
+            storePath,
+            sessionKeys: candidateKeysBeforePatch,
+          });
           return { primaryKey, candidateKeys: migratedTarget.storeKeys };
         },
         project: async ({ primaryKey, existingEntry, entries }) => {
-          patchedPrimaryKey = primaryKey;
           entryBeforePatch = existingEntry ? structuredClone(existingEntry) : undefined;
           const projected = await projectSessionsPatchEntry({
             cfg,
@@ -241,20 +253,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             now: Date.now(),
           });
         } catch (error) {
-          await applySessionEntryLifecycleMutation({
+          if (!candidateLayoutBeforePatch) {
+            throw error;
+          }
+          await restoreSessionEntryCandidateLayout({
             agentId: target.agentId,
             storePath,
-            ...(entryBeforePatch
-              ? { upserts: [{ sessionKey: patchedPrimaryKey, entry: entryBeforePatch }] }
-              : {
-                  removals: [
-                    {
-                      sessionKey: patchedPrimaryKey,
-                      expectedSessionId: result.entry.sessionId,
-                    },
-                  ],
-                }),
-            skipMaintenance: true,
+            snapshot: candidateLayoutBeforePatch,
           });
           throw error;
         }

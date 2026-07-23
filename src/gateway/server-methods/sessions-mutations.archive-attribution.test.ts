@@ -5,7 +5,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -178,6 +181,98 @@ describe("sessions.patch archive attribution", () => {
       expect(restored?.archivedBy).toBeUndefined();
       expect(restored?.pinnedAt).toBe(2);
       expect(restored?.label).toBe("original");
+    });
+  });
+
+  it("restores every alias candidate row byte-for-byte when archive auditing fails", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const canonicalKey = "agent:main:alias-archive";
+      const aliasKey = "alias-archive";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: canonicalKey },
+        {
+          sessionId: "session-canonical-before-archive",
+          updatedAt: 1,
+          label: "canonical",
+        },
+      );
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: aliasKey },
+        {
+          sessionId: "session-alias-before-archive",
+          updatedAt: 2,
+          label: "alias",
+        },
+      );
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const aliasRow = database.db
+        .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
+        .get(aliasKey) as { entry_json: string };
+      const nonCanonicalAliasJson = JSON.stringify(JSON.parse(aliasRow.entry_json), null, 2);
+      database.db
+        .prepare(
+          "UPDATE session_entries SET entry_json = ?, updated_at = ?, status = ? WHERE session_key = ?",
+        )
+        .run(nonCanonicalAliasJson, 777, "failed", aliasKey);
+      database.db
+        .prepare(
+          "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(aliasKey, "profile-member", "profile-owner", 123);
+      const readCandidateState = () => ({
+        entryRows: database.db
+          .prepare(
+            `SELECT session_key, session_id, entry_json, updated_at, status
+             FROM session_entries
+             WHERE session_key IN (?, ?)
+             ORDER BY session_key`,
+          )
+          .all(canonicalKey, aliasKey) as Array<{
+          session_key: string;
+          session_id: string;
+          entry_json: string;
+          updated_at: number;
+          status: string | null;
+        }>,
+        memberRows: database.db
+          .prepare(
+            `SELECT session_key, identity_id, added_by, added_at
+             FROM session_members
+             WHERE session_key IN (?, ?)
+             ORDER BY session_key, identity_id`,
+          )
+          .all(canonicalKey, aliasKey) as Array<{
+          session_key: string;
+          identity_id: string;
+          added_by: string;
+          added_at: number;
+        }>,
+      });
+      const before = readCandidateState();
+      const append = vi
+        .spyOn(SessionManager.prototype, "appendMessage")
+        .mockImplementationOnce(() => {
+          throw new Error("audit unavailable");
+        });
+
+      try {
+        await expect(
+          invokePatchSession({ key: aliasKey, archived: true }, client("profile-ada", "Ada")),
+        ).rejects.toThrow("audit unavailable");
+      } finally {
+        append.mockRestore();
+      }
+
+      const after = readCandidateState();
+      expect(after).toEqual(before);
+      expect(after.entryRows.map((row) => row.session_key)).toEqual(
+        [canonicalKey, aliasKey].toSorted(),
+      );
+      for (const row of after.entryRows) {
+        const entry = JSON.parse(row.entry_json) as Record<string, unknown>;
+        expect(entry.archivedAt).toBeUndefined();
+        expect(entry.archivedBy).toBeUndefined();
+      }
     });
   });
 });

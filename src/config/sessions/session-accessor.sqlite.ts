@@ -28,7 +28,9 @@ export {
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
   applySqliteSessionStoreProjection,
+  captureSqliteSessionEntryCandidateLayout,
   purgeSqliteDeletedAgentSessionEntries,
+  restoreSqliteSessionEntryCandidateLayout,
 } from "./session-accessor.sqlite-projection.js";
 export {
   forkSqliteSessionEntryFromParentTarget,

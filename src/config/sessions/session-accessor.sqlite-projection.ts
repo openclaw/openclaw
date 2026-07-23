@@ -1,10 +1,12 @@
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -28,6 +30,7 @@ import {
   deleteLegacySessionEntryRows,
   deleteSqliteSessionEntryRows,
   readExactSessionEntryRow,
+  readSqliteSessionIdentitySnapshot,
   readSqliteSessionEntryCount,
   readSqliteSessionEntryStore,
   rehomeSqliteSessionWindows,
@@ -37,6 +40,7 @@ import {
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   emitCommittedLifecycleIdentityMutations,
+  emitCommittedSessionIdentityDiff,
   emitCommittedSessionEntryChange,
   emitCommittedSessionEntryRemovals,
 } from "./session-accessor.sqlite-identity.js";
@@ -67,6 +71,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import type { SessionEntryCandidateLayoutSnapshot } from "./session-accessor.types.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -277,6 +282,92 @@ export async function applySqliteSessionStoreProjection<T>(params: {
     );
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
     return operation.result;
+  });
+}
+
+export function captureSqliteSessionEntryCandidateLayout(params: {
+  agentId?: string;
+  storePath: string;
+  sessionKeys: readonly string[];
+}): SessionEntryCandidateLayoutSnapshot {
+  const sessionKeys = uniqueStrings(params.sessionKeys.map((key) => key.trim()));
+  if (sessionKeys.length === 0) {
+    return { sessionKeys, entryRows: [], memberRows: [] };
+  }
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: sessionKeys[0] ?? "",
+    storePath: params.storePath,
+  });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+  const entryRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .selectAll()
+      .where("session_key", "in", sessionKeys)
+      .orderBy("session_key", "asc"),
+  ).rows;
+  const memberRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_members")
+      .selectAll()
+      .where("session_key", "in", sessionKeys)
+      .orderBy("session_key", "asc")
+      .orderBy("identity_id", "asc"),
+  ).rows;
+  return {
+    sessionKeys,
+    entryRows,
+    memberRows,
+  };
+}
+
+export async function restoreSqliteSessionEntryCandidateLayout(params: {
+  agentId?: string;
+  storePath: string;
+  snapshot: SessionEntryCandidateLayoutSnapshot;
+}): Promise<void> {
+  if (params.snapshot.sessionKeys.length === 0) {
+    return;
+  }
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.snapshot.sessionKeys[0] ?? "",
+    storePath: params.storePath,
+  });
+  await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const previous = readSqliteSessionIdentitySnapshot(database, params.snapshot.sessionKeys);
+    runOpenClawAgentWriteTransaction((transactionDb) => {
+      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(transactionDb.db);
+      executeSqliteQuerySync(
+        transactionDb.db,
+        db.deleteFrom("session_members").where("session_key", "in", params.snapshot.sessionKeys),
+      );
+      executeSqliteQuerySync(
+        transactionDb.db,
+        db.deleteFrom("session_entries").where("session_key", "in", params.snapshot.sessionKeys),
+      );
+      if (params.snapshot.entryRows.length > 0) {
+        executeSqliteQuerySync(
+          transactionDb.db,
+          db.insertInto("session_entries").values(params.snapshot.entryRows),
+        );
+      }
+      if (params.snapshot.memberRows.length > 0) {
+        executeSqliteQuerySync(
+          transactionDb.db,
+          db.insertInto("session_members").values(params.snapshot.memberRows),
+        );
+      }
+    }, toDatabaseOptions(resolved));
+    const current = readSqliteSessionIdentitySnapshot(database, params.snapshot.sessionKeys);
+    // The forward projection publishes this same identity diff; handler-level
+    // metadata events are emitted only after its audit succeeds.
+    emitCommittedSessionIdentityDiff(previous, current);
   });
 }
 
