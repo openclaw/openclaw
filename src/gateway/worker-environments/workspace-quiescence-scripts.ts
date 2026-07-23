@@ -117,9 +117,8 @@ const watchdogSource = [
   validProcessReference.toString(),
   validRecovery.toString(),
   parseLease.toString(),
-  processStatus.toString(),
-  leaseMutationOwnerStatus.toString(),
-  leaseMutationSelfIdentity.toString(),
+  leaseMutationOwnerTitle.toString(),
+  leaseMutationOwnerCommand.toString(),
   leaseMutationOwnerDefinitelyStale.toString(),
   leaseMutationOwnerName.toString(),
   parseLeaseMutationOwnerName.toString(),
@@ -130,7 +129,6 @@ const watchdogSource = [
   acquireLeaseMutation.toString(),
   releaseLeaseMutation.toString(),
   persistLeaseLocked.toString(),
-  "leaseMutationSelfIdentity();",
   "(" + watchdogMain.toString() + ")(process.argv[1], process.argv[2]);",
 ].join("\n");
 const watchdog = childProcess.spawn(

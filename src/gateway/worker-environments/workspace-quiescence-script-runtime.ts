@@ -187,43 +187,32 @@ function parseLease(raw, expectedNonce, options = {}) {
   }
   return lease;
 }
-function leaseMutationOwnerStatus(pid) {
-  const status = processStatus(pid);
-  if (status === null) return null;
-  return {
-    state: status.state,
-    identity: crypto.createHash("sha256").update(status.start).digest("hex"),
-  };
+function leaseMutationOwnerTitle(token) {
+  return "openclaw-qlease-" + token;
 }
-function leaseMutationSelfIdentity() {
-  if (typeof leaseMutationSelfIdentity.value === "string") return leaseMutationSelfIdentity.value;
-  const status = leaseMutationOwnerStatus(process.pid);
-  if (status === null) {
-    throw new Error("workspace quiescence lease mutation owner identity was not observable");
+function leaseMutationOwnerCommand(pid) {
+  try {
+    const command = childProcess.execFileSync("ps", ["-ww", "-o", "args=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000, killSignal: "SIGKILL" }).trim();
+    return command || null;
+  } catch (error) {
+    if (error && error.status === 1) return null;
+    throw error;
   }
-  leaseMutationSelfIdentity.value = status.identity;
-  return status.identity;
 }
 function leaseMutationOwnerDefinitelyStale(owner) {
   if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid < 1) return false;
-  let status;
-  try { status = leaseMutationOwnerStatus(owner.pid); } catch { return false; }
-  if (status === null) {
-    // A failed status probe is not proof of PID reuse; only reclaim when absence is observable.
-    try { process.kill(owner.pid, 0); } catch (error) { return Boolean(error && error.code === "ESRCH"); }
-    return false;
-  }
-  if (status.state.startsWith("Z") || status.state.startsWith("X")) return true;
-  return status.identity !== owner.identity;
+  let command;
+  try { command = leaseMutationOwnerCommand(owner.pid); } catch { return false; }
+  return command === null || command !== leaseMutationOwnerTitle(owner.token);
 }
-// The canonical process start identity is encoded in atomic directory-entry metadata.
+// The random owner token is published in both ps-visible process identity and the atomic entry.
 function leaseMutationOwnerName(owner) {
-  return "owner." + owner.pid + "." + owner.identity + "." + owner.token;
+  return "owner." + owner.pid + "." + owner.token;
 }
 function parseLeaseMutationOwnerName(name) {
-  const match = /^owner\.(\d+)\.([a-f0-9]{64})\.([a-f0-9]{32})$/.exec(name);
+  const match = /^owner\.(\d+)\.([a-f0-9]{32})$/.exec(name);
   if (!match) return null;
-  const owner = { pid: Number(match[1]), identity: match[2], token: match[3] };
+  const owner = { pid: Number(match[1]), token: match[2] };
   return Number.isSafeInteger(owner.pid) && owner.pid > 0 ? owner : null;
 }
 function leaseMutationDirectoryOwners(lockPath) {
@@ -274,35 +263,47 @@ function leaseMutationTimeout() {
 function acquireLeaseMutation(targetPath, timeoutMs = ${REMOTE_QUIESCENCE_LEASE_LOCK_TIMEOUT_MS}) {
   const lockPath = targetPath + ".lock";
   const token = crypto.randomBytes(16).toString("hex");
-  const owner = { pid: process.pid, identity: leaseMutationSelfIdentity(), token };
+  const owner = { pid: process.pid, token };
   const ownerName = leaseMutationOwnerName(owner);
+  const previousTitle = process.title;
+  const ownerTitle = leaseMutationOwnerTitle(token);
+  process.title = ownerTitle;
+  if (process.title !== ownerTitle) {
+    process.title = previousTitle;
+    throw new Error("workspace quiescence lease mutation owner token was not publishable");
+  }
   const sleeper = new Int32Array(new SharedArrayBuffer(4));
   const deadlineMs = Date.now() + timeoutMs;
-  while (true) {
-    try {
-      fs.mkdirSync(lockPath, { mode: 0o700 });
-      let acquired = false;
+  try {
+    while (true) {
       try {
-        const descriptor = fs.openSync(lockPath + "/" + ownerName, "wx", 0o600);
-        fs.closeSync(descriptor);
-        const owners = leaseMutationDirectoryOwners(lockPath);
-        if (owners !== null && owners.length === 1 && owners[0].name === ownerName) {
-          acquired = true;
-          return { lockPath, ownerName };
+        fs.mkdirSync(lockPath, { mode: 0o700 });
+        let acquired = false;
+        try {
+          const descriptor = fs.openSync(lockPath + "/" + ownerName, "wx", 0o600);
+          fs.closeSync(descriptor);
+          const owners = leaseMutationDirectoryOwners(lockPath);
+          if (owners !== null && owners.length === 1 && owners[0].name === ownerName) {
+            acquired = true;
+            return { lockPath, ownerName, previousTitle };
+          }
+        } finally {
+          if (!acquired) removeLeaseMutationOwner(lockPath, ownerName);
         }
-      } finally {
-        if (!acquired) removeLeaseMutationOwner(lockPath, ownerName);
+      } catch (error) {
+        if (!error || (error.code !== "EEXIST" && error.code !== "ENOENT")) throw error;
       }
-    } catch (error) {
-      if (!error || (error.code !== "EEXIST" && error.code !== "ENOENT")) throw error;
+      if (clearStaleLeaseMutation(lockPath)) continue;
+      if (Date.now() >= deadlineMs) throw leaseMutationTimeout();
+      Atomics.wait(sleeper, 0, 0, 10);
     }
-    if (clearStaleLeaseMutation(lockPath)) continue;
-    if (Date.now() >= deadlineMs) throw leaseMutationTimeout();
-    Atomics.wait(sleeper, 0, 0, 10);
+  } catch (error) {
+    process.title = previousTitle;
+    throw error;
   }
 }
 function releaseLeaseMutation(mutation) {
-  removeLeaseMutationOwner(mutation.lockPath, mutation.ownerName);
+  try { removeLeaseMutationOwner(mutation.lockPath, mutation.ownerName); } finally { process.title = mutation.previousTitle; }
 }
 function withLeaseMutation(targetPath, mutate) {
   const mutation = acquireLeaseMutation(targetPath); try { return mutate(); } finally { releaseLeaseMutation(mutation); }
@@ -315,5 +316,4 @@ function persistLeaseLocked(targetPath, lease, verifyCurrent) {
 }
 function persistLease(targetPath, lease, verifyCurrent) {
   return withLeaseMutation(targetPath, () => persistLeaseLocked(targetPath, lease, verifyCurrent));
-}
-leaseMutationSelfIdentity();`;
+}`;

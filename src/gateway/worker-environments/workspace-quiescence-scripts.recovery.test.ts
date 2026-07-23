@@ -28,7 +28,7 @@ async function fixture() {
   workspace = await fs.realpath(workspace);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\nbounded_probe() { slot=""; for n in 1 2 3 4 5 6 7 8; do candidate="$OPENCLAW_TEST_PS_PROBE_SLOTS/$n"; if mkdir "$candidate" 2>/dev/null; then slot=$candidate; break; fi; done; if [ -z "$slot" ]; then exit 75; fi; sleep 0.05; /bin/ps "$@"; status=$?; rmdir "$slot"; exit "$status"; }\ncase "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if [ -d "$OPENCLAW_TEST_PS_PROBE_SLOTS" ]; then bounded_probe "$@"; fi ;; esac\ncase "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;; *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)" ;; esac\n',
+    '#!/bin/sh\nbounded_probe() { slot=""; for n in 1 2 3 4 5 6 7 8; do candidate="$OPENCLAW_TEST_PS_PROBE_SLOTS/$n"; if mkdir "$candidate" 2>/dev/null; then slot=$candidate; break; fi; done; if [ -z "$slot" ]; then exit 75; fi; sleep 0.05; /bin/ps "$@"; status=$?; rmdir "$slot"; exit "$status"; }\ncase "$*" in *"stat=,lstart= -p"*) ;; *"lstart= -p"*) if [ -d "$OPENCLAW_TEST_PS_PROBE_SLOTS" ]; then bounded_probe "$@"; fi ;; esac\ncase "$*" in *"stat=,lstart= -p"*|*"lstart= -p"*|*"args= -p"*) exec /bin/ps "$@" ;; *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)" ;; esac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
@@ -131,7 +131,7 @@ describe("remote workspace quiescence lease ownership", () => {
       process.execPath,
       [
         "-e",
-        'const childProcess = require("node:child_process"); const crypto = require("node:crypto"); const fs = require("node:fs"); const target = process.argv[1]; const start = childProcess.execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], { encoding: "utf8", maxBuffer: 4096, timeout: 2000 }).trim(); const identity = crypto.createHash("sha256").update(start).digest("hex"); fs.mkdirSync(target, { mode: 0o700 }); fs.closeSync(fs.openSync(target + "/owner." + process.pid + "." + identity + "." + "d".repeat(32), "wx", 0o600)); setInterval(() => {}, 1000);',
+        'const fs = require("node:fs"); const target = process.argv[1]; const token = "d".repeat(32); process.title = "openclaw-qlease-" + token; fs.mkdirSync(target, { mode: 0o700 }); fs.closeSync(fs.openSync(target + "/owner." + process.pid + "." + token, "wx", 0o600)); setInterval(() => {}, 1000);',
         lockPath,
       ],
       { stdio: "ignore" },
@@ -201,11 +201,9 @@ describe("remote workspace quiescence lease ownership", () => {
         }),
       );
       await fs.mkdir(lockPath, { mode: 0o700 });
-      await fs.writeFile(
-        path.join(lockPath, `owner.${lockOwnerPid}.${"0".repeat(64)}.${"e".repeat(32)}`),
-        "",
-        { mode: 0o600 },
-      );
+      await fs.writeFile(path.join(lockPath, `owner.${lockOwnerPid}.${"e".repeat(32)}`), "", {
+        mode: 0o600,
+      });
 
       await resume(input, nonce);
 
@@ -229,15 +227,15 @@ describe("remote workspace quiescence lease ownership", () => {
     const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
       watchdog: { pid: number; start: string };
     };
-    const lockOwner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      stdio: "ignore",
-    });
+    const token = "f".repeat(32);
+    const lockOwner = spawn(
+      process.execPath,
+      ["-e", `process.title = "openclaw-qlease-${token}"; setInterval(() => {}, 1000)`],
+      { stdio: "ignore" },
+    );
     const lockOwnerPid = lockOwner.pid!;
     const lockPath = `${leaseFile}.lock`;
     try {
-      const identity = createHash("sha256")
-        .update(await processStart(lockOwnerPid))
-        .digest("hex");
       await fs.writeFile(
         leaseFile,
         JSON.stringify({
@@ -249,14 +247,12 @@ describe("remote workspace quiescence lease ownership", () => {
         }),
       );
       await fs.mkdir(lockPath, { mode: 0o700 });
-      await fs.writeFile(
-        path.join(lockPath, `owner.${lockOwnerPid}.${identity}.${"f".repeat(32)}`),
-        "",
-        { mode: 0o600 },
-      );
+      await fs.writeFile(path.join(lockPath, `owner.${lockOwnerPid}.${token}`), "", {
+        mode: 0o600,
+      });
       await fs.writeFile(
         path.join(input.bin, "ps"),
-        '#!/bin/sh\ncase "$*" in *"stat=,lstart= -p $OPENCLAW_TEST_PS_STALL_PID"*) exec sleep 10 ;; esac\nexec /bin/ps "$@"\n',
+        '#!/bin/sh\ncase "$*" in *"args= -p $OPENCLAW_TEST_PS_STALL_PID"*) exec sleep 10 ;; esac\nexec /bin/ps "$@"\n',
       );
 
       const result = await runCommandWithTimeout(
