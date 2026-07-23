@@ -227,21 +227,15 @@ export async function loadPreparedModelCatalogSnapshot(
   return (await loadPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
 }
 
-/** Reads the committed owner generation for long-lived runtime work. */
-export async function loadPublishedPreparedModelCatalogSnapshot(
-  params: LoadPreparedModelCatalogParams = {},
-): Promise<ModelCatalogSnapshot> {
-  return (await loadPublishedPreparedModelCatalogOwnerSnapshot(params)).modelCatalog;
-}
-
 export async function loadPreparedModelCatalog(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogEntry[]> {
   return (await loadPreparedModelCatalogSnapshot(params)).entries;
 }
 
+/** Reads the committed owner generation for long-lived runtime work. */
 export async function loadPublishedPreparedModelCatalog(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<ModelCatalogEntry[]> {
-  return (await loadPublishedPreparedModelCatalogSnapshot(params)).entries;
+  return (await loadPublishedPreparedModelCatalogOwnerSnapshot(params)).modelCatalog.entries;
 }

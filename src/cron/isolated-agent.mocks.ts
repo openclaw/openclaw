@@ -4,6 +4,8 @@
 import "../utils/usage-format.js";
 import { vi } from "vitest";
 
+const loadPreparedModelCatalog = vi.hoisted(() => vi.fn());
+
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
@@ -11,7 +13,8 @@ vi.mock("../agents/embedded-agent.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: vi.fn(),
+  loadPreparedModelCatalog,
+  loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
 }));
 
 vi.mock("../agents/model-selection.js", async () => {
