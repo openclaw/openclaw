@@ -368,6 +368,9 @@ const config = {
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Private RFC 0013 recovery helpers are direct unit-test contracts until
+    // their hidden host-facing caller lands in the next stacked slice.
+    "src/snapshot/recovery-point.ts": ["exports"],
   },
   workspaces: {
     ".": {
