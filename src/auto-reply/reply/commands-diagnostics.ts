@@ -7,7 +7,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import type { InteractiveReply, MessagePresentationAction } from "../../interactive/payload.js";
+import type {
+  LegacyInteractiveReply,
+  MessagePresentationAction,
+} from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import type { ReplyPayload } from "../types.js";
@@ -268,7 +271,7 @@ async function requestGatewayDiagnosticsExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
   codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
 ): Promise<GatewayDiagnosticsApprovalResult> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({
@@ -443,6 +446,7 @@ async function executeCodexDiagnosticsAddon(
     config: params.cfg,
     from: params.command.from,
     to: params.command.to,
+    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
       typeof params.ctx.MessageThreadId === "string" ||
@@ -579,7 +583,7 @@ function rewriteCodexDiagnosticsResult(result: PluginCommandResult): PluginComma
   };
 }
 
-function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
+function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteractiveReply {
   return {
     blocks: interactive.blocks.map((block) => {
       if (block.type === "buttons") {

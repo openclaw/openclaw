@@ -55,6 +55,41 @@ struct StatusItemMouseRouterTests {
         #expect(rightClicks == 1)
     }
 
+    @Test func `retargets hover tracking without reinstalling the monitor`() throws {
+        let firstButton = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        let secondButton = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        let firstTrackingAreaCount = firstButton.trackingAreas.count
+        let secondTrackingAreaCount = secondButton.trackingAreas.count
+        var monitorInstallCount = 0
+        var hoverChanges: [Bool] = []
+        let router = StatusItemMouseRouter(
+            eventMonitorInstaller: { _, _ in
+                monitorInstallCount += 1
+                return NSObject()
+            },
+            eventMonitorRemover: { _ in })
+
+        router.install(
+            on: firstButton,
+            onLeftClick: {},
+            onRightClick: {},
+            onHoverChanged: { hoverChanges.append($0) })
+        #expect(firstButton.trackingAreas.count == firstTrackingAreaCount + 1)
+        try router.mouseEntered(with: Self.mouseEvent(.mouseMoved))
+        try router.mouseExited(with: Self.mouseEvent(.mouseMoved))
+
+        router.install(
+            on: secondButton,
+            onLeftClick: {},
+            onRightClick: {},
+            onHoverChanged: { hoverChanges.append($0) })
+        #expect(monitorInstallCount == 1)
+        #expect(firstButton.trackingAreas.count == firstTrackingAreaCount)
+        #expect(secondButton.trackingAreas.count == secondTrackingAreaCount + 1)
+        try router.mouseEntered(with: Self.mouseEvent(.mouseMoved))
+        #expect(hoverChanges == [true, false, true])
+    }
+
     @Test func `non-target and unrelated events continue to native dispatch`() throws {
         var leftClicks = 0
         var rightClicks = 0

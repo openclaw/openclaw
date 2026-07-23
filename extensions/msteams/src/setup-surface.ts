@@ -1,16 +1,16 @@
 // Msteams plugin module implements setup surface behavior.
 import {
   createAccountScopedGroupAccessSection,
-  createLegacyCompatChannelDmPolicy,
   mergeAllowFromEntries,
-  setAccountDmAllowFromForChannel,
+  patchChannelConfigForAccount,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
@@ -86,11 +86,11 @@ async function promptMSTeamsAllowFrom(params: {
         continue;
       }
       const unique = mergeAllowFromEntries(existing, ids);
-      return setAccountDmAllowFromForChannel({
+      return patchChannelConfigForAccount({
         cfg: params.cfg,
         channel,
         accountId,
-        allowFrom: unique,
+        patch: { dmPolicy: "allowlist", allowFrom: unique },
       });
     }
 
@@ -107,11 +107,11 @@ async function promptMSTeamsAllowFrom(params: {
 
     const ids = resolved.map((item) => item.id as string);
     const unique = mergeAllowFromEntries(existing, ids);
-    return setAccountDmAllowFromForChannel({
+    return patchChannelConfigForAccount({
       cfg: params.cfg,
       channel,
       accountId,
-      allowFrom: unique,
+      patch: { dmPolicy: "allowlist", allowFrom: unique },
     });
   }
 }
@@ -274,11 +274,23 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> =
       ),
   });
 
-const msteamsDmPolicy: ChannelSetupDmPolicy = createLegacyCompatChannelDmPolicy({
+const msteamsDmPolicy: ChannelSetupDmPolicy = {
   label: "MS Teams",
   channel,
+  policyKey: "channels.msteams.dmPolicy",
+  allowFromKey: "channels.msteams.allowFrom",
+  resolveConfigKeys: (_cfg, accountId) => {
+    const base =
+      accountId && accountId !== "default"
+        ? `channels.msteams.accounts.${accountId}`
+        : "channels.msteams";
+    return { policyKey: `${base}.dmPolicy`, allowFromKey: `${base}.allowFrom` };
+  },
+  getCurrent: (cfg, accountId) => resolveMSTeamsAccountConfig(cfg, accountId).dmPolicy ?? "pairing",
+  setPolicy: (cfg, policy, accountId = "default") =>
+    patchMSTeamsAccountConfig({ cfg, accountId, patch: { dmPolicy: policy } }),
   promptAllowFrom: promptMSTeamsAllowFrom,
-});
+};
 
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
@@ -373,11 +385,5 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: { ...cfg.channels?.msteams, enabled: false },
-    },
-  }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

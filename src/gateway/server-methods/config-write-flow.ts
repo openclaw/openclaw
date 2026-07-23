@@ -141,7 +141,8 @@ function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>)
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
@@ -150,18 +151,15 @@ function resolveConfigRestartRequirement(params: {
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  const plan = buildGatewayReloadPlan(params.changedPaths);
+  const plan = buildGatewayReloadPlan(params.changedPaths, { candidateConfig: params.nextConfig });
   if (isNoopConfigReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }
   if (reloadSettings.mode === "off") {
     return { requiresRestart: true, scheduleDirectRestart: true };
   }
-  if (reloadSettings.mode === "restart") {
-    return { requiresRestart: true, scheduleDirectRestart: false };
-  }
   if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+    return { requiresRestart: true, scheduleDirectRestart: false };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
 }
@@ -248,6 +246,7 @@ export async function commitGatewayConfigWrite(params: {
     nextConfig: params.nextConfig,
     writeOptions: {
       ...params.writeOptions,
+      auditOrigin: "config-rpc",
       runtimeRefresh: {
         ...params.writeOptions.runtimeRefresh,
         includeAuthStoreRefs: false,

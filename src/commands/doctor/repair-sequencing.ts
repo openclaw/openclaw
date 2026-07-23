@@ -4,6 +4,7 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
+import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -33,6 +34,7 @@ import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engi
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
+import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
@@ -48,6 +50,7 @@ export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
@@ -100,6 +103,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     env,
     shouldRepair: true,
+    blockedProviderPlan: params.blockedCodexProviderPlan,
   });
   applyMutation({
     config: codexRouteRepair.cfg,
@@ -184,6 +188,16 @@ export async function runDoctorRepairSequence(params: {
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
+  }
+  const onboardingRecommendationsMigration = migrateLegacyOnboardingRecommendationsScope({
+    cfg: state.candidate,
+    env,
+  });
+  if (onboardingRecommendationsMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(onboardingRecommendationsMigration.changes));
+  }
+  if (onboardingRecommendationsMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(onboardingRecommendationsMigration.warnings));
   }
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,

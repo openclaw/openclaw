@@ -28,7 +28,6 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { WHATSAPP_INBOUND_DEDUPE_TTL_MS } from "../inbound/dedupe.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
   attachWebInboxToSocket,
@@ -88,8 +87,7 @@ function resolveWebMonitorConfigSnapshot(params: {
       ...params.cfg.channels,
       whatsapp: {
         ...params.cfg.channels?.whatsapp,
-        ackReaction: account.ackReaction,
-        messagePrefix: account.messagePrefix,
+        responsePrefix: account.messagePrefix,
         allowFrom: account.allowFrom,
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
@@ -150,6 +148,7 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
+const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -181,7 +180,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
-  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
+  const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??
@@ -226,7 +225,7 @@ export async function monitorWebChannel(
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
   const reconnectCatchUpWindowMs = Math.min(
     Math.max(messageTimeoutMs, 60_000),
-    WHATSAPP_INBOUND_DEDUPE_TTL_MS,
+    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
   );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({

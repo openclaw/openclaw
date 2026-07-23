@@ -1,10 +1,11 @@
-// Qa Lab plugin module implements scenario catalog behavior.
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
+import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -66,25 +67,36 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
+const qaScenarioProfileSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:[.:/-][a-z0-9]+)*$/, {
+    message: "scenario execution profiles must use lowercase namespaced tokens",
+  });
+
 const qaScenarioTransportPolicySchema = z.object({
   requireGroupMention: z.literal(true).optional(),
   senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
   topLevelReplies: z.literal(true).optional(),
 });
 
-const qaFlowScenarioExecutionSchema = z.object({
-  kind: z.literal("flow").default("flow"),
-  summary: z.string().trim().min(1).optional(),
-  channel: qaScenarioChannelSchema.optional(),
-  suiteIsolation: z.literal("isolated").optional(),
-  isolationReason: z.string().trim().min(1).optional(),
-  transportPolicy: qaScenarioTransportPolicySchema.optional(),
-  config: qaScenarioConfigSchema.optional(),
-});
+const qaFlowScenarioExecutionSchema = z
+  .object({
+    kind: z.literal("flow").default("flow"),
+    summary: z.string().trim().min(1).optional(),
+    channel: qaScenarioChannelSchema.optional(),
+    profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
+    suiteIsolation: z.literal("isolated").optional(),
+    isolationReason: z.string().trim().min(1).optional(),
+    transportPolicy: qaScenarioTransportPolicySchema.optional(),
+    config: qaScenarioConfigSchema.optional(),
+  })
+  .extend(qaScenarioModuleFlow.executionShape);
 
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
+  profiles: z.record(qaScenarioProfileSchema, z.number().int().nonnegative()).optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),
 });
@@ -109,13 +121,6 @@ const qaScenarioExecutionSchema = z.union([
   qaFlowScenarioExecutionSchema,
   qaTestFileScenarioExecutionSchema,
 ]);
-
-const qaCoverageIdSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
-    message: "coverage ids must use lowercase dotted tokens",
-  });
 
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 
@@ -306,12 +311,11 @@ const qaSeedScenarioBodySchema = z.object({
 const qaSeedScenarioSchema = qaSeedScenarioBodySchema.extend({
   title: z.string().trim().min(1),
 });
-
 const qaScenarioFileSchema = z
   .object({
     title: z.string().trim().min(1),
-    scenario: qaSeedScenarioBodySchema,
-    flow: qaFlowSchema.optional(),
+    scenario: qaSeedScenarioBodySchema.partial({ objective: true, successCriteria: true }),
+    flow: z.union([qaFlowSchema, qaScenarioModuleFlow.moduleSchema]).optional(),
   })
   .superRefine((file, ctx) => {
     if (file.scenario.runtimeParityUsage && !file.scenario.runtimeParityTier) {
@@ -322,7 +326,6 @@ const qaScenarioFileSchema = z
       });
     }
   });
-
 const qaScenarioPackSchema = z.object({
   version: z.number().int().positive(),
   agent: z
@@ -334,7 +337,6 @@ const qaScenarioPackSchema = z.object({
     }),
   kickoffTask: z.string().trim().min(1),
 });
-
 const qaScenarioPackFileSchema = z.object({
   title: z.string().trim().min(1),
   pack: qaScenarioPackSchema,
@@ -429,9 +431,8 @@ export function readQaScenarioPack(): QaScenarioPack {
   }
   const packYaml = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packYaml) {
-    // The QA scenario pack is optional in npm distributions.  Return an empty
-    // pack so completion cache updates and other consumers don't crash when
-    // the qa/scenarios/ directory is not shipped with the package.
+    // The QA scenario pack is absent from some npm distributions. Return an
+    // empty pack so completion cache updates and other consumers remain safe.
     qaScenarioPackCache = {
       version: 1,
       agent: { identityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN },
@@ -447,24 +448,26 @@ export function readQaScenarioPack(): QaScenarioPack {
   const scenarios = listQaScenarioYamlPaths().map((relativePath) =>
     (() => {
       const parsedScenarioFile = parseQaYamlFileWithContext(qaScenarioFileSchema, relativePath);
-      const parsedScenario = {
-        ...parsedScenarioFile.scenario,
-        title: parsedScenarioFile.title,
-      };
+      const parsedScenario = qaScenarioModuleFlow.normalizeMetadata(
+        parsedScenarioFile.scenario,
+        parsedScenarioFile.title,
+      );
       const execution = parseQaYamlWithContext(
         qaScenarioExecutionSchema,
         parsedScenario.execution ?? {},
         relativePath,
       );
-      if (execution.kind === "flow" && !parsedScenarioFile.flow) {
-        throw new Error(`${relativePath}: flow scenarios must define a top-level flow block`);
-      }
+      const flow = qaScenarioModuleFlow.resolveFlow(
+        parsedScenarioFile.flow,
+        parsedScenarioFile.title,
+      );
+      qaScenarioModuleFlow.assertDefined({ executionKind: execution.kind, flow, relativePath });
       return {
         ...parsedScenario,
         sourcePath: relativePath,
         execution: {
           ...execution,
-          ...(parsedScenarioFile.flow ? { flow: parsedScenarioFile.flow } : {}),
+          ...(flow ? { flow } : {}),
         },
       } satisfies QaSeedScenarioWithSource;
     })(),
@@ -544,6 +547,21 @@ export function readQaScenarioById(id: string): QaSeedScenarioWithSource {
 
 export function readQaScenarioExecutionConfig(id: string): Record<string, unknown> | undefined {
   return readQaScenarioPack().scenarios.find((candidate) => candidate.id === id)?.execution?.config;
+}
+
+export function listQaScenariosForExecutionProfile(profile: string): QaSeedScenarioWithSource[] {
+  const normalized = qaScenarioProfileSchema.parse(profile);
+  const scenarios = readQaScenarioPack()
+    .scenarios.filter((scenario) => scenario.execution.profiles?.[normalized] !== undefined)
+    .toSorted((left, right) => {
+      const orderDelta =
+        left.execution.profiles![normalized]! - right.execution.profiles![normalized]!;
+      return orderDelta || left.sourcePath.localeCompare(right.sourcePath);
+    });
+  if (scenarios.length === 0) {
+    throw new Error(`unknown QA scenario execution profile: ${normalized}`);
+  }
+  return scenarios;
 }
 
 export function validateQaScenarioExecutionConfig(config: Record<string, unknown>) {

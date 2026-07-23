@@ -163,8 +163,59 @@ function resumableClaudeCatalog() {
   };
 }
 
+function hostGroupedNativeCatalogs() {
+  const catalog = (id: "claude" | "codex", label: string) => ({
+    id,
+    label,
+    capabilities: { continueSession: true, archive: false },
+    hosts: [
+      {
+        hostId: "gateway:local",
+        label: "Gateway Mac",
+        kind: "gateway",
+        connected: true,
+        sessions: [
+          {
+            threadId: `${id}-local`,
+            name: `${label} local plan`,
+            status: "stored",
+            canContinue: true,
+            canArchive: false,
+          },
+        ],
+      },
+      {
+        hostId: "node:build",
+        label: "Build Node",
+        kind: "node",
+        connected: true,
+        nodeId: "build",
+        sessions: [
+          {
+            threadId: `${id}-remote`,
+            name: `${label} remote review`,
+            status: "stored",
+            canContinue: false,
+            canArchive: false,
+          },
+        ],
+      },
+    ],
+  });
+  return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
+}
+
+async function expandCodingSection(page: Page) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  await toggle.waitFor({ state: "visible" });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
+}
+
 async function openClaudeCatalogTerminal(page: Page) {
   await page.goto(`${server.baseUrl}chat`);
+  await expandCodingSection(page);
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
@@ -184,6 +235,39 @@ suite("Claude native session catalog", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expandCodingSection(page);
+      for (const catalogId of ["claude", "codex"]) {
+        const section = page.locator(`[data-session-section="catalog:${catalogId}"]`);
+        const gatewayHost = section.locator('[data-session-catalog-host="gateway:local"]');
+        const buildHost = section.locator('[data-session-catalog-host="node:build"]');
+        await gatewayHost.getByText("Gateway Mac", { exact: true }).waitFor();
+        await buildHost.getByText("Build Node", { exact: true }).waitFor();
+        expect(await gatewayHost.locator(".sidebar-recent-session").count()).toBe(1);
+        expect(await buildHost.locator(".sidebar-recent-session").count()).toBe(1);
+      }
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await fs.mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(artifactDir, "native-session-host-groups.png"),
+          fullPage: true,
+        });
+      }
+    } finally {
+      await page.close();
+    }
   });
 
   it("shows catalog connection progress until the first terminal output", async () => {
@@ -222,7 +306,7 @@ suite("Claude native session catalog", () => {
       });
       const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
       await connecting.waitFor();
-      expect(await page.locator(".tp-tab.is-connecting").count()).toBe(1);
+      expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -245,7 +329,7 @@ suite("Claude native session catalog", () => {
         data: "Claude Code ready\r\n",
       });
       await expect.poll(() => connecting.count()).toBe(0);
-      expect(await page.locator(".tp-tab.is-live").count()).toBe(1);
+      expect(await page.locator(".tabstrip-tab.is-live").count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -292,7 +376,7 @@ suite("Claude native session catalog", () => {
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator(".tp-tab").count()).toBe(0);
+      expect(await page.locator(".tabstrip-tab").count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -385,7 +469,8 @@ suite("Claude native session catalog", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
-    await page.getByRole("button", { name: "Load more sessions" }).click();
+    await expandCodingSection(page);
+    await page.getByRole("button", { name: "Load more threads" }).click();
     await page.getByText("Older remote review", { exact: true }).waitFor();
     expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
       agentId: "main",
@@ -434,7 +519,7 @@ suite("Claude native session catalog", () => {
     expectStableVirtualRowPrepend(anchor, await finishVirtualRowPrependProbe(thread));
     expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
     await expect
-      .poll(() => page.getByText("This session is on a paired node and is view-only.").count())
+      .poll(() => page.getByText("This thread is on a paired node and is view-only.").count())
       .toBe(1);
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const expectCenteredLayout = async (screenshotName: string) => {

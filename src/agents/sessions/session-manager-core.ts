@@ -210,6 +210,7 @@ export class SessionManagerCore {
     this.logicalParentsById.clear();
     this.invalidLeafControlIds.clear();
     this.labelsById.clear();
+    this.labelTimestampsById.clear();
     this.leafId = null;
     this.appendParentId = null;
     this.promptReleasedSideBranchParentId = undefined;
@@ -579,6 +580,15 @@ export class SessionManagerCore {
     if (rememberedWrite.verifiedWrite && options?.publishSnapshot !== false) {
       publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
     }
+  }
+
+  /** Makes pending append-oriented persistence durable without replacing SQLite transcripts. */
+  protected flushPendingPersistence(): void {
+    if (!this.shouldPersist || this.sqlitePersistence || this.flushed || !this.sessionFile) {
+      return;
+    }
+    this.replacePersistedTranscript();
+    this.flushed = true;
   }
 
   isPersisted(): boolean {

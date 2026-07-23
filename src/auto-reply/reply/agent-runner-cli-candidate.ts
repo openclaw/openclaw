@@ -161,6 +161,7 @@ export async function runCliFallbackCandidate(params: {
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
+          onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },
@@ -240,6 +241,7 @@ export async function runCliFallbackCandidate(params: {
             config: params.runtimeConfig,
             prompt: turn.commandBody,
             transcriptPrompt: turn.transcriptCommandBody,
+            media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             onUserMessagePersisted: params.notifyUserMessagePersisted,

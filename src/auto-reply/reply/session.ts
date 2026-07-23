@@ -53,6 +53,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,6 +77,10 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  classifySessionStateActor,
+  registerMainSessionGroupWatch,
+} from "../../sessions/session-state-events.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
@@ -192,6 +197,7 @@ type InitSessionStateAttemptContext = {
   agentId: string;
   conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
   isSystemEvent: boolean;
+  retargetedSession: boolean;
   sessionCtxForState: MsgContext;
   storePath: string;
 };
@@ -296,6 +302,7 @@ function resolveInitSessionStateAttemptContext(
     agentId,
     conversationBindingContext,
     isSystemEvent,
+    retargetedSession: sessionCtxForState !== ctx,
     sessionCtxForState,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
   };
@@ -425,8 +432,14 @@ async function initSessionStateAttemptLocked(
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
-  const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
-    attemptContext;
+  const {
+    agentId,
+    conversationBindingContext,
+    isSystemEvent,
+    retargetedSession,
+    sessionCtxForState,
+    storePath,
+  } = attemptContext;
   const sessionCfg = cfg.session;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -435,7 +448,7 @@ async function initSessionStateAttemptLocked(
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
 
   let sessionEntry: SessionEntry;
 
@@ -606,7 +619,11 @@ async function initSessionStateAttemptLocked(
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
-  const expectedExistingSessionId = params.expectedExistingSessionId?.trim() || undefined;
+  // Gateway admission pins the source session. A conversation or command target owns a
+  // different session id, so applying the source constraint there rejects valid routing.
+  const expectedExistingSessionId = retargetedSession
+    ? undefined
+    : params.expectedExistingSessionId?.trim() || undefined;
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }
@@ -888,11 +905,19 @@ async function initSessionStateAttemptLocked(
   sessionEntry = {
     ...baseEntry,
     sessionId,
+    ...(isNewSession
+      ? ctx.SessionCreator
+        ? { createdBy: { ...ctx.SessionCreator } }
+        : {}
+      : baseEntry?.createdBy
+        ? { createdBy: baseEntry.createdBy }
+        : {}),
     updatedAt: Date.now(),
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
+    agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
@@ -1068,6 +1093,17 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  if (
+    !isSystemEvent &&
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
+  ) {
+    registerMainSessionGroupWatch({
+      sessionKey,
+      agentId,
+      entry: sessionEntry,
+      dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
+    });
+  }
   const sessionStore = committed.sessionStoreView;
   const sessionEntryHandle = createReplySessionEntryHandle({
     sessionEntry,

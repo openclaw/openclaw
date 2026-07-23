@@ -160,6 +160,8 @@ export const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility chec
 export const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
+export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
+  /empty response after write recovery qa check/i;
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
@@ -232,6 +234,8 @@ export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 export const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
   "The previous attempt did not produce a user-visible answer.";
+export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
@@ -246,6 +250,9 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
+const QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER = "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER";
+const QA_MATRIX_VOICE_TRANSCRIPTION_TEXT =
+  "C3PLQA reply with only these words Matrix QA voice pre-flight OK.";
 export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 export type MockScenarioState = {
@@ -307,6 +314,9 @@ export function writeOpenAiMalformedJsonError(res: ServerResponse, label: string
 }
 
 export function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.includes(QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER)) {
+    return QA_MATRIX_VOICE_TRANSCRIPTION_TEXT;
+  }
   if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }

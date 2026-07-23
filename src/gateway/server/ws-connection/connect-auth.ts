@@ -80,6 +80,7 @@ export async function authenticateGatewayConnect(
     sendHandshakeErrorResponse,
   } = context;
   const resolvedAuth = getResolvedAuth();
+  const hasRequestedScopes = Array.isArray(connectParams.scopes);
   const admission = await admitGatewayConnect(context);
   if (!admission) {
     return undefined;
@@ -165,6 +166,12 @@ export async function authenticateGatewayConnect(
       scopeCount: scopes.length,
       hasDeviceIdentity: Boolean(device),
     });
+    const authMessage = formatGatewayAuthFailureMessage({
+      authMode: resolvedAuth.mode,
+      authProvided,
+      reason: failedAuth.reason,
+      client: connectParams.client,
+    });
     const authLogDecision = shouldLimitMissingCredentialAuthLog({
       reason: failedAuth.reason,
       authProvided,
@@ -185,16 +192,18 @@ export async function authenticateGatewayConnect(
           ? ` suppressed=${authLogDecision.suppressedSinceLastLog}`
           : "";
       logWsControl.warn(
-        `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}${suppressedText}`,
+        `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"} guidance=${formatForLog(authMessage)}${suppressedText}`,
       );
     }
-    const authMessage = formatGatewayAuthFailureMessage({
-      authMode: resolvedAuth.mode,
-      authProvided,
-      reason: failedAuth.reason,
-      client: connectParams.client,
-    });
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage, {
+      ...(failedAuth.rateLimited === true
+        ? {
+            retryable: true,
+            ...(failedAuth.retryAfterMs !== undefined
+              ? { retryAfterMs: failedAuth.retryAfterMs }
+              : {}),
+          }
+        : {}),
       details: {
         code: resolveAuthConnectErrorDetailCode(failedAuth.reason),
         authReason: failedAuth.reason,
@@ -243,11 +252,7 @@ export async function authenticateGatewayConnect(
       authOk,
       authMethod,
     });
-    const preserveInsecureLocalControlUiScopes =
-      isControlUi &&
-      controlUiAuthPolicy.allowInsecureAuthConfigured &&
-      isLocalClient &&
-      (authMethod === "token" || authMethod === "password");
+    const preserveInsecureLocalControlUiScopes = false;
     const decision = evaluateMissingDeviceIdentity({
       hasDeviceIdentity: Boolean(device),
       role,
@@ -285,7 +290,7 @@ export async function authenticateGatewayConnect(
       const errorMessage =
         "control ui requires device identity (use HTTPS or localhost secure context)";
       markHandshakeFailure("control-ui-insecure-auth", {
-        insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
+        insecureAuthConfigured: false,
       });
       sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
         details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
@@ -449,6 +454,7 @@ export async function authenticateGatewayConnect(
     usesLegacyNodeProtocol,
     role,
     scopes,
+    hasRequestedScopes,
     isControlUi,
     isBrowserOperatorUi,
     isWebchat,

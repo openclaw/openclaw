@@ -208,6 +208,10 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
       }),
   ),
 }));
+vi.mock("../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher:
+    dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher,
+}));
 export const listSkillCommandsForAgents = skillCommandListHoisted.listSkillCommandsForAgents;
 const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData;
 export const replySpy = replySpyHoisted.replySpy;
@@ -218,7 +222,7 @@ const menuSyncHoisted = vi.hoisted(() => ({
     await bot.api.setMyCommands(commandsToRegister);
   }),
 }));
-export const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
+const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
 
 function parseModelRef(raw: string): { provider?: string; model: string } {
   const trimmed = raw.trim();
@@ -357,7 +361,7 @@ const grammySpies = vi.hoisted(() => ({
 export const useSpy: MockFn<(arg: unknown) => void> = grammySpies.useSpy;
 export const middlewareUseSpy: AnyMock = grammySpies.middlewareUseSpy;
 export const onSpy: AnyMock = grammySpies.onSpy;
-export const stopSpy: AnyMock = grammySpies.stopSpy;
+const stopSpy: AnyMock = grammySpies.stopSpy;
 export const commandSpy: AnyMock = grammySpies.commandSpy;
 export const botCtorSpy: MockFn<
   (token: string, options?: { client?: { fetch?: typeof fetch }; botInfo?: unknown }) => void
@@ -379,6 +383,7 @@ type RichMessageParams = {
   chat_id?: string | number;
   message_id?: number;
   rich_message?: {
+    blocks?: Array<{ type?: string; text?: unknown }>;
     markdown?: string;
     html?: string;
   };
@@ -386,7 +391,22 @@ type RichMessageParams = {
 };
 
 function getRichMessageText(params: RichMessageParams): string {
-  return params.rich_message?.markdown ?? params.rich_message?.html ?? "";
+  const rich = params.rich_message;
+  if (!rich) {
+    return "";
+  }
+  if (rich.blocks) {
+    // Test harness only needs a readable plain-ish projection for assertions.
+    return rich.blocks
+      .map((block) => {
+        if (typeof block.text === "string") {
+          return block.text;
+        }
+        return JSON.stringify(block.text ?? "");
+      })
+      .join("\n");
+  }
+  return rich.markdown ?? rich.html ?? "";
 }
 
 function toLegacyMessageParams(params: RichMessageParams): Record<string, unknown> {
@@ -417,7 +437,7 @@ const runnerHoisted = vi.hoisted(() => ({
 export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
 export let sequentializeKey: ((ctx: unknown) => string) | undefined;
 export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
-export const telegramBotRuntimeForTest = {
+const telegramBotRuntimeForTest = {
   Bot: class {
     api = {
       config: { use: grammySpies.useSpy },
@@ -521,7 +541,7 @@ export const getOnHandler = (event: string) => {
 const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
   agents: {
     defaults: {
-      envelopeTimezone: "utc",
+      userTimezone: "UTC",
     },
   },
   channels: {

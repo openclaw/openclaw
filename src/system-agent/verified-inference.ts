@@ -38,14 +38,12 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "../plugins/providers.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
   type SystemAgentConfiguredRouteDeps,
 } from "./inference-route.js";
-
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
 type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
   SystemAgentConfiguredRoute,
   "runConfig" | "authProfileId"
@@ -115,6 +113,8 @@ export type SystemAgentVerifiedInferenceBinding = Readonly<{
   auth: Readonly<{
     authProfileId?: string;
     agentHarnessId?: string;
+    modelId?: string;
+    modelApi?: string;
     authFingerprint: string;
     proofKind?: "runtime-owner";
     runtimeOwnerKind?: OpaqueRuntimeOwnerKind;
@@ -398,14 +398,13 @@ function projectOwnerPluginArtifacts(params: {
     };
   });
 }
-
 async function projectVerifiedExecutionFingerprint(
   config: OpenClawConfig,
   route: SystemAgentConfiguredRoute,
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectDefaultInferenceRoute(config);
+  const projection = await projectInferenceRoute(config, route.agentId, deps);
   return {
     route: projection.route
       ? (() => {
@@ -490,6 +489,8 @@ export function captureSystemAgentOwnerPluginArtifacts(params: {
 async function resolveCurrentAuthFingerprint(params: {
   route: SystemAgentConfiguredRoute;
   authProfileId?: string;
+  modelId?: string;
+  modelApi?: string;
   skipLocalCredential?: boolean;
   deps: SystemAgentVerifiedInferenceDeps;
 }): Promise<string | undefined> {
@@ -579,6 +580,9 @@ async function resolveCurrentAuthFingerprint(params: {
           deps: params.deps,
         });
       }
+      if (!params.modelId || !params.modelApi) {
+        return undefined;
+      }
       const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
       const auth = await resolveAuth({
         provider: params.route.provider,
@@ -591,6 +595,8 @@ async function resolveCurrentAuthFingerprint(params: {
         ),
         profileId: params.authProfileId,
         lockedProfile: true,
+        modelId: params.modelId,
+        modelApi: params.modelApi,
         secretSentinels: false,
       });
       if (auth.profileId !== params.authProfileId || !auth.apiKey) {
@@ -602,6 +608,11 @@ async function resolveCurrentAuthFingerprint(params: {
         resolvedAuth: auth,
       });
     }
+  }
+  // Credential selection is transport-sensitive. Reuse the facts from the
+  // successful run so this authority hot path cannot pick a different owner.
+  if (!params.modelId || !params.modelApi) {
+    return undefined;
   }
   const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
   const auth = await resolveAuth({
@@ -616,6 +627,8 @@ async function resolveCurrentAuthFingerprint(params: {
     ...(params.authProfileId
       ? { profileId: params.authProfileId, lockedProfile: true as const }
       : {}),
+    modelId: params.modelId,
+    modelApi: params.modelApi,
     secretSentinels: true,
   });
   if (params.authProfileId && auth.profileId !== params.authProfileId) {
@@ -634,6 +647,8 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   const runConfig = structuredClone(params.executionRoute.runConfig);
   const execution = { ...params.executionRoute, runConfig } as SystemAgentConfiguredRoute;
   const authProfileId = params.auth.authProfileId ?? execution.authProfileId;
+  const modelId = params.auth.modelId?.trim();
+  const modelApi = params.auth.modelApi?.trim();
   if (authProfileId) {
     execution.authProfileId = authProfileId;
   }
@@ -728,6 +743,8 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     : resolveCurrentAuthFingerprint({
         route: execution,
         ...(authProfileId ? { authProfileId } : {}),
+        ...(modelId ? { modelId } : {}),
+        ...(modelApi ? { modelApi } : {}),
         ...(params.auth.skipLocalCredential ? { skipLocalCredential: true } : {}),
         deps,
       }));
@@ -766,6 +783,8 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
     auth: {
       ...(authProfileId ? { authProfileId } : {}),
       ...(successfulHarnessId ? { agentHarnessId: successfulHarnessId } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(modelApi ? { modelApi } : {}),
       authFingerprint,
       ...(proofKind === "runtime-owner" ? { proofKind } : {}),
       ...(params.auth.runtimeOwnerKind ? { runtimeOwnerKind: params.auth.runtimeOwnerKind } : {}),
@@ -829,7 +848,11 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
     return null;
   }
   const config = snapshot.runtimeConfig ?? snapshot.config;
-  const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    config,
+    binding.execution.agentId,
+    deps,
+  );
   if (
     !currentRoute ||
     !isDeepStrictEqual(systemAgentRouteIdentity(currentRoute), binding.configuredRoute)
@@ -917,6 +940,8 @@ export async function resolveSystemAgentVerifiedInferenceRoute(
       : resolveCurrentAuthFingerprint({
           route: currentExecution,
           ...(binding.auth.authProfileId ? { authProfileId: binding.auth.authProfileId } : {}),
+          ...(binding.auth.modelId ? { modelId: binding.auth.modelId } : {}),
+          ...(binding.auth.modelApi ? { modelApi: binding.auth.modelApi } : {}),
           ...(binding.auth.skipLocalCredential ? { skipLocalCredential: true } : {}),
           deps,
         })

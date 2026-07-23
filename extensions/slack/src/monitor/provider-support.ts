@@ -2,6 +2,7 @@
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
+import type { SlackIdentityHealth } from "./enterprise-install.js";
 import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -9,10 +10,6 @@ type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
 type SlackReceiver = import("@slack/bolt").Receiver;
 type SlackSocketModeReceiverConstructor = typeof import("@slack/bolt").SocketModeReceiver;
 type SlackSocketModeReceiverOptions = ConstructorParameters<SlackSocketModeReceiverConstructor>[0];
-type SlackSocketModeConfig = Pick<
-  SlackSocketModeReceiverOptions,
-  "clientPingTimeout" | "serverPingTimeout" | "pingPongLoggingEnabled"
->;
 type SlackSdkLogger = NonNullable<SlackSocketModeReceiverOptions["logger"]>;
 type SlackSdkLogLevel = ReturnType<SlackSdkLogger["getLevel"]>;
 type SlackSocketModeLogger = SlackSdkLogger & {
@@ -186,16 +183,17 @@ export function resolveSlackBoltInterop(params: {
   throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
 }
 
-export function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
+export function publishSlackConnectedStatus(
+  setStatus?: (next: Record<string, unknown>) => void,
+  identityHealth: SlackIdentityHealth = { healthState: "healthy", lastError: null },
+) {
   if (!setStatus) {
     return;
   }
-  const now = Date.now();
   setStatus({
     connected: true,
-    lastConnectedAt: now,
-    healthState: "healthy",
-    lastError: null,
+    lastConnectedAt: Date.now(),
+    ...identityHealth,
   });
 }
 
@@ -306,30 +304,24 @@ function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {
 export function createSlackBoltApp(params: {
   interop: SlackBoltResolvedExports;
   slackMode: "socket" | "http" | "relay";
-  botToken: string;
+  token: string;
   appToken?: string;
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
-  socketMode?: SlackSocketModeConfig;
+  wrapReceiver?: (receiver: SlackReceiver) => SlackReceiver;
 }) {
   const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
     autoReconnectEnabled: true,
-    clientPingTimeout:
-      params.socketMode?.clientPingTimeout ?? OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
+    clientPingTimeout: OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
     logger: socketModeLogger,
     installerOptions: {
       clientOptions: params.clientOptions,
     },
+    ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
   };
-  if (params.socketMode?.serverPingTimeout !== undefined) {
-    socketModeReceiverOptions.serverPingTimeout = params.socketMode.serverPingTimeout;
-  }
-  if (params.socketMode?.pingPongLoggingEnabled !== undefined) {
-    socketModeReceiverOptions.pingPongLoggingEnabled = params.socketMode.pingPongLoggingEnabled;
-  }
 
   let receiver:
     | InstanceType<SlackSocketModeReceiverConstructor>
@@ -343,19 +335,21 @@ export function createSlackBoltApp(params: {
     receiver = new params.interop.HTTPReceiver({
       signingSecret: params.signingSecret ?? "",
       endpoints: params.slackWebhookPath,
+      ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
     });
   } else {
     receiver = createSlackRelayReceiver();
   }
+  const appReceiver = receiver && params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
   const app = new params.interop.App({
-    token: params.botToken,
+    token: params.token,
     clientOptions: params.clientOptions,
     ignoreSelf: false,
     // Bolt eagerly starts an auth.test promise in the constructor when token
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
-    ...(receiver ? { receiver } : {}),
+    ...(appReceiver ? { receiver: appReceiver } : {}),
   });
   app.use(async (args) => {
     if (shouldSkipOpenClawSlackSelfEvent(args)) {

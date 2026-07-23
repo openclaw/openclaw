@@ -3,16 +3,14 @@ import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
-  createConfig,
-  createRuntime,
-  createStores,
-  requireMSTeamsConfig,
-  updateMSTeamsConfig,
-} from "./monitor.lifecycle.test-support.js";
+  getMSTeamsIngressMockState,
+  gateIngressAcceptThenDispatch,
+} from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsSsoStoredToken } from "./sso-token-store.js";
 
@@ -62,6 +60,18 @@ const expressControl = vi.hoisted(() => ({
 }));
 
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
+const keepHttpServerTaskAliveMock = vi.hoisted(() =>
+  vi.fn(async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
+    await new Promise<void>((resolve) => {
+      if (params.abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+      params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await params.onAbort?.();
+  }),
+);
 
 vi.mock("../runtime-api.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",
@@ -73,18 +83,7 @@ vi.mock("../runtime-api.js", () => ({
     typeof value === "string" && value.trim().length > 0,
   normalizeResolvedSecretInputString: (params: { value?: unknown }) =>
     typeof params?.value === "string" && params.value.trim() ? params.value.trim() : undefined,
-  keepHttpServerTaskAlive: vi.fn(
-    async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
-      await new Promise<void>((resolve) => {
-        if (params.abortSignal?.aborted) {
-          resolve();
-          return;
-        }
-        params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      await params.onAbort?.();
-    },
-  ),
+  keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
   mergeAllowlist: (params: { existing?: string[]; additions?: string[] }) =>
     Array.from(new Set([...(params.existing ?? []), ...(params.additions ?? [])])),
   summarizeMapping: vi.fn(),
@@ -231,8 +230,67 @@ vi.mock("./sso-token-store.js", () => ({
 
 import { monitorMSTeamsProvider } from "./monitor.js";
 
-const requireRegisteredMSTeamsConfig = () =>
-  requireMSTeamsConfig(registerMSTeamsHandlers.mock.calls[0]?.[1]);
+async function waitForMSTeamsTestState(assertion: () => void | Promise<void>): Promise<void> {
+  await vi.waitFor(assertion, { interval: 1 });
+}
+
+function createConfig(port: number): OpenClawConfig {
+  return {
+    channels: {
+      msteams: {
+        enabled: true,
+        appId: "app-id",
+        appPassword: "app-password", // pragma: allowlist secret
+        tenantId: "tenant-id",
+        webhook: {
+          port,
+          path: "/api/messages",
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function updateMSTeamsConfig(
+  cfg: OpenClawConfig,
+  patch: NonNullable<NonNullable<OpenClawConfig["channels"]>["msteams"]>,
+): void {
+  const msteams = cfg.channels?.msteams;
+  if (!cfg.channels || !msteams) {
+    throw new Error("Expected Microsoft Teams config fixture");
+  }
+  cfg.channels.msteams = {
+    ...msteams,
+    ...patch,
+  };
+}
+
+function createRuntime(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: (code: number): never => {
+      throw new Error(`exit ${code}`);
+    },
+  };
+}
+
+function createStores() {
+  return {
+    conversationStore: {} as MSTeamsConversationStore,
+    pollStore: {} as MSTeamsPollStore,
+  };
+}
+
+function requireRegisteredMSTeamsConfig(): OpenClawConfig {
+  const registered = registerMSTeamsHandlers.mock.calls[0]?.[1] as
+    | { cfg?: OpenClawConfig }
+    | undefined;
+  if (!registered?.cfg) {
+    throw new Error("expected registered MSTeams handler config");
+  }
+  return registered.cfg;
+}
 
 describe("monitorMSTeamsProvider lifecycle", () => {
   afterEach(() => {
@@ -247,6 +305,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
     runMSTeamsFileConsentInvokeHandler.mockReset().mockResolvedValue(undefined);
+    getMSTeamsIngressMockState().instances.length = 0;
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
     ssoTokenStore.remove.mockClear();
@@ -264,13 +323,20 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: stores.pollStore,
     });
 
-    const early = await Promise.race([
-      task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => {
-        setTimeout(() => resolve("pending"), 50);
-      }),
-    ]);
-    expect(early).toBe("pending");
+    let taskSettled = false;
+    void task.then(
+      () => {
+        taskSettled = true;
+      },
+      () => {
+        taskSettled = true;
+      },
+    );
+    await waitForMSTeamsTestState(() => {
+      expect(keepHttpServerTaskAliveMock).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(taskSettled).toBe(false);
 
     abort.abort();
     const result = await task;
@@ -380,7 +446,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(expressControl.apps.length).toBeGreaterThan(0);
     });
 
@@ -429,7 +495,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(expressControl.apps.length).toBeGreaterThan(0);
     });
 
@@ -468,7 +534,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(expressControl.apps.length).toBeGreaterThan(0);
     });
 
@@ -523,7 +589,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         pollStore: createStores().pollStore,
       });
 
-      await vi.waitFor(() => {
+      await waitForMSTeamsTestState(() => {
         expect(registerMSTeamsHandlers).toHaveBeenCalled();
       });
 
@@ -609,7 +675,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -634,7 +700,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(1);
     });
     expect(ssoTokenStore.save).not.toHaveBeenCalled();
@@ -659,7 +725,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -698,7 +764,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -766,7 +832,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -793,7 +859,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
-  it("acks non-poll card actions before agent dispatch settles", async () => {
+  it("acks non-poll card actions after durable admission, before agent dispatch settles", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -803,7 +869,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -822,24 +888,41 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!registeredHandler) {
       throw new Error("expected registered Teams handler");
     }
-    let releaseDispatch: (() => void) | undefined;
-    const dispatchWork = new Promise<void>((resolve) => {
-      releaseDispatch = resolve;
-    });
+    const dispatchWork = new Promise<void>(() => {});
     const run = vi.spyOn(registeredHandler, "run").mockReturnValueOnce(dispatchWork);
 
-    const response = await cardActionHandler({
+    const ingress = getMSTeamsIngressMockState().instances[0];
+    if (!ingress) {
+      throw new Error("expected Teams ingress");
+    }
+    let releaseAppend: (() => void) | undefined;
+    const appendWork = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    gateIngressAcceptThenDispatch(ingress, appendWork);
+
+    const responseWork = cardActionHandler({
       activity: {
+        id: "activity-card-action",
         type: "invoke",
         name: "adaptiveCard/action",
+        conversation: { id: "conversation-card-action", conversationType: "personal" },
         value: { action: { data: { action: "nonPoll" } } },
       },
     });
 
+    let responseSettled = false;
+    void responseWork.then(() => {
+      responseSettled = true;
+    });
+    await Promise.resolve();
+    expect(responseSettled).toBe(false);
+
+    releaseAppend?.();
+    const response = await responseWork;
+
     expect(response).toMatchObject({ statusCode: 200, value: "OK" });
     expect(run).toHaveBeenCalledTimes(1);
-    releaseDispatch?.();
-    await dispatchWork;
 
     abort.abort();
     await task;
@@ -871,7 +954,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -931,7 +1014,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -1000,7 +1083,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -1058,7 +1141,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -1112,7 +1195,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 

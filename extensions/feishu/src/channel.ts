@@ -30,10 +30,10 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
-  interactiveReplyToPresentation,
-  normalizeInteractiveReply,
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
-  resolveInteractiveTextFallback,
+  resolveLegacyInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -641,7 +641,13 @@ function readFirstString(
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 
 function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionContext) {
-  const configured = ctx.cfg.messages?.responsePrefix;
+  const channel = ctx.cfg.channels?.feishu as
+    | { responsePrefix?: string; accounts?: Record<string, { responsePrefix?: string }> }
+    | undefined;
+  const configured =
+    (ctx.accountId ? channel?.accounts?.[ctx.accountId]?.responsePrefix : undefined) ??
+    channel?.responsePrefix ??
+    (channel === undefined ? ctx.cfg.messages?.responsePrefix : undefined);
   if (!configured) {
     return undefined;
   }
@@ -1074,10 +1080,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const textCard = readNativeFeishuCardJson(text, {
               responsePrefix: resolveFeishuMessageActionResponsePrefix(ctx),
             });
-            const interactive = normalizeInteractiveReply(ctx.params.interactive);
+            const interactive = normalizeLegacyInteractiveReply(ctx.params.interactive);
             const presentation =
               normalizeMessagePresentation(ctx.params.presentation) ??
-              (interactive ? interactiveReplyToPresentation(interactive) : undefined);
+              (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
@@ -1088,7 +1094,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   presentation,
                   fallbackText: textCard
                     ? undefined
-                    : resolveInteractiveTextFallback({ text, interactive }),
+                    : resolveLegacyInteractiveTextFallback({ text, interactive }),
                 })
               : undefined;
             const presentationCard =

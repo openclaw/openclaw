@@ -10,6 +10,7 @@ import {
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
+  resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import {
   hasRetainedManagedNpmInstallMarker,
@@ -744,6 +745,35 @@ describe("installPluginFromNpmSpec", () => {
       error: "npm view failed: registry unavailable",
       code: PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE,
     });
+  });
+
+  it("continues when the managed generation scan reports ENOTDIR", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "scan-recovery-plugin";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+    });
+    const error = Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+    const readdirSpy = vi.spyOn(fs.promises, "readdir").mockRejectedValueOnce(error);
+
+    try {
+      const result = await installPluginFromNpmSpec({
+        spec: `${packageName}@1.0.0`,
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(readdirSpy).toHaveBeenCalledWith(resolvePluginNpmProjectsDir(npmRoot), {
+        withFileTypes: true,
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("installs npm pack archives through the managed npm root", async () => {
@@ -2915,7 +2945,7 @@ describe("installPluginFromNpmSpec", () => {
       path.join(hostRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
-        "  axios: 1.16.0",
+        "  axios: 1.18.0",
         '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
         "  nested:",
         '    alias: "npm:@scope/alias@1.0.0"',
@@ -2964,7 +2994,7 @@ describe("installPluginFromNpmSpec", () => {
             };
           }
           expect(manifest.overrides).toEqual({
-            axios: "1.16.0",
+            axios: "1.18.0",
             nested: {
               semver: "1.2.3",
             },

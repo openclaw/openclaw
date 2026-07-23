@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CliUsageError, parseSqliteReliabilityCli } from "./lib/sqlite-reliability-cli.js";
 import type { ReliabilityReport } from "./lib/sqlite-reliability-contract.js";
-import { runReliabilityStress } from "./lib/sqlite-reliability-runner.js";
 
 function printUsage(): void {
   console.log(`OpenClaw SQLite reliability stress proof
@@ -63,6 +62,7 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     const { options } = cli;
+    const { runReliabilityStress } = await import("./lib/sqlite-reliability-runner.js");
     const report = await runReliabilityStress(options);
     if (options.output) {
       fs.mkdirSync(path.dirname(options.output), { recursive: true });

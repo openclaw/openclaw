@@ -7,11 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
-import {
-  testing as replyRunTesting,
-  createReplyOperation,
-  replyRunRegistry,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadTranscriptEvents, upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -26,7 +23,12 @@ import {
   resolveMcpLoopbackYieldContext,
   updateMcpLoopbackToolCallCapture,
 } from "../gateway/mcp-http.loopback-runtime.js";
-import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -37,6 +39,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { runSkillResearchAutoCapture } from "../skills/research/autocapture.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
   runPreparedCliAgent,
@@ -48,7 +51,7 @@ import {
   requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
-import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.js";
+import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   resolveCliNoOutputTimeoutMs,
@@ -88,7 +91,7 @@ vi.mock("../skills/research/autocapture.js", () => ({
   runSkillResearchAutoCapture: vi.fn(async () => undefined),
 }));
 
-vi.mock("../tts/tts.js", () => ({
+vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -373,6 +376,7 @@ describe("runCliAgent reliability", () => {
     sessionFileEnvSnapshot = undefined;
     resetClaudeLiveSessionsForTest();
     resetDiagnosticEventsForTest();
+    cliBackendsTesting.resetDepsForTest();
     vi.useRealTimers();
   });
 
@@ -1877,7 +1881,7 @@ describe("runCliAgent reliability", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always" as const,
       liveSession: "claude-stdio" as const,
       reliability: {
@@ -2011,6 +2015,21 @@ describe("runCliAgent reliability", () => {
   it.each(["timeout", "unknown", "context_overflow"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
+      const runId = `run-retry-${reason}`;
+      const modelCallEvents: Array<{ callId: string; type: string }> = [];
+      setDiagnosticsEnabledForProcess(true);
+      const stopDiagnostics = onTrustedInternalDiagnosticEvent((event) => {
+        if (
+          event.type !== "model.call.started" &&
+          event.type !== "model.call.completed" &&
+          event.type !== "model.call.error"
+        ) {
+          return;
+        }
+        if (event.runId === runId) {
+          modelCallEvents.push({ callId: event.callId, type: event.type });
+        }
+      });
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) =>
           ["llm_input", "llm_output", "agent_end"].includes(hookName),
@@ -2086,7 +2105,7 @@ describe("runCliAgent reliability", () => {
       try {
         const context = buildPreparedContext({
           sessionKey: "agent:main:subagent:retry",
-          runId: `run-retry-${reason}`,
+          runId,
           cliSessionId: "stale-cli-session",
           provider: "claude-cli",
           model: "opus",
@@ -2128,7 +2147,18 @@ describe("runCliAgent reliability", () => {
         );
         expect(agentEndEvent.success).toBe(true);
         expect(agentEndEvent.error).toBeUndefined();
+        await waitForDiagnosticEventsDrained();
+        expect(modelCallEvents.map((event) => event.type)).toEqual([
+          "model.call.started",
+          "model.call.error",
+          "model.call.started",
+          "model.call.completed",
+        ]);
+        expect(modelCallEvents[0]?.callId).toBe(modelCallEvents[1]?.callId);
+        expect(modelCallEvents[2]?.callId).toBe(modelCallEvents[3]?.callId);
+        expect(modelCallEvents[0]?.callId).not.toBe(modelCallEvents[2]?.callId);
       } finally {
+        stopDiagnostics();
         fs.rmSync(dir, { recursive: true, force: true });
       }
     },
@@ -4306,26 +4336,26 @@ describe("runCliAgent reliability", () => {
       })}\n`,
       "utf-8",
     );
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: dir,
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              args: ["exec"],
-              output: "text",
-              input: "arg",
-              sessionMode: "existing",
-            },
+    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "codex-cli",
+          pluginId: "test-codex",
+          config: {
+            command: "codex",
+            args: ["exec"],
+            output: "text",
+            input: "arg",
+            sessionMode: "existing",
           },
         },
-      },
-    };
+      ],
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
-      runBeforeAgentStart: vi.fn(async () => undefined),
     };
     setHookRunnerForTest(hookRunner);
 
@@ -4353,24 +4383,6 @@ describe("runCliAgent reliability", () => {
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
-  it("uses backend-configured resume watchdog override", () => {
-    const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: {
-        command: "codex",
-        reliability: {
-          watchdog: {
-            resume: {
-              noOutputTimeoutMs: 42_000,
-            },
-          },
-        },
-      },
-      timeoutMs: 120_000,
-      useResume: true,
-    });
-    expect(timeoutMs).toBe(42_000);
-  });
-
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },

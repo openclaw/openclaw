@@ -6,10 +6,12 @@ import { parse } from "yaml";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
+  buildTelegramArtifactInputs,
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
   githubApi,
+  isDirectReleaseCandidateExecution,
   parseArgs,
   parseRunIdFromDispatchOutput,
   reconcileReleaseCandidateState,
@@ -23,6 +25,7 @@ import {
   validateFullManifest,
   validateNpmPreflightRunSource,
   validatePreflightManifest,
+  validateTrustedToolingPin,
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mjs";
 
@@ -45,6 +48,21 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("recognizes direct execution through a symlinked temporary root", () => {
+    const realpath = vi.fn((value: string) => value.replace(/^\/tmp\//u, "/private/tmp/"));
+
+    expect(
+      isDirectReleaseCandidateExecution(
+        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        realpath,
+      ),
+    ).toBe(true);
+    expect(isDirectReleaseCandidateExecution(undefined, "/private/tmp/script.mjs", realpath)).toBe(
+      false,
+    );
+  });
+
   it("resumes exact workflow runs from matching release candidate state", () => {
     const options = parseArgs(["--tag", "v2026.7.1-beta.4"]);
     const expected = buildReleaseCandidateState(options, {
@@ -181,13 +199,44 @@ describe("release candidate checklist", () => {
     expect(source).toContain(
       '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
     );
+    expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
     expect(source).toContain('"worktree", "remove", "--force", toolingRoot');
     expect(source).toContain(
-      "const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
+      "const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT)",
     );
     expect(source).toContain('targetHeadSha: gitRevParse("HEAD", targetRoot)');
     expect(source).toContain("toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT)");
+  });
+
+  it("keeps the exact pinned trusted tooling valid when main advances", () => {
+    const isAncestor = vi.fn(() => true);
+
+    expect(
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor,
+      }),
+    ).toBe("a".repeat(40));
+    expect(isAncestor).toHaveBeenCalledWith("a".repeat(40), "b".repeat(40));
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "b".repeat(40),
+        latestTrustedToolingSha: "b".repeat(40),
+        isAncestor: () => true,
+      }),
+    ).toThrow("does not match pinned tooling");
+    expect(() =>
+      validateTrustedToolingPin({
+        toolingSha: "a".repeat(40),
+        pinnedToolingSha: "a".repeat(40),
+        latestTrustedToolingSha: "c".repeat(40),
+        isAncestor: () => false,
+      }),
+    ).toThrow("pinned release candidate tooling");
   });
 
   it("validates the exact tag changelog before dispatching the release matrix", () => {
@@ -690,6 +739,25 @@ describe("release candidate checklist", () => {
     ).toThrow("blocking product performance");
   });
 
+  it("keeps product performance advisory for beta release candidates", () => {
+    expect(() =>
+      validateFullManifest(
+        {
+          workflowName: "Full Release Validation",
+          targetSha: "candidate-sha",
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          controls: { performanceBlocking: false },
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "beta",
+        },
+      ),
+    ).not.toThrow();
+  });
+
   it("binds SHA-pinned full validation evidence through its manifest", () => {
     const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
 
@@ -971,6 +1039,37 @@ describe("release candidate checklist", () => {
         "openclaw-npm-preflight-",
       ),
     ).toBe("openclaw-npm-preflight-dba00");
+  });
+
+  it("builds the complete immutable Telegram artifact identity tuple", () => {
+    expect(
+      buildTelegramArtifactInputs({
+        artifact: {
+          digest: `sha256:${"a".repeat(64)}`,
+          id: 123,
+          name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+          workflowRunId: 456,
+        },
+        manifest: {
+          packageVersion: "2026.7.2-beta.1",
+          tarballName: "openclaw-2026.7.2-beta.1.tgz",
+          tarballSha256: "b".repeat(64),
+        },
+        runAttempt: 2,
+        runId: "456",
+        sourceSha: "c".repeat(40),
+      }),
+    ).toEqual({
+      package_artifact_digest: "a".repeat(64),
+      package_artifact_id: 123,
+      package_artifact_name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+      package_artifact_run_attempt: 2,
+      package_artifact_run_id: "456",
+      package_file_name: "openclaw-2026.7.2-beta.1.tgz",
+      package_sha256: "b".repeat(64),
+      package_source_sha: "c".repeat(40),
+      package_version: "2026.7.2-beta.1",
+    });
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {

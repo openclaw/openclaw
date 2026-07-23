@@ -29,7 +29,6 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -117,6 +116,14 @@ function isLegacyPreserveSideRunsError(err: unknown): boolean {
   return message.includes("invalid chat.abort params") && message.includes("preservesideruns");
 }
 
+function isLegacySucceedsParentError(err: unknown): boolean {
+  if (!(err instanceof GatewayClientRequestError) || err.gatewayCode !== "INVALID_REQUEST") {
+    return false;
+  }
+  const message = err.message.toLowerCase();
+  return message.includes("invalid sessions.create params") && message.includes("succeedsparent");
+}
+
 type GatewaySessionList = TuiSessionList;
 type GatewayAgentsList = TuiAgentsList;
 type GatewayModelChoice = TuiModelChoice;
@@ -152,7 +159,12 @@ export class GatewayChatClient implements TuiBackend {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
-      caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      caps: [
+        GATEWAY_CLIENT_CAPS.AGENT_KIND,
+        GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
+        GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+        GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      ],
       instanceId: randomUUID(),
       minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -208,7 +220,9 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
-    this.client.stop();
+    // Keep TUI teardown ordered after the transport closes. Otherwise the
+    // late close callback can re-arm UI timers after shutdown cleared them.
+    return this.client.stopAndWait();
   }
 
   async subscribeSessionEvents() {
@@ -300,10 +314,33 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async createSession(opts: TuiSessionCreateOptions): Promise<TuiSessionMutationResult> {
-    return await this.client.request<TuiSessionMutationResult>("sessions.create", {
+    const params = {
       ...opts,
       emitCommandHooks: Boolean(opts.parentSessionKey),
-    });
+    };
+    try {
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", params);
+    } catch (err) {
+      if (opts.succeedsParent === undefined || !isLegacySucceedsParentError(err)) {
+        throw err;
+      }
+      const { succeedsParent: _succeedsParent, ...legacyParams } = params;
+      if (!opts.succeedsParent) {
+        // Older Gateways cannot express a linked parallel child. Preserve the
+        // parent's lifecycle by retrying as an unlinked child, never a rollover.
+        const {
+          parentSessionKey: _parentSessionKey,
+          emitCommandHooks: _emitCommandHooks,
+          ...parallelParams
+        } = legacyParams;
+        return await this.client.request<TuiSessionMutationResult>(
+          "sessions.create",
+          parallelParams,
+        );
+      }
+      // Legacy rollover is equivalent to an explicit successor request.
+      return await this.client.request<TuiSessionMutationResult>("sessions.create", legacyParams);
+    }
   }
 
   async resetSession(
@@ -408,7 +445,6 @@ function resolveBoundGatewayConnection(
     token: explicitAuth.token,
     password: explicitAuth.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: opts.config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi: false,
   };
 }
@@ -445,16 +481,7 @@ async function resolveGatewayConnection(
     ...(urlOverride ? { url: urlOverride } : {}),
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
-  const allowInsecureLocalOperatorUi = (() => {
-    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
-      return false;
-    }
-    try {
-      return isLoopbackHost(new URL(url).hostname);
-    } catch {
-      return false;
-    }
-  })();
+  const allowInsecureLocalOperatorUi = false;
 
   if (urlOverride) {
     return {
@@ -462,7 +489,6 @@ async function resolveGatewayConnection(
       token: explicitAuth.token,
       password: explicitAuth.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -485,7 +511,6 @@ async function resolveGatewayConnection(
       ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
         ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
         : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -502,7 +527,6 @@ async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -528,7 +552,6 @@ async function resolveGatewayConnection(
     token: resolved.token,
     password: resolved.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
 }

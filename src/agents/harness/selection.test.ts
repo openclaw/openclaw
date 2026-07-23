@@ -7,7 +7,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js";
-import { testing as cliBackendsTesting } from "../cli-backends.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -22,6 +22,7 @@ import {
   resolveAvailableAgentHarnessPolicy,
   resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
+  runAgentHarnessSettledTurnFinalization,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "./selection.js";
@@ -181,6 +182,26 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "final answer" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
   };
 }
 
@@ -379,6 +400,62 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("routes settled turns only through an explicit harness finalizer", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
+    let hostAuthorityActive = true;
+    const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
+      async ({ attempt, settledAttempt: _settledAttempt }) => {
+        hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
+        expect(attempt.operation).toBe("settled-tool-finalization");
+        return {
+          assistant: createFinalAssistant(),
+        };
+      },
+    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt,
+      finalizeSettledTurn,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+    const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+    const settledAttempt = createAttemptResult("settled");
+
+    await expect(
+      runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
+    ).resolves.toMatchObject({
+      assistant: { content: [{ type: "text", text: "final answer" }] },
+    });
+    expect(runAttempt).not.toHaveBeenCalled();
+    expect(hostAuthorityActive).toBe(false);
+    expect(finalizeSettledTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settledAttempt,
+        attempt: expect.objectContaining({ provider: "codex" }),
+      }),
+    );
+  });
+
+  it("fails closed when the selected harness has no settled-turn finalizer", async () => {
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async () => createAttemptResult("run"),
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
+
+    await expect(
+      runAgentHarnessSettledTurnFinalization(
+        createAttemptParams(providerRuntimeConfig("codex", "codex")),
+        createAttemptResult("settled"),
+        harness,
+      ),
+    ).rejects.toThrow("Agent harness codex cannot safely finalize a settled tool turn");
+  });
+
   it.each(["codex", "copilot"] as const)(
     "binds the host OpenClaw tool to the %s SDK construction path without leaking authority",
     async (harnessId) => {
@@ -423,7 +500,6 @@ describe("runAgentHarnessAttempt", () => {
       expect(receivedPrivateAuthority).toBe(false);
       expect(hostScopeActive).toBe(true);
       expect(toolNames).toEqual(["openclaw"]);
-      expect(createOpenClawCodingTools().some((tool) => tool.name === "openclaw")).toBe(false);
       expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
     },
   );
@@ -549,7 +625,6 @@ describe("runAgentHarnessAttempt", () => {
 
     expect(result.sessionIdUsed).toBe("openclaw");
     expect(toolNames).toEqual(["openclaw"]);
-    expect(createOpenClawCodingTools().some((tool) => tool.name === "openclaw")).toBe(false);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 
@@ -979,6 +1054,18 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("does not select Codex from a non-OpenAI model name", () => {
+    registerSuccessfulCodexHarness();
+
+    expect(resolveAgentHarnessPolicy({ provider: "custom", modelId: "gpt-5.4-codex" })).toEqual({
+      runtime: "auto",
+      runtimeSource: "implicit",
+    });
+    expect(selectAgentHarness({ provider: "custom", modelId: "gpt-5.4-codex" }).id).toBe(
+      "openclaw",
+    );
+  });
+
   it("auto-selects plugin support by default", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
@@ -995,6 +1082,23 @@ describe("selectAgentHarness", () => {
 
     expect(harness.id).toBe("codex");
     expect(supports).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects statically unrelated auto harnesses before provider discovery", () => {
+    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      autoSelection: { providerIds: ["openai", "codex"] },
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(selectAgentHarness({ provider: "deepseek", modelId: "deepseek-v4-pro" }).id).toBe(
+      "openclaw",
+    );
+    expect(supports).not.toHaveBeenCalled();
+    expect(providerOwnerMocks.resolveProviderRefOwnership).not.toHaveBeenCalled();
   });
 
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
@@ -2610,27 +2714,6 @@ describe("selectAgentHarness", () => {
       ).toBe("openclaw");
     },
   );
-
-  it("still throws MissingAgentHarnessError for an explicit configured cliBackends id", () => {
-    const config = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "my-custom-cli": { command: "echo" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(() =>
-      selectAgentHarness({
-        provider: "anthropic",
-        modelId: "sonnet-4.6",
-        agentHarnessRuntimeOverride: "my-custom-cli",
-        config,
-      }),
-    ).toThrow('Requested agent harness "my-custom-cli" is not registered');
-  });
 
   it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
     expect(() =>

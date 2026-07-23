@@ -10,7 +10,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
@@ -39,7 +39,7 @@ type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
   storePath: string;
 };
 
-export function resolveSessionSnapshotBundledSkillsDir(params?: {
+function resolveSessionSnapshotBundledSkillsDir(params?: {
   bundledSkillsDir?: string;
   argv1?: string;
   moduleUrl?: string;
@@ -214,13 +214,14 @@ function resolveExpectedBundledSkillPath(params: {
   cachedPath: string;
   bundledSkillsDir: string;
   pathExists: (filePath: string) => boolean;
-  homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const expandedCachedPath = expandHomePrefix(params.cachedPath, {
-    home: params.homeDir,
-    env: params.env,
-  });
+  // Snapshot paths use shell `~` semantics. OPENCLAW_HOME may point at an isolated
+  // runtime profile, so expanding against it would make the active runtime look stale.
+  const osHomeDir = resolveOsHomeDir(params.env);
+  const expandedCachedPath = osHomeDir
+    ? expandHomePrefix(params.cachedPath, { home: osHomeDir })
+    : params.cachedPath;
   if (!isAbsolutePathLike(expandedCachedPath)) {
     return undefined;
   }
@@ -259,11 +260,10 @@ function resolveMovedBundledSkillPath(params: {
 }
 
 /** Finds cached bundled-skill paths that point at old runtime/temp package roots. */
-export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
+function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
   pathExists?: (filePath: string) => boolean;
-  homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): StaleSessionSnapshotPathFinding[] {
   const bundledSkillsDir = params.bundledSkillsDir?.trim();
@@ -282,7 +282,6 @@ export function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
         cachedPath: cached.path,
         bundledSkillsDir,
         pathExists,
-        homeDir: params.homeDir,
         env: params.env,
       });
       if (!expectedPath) {
@@ -654,4 +653,13 @@ export async function noteSessionSnapshotHealth(params?: {
     );
   }
   note(lines.join("\n"), "Session snapshots");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorSessionSnapshotsTestApi")
+  ] = {
+    resolveSessionSnapshotBundledSkillsDir,
+    scanSessionStoreForStaleRuntimeSnapshotPaths,
+  };
 }

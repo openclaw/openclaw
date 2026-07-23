@@ -36,6 +36,13 @@ export function collectRuntimeConfigAssignments(params: {
       isBaseFieldActiveForChannelSurface(surface, "appPassword") ||
       isRootDefaultIdentityActive(msteams),
     inactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
+    owner: {
+      ownerKind: "account",
+      ownerId: "msteams:default",
+      requiredForGateway: false,
+      disposition: "isolate",
+      contract: msteams,
+    },
     apply: (value) => {
       msteams.appPassword = value;
     },

@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveEmbeddedCliBackendDispatchEligibility } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   buildConfiguredModelCatalog,
@@ -20,7 +21,8 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
@@ -43,7 +45,6 @@ import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
-
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
@@ -51,7 +52,9 @@ type RuntimeSessionStoreReadParams = {
   storePath?: string;
 };
 
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  readOnly?: boolean;
+};
 
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -104,13 +107,16 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 }
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
-  return loadSessionEntry(toSessionAccessScope(params));
+  return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
 function listSessionEntries(
   params: RuntimeSessionStoreListParams = {},
 ): RuntimeSessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const listEntries = params.readOnly
+    ? listAccessorSessionEntriesReadOnly
+    : listAccessorSessionEntries;
+  return listEntries({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -453,10 +459,7 @@ async function runWithSessionWorkAdmission<T>(
 /** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
-    defaults: {
-      model: DEFAULT_MODEL,
-      provider: DEFAULT_PROVIDER,
-    },
+    defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
@@ -489,6 +492,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
       return profile.defaultLevel ? { ...policy, defaultLevel: profile.defaultLevel } : policy;
     },
     resolveAgentTimeoutMs,
+    resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
   } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
     Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;

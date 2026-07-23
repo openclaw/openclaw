@@ -30,4 +30,13 @@ export type ModelCatalogEntry = {
 export type ModelCatalogSnapshot = {
   entries: ModelCatalogEntry[];
   routeVariants: ModelCatalogEntry[];
+  /** Static provider-hook rows captured alongside the full lifecycle generation. */
+  staticEntries?: ModelCatalogEntry[];
+  /**
+   * `false` only when this snapshot came from a degraded load (discovery threw,
+   * static or empty fallback). Absent/`true` means authoritative — consumers that
+   * destroy durable state (e.g. resetting a pinned model override) must treat only
+   * an explicit `false` as degraded, so unrelated hand-built snapshots stay safe.
+   */
+  authoritative?: boolean;
 };

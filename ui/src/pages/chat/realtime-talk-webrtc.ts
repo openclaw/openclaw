@@ -1,6 +1,7 @@
 // Control UI chat module implements realtime talk webrtc behavior.
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
-import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
+import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -13,6 +14,10 @@ import {
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
 } from "./realtime-talk-shared.ts";
+import {
+  captureRealtimeTalkVideoFrame,
+  type RealtimeTalkVideoFrame,
+} from "./realtime-talk-video.ts";
 
 type RealtimeServerEvent = {
   type?: string;
@@ -48,7 +53,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private peer: RTCPeerConnection | null = null;
   private channel: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
+  private cameraMedia: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
+  private captureVideo: HTMLVideoElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
   private responseActive = false;
@@ -56,6 +63,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseCreatePending = false;
   private toolBuffers = new Map<string, ToolBuffer>();
   private pendingOfferRequest: PendingOfferRequest | null = null;
+  private mediaSetupController: AbortController | null = null;
+  private cameraSetupController: AbortController | null = null;
+  private readonly handleCameraTrackEnded = () => this.releaseCamera();
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
 
@@ -71,6 +81,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
+    this.mediaSetupController?.abort();
     const peer = new RTCPeerConnection();
     this.peer = peer;
     this.audio = document.createElement("audio");
@@ -83,7 +94,21 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.audio.srcObject = stream;
       }
     });
-    const media = await this.awaitSetupStep(peer, openRealtimeTalkInput(this.ctx.inputDeviceId));
+    const mediaSetupController = new AbortController();
+    this.mediaSetupController = mediaSetupController;
+    let media: MediaStream | typeof cancelledSetup;
+    try {
+      media = await this.awaitSetupStep(
+        peer,
+        openRealtimeTalkInput(this.ctx.inputDeviceId, {
+          signal: mediaSetupController.signal,
+        }),
+      );
+    } finally {
+      if (this.mediaSetupController === mediaSetupController) {
+        this.mediaSetupController = null;
+      }
+    }
     if (media === cancelledSetup) {
       return;
     }
@@ -96,6 +121,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(media);
     }
+    // Camera frames travel only as explicit describe_view data-channel events.
+    // Keeping video off the peer prevents unintended continuous camera upload.
     for (const track of media.getAudioTracks()) {
       peer.addTrack(track, media);
     }
@@ -115,7 +142,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         return;
       }
       if (this.peer?.connectionState === "failed" || this.peer?.connectionState === "closed") {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
+        this.failConnection("Realtime connection closed");
       }
     });
 
@@ -147,6 +174,83 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         sdp: answerSdp,
       }),
     );
+  }
+
+  async setVideoEnabled(enabled: boolean): Promise<void> {
+    if (!enabled) {
+      this.releaseCamera();
+      return;
+    }
+    if (this.closed) {
+      throw new Error("Realtime Talk session is closed");
+    }
+    if (this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live")) {
+      return;
+    }
+    this.cameraSetupController?.abort();
+    const controller = new AbortController();
+    this.cameraSetupController = controller;
+    let camera: MediaStream;
+    try {
+      camera = await openRealtimeTalkCamera(this.ctx.videoDeviceId, {
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (this.closed || controller.signal.aborted) {
+        return;
+      }
+      throw error;
+    } finally {
+      if (this.cameraSetupController === controller) {
+        this.cameraSetupController = null;
+      }
+    }
+    if (this.closed || controller.signal.aborted) {
+      camera.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    this.cameraMedia = camera;
+    // External track loss clears preview state so the next toggle reacquires the camera.
+    camera
+      .getVideoTracks()
+      .forEach((track) =>
+        track.addEventListener("ended", this.handleCameraTrackEnded, { once: true }),
+      );
+    const captureVideo = document.createElement("video");
+    captureVideo.autoplay = true;
+    captureVideo.muted = true;
+    captureVideo.playsInline = true;
+    captureVideo.srcObject = camera;
+    this.captureVideo = captureVideo;
+    this.ctx.callbacks.onVideoStream?.(camera);
+    void captureVideo.play().catch(() => undefined);
+  }
+
+  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    const nextDeviceId = videoDeviceId?.trim() || undefined;
+    const previousDeviceId =
+      this.cameraMedia?.getVideoTracks()[0]?.getSettings?.().deviceId?.trim() ||
+      this.ctx.videoDeviceId;
+    const shouldReacquire = this.cameraMedia !== null || this.cameraSetupController !== null;
+    this.ctx.videoDeviceId = nextDeviceId;
+    if (!shouldReacquire) {
+      return;
+    }
+
+    this.releaseCamera();
+    try {
+      await this.setVideoEnabled(true);
+    } catch (error) {
+      if (!this.closed && previousDeviceId !== nextDeviceId) {
+        this.ctx.videoDeviceId = previousDeviceId;
+        try {
+          await this.setVideoEnabled(true);
+        } catch {
+          // The original switch failure is the actionable error for the user.
+        }
+      }
+      throw error;
+    }
   }
 
   private async readOfferAnswer(
@@ -249,6 +353,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "session.closed", final: true });
     }
     this.closed = true;
+    this.mediaSetupController?.abort();
+    this.mediaSetupController = null;
+    this.cameraSetupController?.abort();
+    this.cameraSetupController = null;
     this.abortOfferRequest();
     this.channel?.close();
     this.channel = null;
@@ -256,6 +364,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.peer = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
+    this.releaseCamera();
     this.inputMeter?.stop();
     this.inputMeter = null;
     this.audio?.remove();
@@ -268,6 +377,15 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.responseActive = false;
     this.responseCreateInFlight = false;
     this.responseCreatePending = false;
+  }
+
+  private failConnection(detail: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.ctx.callbacks.onStatus?.("error", detail);
+    // A terminal peer failure still owns live browser media until stop() releases it.
+    this.stop();
   }
 
   private send(event: unknown): void {
@@ -439,6 +557,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       });
       return;
     }
+    if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
+      await this.handleDescribeViewToolCall(callId, key);
+      return;
+    }
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       return;
     }
@@ -464,6 +586,52 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
   }
 
+  private async handleDescribeViewToolCall(callId: string, itemId: string): Promise<void> {
+    this.emitTalkEvent({
+      type: "tool.call",
+      callId,
+      itemId,
+      payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME },
+    });
+    if (!this.cameraMedia?.getVideoTracks().some((track) => track.readyState === "live")) {
+      this.submitToolResult(callId, { ok: false, error: "camera is off" });
+      this.emitTalkEvent({
+        type: "tool.error",
+        callId,
+        itemId,
+        final: true,
+        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, message: "camera is off" },
+      });
+      return;
+    }
+    try {
+      const frame = await captureRealtimeTalkVideoFrame(
+        this.captureVideo,
+        realtimeTalkDataChannelMaxMessageSize(this.peer),
+        realtimeTalkImageEvent,
+      );
+      this.send(realtimeTalkImageEvent(frame));
+      this.submitToolResult(callId, { ok: true, frameAttached: true });
+      this.emitTalkEvent({
+        type: "tool.result",
+        callId,
+        itemId,
+        final: true,
+        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, frameAttached: true },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.submitToolResult(callId, { ok: false, error: message });
+      this.emitTalkEvent({
+        type: "tool.error",
+        callId,
+        itemId,
+        final: true,
+        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, message },
+      });
+    }
+  }
+
   private submitToolResult(callId: string, result: unknown): void {
     this.send({
       type: "conversation.item.create",
@@ -474,6 +642,21 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     this.requestResponseCreate();
+  }
+
+  private releaseCamera(): void {
+    this.cameraSetupController?.abort();
+    this.cameraSetupController = null;
+    this.cameraMedia?.getVideoTracks().forEach((track) => {
+      track.removeEventListener("ended", this.handleCameraTrackEnded);
+      track.stop();
+    });
+    this.cameraMedia = null;
+    if (this.captureVideo) {
+      this.captureVideo.srcObject = null;
+      this.captureVideo = null;
+    }
+    this.ctx.callbacks.onVideoStream?.(null);
   }
 
   private reportToolResultSubmissionError(error: unknown): void {
@@ -529,4 +712,24 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.responseCreatePending = false;
     this.requestResponseCreate();
   }
+}
+
+const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
+
+function realtimeTalkDataChannelMaxMessageSize(peer: RTCPeerConnection | null): number {
+  const negotiated = peer?.sctp?.maxMessageSize;
+  return typeof negotiated === "number" && Number.isFinite(negotiated) && negotiated > 0
+    ? negotiated
+    : REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE;
+}
+
+function realtimeTalkImageEvent(frame: RealtimeTalkVideoFrame): unknown {
+  return {
+    type: "conversation.item.create",
+    item: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_image", image_url: `data:${frame.mimeType};base64,${frame.data}` }],
+    },
+  };
 }

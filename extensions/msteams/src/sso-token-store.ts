@@ -59,7 +59,7 @@ type MSTeamsSsoStoreData = SsoStoreData;
 
 export const MSTEAMS_SSO_TOKENS_LEGACY_FILENAME = "msteams-sso-tokens.json";
 export const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";
-const SSO_TOKEN_LOCK_FILENAME = "msteams-sso-tokens.sqlite.lock";
+const SSO_TOKEN_MUTATION_KEY = "sso-tokens";
 export const MSTEAMS_MAX_SSO_TOKENS = 5000;
 const STORE_KEY_VERSION_PREFIX = "v2:";
 
@@ -155,7 +155,7 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
     },
 
     async save(token) {
-      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_LOCK_FILENAME, async () => {
+      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
         await tokenStore.register(
           makeMSTeamsSsoTokenStoreKey(
             token.connectionName,
@@ -176,7 +176,7 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
 
     async remove({ accountId, connectionName, userId }) {
       let removed = false;
-      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_LOCK_FILENAME, async () => {
+      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
         removed = await tokenStore.delete(
           makeMSTeamsSsoTokenStoreKey(connectionName, userId, accountId ?? defaultAccountId),
         );

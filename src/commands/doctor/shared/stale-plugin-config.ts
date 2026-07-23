@@ -2,11 +2,14 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
-import { shouldSuppressMissingCodexPluginDiagnostics } from "../../../config/codex-plugin-diagnostics.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+} from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { asObjectRecord } from "./object.js";
 import {
@@ -25,6 +28,7 @@ type StalePluginConfigHit = {
 
 type StalePluginRegistryState = {
   knownIds: Set<string>;
+  officialIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
   hasDiscoveryErrors: boolean;
@@ -42,6 +46,12 @@ function collectPluginRegistryState(
     env: environment,
   }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+  // Official catalog config remains valid even when its package is not installed yet.
+  const officialIds = new Set(
+    listOfficialExternalPluginCatalogEntries()
+      .map((entry) => normalizePluginId(resolveOfficialExternalPluginId(entry) ?? ""))
+      .filter(Boolean),
+  );
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
     const normalized = normalizePluginId(pluginId);
@@ -72,6 +82,7 @@ function collectPluginRegistryState(
   }
   return {
     knownIds,
+    officialIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
     hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
@@ -98,20 +109,15 @@ export function scanStalePluginConfig(
     return [];
   }
   const environment = env ?? process.env;
-  return scanStalePluginConfigWithState(
-    cfg,
-    collectPluginRegistryState(cfg, environment),
-    environment,
-  );
+  return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, environment));
 }
 
 function scanStalePluginConfigWithState(
   cfg: OpenClawConfig,
   registryState: StalePluginRegistryState,
-  env: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
   const plugins = asObjectRecord(cfg.plugins);
-  const { knownIds } = registryState;
+  const { knownIds, officialIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
 
@@ -122,7 +128,12 @@ function scanStalePluginConfigWithState(
         continue;
       }
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+      if (
+        !pluginId ||
+        knownIds.has(pluginId) ||
+        officialIds.has(pluginId) ||
+        registryState.knownChannelIds.has(pluginId)
+      ) {
         continue;
       }
       hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
@@ -134,10 +145,12 @@ function scanStalePluginConfigWithState(
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
-        continue;
-      }
-      if (pluginId === "codex" && shouldSuppressMissingCodexPluginDiagnostics(cfg, env)) {
+      if (
+        !pluginId ||
+        knownIds.has(pluginId) ||
+        officialIds.has(pluginId) ||
+        registryState.knownChannelIds.has(pluginId)
+      ) {
         continue;
       }
       hits.push({
@@ -353,7 +366,7 @@ export function maybeRepairStalePluginConfig(
   }
 
   const hits = filterRepairableStalePluginHits({
-    hits: scanStalePluginConfigWithState(cfg, registryState, environment),
+    hits: scanStalePluginConfigWithState(cfg, registryState),
     preservePluginIds: params?.preservePluginIds,
     surfacePreservePluginIds: params?.surfacePreservePluginIds,
   });

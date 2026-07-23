@@ -16,7 +16,6 @@ import {
   resolveQwenTokenPlanBaseUrl,
 } from "./api.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildQwenOAuthProvider } from "./provider-catalog.js";
 
 type QwenProvider = ReturnType<typeof buildQwenProvider>;
 
@@ -75,23 +74,6 @@ describe("qwen provider catalog", () => {
     });
   });
 
-  it("keeps unsupported Qwen models out of the portal catalog", () => {
-    const portal = buildQwenOAuthProvider();
-    const portalQwen36 = portal.models.find((model) => model.id === "qwen3.6-plus");
-    const manifestQwen36 = manifest.modelCatalog.providers["qwen-oauth"].models.find(
-      (model) => model.id === "qwen3.6-plus",
-    );
-
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(
-      manifest.modelCatalog.providers["qwen-oauth"].models.map((model) => model.id),
-    ).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_37_MAX_MODEL_ID);
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_37_PLUS_MODEL_ID);
-    expect(portalQwen36?.reasoning).toBe(true);
-    expect(manifestQwen36?.reasoning).toBe(portalQwen36?.reasoning);
-  });
-
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {
     const nativeProvider = applyQwenNativeStreamingUsageCompat(buildQwenProvider());
     expect(nativeProvider.models.length).toBeGreaterThan(0);
@@ -141,7 +123,7 @@ describe("qwen token plan provider catalog", () => {
     ]);
     expect(provider.models.every((model) => model.reasoning)).toBe(true);
     expect(manifest.modelCatalog.providers["qwen-token-plan"].models).toEqual(provider.models);
-    expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("static");
+    expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
   });
 
   it("uses region-scoped endpoints with the documented GLM 5.2 window", () => {

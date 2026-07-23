@@ -3,12 +3,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
-  testing,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
+import { testing } from "../tool-search.test-support.js";
 import { createAgentHarnessToolSurfaceRuntime } from "./tool-surface-bridge.js";
 
 function tools(names: string[]) {

@@ -35,6 +35,38 @@ describe("signal groups schema", () => {
     }
   });
 
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    const issues = expectInvalidSignalConfig({ dmPolicy: "allowlist" });
+    expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectValidSignalConfig({
+      allowFrom: ["+15550001111"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+  });
+
+  it("accepts channel and account scoped reply-to modes", () => {
+    expectValidSignalConfig({
+      replyToMode: "first",
+      replyToModeByChatType: { direct: "all", group: "first" },
+      accounts: {
+        work: {
+          replyToMode: "off",
+          replyToModeByChatType: { direct: "first", group: "off" },
+        },
+      },
+    });
+  });
+
+  it("rejects unreachable channel and account reply-to overrides", () => {
+    expectInvalidSignalConfig({ replyToModeByChatType: { channel: "off" } });
+    expectInvalidSignalConfig({
+      accounts: { work: { replyToModeByChatType: { channel: "off" } } },
+    });
+  });
+
   it("defaults dm/group policy", () => {
     const res = SignalConfigSchema.safeParse({});
 

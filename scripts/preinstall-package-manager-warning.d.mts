@@ -6,6 +6,33 @@ export function nodeVersionSatisfiesPackageEngine(
 ): boolean;
 /** Reads the Node runtime contract from the package being installed. */
 export function readPackageNodeEngine(packageJsonUrl?: URL): string | null;
+export type PackageCliNodeRuntime = {
+  version: string | null;
+  bunVersion: string | null;
+  execPath: string | null;
+};
+/** Finds the real Node that will launch the installed CLI after Bun removes its lifecycle PATH. */
+export function probePackageCliNodeRuntime(options?: {
+  env?: NodeJS.ProcessEnv;
+  pathEnv?: string;
+  platform?: NodeJS.Platform;
+  cwd?: string;
+  run?: (
+    command: string,
+    args: string[],
+    options: {
+      cwd: string;
+      encoding: "utf8";
+      env: NodeJS.ProcessEnv;
+      timeout: number;
+      windowsHide: boolean;
+    },
+  ) => {
+    status?: number | null;
+    stdout?: string;
+    error?: NodeJS.ErrnoException;
+  };
+}): PackageCliNodeRuntime | null;
 /** Rejects installation before an unsupported runtime can replace a working release. */
 export function enforceSupportedNodeRuntime(
   options?: {
@@ -13,6 +40,7 @@ export function enforceSupportedNodeRuntime(
     bunVersion?: string | null;
     engine?: string | null;
     execPath?: string | null;
+    probeNodeRuntime?: () => PackageCliNodeRuntime | null;
   },
   reportError?: (...data: unknown[]) => void,
 ): boolean;

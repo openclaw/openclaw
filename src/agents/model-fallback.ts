@@ -66,14 +66,14 @@ import {
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
-import { isCliProvider } from "./model-selection-cli.js";
 import {
   type ModelManifestNormalizationContext,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
+import { isCliProvider } from "./model-selection-cli.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -889,14 +889,6 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
   return DEFAULT_PROVIDER;
 }
 
-export const testing = {
-  resolveFallbackCandidates: resolveModelCandidateChain,
-  resolveImageFallbackCandidates,
-  resolveCooldownDecision,
-  resolveSessionSuspensionReason,
-  shouldDiscardDeferredSessionSuspension,
-} as const;
-
 export function resolveModelCandidateChain(
   params: {
     cfg: OpenClawConfig | undefined;
@@ -1412,6 +1404,13 @@ function shouldDiscardDeferredSessionSuspension(params: {
   );
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelFallbackTestApi")] = {
+    resolveCooldownDecision,
+    shouldDiscardDeferredSessionSuspension,
+  };
+}
+
 export async function runWithModelFallback<T>(
   params: RunWithModelFallbackParams<T>,
 ): Promise<ModelFallbackRunResult<T>> {
@@ -1579,6 +1578,12 @@ async function runWithModelFallbackInternal<T>(
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
+      });
+      authRuntime.maybeReprobeWhamBlockedProfiles({
+        store: authStore,
+        profileIds,
+        agentDir: params.agentDir,
+        forModel: candidate.model,
       });
       const isAnyProfileAvailable = profileIds.some(
         (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),

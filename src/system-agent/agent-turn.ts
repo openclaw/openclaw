@@ -11,6 +11,7 @@ import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import type { SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
@@ -28,6 +29,9 @@ import {
  * Turns share one persistent session so the conversation has genuine
  * multi-turn memory. Inference setup must succeed before this runner is entered.
  */
+// Flat budget for both route classes: agent-loop turns run multi-step tool
+// calls, so even metered external routes need the full window, and 120s
+// already covers local startup + generation (planner evidence).
 const AGENT_TURN_TIMEOUT_MS = 120_000;
 const SYSTEM_AGENT_MCP_TOOL_NAME = "mcp__openclaw__openclaw";
 
@@ -53,9 +57,9 @@ export type SystemAgentTurnRunner = (params: {
 export type SystemAgentSession = {
   sessionId: string;
   /** Exact live-tested inference owner for this ephemeral conversation. */
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
+  verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Host-owned pending-proposal fingerprint; see system-agent-tool.ts. */
-  proposalRef: { current?: string };
+  proposalRef: { current?: string; operation?: SystemAgentOperation };
   /** Native CLI continuity, bound to the exact configured model/auth owner route. */
   cliSession?: {
     routeKey: string;
@@ -146,6 +150,7 @@ function clearSystemAgentCliSession(session: SystemAgentSession): void {
 
 function clearFailedSystemAgentSessionState(session: SystemAgentSession): void {
   session.proposalRef.current = undefined;
+  session.proposalRef.operation = undefined;
   clearSystemAgentCliSession(session);
 }
 
@@ -227,7 +232,7 @@ function resolveSystemAgentCliToolAvailability(
  */
 async function mirrorSystemAgentToolStateFromEvents(params: {
   runId: string;
-  proposalRef: { current?: string };
+  proposalRef: { current?: string; operation?: SystemAgentOperation };
   directiveRef: { current?: SystemAgentTurnDirective };
 }): Promise<() => void> {
   const [
@@ -256,6 +261,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
     const transition = resolveSystemAgentProposalTransition({ args, resultText });
     if (transition) {
       params.proposalRef.current = transition.proposal;
+      params.proposalRef.operation = transition.operation;
     }
     const directive = resolveSystemAgentDirectiveTransition({ args, resultText });
     if (directive && params.directiveRef.current?.kind !== "approved-operation") {
@@ -269,7 +275,7 @@ async function mirrorSystemAgentToolStateFromEvents(params: {
  * output failures are typed so callers may try another inference path without
  * mistaking the failure for deterministic setup authority.
  */
-export async function runSystemAgentTurnWithDeps(
+async function runSystemAgentTurnWithDeps(
   params: SystemAgentTurnParams,
   deps: SystemAgentTurnDeps = {},
 ): Promise<SystemAgentTurnReply | null> {
@@ -320,6 +326,7 @@ export async function runSystemAgentTurnWithDeps(
     config: plan.runConfig,
     prompt: params.input,
     timeoutMs: AGENT_TURN_TIMEOUT_MS,
+    thinkLevel: "off" as const,
     runId,
     messageChannel: "openclaw",
     messageProvider: "openclaw",
@@ -432,3 +439,9 @@ export async function runSystemAgentTurnWithDeps(
 
 export const runSystemAgentTurn: SystemAgentTurnRunner = (params) =>
   runSystemAgentTurnWithDeps(params);
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.systemAgentTurnTestApi")] = {
+    runSystemAgentTurnWithDeps,
+  };
+}

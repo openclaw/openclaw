@@ -12,8 +12,10 @@ import {
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
+import { hasRememberAcrossConversationsAgent } from "./session-policy.js";
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -50,6 +52,7 @@ const hoisted = vi.hoisted(() => {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
     cleanupSessionLifecycleArtifacts: vi.fn(),
     patchSessionEntry: vi.fn(),
+    rawDeltaReads: [] as Array<{ maxBytes?: number; maxEvents?: number; sessionId: string }>,
     runtimeTranscriptFiles: {} as Record<string, string>,
     sessionStore,
     updateSessionStore: vi.fn(
@@ -85,6 +88,52 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
   >("openclaw/plugin-sdk/session-transcript-runtime");
   return {
     ...actual,
+    readSessionTranscriptRawDelta: async (
+      params: Parameters<typeof actual.readSessionTranscriptRawDelta>[0],
+    ) => {
+      hoisted.rawDeltaReads.push({
+        maxBytes: params.maxBytes,
+        maxEvents: params.maxEvents,
+        sessionId: params.sessionId,
+      });
+      const testSessionFile = hoisted.runtimeTranscriptFiles[params.sessionId];
+      if (!testSessionFile) {
+        return await actual.readSessionTranscriptRawDelta(params);
+      }
+      try {
+        const lines = (await fs.readFile(testSessionFile, "utf8"))
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const maxEvents = params.maxEvents ?? lines.length;
+        const maxBytes = params.maxBytes ?? Number.MAX_SAFE_INTEGER;
+        const events: Array<{ event: unknown; seq: number }> = [];
+        let serializedBytes = 0;
+        for (const [seq, line] of lines.entries()) {
+          const nextBytes = Buffer.byteLength(`${line}\n`, "utf8");
+          if (events.length >= maxEvents || serializedBytes + nextBytes > maxBytes) {
+            break;
+          }
+          events.push({ event: JSON.parse(line) as unknown, seq });
+          serializedBytes += nextBytes;
+        }
+        const requiredBytes =
+          events.length === 0 && lines[0] ? Buffer.byteLength(`${lines[0]}\n`, "utf8") : undefined;
+        return {
+          kind: "page" as const,
+          cursor: `test-runtime:${String(events.length)}`,
+          events,
+          hasMore: events.length < lines.length,
+          ...(requiredBytes !== undefined ? { requiredBytes } : {}),
+          serializedBytes,
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      return await actual.readSessionTranscriptRawDelta(params);
+    },
     readSessionTranscriptEvents: async (
       target: Parameters<typeof actual.readSessionTranscriptEvents>[0],
     ) => {
@@ -131,6 +180,11 @@ describe("active-memory plugin", () => {
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedAgent = vi.fn();
+  // Default: recall routes are not CLI-dispatch-eligible; tests that prove the
+  // raised budget override this per-case.
+  const resolveCliBackendDispatchEligibility = vi.fn(
+    () => undefined as { provider: string } | undefined,
+  );
   const runtimeRunEmbeddedAgent = vi.fn(async (params: Record<string, unknown>) => {
     const sessionId =
       typeof params.sessionId === "string" && params.sessionId.length > 0
@@ -166,12 +220,15 @@ describe("active-memory plugin", () => {
       },
     };
   });
+  let fixtureRoot = "";
+  let pluginStateDir = "";
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
     agents: ["main"],
     logging: true,
   };
+  let apiConfig: Record<string, unknown> = {};
   const syncRuntimePluginConfig = (nextPluginConfig: Record<string, unknown>) => {
     pluginConfig = nextPluginConfig;
     const plugins = configFile.plugins as Record<string, unknown> | undefined;
@@ -212,13 +269,24 @@ describe("active-memory plugin", () => {
     set pluginConfig(nextPluginConfig: Record<string, unknown>) {
       syncRuntimePluginConfig(nextPluginConfig);
     },
-    config: {},
+    get config() {
+      return apiConfig;
+    },
+    set config(nextConfig: Record<string, unknown>) {
+      apiConfig = nextConfig;
+      const plugins = configFile.plugins;
+      configFile = {
+        ...nextConfig,
+        ...(plugins ? { plugins } : {}),
+      };
+    },
     id: "active-memory",
     name: "Active Memory",
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     runtime: {
       agent: {
         runEmbeddedAgent: runtimeRunEmbeddedAgent,
+        resolveCliBackendDispatchEligibility,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
@@ -271,7 +339,7 @@ describe("active-memory plugin", () => {
         openKeyedStore: (options: OpenKeyedStoreOptions) =>
           createPluginStateKeyedStoreForTests("active-memory", {
             ...options,
-            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+            env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
           }),
       },
       config: {
@@ -467,12 +535,25 @@ describe("active-memory plugin", () => {
     return call;
   };
 
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+    pluginStateDir = path.join(fixtureRoot, "plugin-state");
+    stateDir = path.join(fixtureRoot, "state");
+  });
+
   beforeEach(async () => {
     vi.clearAllMocks();
-    resetPluginStateStoreForTests();
+    await fs.rm(stateDir, { recursive: true, force: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    // Keep the SQLite file/schema warm, but clear the plugin's only real namespace.
+    await createPluginStateKeyedStoreForTests("active-memory", {
+      namespace: "session-toggles",
+      maxEntries: 10_000,
+      env: { ...process.env, OPENCLAW_STATE_DIR: pluginStateDir },
+    }).clear();
     runEmbeddedAgent.mockReset();
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
     configFile = {
+      session: { dmScope: "per-peer" },
       plugins: {
         entries: {
           "active-memory": {
@@ -489,6 +570,7 @@ describe("active-memory plugin", () => {
       logging: true,
     });
     api.config = {
+      session: { dmScope: "per-peer" },
       agents: {
         defaults: {
           model: {
@@ -503,6 +585,7 @@ describe("active-memory plugin", () => {
     for (const key of Object.keys(hoisted.runtimeTranscriptFiles)) {
       delete hoisted.runtimeTranscriptFiles[key];
     }
+    hoisted.rawDeltaReads.length = 0;
     hoisted.sessionStore["agent:main:main"] = {
       sessionId: "s-main",
       updatedAt: 0,
@@ -574,14 +657,18 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     testing.resetActiveRecallCacheForTests();
-    if (stateDir) {
-      await fs.rm(stateDir, { recursive: true, force: true });
-      stateDir = "";
-    }
+  });
+
+  afterAll(async () => {
+    resetPluginStateStoreForTests();
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    fixtureRoot = "";
+    pluginStateDir = "";
+    stateDir = "";
   });
 
   it("registers a before_prompt_build hook", () => {
@@ -590,6 +677,19 @@ describe("active-memory plugin", () => {
     expect(typeof handler).toBe("function");
     expect(options).toEqual({ timeoutMs: 153_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
+  });
+
+  it("does not synthesize a main agent when every configured agent opts out", () => {
+    expect(
+      hasRememberAcrossConversationsAgent({
+        agents: {
+          list: [
+            { id: "personal", memory: { search: { rememberAcrossConversations: false } } },
+            { id: "support", memory: { search: { rememberAcrossConversations: false } } },
+          ],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("keeps the outer hook timeout at the live-config ceiling", () => {
@@ -625,6 +725,9 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().authProfileFailurePolicy).toBe("local");
+    // Subscription-only claude-cli setups route recall through the CLI
+    // backend instead of the direct-API passthrough.
+    expect(lastEmbeddedRunParams().cliBackendDispatch).toBe("subscription-auth");
   });
 
   it("runs recall on a dedicated active-memory lane", async () => {
@@ -780,6 +883,317 @@ describe("active-memory plugin", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to clean up recall session"),
     );
+  });
+
+  it("runs product recall for an opted-in direct session without an Active Memory agent entry", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [
+          {
+            id: "personal",
+            workspace: "/tmp/live-personal-workspace",
+            agentDir: "/tmp/live-personal-agent",
+            model: { primary: "openai/gpt-5.5" },
+            memory: { search: { rememberAcrossConversations: true } },
+          },
+        ],
+      },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: sessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    });
+    expect(lastEmbeddedRunParams().toolsAllow).toEqual(["memory_search"]);
+    expect(lastEmbeddedRunParams()).toMatchObject({
+      workspaceDir: "/tmp/live-personal-workspace",
+      agentDir: "/tmp/live-personal-agent",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(embeddedRunConfig()).toMatchObject({
+      agents: {
+        list: [
+          {
+            id: "personal",
+            workspace: "/tmp/live-personal-workspace",
+            agentDir: "/tmp/live-personal-agent",
+            model: { primary: "openai/gpt-5.5" },
+            memory: { search: { rememberAcrossConversations: true } },
+          },
+        ],
+      },
+    });
+  });
+
+  it("keeps product recall available when Lossless Claw owns the context-engine slot", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memory: { search: { rememberAcrossConversations: true } },
+          },
+        ],
+      },
+      plugins: {
+        ...(configFile.plugins as Record<string, unknown>),
+        slots: { contextEngine: "lossless-claw" },
+      },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: sessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    });
+    expect(hasWarnLine("does not support protected private transcript recall")).toBe(false);
+  });
+
+  it("matches case-preserved conversation ids against lowercased deny lists", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["direct", "group"],
+      deniedChatIds: ["AbCdEfGh=="],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await requireHook("before_prompt_build")(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:signal:group:AbCdEfGh==",
+        messageProvider: "signal",
+        channelId: "signal",
+      },
+    );
+
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(result).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "a denylisted main-scope DM",
+      sessionKey: "agent:personal:main",
+      messageProvider: "telegram",
+      channelId: "owner",
+      pluginConfig: { agents: [], logging: true, deniedChatIds: ["owner"] },
+      memorySlot: "memory-core",
+      warn: undefined,
+    },
+    {
+      name: "a group destination",
+      sessionKey: "agent:personal:telegram:group:family",
+      messageProvider: "telegram",
+      channelId: "family",
+      pluginConfig: { agents: [], logging: true },
+      memorySlot: "memory-core",
+      warn: undefined,
+    },
+    {
+      name: "a headless explicit destination",
+      sessionKey: "agent:personal:explicit:headless-run",
+      messageProvider: undefined,
+      channelId: undefined,
+      pluginConfig: { agents: [], logging: true },
+      memorySlot: "memory-core",
+      warn: undefined,
+    },
+    {
+      name: "an unsupported memory provider",
+      sessionKey: "agent:personal:telegram:direct:owner",
+      messageProvider: "telegram",
+      channelId: "owner",
+      pluginConfig: { agents: [], toolsAllow: ["memory_search"], logging: true },
+      memorySlot: "memory-lancedb",
+      warn: "does not support protected private transcript recall",
+    },
+    {
+      name: "a missing memory_search tool",
+      sessionKey: "agent:personal:telegram:direct:owner",
+      messageProvider: "telegram",
+      channelId: "owner",
+      pluginConfig: { agents: [], toolsAllow: ["memory_get"], logging: true },
+      memorySlot: "memory-core",
+      warn: "memory_search is unavailable",
+    },
+  ])("fails closed without product recall for $name", async (testCase) => {
+    syncRuntimePluginConfig(testCase.pluginConfig);
+    setMemorySlot(testCase.memorySlot);
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
+      },
+    };
+    hoisted.sessionStore[testCase.sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    const result = await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey: testCase.sessionKey,
+        messageProvider: testCase.messageProvider,
+        channelId: testCase.channelId,
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    if (testCase.warn) {
+      expect(hasWarnLine(testCase.warn)).toBe(true);
+    }
+  });
+
+  it("runs product recall by default for a personal install without Active Memory config", async () => {
+    configFile = {
+      agents: {
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+          },
+        ],
+      },
+      plugins: { entries: {} },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: sessionKey,
+      scope: "same-agent-private",
+      corpus: "sessions",
+    });
+  });
+
+  it("keeps advanced recall corpora separate from product recall", async () => {
+    syncRuntimePluginConfig({ agents: ["personal"], allowedChatTypes: ["direct", "group"] });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [
+          {
+            id: "personal",
+            model: { primary: "github-copilot/gpt-5.4-mini" },
+            memory: { search: { rememberAcrossConversations: true } },
+          },
+        ],
+      },
+    };
+    const directSessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[directSessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey: directSessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+    expect(lastEmbeddedRunParams().conversationRecall).toEqual({
+      anchorSessionKey: directSessionKey,
+      scope: "same-agent-private",
+      corpus: "configured",
+    });
+
+    await requireHook("before_prompt_build")(
+      { prompt: "what context helps here?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey: "agent:personal:telegram:group:family",
+        messageProvider: "telegram",
+        channelId: "family",
+      },
+    );
+    expect(lastEmbeddedRunParams().conversationRecall).toBeUndefined();
+  });
+
+  it("lets a remember-only agent pause recall for one session", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true });
+    configFile = {
+      ...configFile,
+      agents: {
+        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
+      },
+    };
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
+
+    const offResult = await registeredCommands["active-memory"].handler({
+      channel: "telegram",
+      isAuthorizedSender: true,
+      sessionKey,
+      args: "off",
+      commandBody: "/active-memory off",
+      config: configFile,
+      requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+      detachConversationBinding: async () => ({ removed: false }),
+      getCurrentConversationBinding: async () => null,
+    });
+    await requireHook("before_prompt_build")(
+      { prompt: "what do I usually order?", messages: [] },
+      {
+        agentId: "personal",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "telegram",
+        channelId: "owner",
+      },
+    );
+
+    expect(offResult.text).toBe("Active Memory: off for this session.");
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("registers a session-scoped active-memory toggle command", async () => {
@@ -2264,6 +2678,8 @@ describe("active-memory plugin", () => {
       updatedAt: 0,
       fastMode: false,
     };
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
 
     await requireHook("before_prompt_build")(
       {
@@ -2279,6 +2695,8 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().fastMode).toBe(false);
+    let infoLines = vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "fast=off start");
 
     delete hoisted.sessionStore["agent:main:main"].fastMode;
     await requireHook("before_prompt_build")(
@@ -2295,6 +2713,8 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().fastMode).toBe(true);
+    infoLines = vi.mocked(api.logger.info).mock.calls.map((call: unknown[]) => String(call[0]));
+    expectLinesToContain(infoLines, "fast=on start");
   });
 
   it("allows appending extra prompt instructions without replacing the base prompt", async () => {
@@ -3317,10 +3737,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3364,10 +3784,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3411,6 +3831,12 @@ describe("active-memory plugin", () => {
     );
 
     expectPrependContextContains(result, "sqlite partial recall summary");
+    expect(hoisted.rawDeltaReads).toContainEqual(
+      expect.objectContaining({
+        maxBytes: 50 * 1024 * 1024,
+        maxEvents: 2_000,
+      }),
+    );
     if (artifactSessionFile) {
       await expectPathMissing(artifactSessionFile);
     }
@@ -4367,10 +4793,10 @@ describe("active-memory plugin", () => {
   it("does not recover transcript partials after a later unavailable search times out", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4426,10 +4852,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial when unavailable debug arrives after the last poll", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4486,7 +4912,7 @@ describe("active-memory plugin", () => {
     testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4498,6 +4924,10 @@ describe("active-memory plugin", () => {
     let resolveLateWrite: () => void = () => {};
     const lateWriteDone = new Promise<void>((resolve) => {
       resolveLateWrite = resolve;
+    });
+    let releaseLateWrite: () => void = () => {};
+    const lateWriteRelease = new Promise<void>((resolve) => {
+      releaseLateWrite = resolve;
     });
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
@@ -4516,9 +4946,7 @@ describe("active-memory plugin", () => {
             },
           },
         ]);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        });
+        await lateWriteRelease;
         await writeTranscriptJsonl(params.sessionFile, [
           {
             message: {
@@ -4539,25 +4967,29 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await requireHook("before_prompt_build")(
-      { prompt: "what food do i usually order? unsettled timeout", messages: [] },
-      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
-    );
+    try {
+      const result = await requireHook("before_prompt_build")(
+        { prompt: "what food do i usually order? unsettled timeout", messages: [] },
+        { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+      );
 
-    expect(result).toBeUndefined();
-    const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "Active Memory: status=timeout");
-    expectLinesNotToContain(lines, "timeout_partial");
-    await lateWriteDone;
+      expect(result).toBeUndefined();
+      const lines = getActiveMemoryLines(sessionKey);
+      expectLinesToContain(lines, "Active Memory: status=timeout");
+      expectLinesNotToContain(lines, "timeout_partial");
+    } finally {
+      releaseLateWrite();
+      await lateWriteDone;
+    }
   });
 
   it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(100);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 250,
+      timeoutMs: 100,
       toolsAllow: ["memory_lookup_custom"],
       logging: true,
     };
@@ -6491,6 +6923,67 @@ describe("active-memory plugin", () => {
     expect(testing.normalizePluginConfig({ fastMode: false }).fastMode).toBe(false);
     expect(testing.normalizePluginConfig({ fastMode: "auto" }).fastMode).toBe("auto");
     expect(testing.normalizePluginConfig({ fastMode: "on" }).fastMode).toBeUndefined();
+  });
+
+  it("raises the default recall budget only when CLI dispatch is eligible", () => {
+    const defaults = testing.normalizePluginConfig({});
+    expect(defaults.timeoutMs).toBe(15_000);
+    expect(defaults.timeoutMsIsDefault).toBe(true);
+    expect(applyCliRuntimeRecallTimeoutDefault(defaults, true).timeoutMs).toBe(45_000);
+    expect(applyCliRuntimeRecallTimeoutDefault(defaults, false).timeoutMs).toBe(15_000);
+    // Explicit operator config always wins.
+    const explicit = testing.normalizePluginConfig({ timeoutMs: 20_000 });
+    expect(explicit.timeoutMsIsDefault).toBe(false);
+    expect(applyCliRuntimeRecallTimeoutDefault(explicit, true).timeoutMs).toBe(20_000);
+  });
+
+  it("applies the CLI dispatch recall budget to the embedded run", async () => {
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    resolveCliBackendDispatchEligibility.mockReturnValueOnce({ provider: "claude-cli" });
+    runEmbeddedAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- lemon pepper wings" }],
+    }));
+    await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+        modelProviderId: "claude-cli",
+        modelId: "claude-opus-4-8",
+      },
+    );
+    // 45s CLI-dispatch default + 0ms setup grace.
+    expect(lastEmbeddedRunParams().timeoutMs).toBe(45_000);
+    // Budgeting consults the runner's own eligibility decision.
+    expect(resolveCliBackendDispatchEligibility).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
+    );
+  });
+
+  it("keeps the plain recall budget when CLI dispatch is not eligible", async () => {
+    // API-key and missing-backend routes resolve to no eligibility: the run
+    // stays on the direct passthrough, so the plain 15s default applies.
+    api.pluginConfig = { agents: ["main"], logging: true };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    resolveCliBackendDispatchEligibility.mockReturnValueOnce(undefined);
+    runEmbeddedAgent.mockImplementationOnce(async () => ({
+      payloads: [{ text: "- lemon pepper wings" }],
+    }));
+    await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+        modelProviderId: "claude-cli",
+        modelId: "claude-opus-4-8",
+      },
+    );
+    expect(lastEmbeddedRunParams().timeoutMs).toBe(15_000);
   });
 
   it("normalizes setup grace config with a zero default and bounded opt-in", () => {

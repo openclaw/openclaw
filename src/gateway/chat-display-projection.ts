@@ -27,7 +27,14 @@ import {
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
-import { isSuppressedControlReplyText } from "./control-reply-text.js";
+import {
+  isSuppressedControlReplyText,
+  stripSuppressedControlReplyToken,
+} from "./control-reply-text.js";
+import {
+  projectWorkspaceResultConflict,
+  WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+} from "./worker-environments/workspace-conflicts.js";
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 
@@ -50,6 +57,7 @@ type ChatDisplayProjectionResult = {
 type PendingMessageToolVisibleReply = {
   toolCallId?: string;
   text: string;
+  requiresSourceRouteConfirmation: boolean;
   anchor: Record<string, unknown>;
   completionAnchor?: Record<string, unknown>;
   deliveryMirrorAnchor?: Record<string, unknown>;
@@ -112,6 +120,11 @@ function projectToolResultDetails(
     return undefined;
   }
   const projected: Record<string, unknown> = {};
+  for (const key of ["changed", "created"] as const) {
+    if (typeof record[key] === "boolean") {
+      projected[key] = record[key];
+    }
+  }
   if (typeof record.diff === "string" && record.diff.trim()) {
     projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
   }
@@ -573,6 +586,39 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+function projectWorkspaceConflictDetails(
+  entry: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (entry.role !== "custom" || entry.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
+    return undefined;
+  }
+  const details = readRecord(entry.details);
+  if (
+    !details ||
+    !Array.isArray(details.paths) ||
+    details.paths.length === 0 ||
+    !details.paths.every(
+      (entryPath): entryPath is string => typeof entryPath === "string" && entryPath.length > 0,
+    ) ||
+    typeof details.stagedResultRef !== "string" ||
+    !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef) ||
+    (details.totalCount !== undefined &&
+      (!Number.isSafeInteger(details.totalCount) ||
+        (details.totalCount as number) < details.paths.length))
+  ) {
+    return undefined;
+  }
+  try {
+    return projectWorkspaceResultConflict(
+      details.paths,
+      details.stagedResultRef,
+      details.totalCount as number | undefined,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -594,9 +640,11 @@ function sanitizeChatHistoryMessage(
     typeof entry.tool_call_id === "string";
 
   if ("details" in entry) {
-    const projectedDetails = messageHasToolResultShape(entry)
-      ? projectToolResultDetails(entry.details, maxChars)
-      : undefined;
+    const projectedDetails =
+      projectWorkspaceConflictDetails(entry) ??
+      (messageHasToolResultShape(entry)
+        ? projectToolResultDetails(entry.details, maxChars)
+        : undefined);
     if (projectedDetails) {
       entry.details = projectedDetails;
     } else {
@@ -635,20 +683,46 @@ function sanitizeChatHistoryMessage(
     }
   }
 
+  const stripAssistantControlTokens =
+    role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
+
   if (typeof entry.content === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const controlStripped = stripAssistantControlTokens
+      ? stripSuppressedControlReplyToken(stripped.text)
+      : stripped.text;
+    changed ||= controlStripped !== stripped.text;
     if (preserveExactToolPayload) {
-      entry.content = stripped.text;
+      entry.content = controlStripped;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.content = res.text;
       changed ||= stripped.changed || res.truncated;
     }
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
-    );
+    const updated = entry.content.map((block) => {
+      const sanitized = sanitizeChatHistoryContentBlock(block, {
+        preserveExactToolPayload,
+        maxChars,
+      });
+      if (
+        !stripAssistantControlTokens ||
+        !sanitized.block ||
+        typeof sanitized.block !== "object" ||
+        Array.isArray(sanitized.block)
+      ) {
+        return sanitized;
+      }
+      const contentBlock = sanitized.block as { type?: unknown; text?: unknown };
+      if (!isAssistantTextContentType(contentBlock.type) || typeof contentBlock.text !== "string") {
+        return sanitized;
+      }
+      const text = stripSuppressedControlReplyToken(contentBlock.text);
+      return text === contentBlock.text
+        ? sanitized
+        : { block: { ...contentBlock, text }, changed: true };
+    });
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
@@ -673,11 +747,15 @@ function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const controlStripped = stripAssistantControlTokens
+      ? stripSuppressedControlReplyToken(stripped.text)
+      : stripped.text;
+    changed ||= controlStripped !== stripped.text;
     if (preserveExactToolPayload) {
-      entry.text = stripped.text;
+      entry.text = controlStripped;
       changed ||= stripped.changed;
     } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
+      const res = truncateChatHistoryText(controlStripped, maxChars);
       entry.text = res.text;
       changed ||= stripped.changed || res.truncated;
     }
@@ -710,6 +788,9 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
       return undefined;
     }
     const typed = block as { type?: unknown; text?: unknown };
+    if (isAssistantInternalReasoningContentType(typed.type)) {
+      continue;
+    }
     if (!isAssistantTextContentType(typed.type) || typeof typed.text !== "string") {
       return undefined;
     }
@@ -720,6 +801,10 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
 
 function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
+}
+
+function isAssistantInternalReasoningContentType(type: unknown): boolean {
+  return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 
 function hasAssistantNonTextContent(message: unknown): boolean {
@@ -735,6 +820,51 @@ function hasAssistantNonTextContent(message: unknown): boolean {
       block &&
       typeof block === "object" &&
       !isAssistantTextContentType((block as { type?: unknown }).type),
+  );
+}
+
+function hasAssistantDisplayableNonTextContent(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      !isAssistantTextContentType((block as { type?: unknown }).type) &&
+      !isAssistantInternalReasoningContentType((block as { type?: unknown }).type),
+  );
+}
+
+function shouldPreserveAssistantControlReplyText(message: Record<string, unknown>): boolean {
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return true;
+  }
+  const content = message.text ?? message.content;
+  const texts =
+    typeof content === "string"
+      ? [content]
+      : Array.isArray(content)
+        ? content.flatMap((block) => {
+            if (!block || typeof block !== "object" || Array.isArray(block)) {
+              return [];
+            }
+            const typed = block as { type?: unknown; text?: unknown };
+            return isAssistantTextContentType(typed.type) && typeof typed.text === "string"
+              ? [typed.text]
+              : [];
+          })
+        : [];
+  return (
+    texts.length > 0 &&
+    texts.every((text) =>
+      isSuppressedControlReplyText(stripInlineDirectiveTagsForDisplay(text).text),
+    ) &&
+    hasAssistantDisplayableNonTextContent(message)
   );
 }
 
@@ -911,15 +1041,17 @@ function extractMessageToolVisibleReplies(
     if (isDryRunMessageToolRecord(args)) {
       continue;
     }
-    if (hasExplicitMessageToolRoute(args)) {
-      continue;
-    }
+    const requiresSourceRouteConfirmation = hasExplicitMessageToolRoute(args);
     const text = readMessageToolVisibleText(args);
     if (!text?.trim()) {
       continue;
     }
     const toolCallId = readToolBlockCallId(record);
-    replies.push({ ...(toolCallId ? { toolCallId } : {}), text });
+    replies.push({
+      ...(toolCallId ? { toolCallId } : {}),
+      text,
+      requiresSourceRouteConfirmation,
+    });
   }
   return replies;
 }
@@ -927,7 +1059,9 @@ function extractMessageToolVisibleReplies(
 function isAssistantSilentControlReplyOnly(message: Record<string, unknown>): boolean {
   const text = extractAssistantTextForSilentCheck(message);
   return (
-    text !== undefined && isSuppressedControlReplyText(text) && !hasAssistantNonTextContent(message)
+    text !== undefined &&
+    isSuppressedControlReplyText(text) &&
+    !hasAssistantDisplayableNonTextContent(message)
   );
 }
 
@@ -1012,6 +1146,40 @@ function hasDryRunToolResultValue(value: unknown): boolean {
   });
 }
 
+function hasSuppressedToolResultValue(value: unknown): boolean {
+  const record = readMaybeJsonRecord(value);
+  if (record) {
+    const messageId = normalizeOptionalString(record.messageId)?.toLowerCase();
+    const status = (
+      normalizeOptionalString(record.deliveryStatus) ??
+      normalizeOptionalString(record.delivery_status) ??
+      normalizeOptionalString(record.status)
+    )?.toLowerCase();
+    if (
+      record.delivered === false ||
+      messageId === "skipped" ||
+      messageId === "suppressed" ||
+      status === "skipped" ||
+      status === "suppressed"
+    ) {
+      return true;
+    }
+  }
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((block) => {
+    if (hasSuppressedToolResultValue(block)) {
+      return true;
+    }
+    const blockRecord = readRecord(block);
+    return (
+      hasSuppressedToolResultValue(blockRecord?.text) ||
+      hasSuppressedToolResultValue(blockRecord?.content)
+    );
+  });
+}
+
 function isSuccessfulMessageToolResult(
   message: Record<string, unknown>,
   pending: PendingMessageToolVisibleReply,
@@ -1025,10 +1193,17 @@ function isSuccessfulMessageToolResult(
     return false;
   }
   const resultCallId = readMessageToolResultCallId(message);
+  const hasConfirmedSourceRoute =
+    !pending.requiresSourceRouteConfirmation ||
+    readRecord(message.details)?.sourceReplyRoute === "current-source";
   if (pending.toolCallId) {
-    return resultCallId === pending.toolCallId && isSuccessfulMessageToolResultPayload(message);
+    return (
+      resultCallId === pending.toolCallId &&
+      isSuccessfulMessageToolResultPayload(message) &&
+      hasConfirmedSourceRoute
+    );
   }
-  return isSuccessfulMessageToolResultPayload(message);
+  return isSuccessfulMessageToolResultPayload(message) && hasConfirmedSourceRoute;
 }
 
 function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>): boolean {
@@ -1040,6 +1215,15 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
     hasDryRunToolResultValue(message.output) ||
     hasDryRunToolResultValue(message.content) ||
     hasDryRunToolResultValue(message.text)
+  ) {
+    return false;
+  }
+  if (
+    hasSuppressedToolResultValue(message.details) ||
+    hasSuppressedToolResultValue(message.result) ||
+    hasSuppressedToolResultValue(message.output) ||
+    hasSuppressedToolResultValue(message.content) ||
+    hasSuppressedToolResultValue(message.text)
   ) {
     return false;
   }
@@ -1240,10 +1424,14 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
     return !hasAssistantMixedToolVisibleText(message);
   }
   const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
+  // Classify after removing UI-only directives, before sanitization can erase
+  // the control token and leave a blank assistant row behind.
+  const displayText =
+    text === undefined ? undefined : stripInlineDirectiveTagsForDisplay(text).text;
+  if (displayText === undefined || !isSuppressedControlReplyText(displayText)) {
     return false;
   }
-  return !hasAssistantNonTextContent(message);
+  return !hasAssistantDisplayableNonTextContent(message);
 }
 
 export function sanitizeChatHistoryMessages(

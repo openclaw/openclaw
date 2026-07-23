@@ -7,10 +7,13 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 
 export type SessionCatalogListProviderParams = {
+  /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
+  /** Publishes completed hosts without waiting for slower machines in the same list. */
+  onHost?: (host: SessionCatalogHost) => void;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId">;
 export type SessionCatalogContinueProviderParams = Omit<

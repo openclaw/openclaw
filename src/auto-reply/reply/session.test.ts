@@ -8,7 +8,7 @@ import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runt
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   listSessionEntries,
@@ -217,8 +217,8 @@ vi.mock("../../agents/session-write-lock.js", async () => {
   };
 });
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(async () => [
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
@@ -784,6 +784,14 @@ describe("initSessionState thread forking", () => {
         updatedAt: Date.now(),
         totalTokens: 0,
         totalTokensFresh: true,
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "old-run", lifecycleGeneration: "old-generation" }],
+        mainRestartRecovery: {
+          cycleId: "old-cycle",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "old transcript exhausted" },
+        },
       },
     });
 
@@ -805,6 +813,9 @@ describe("initSessionState thread forking", () => {
     expect(first.sessionEntry.forkedFromParent).toBe(true);
     expect(first.sessionEntry.totalTokens).toBeUndefined();
     expect(first.sessionEntry.totalTokensFresh).toBe(false);
+    expect(first.sessionEntry.abortedLastRun).toBe(false);
+    expect(first.sessionEntry.restartRecoveryRuns).toBeUndefined();
+    expect((first.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
 
     const second = await initSessionState({
       ctx: {
@@ -820,6 +831,8 @@ describe("initSessionState thread forking", () => {
     expect(second.sessionEntry.forkedFromParent).toBe(true);
     expect(second.sessionEntry.totalTokens).toBeUndefined();
     expect(second.sessionEntry.totalTokensFresh).toBe(false);
+    expect(second.sessionEntry.restartRecoveryRuns).toBeUndefined();
+    expect((second.sessionEntry as SessionEntry).mainRestartRecovery).toBeUndefined();
     warn.mockRestore();
   });
 
@@ -1245,7 +1258,7 @@ describe("initSessionState RawBody", () => {
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:discord:channel:daily-rollover";
     const existingSessionId = "session-before-daily-reset";
-    // Stale under the default daily reset (atHour 4): started ~48h ago so
+    // Stale under the configured daily reset (atHour 4): started ~48h ago so
     // sessionStartedAt < today's reset boundary.
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
 
@@ -1264,7 +1277,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -1306,7 +1319,7 @@ describe("initSessionState RawBody", () => {
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:discord:channel:daily-rollover-behavior";
     const existingSessionId = "session-before-daily-reset-behavior";
-    // Stale under the default daily reset (atHour 4): started ~48h ago.
+    // Stale under the configured daily reset (atHour 4): started ~48h ago.
     const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
 
     await writeSessionStoreFast(storePath, {
@@ -1327,7 +1340,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -1395,7 +1408,9 @@ describe("initSessionState RawBody", () => {
         ChatType: "channel",
         SessionKey: sessionKey,
       },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
@@ -1428,7 +1443,9 @@ describe("initSessionState RawBody", () => {
         ChatType: "direct",
         SessionKey: sessionKey,
       },
-      cfg: { session: { store: storePath } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
 
@@ -1471,7 +1488,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -1521,7 +1538,7 @@ describe("initSessionState RawBody", () => {
     });
 
     const cfg = {
-      session: { store: storePath },
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
     } as OpenClawConfig;
 
     const result = await initSessionState({
@@ -2062,6 +2079,54 @@ describe("initSessionState RawBody", () => {
 
     expect(result.sessionKey).toBe(boundSessionKey);
   });
+
+  it("does not apply a source admission id to a bound conversation target", async () => {
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({
+      channel: "slack",
+      accountId: "default",
+    });
+    const storePath = await createStorePath("openclaw-bound-admission-id-");
+    const sourceSessionKey = "agent:main:slack:source";
+    const sourceSessionId = "source-admission-session";
+    const boundSessionKey = "plugin-binding:codex:bound-target";
+    const boundSessionId = "bound-target-session";
+    await writeSessionStoreFast(storePath, {
+      [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
+      [boundSessionKey]: { sessionId: boundSessionId, updatedAt: Date.now() },
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello",
+        SessionKey: sourceSessionKey,
+        Provider: "slack",
+        Surface: "slack",
+        From: "slack:user:U123",
+        To: "user:U123",
+        OriginatingTo: "user:U123",
+        SenderId: "U123",
+        ChatType: "direct",
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: sourceSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.sessionKey).toBe(boundSessionKey);
+    expect(result.sessionId).toBe(boundSessionId);
+    expect(result.isNewSession).toBe(false);
+  });
 });
 
 describe("initSessionState reset policy", () => {
@@ -2080,7 +2145,7 @@ describe("initSessionState reset policy", () => {
     vi.useRealTimers();
   });
 
-  it("defaults to daily reset at 4am local time", async () => {
+  it("keeps the current session across the former daily boundary by default", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-");
     const storePath = path.join(root, "sessions.json");
@@ -2093,11 +2158,6 @@ describe("initSessionState reset policy", () => {
         updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
       },
     });
-    enqueueSystemEvent("stale daily rollover event", { sessionKey });
-    enqueueSystemEvent("stale daily rollover session-id event", {
-      sessionKey: existingSessionId,
-    });
-
     const cfg = { session: { store: storePath } } as OpenClawConfig;
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
@@ -2105,21 +2165,12 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
     expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
       sessionKey,
-      previousSessionId: existingSessionId,
+      previousSessionId: undefined,
     });
-    await expect(
-      drainFormattedSystemEvents({
-        cfg,
-        sessionKey,
-        isMainSession: false,
-        isNewSession: true,
-      }),
-    ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -2136,7 +2187,9 @@ describe("initSessionState reset policy", () => {
       },
     });
 
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const cfg = {
+      session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+    } as OpenClawConfig;
     const result = await initSessionState({
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
@@ -2788,7 +2841,7 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).toBe(existingSessionId);
   });
 
-  it("defaults to daily resets when only resetByType is configured", async () => {
+  it("keeps the no-reset default for types without an override", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-type-default-");
     const storePath = path.join(root, "sessions.json");
@@ -2814,8 +2867,8 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
   });
 
   it("keeps legacy idleMinutes behavior without reset config", async () => {
@@ -4412,7 +4465,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Provider: "telegram",
         Surface: "telegram",
       },
-      cfg: { session: { store: storePath, idleMinutes: 1 } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
     const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {
@@ -4473,7 +4528,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello",
@@ -4529,7 +4586,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       operation.setPhase("running");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello while active",
@@ -4585,7 +4644,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         resetTriggered: false,
       });
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello after boundary",
@@ -4642,7 +4703,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       });
       operation.setPhase("running");
 
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
       const result = await initSessionState({
         ctx: {
           Body: "hello after boundary",
@@ -4674,7 +4737,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
-  it("keeps provider-owned CLI sessions on implicit daily reset boundaries", async () => {
+  it("keeps provider-owned CLI sessions under the default no-reset policy", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));

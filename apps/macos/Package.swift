@@ -15,6 +15,7 @@ let package = Package(
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1"),
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
@@ -46,6 +47,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),
@@ -58,6 +60,7 @@ let package = Package(
                 .product(name: "PeekabooBridge", package: "Peekaboo"),
                 .product(name: "PeekabooAutomationKit", package: "Peekaboo"),
                 .product(name: "ConcurrencyExtras", package: "swift-concurrency-extras"),
+                .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
             ],
             exclude: [
                 "Resources/Info.plist",

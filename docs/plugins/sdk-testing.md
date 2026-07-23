@@ -38,6 +38,8 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { describeOpenAIProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { withEnv, withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
+import { createRequestCaptureJsonFetch } from "openclaw/plugin-sdk/test-media-understanding";
 import {
   bundledPluginRoot,
   createCliRuntimeCapture,
@@ -48,10 +50,10 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 
 Use these focused subpaths for bundled plugin tests. The former
 `openclaw/plugin-sdk/testing` barrel was repo-local, excluded from shipped
-packages, and has been removed. The legacy `openclaw/plugin-sdk/test-utils`
-alias remains repo-local; `pnpm run lint:plugins:no-extension-test-core-imports`
-(`scripts/check-no-extension-test-core-imports.ts`) rejects new extension-test
-imports of that alias.
+packages, and has been removed. The former `openclaw/plugin-sdk/test-utils`
+alias was removed with it. `pnpm run lint:plugins:no-extension-test-core-imports`
+(`scripts/check-no-extension-test-core-imports.ts`) keeps extension tests on
+the focused test subpaths above.
 
 ### Available exports
 
@@ -102,7 +104,10 @@ imports of that alias.
 | `createTestRegistry`                                 | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`               |
 | `createEmptyPluginRegistry`                          | Build an empty plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`                |
 | `setActivePluginRegistry`                            | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`   |
-| `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-env`                                                     |
+| `createRequestCaptureJsonFetch`                      | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-media-understanding`                                     |
+| `isLiveTestEnabled`                                  | Gate opt-in live provider tests. Import from `plugin-sdk/test-live`                                                                      |
+| `collectProviderApiKeys`                             | Discover credentials for live provider tests. Import from `plugin-sdk/test-live-auth`                                                    |
+| `parseProviderModelMap`                              | Parse music/video live-test model overrides. Import from `plugin-sdk/test-media-generation`                                              |
 | `withServer`                                         | Run tests against a disposable local HTTP server. Import from `plugin-sdk/test-env`                                                      |
 | `createMockIncomingRequest`                          | Build a minimal incoming HTTP request object. Import from `plugin-sdk/test-env`                                                          |
 | `withFetchPreconnect`                                | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                       |
@@ -183,11 +188,9 @@ entry to declare `kind: "memory"`.
 
 ### Testing runtime config access
 
-Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/plugin-test-runtime`.
-Its `runtime.config.loadConfig()` and `runtime.config.writeConfigFile(...)`
-mocks throw by default so tests catch new usage of deprecated compatibility
-APIs. Override those mocks only when the test is explicitly covering legacy
-compatibility behavior.
+Prefer the shared plugin runtime mock from
+`openclaw/plugin-sdk/plugin-test-runtime`. Its runtime config helpers model the
+current snapshot and mutation APIs.
 
 ### Unit testing a channel plugin
 
@@ -335,11 +338,11 @@ pnpm test src/plugins/contracts/runtime-seams.contract.test.ts
 `scripts/run-additional-boundary-checks.mjs` runs a set of `lint:plugins:*`
 import-boundary checks in CI; each can also be run standalone locally:
 
-| Command                                                        | Enforces                                                                                    |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.             |
-| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`). |
-| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import `plugin-sdk/test-utils` or other core-only test helpers. |
+| Command                                                        | Enforces                                                                                     |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports` | Bundled plugins cannot import the monolithic `openclaw/plugin-sdk` root barrel.              |
+| `pnpm run lint:plugins:no-extension-src-imports`               | Production extension files cannot import the repo `src/**` tree directly (`../../src/...`).  |
+| `pnpm run lint:plugins:no-extension-test-core-imports`         | Extension test files cannot import removed SDK test aliases or other core-only test helpers. |
 
 External plugins are not subject to these lint rules, but following the same
 patterns is recommended.

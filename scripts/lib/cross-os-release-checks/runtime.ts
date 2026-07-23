@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { appendFileSync, createWriteStream } from "node:fs";
 import {
   agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseAgentSessionId,
   buildReleaseAgentTurnArgs,
   maybeBuildOptionalAgentTurnSkipResult,
@@ -25,6 +24,7 @@ import {
   buildCrossOsReleaseSmokePluginAllowlist,
   buildReleaseProviderConfigOverride,
   gatewayReadyDeadlineMs,
+  managedGatewayRestartCommandTimeoutMs,
 } from "./config.ts";
 import { installedEntryPath } from "./install.ts";
 import {
@@ -96,7 +96,7 @@ export async function exerciseManagedGatewayLifecycle(
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-restart.log`,
-    timeoutMs: 2 * 60 * 1000,
+    timeoutMs: managedGatewayRestartCommandTimeoutMs(),
   });
   await ensureManagedGatewayReady({
     lane: params.lane,
@@ -108,7 +108,7 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop"],
+    args: ["gateway", "stop", "--force"],
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,
@@ -306,9 +306,6 @@ export async function runAgentTurn(
       const logText = readLogTextSince(params.logPath, logOffset);
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {

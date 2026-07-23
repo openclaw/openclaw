@@ -31,6 +31,7 @@ const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveProviderFollowupFallbackRouteMock = vi.fn();
 const resolveProviderThinkingProfileMock = vi.fn();
+const admitReplyTurnMock = vi.fn();
 let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
@@ -49,8 +50,8 @@ let createMockTypingController: typeof import("./test-helpers.js").createMockTyp
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
 let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRegistry;
-let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
-let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
+let replyRunTestingForTest: typeof import("./reply-run-registry.test-support.js").testing;
+let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.test-support.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
@@ -402,7 +403,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
     compactEmbeddedAgentSession: (params: unknown) => compactEmbeddedAgentSessionMock(params),
     isEmbeddedAgentRunActive: vi.fn(() => false),
     isEmbeddedAgentRunStreaming: vi.fn(() => false),
-    queueEmbeddedAgentMessage: vi.fn(async () => undefined),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
@@ -411,12 +411,12 @@ async function loadFreshFollowupRunnerModuleForTest() {
     runCliAgent: (params: unknown) => runCliAgentMock(params),
   }));
   vi.doMock("./queue.js", () => ({
-    admitFollowupRunLifecycle: async (run: Pick<FollowupRun, "queuedLifecycle">) => {
-      await run.queuedLifecycle?.onAdmitted?.();
+    admitFollowupRunLifecycle: async (run: Pick<FollowupRun, "turnAdoptionLifecycle">) => {
+      await run.turnAdoptionLifecycle?.onAdopted?.();
     },
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
-    completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
-      run.queuedLifecycle?.onComplete?.(),
+    completeFollowupRunLifecycle: (run: Pick<FollowupRun, "turnAdoptionLifecycle">) =>
+      run.turnAdoptionLifecycle?.onSettled?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
     isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">) =>
       run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true,
@@ -429,6 +429,18 @@ async function loadFreshFollowupRunnerModuleForTest() {
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
     resolveQueueSettings: (): QueueSettings => ({ mode: "followup" }),
   }));
+  vi.doMock("./reply-turn-admission.js", async () => {
+    const actual = await vi.importActual<typeof import("./reply-turn-admission.js")>(
+      "./reply-turn-admission.js",
+    );
+    return {
+      ...actual,
+      admitReplyTurn: (...args: Parameters<typeof actual.admitReplyTurn>) =>
+        admitReplyTurnMock.getMockImplementation()
+          ? admitReplyTurnMock(...args)
+          : actual.admitReplyTurn(...args),
+    };
+  });
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
@@ -514,7 +526,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
       };
     },
   }));
-  ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
+  ({ testing: cliBackendsTestingForTest } =
+    await import("../../agents/cli-backends.test-support.js"));
   setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -530,8 +543,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     abortActiveReplyRuns: abortActiveReplyRunsForTest,
     createReplyOperation: createReplyOperationForTest,
     replyRunRegistry: replyRunRegistryForTest,
-    testing: replyRunTestingForTest,
   } = await import("./reply-run-registry.js"));
+  ({ testing: replyRunTestingForTest } = await import("./reply-run-registry.test-support.js"));
   ({
     getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
     setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
@@ -544,6 +557,12 @@ function setFastFollowupCliBackendDeps(): void {
     pluginId: "anthropic",
     modelProvider: "anthropic",
     config: { command: "claude" },
+    bundleMcp: false,
+  };
+  const codexBackend = {
+    id: "codex",
+    pluginId: "test-codex-cli",
+    config: { command: "codex" },
     bundleMcp: false,
   };
   cliBackendsTestingForTest.setDepsForTest({
@@ -561,7 +580,7 @@ function setFastFollowupCliBackendDeps(): void {
       autoEnableProbes: [],
       diagnostics: [],
     }),
-    resolveRuntimeCliBackends: () => [claudeBackend],
+    resolveRuntimeCliBackends: () => [claudeBackend, codexBackend],
   });
 }
 
@@ -614,6 +633,7 @@ beforeEach(() => {
   resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
   resolveProviderThinkingProfileMock.mockReset();
   resolveProviderThinkingProfileMock.mockReturnValue(undefined);
+  admitReplyTurnMock.mockReset();
   const resolveQueuedReplyExecutionConfig = resolveQueuedReplyExecutionConfigActual;
   if (!resolveQueuedReplyExecutionConfig) {
     throw new Error("resolveQueuedReplyExecutionConfig mock not initialized");
@@ -686,7 +706,10 @@ function createQueuedRun(
 describe("createFollowupRunner reply-lane admission", () => {
   it("drops stale active-goal context after the persisted goal completes", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const storePath = "/tmp/openclaw-followup-completed-goal.json";
+    const storePath = path.join(
+      tmpdir(),
+      `openclaw-followup-completed-goal-${crypto.randomUUID()}.json`,
+    );
     const activeEntry: SessionEntry = {
       sessionId: "session-completed-goal",
       updatedAt: 1,
@@ -708,6 +731,14 @@ describe("createFollowupRunner reply-lane admission", () => {
       goal: { ...activeEntry.goal!, status: "complete", updatedAt: 2 },
     };
     registerFollowupTestSessionStore(storePath, { main: completedEntry });
+    admitReplyTurnMock.mockResolvedValueOnce({
+      status: "admitted",
+      operation: createReplyOperationForTest({
+        sessionKey: "main",
+        sessionId: completedEntry.sessionId,
+        resetTriggered: false,
+      }),
+    });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
@@ -743,7 +774,7 @@ describe("createFollowupRunner reply-lane admission", () => {
     const context = requireRecord(call.currentInboundContext, "current inbound context");
     expect(context.text).toContain("Current message:\nmessage_id=next-turn");
     expect(context.text).not.toContain("Active goal:");
-  });
+  }, 300_000);
 
   it("keeps the originating client caps on queued embedded runs", async () => {
     // Regression: the queued path built runEmbeddedAgent params inline and
@@ -902,13 +933,15 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const pending = runner(
       createQueuedRun({
-        queuedLifecycle: {
-          onAdmitted: async () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
             events.push("admission-started");
             await admissionBarrier;
             events.push("admitted");
           },
-          onComplete: () => events.push("complete"),
+          onSettled: () => events.push("complete"),
+          admission: "exclusive",
+          onAbandoned: () => {},
         },
         run: { provider: "anthropic", model: "claude" },
       }),
@@ -942,13 +975,15 @@ describe("createFollowupRunner reply-lane admission", () => {
     const pending = runner(
       createQueuedRun({
         abortSignal: abortController.signal,
-        queuedLifecycle: {
-          onAdmitted: async () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {
             events.push("admission-started");
             await admissionBarrier;
             events.push("admitted");
           },
-          onComplete: () => events.push("complete"),
+          onSettled: () => events.push("complete"),
+          admission: "exclusive",
+          onAbandoned: () => {},
         },
         run: { provider: "anthropic", model: "claude" },
       }),
@@ -1297,7 +1332,7 @@ describe("createFollowupRunner reply-lane admission", () => {
             model: "claude",
             sessionKey: "main",
           },
-          queuedLifecycle: { onComplete },
+          turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
         }),
       ),
     ).rejects.toThrow("session load failed");
@@ -1465,10 +1500,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            codex: { command: "codex" },
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1526,9 +1557,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1644,9 +1672,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1708,9 +1733,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1784,9 +1806,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1855,9 +1874,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1925,9 +1941,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1976,9 +1989,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2026,9 +2036,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2089,9 +2096,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2144,9 +2148,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2202,9 +2203,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2277,7 +2275,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: { "claude-cli": { command: "claude" } },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2364,9 +2361,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2452,9 +2446,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
@@ -2564,8 +2555,9 @@ describe("createFollowupRunner runtime config", () => {
         createQueuedRun({
           originatingChannel: "telegram",
           originatingTo: "chat-1",
-          queuedLifecycle: {
-            onComplete: () => {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onSettled: () => {
               operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
             },
           },
@@ -2660,8 +2652,9 @@ describe("createFollowupRunner runtime config", () => {
         createQueuedRun({
           originatingChannel: "telegram",
           originatingTo: "chat-1",
-          queuedLifecycle: {
-            onComplete: () => {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onSettled: () => {
               operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
             },
           },
@@ -2718,9 +2711,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -3061,8 +3051,9 @@ describe("createFollowupRunner runtime config", () => {
       createQueuedRun({
         originatingChannel: "telegram",
         originatingTo: "chat-1",
-        queuedLifecycle: {
-          onComplete: () => {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {},
+          onSettled: () => {
             operationResultDuringCompletion = replyRunRegistryForTest.get("main")?.result;
           },
         },
@@ -3409,9 +3400,6 @@ describe("createFollowupRunner progress forwarding", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -3484,9 +3472,6 @@ describe("createFollowupRunner progress forwarding", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -5091,8 +5076,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     registerFollowupTestSessionStore(storePath, sessionStore);
 
     const cfg = {
-      messages: {
-        responsePrefix: "agent",
+      channels: {
+        slack: { responsePrefix: "agent" },
       },
     };
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
@@ -5301,15 +5286,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         createQueuedRun({
           run: {
             provider: "openai",
-            config: {
-              agents: {
-                defaults: {
-                  cliBackends: {
-                    anthropic: { command: "anthropic" },
-                  },
-                },
-              },
-            } as OpenClawConfig,
+            config: {} as OpenClawConfig,
           },
         }),
       ),
@@ -6038,7 +6015,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const finalText =
       "Here is the answer the queued user asked for. It includes enough detail to be a visible response, and it has another sentence so the substantive-final detector treats it as a real reply.";
     const parentOnComplete = vi.fn();
-    const parentLifecycle = { onComplete: parentOnComplete };
+    const parentLifecycle = { onAdopted: async () => {}, onSettled: parentOnComplete };
     const queued = baseQueuedRun("discord");
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
@@ -6049,7 +6026,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         ...queued,
         originatingChannel: "discord",
         originatingTo: "channel:C1",
-        queuedLifecycle: parentLifecycle,
+        turnAdoptionLifecycle: parentLifecycle,
         run: {
           ...queued.run,
           sourceReplyDeliveryMode: "message_tool_only",
@@ -6072,7 +6049,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(retry?.prompt).toContain("message(action=send)");
     expect(retry?.prompt).toContain(finalText);
     // System retry detaches from the client turn lifecycle; parent completion owns onComplete once.
-    expect(retry?.queuedLifecycle).toBeUndefined();
+    expect(retry?.turnAdoptionLifecycle).toBeUndefined();
     expect(parentOnComplete).toHaveBeenCalledTimes(1);
   });
 
@@ -6133,6 +6110,32 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it("does not route marked host media for message-tool-only queued room events", async () => {
+    const queued = baseQueuedRun("discord");
+    await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { mediaUrl: "/tmp/generated.png" },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        currentInboundEventKind: "room_event",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
   it("does not enqueue stranded recovery when queued followup send policy denies delivery", async () => {
     const finalText =
       "Here is a long reply for a denied session. It includes enough detail to be substantive, but send-policy denial must remain an intentional delivery block.";
@@ -6160,6 +6163,37 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(FOLLOWUP_TEST_QUEUES.get("main")?.items).toBeUndefined();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not route marked host media when queued followup send policy denies delivery", async () => {
+    const queued = baseQueuedRun("discord");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      sendPolicy: "deny",
+    };
+    await runMessagingCase({
+      agentResult: {
+        payloads: [
+          setReplyPayloadMetadataForTest(
+            { mediaUrl: "/tmp/generated.png" },
+            { deliverDespiteSourceReplySuppression: true },
+          ),
+        ],
+      },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        run: {
+          ...queued.run,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      } as FollowupRun,
+      runnerOverrides: { sessionEntry, sessionKey: "main" },
+    });
+
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 

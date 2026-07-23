@@ -345,6 +345,11 @@ export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | nul
   return createGatewayRootWorkRelease(current);
 }
 
+/** Starts process-lifetime work without inheriting the request root that created it. */
+export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
+  return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.exit(run);
+}
+
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
 export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
   let count = GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size;

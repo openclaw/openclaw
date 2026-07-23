@@ -1,8 +1,10 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -62,6 +64,8 @@ import {
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -76,6 +80,18 @@ export function loadSqliteSessionEntry(scope: SessionAccessScope): SessionEntry 
   const resolved = resolveSqliteScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return readSessionEntryRow(database, resolved.sessionKey)?.entry;
+}
+
+/** Loads one session entry without opening its agent database writable. */
+export function loadSqliteSessionEntryReadOnly(
+  scope: SessionAccessScope,
+): SessionEntry | undefined {
+  const resolved = resolveSqliteScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionEntryRow(database, resolved.sessionKey)?.entry,
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
 }
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
@@ -116,6 +132,26 @@ export function listSqliteSessionEntries(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return listSqliteSessionEntriesFromDatabase(database);
+}
+
+/**
+ * Lists session entries without opening the agent database writable.
+ * Transient lock errors propagate: only the caller knows whether "empty" is an
+ * acceptable degradation (health snapshots) or hides real state (migration detection).
+ */
+export function listSqliteSessionEntriesReadOnly(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => listSqliteSessionEntriesFromDatabase(database),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : [];
+}
+
+function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -287,6 +323,11 @@ export async function patchSqliteSessionEntry(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }
@@ -357,6 +398,11 @@ export async function patchSqliteSessionEntryTarget(
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    kickSessionHistoryDiskBudgetMaintenance({
+      ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
+      storePath: resolveSessionStorePathForScope(scope),
+      ...(options.maintenanceConfig ? { maintenanceConfig: options.maintenanceConfig } : {}),
+    });
     return result;
   });
 }

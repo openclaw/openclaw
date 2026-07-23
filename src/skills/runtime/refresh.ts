@@ -712,7 +712,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   evictIdleWorkspaceWatchStates(now);
 }
 
-export async function resetSkillsRefreshForTest(): Promise<void> {
+async function resetSkillsRefreshForTest(): Promise<void> {
   resetSkillsRefreshStateForTest();
 
   const active = Array.from(pathWatchers.values());
@@ -732,4 +732,10 @@ export async function resetSkillsRefreshForTest(): Promise<void> {
       }
     }),
   );
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsRefreshTestApi")] = {
+    resetSkillsRefreshForTest,
+  };
 }

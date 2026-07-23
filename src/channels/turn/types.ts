@@ -1,6 +1,8 @@
-// Type contracts for channel turn normalization, admission, dispatch, and delivery.
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
-import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  TurnAdoptionLifecycle,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
@@ -15,12 +17,14 @@ import type {
   SupplementalContextFacts,
 } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
+import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   DeliverOutboundPayloadsParams,
   DurableFinalDeliveryRequirements,
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
@@ -83,6 +87,7 @@ export type ConversationFacts = {
 /** Session routing facts derived before dispatch. */
 export type RouteFacts = {
   agentId: string;
+  dmScope?: DmScope;
   accountId?: string;
   routeSessionKey: string;
   dispatchSessionKey?: string;
@@ -130,14 +135,7 @@ export type CommandFacts = {
 };
 
 /** Inbound media facts supplied to the agent context. */
-export type InboundMediaFacts = {
-  path?: string;
-  url?: string;
-  contentType?: string;
-  kind?: "image" | "video" | "audio" | "document" | "unknown";
-  transcribed?: boolean;
-  messageId?: string;
-};
+export type InboundMediaFacts = Omit<MediaFact, "workspaceDir">;
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -269,17 +267,31 @@ export type AssembledChannelTurn = {
   toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
+  sessionInitRetry?: {
+    delaysMs: readonly number[];
+    signal?: AbortSignal;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  };
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
-  /**
-   * Observes turn adoption without waiting for settle. Threaded into
-   * replyOptions for the agent runner (after recovery persist attempt).
-   */
-  onTurnAdopted?: () => void | Promise<void>;
+  /** Canonical adoption lifecycle threaded into replyOptions. */
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+};
+
+type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly" | "outboundEcho";
+
+/** Lifecycle ownership declared alongside an already-prepared dispatch runner. */
+type PreparedChannelTurnDispatchLifecycle = {
+  /** Exact adoption lifecycle captured by runDispatch, or undefined for non-durable turns. */
+  turnAdoptionLifecycle: TurnAdoptionLifecycle | undefined;
+  /** Releases resources that runDispatch would otherwise settle when dispatch is skipped. */
+  onDispatchSkipped: (reason: PreparedChannelTurnDispatchSkipReason) => void | Promise<void>;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -295,19 +307,50 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
   runDispatch: () => Promise<TDispatchResult>;
+  /** Optional for the legacy direct prepared runner; inbound adapters use the stricter type. */
+  runDispatchLifecycle?: PreparedChannelTurnDispatchLifecycle;
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
 };
 
+type ChannelTurnRoute = {
+  agentId: string;
+  dmScope?: DmScope;
+  sessionKey: string;
+};
+
+type RoutedChannelTurn<T> = Omit<T, "routeSessionKey" | "storePath" | "recordInboundSession"> & {
+  route: ChannelTurnRoute;
+};
+
+type InboundPreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> =
+  PreparedChannelTurn<TDispatchResult> & {
+    runDispatchLifecycle: PreparedChannelTurnDispatchLifecycle;
+  };
+
+export type ChannelTurnPlan = RoutedChannelTurn<
+  Omit<AssembledChannelTurn, "agentId" | "dispatchReplyWithBufferedBlockDispatcher">
+>;
+
+type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
+  InboundPreparedChannelTurn<TDispatchResult>
+> & {
+  cfg: OpenClawConfig;
+};
+
 /** Resolved turn shape returned by adapters before final run/dispatch handling. */
 export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
+  | ChannelTurnPlan
+  | PreparedChannelTurnPlan<TDispatchResult>
   | (AssembledChannelTurn & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     })
-  | (PreparedChannelTurn<TDispatchResult> & {
+  | (InboundPreparedChannelTurn<TDispatchResult> & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     });
 
@@ -383,10 +426,6 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
-  /**
-   * Observes turn adoption without waiting for settle. Fired after the
-   * recovery-context persist attempt (context may be absent when source
-   * delivery is suppressed). Default callers still await full settle.
-   */
-  onTurnAdopted?: () => void | Promise<void>;
+  /** Canonical adoption lifecycle for this turn. */
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };

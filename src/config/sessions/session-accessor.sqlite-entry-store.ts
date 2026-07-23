@@ -6,6 +6,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  linkSessionConversation,
+  prepareSessionConversation,
+  upsertConversationIdentity,
+} from "./session-accessor.sqlite-conversation.js";
 import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { resolveSessionEntryProvenanceRow } from "./session-accessor.sqlite-provenance.js";
 import {
@@ -20,6 +25,7 @@ import {
 import {
   normalizeSqliteStatus,
   parseSqliteSessionEntryJson as parseSessionEntryRow,
+  serializeSqliteSessionCreatorIdentity,
 } from "./session-accessor.sqlite-status.js";
 import {
   readTranscriptMutationStateInTransaction,
@@ -33,6 +39,8 @@ import {
 import type { SessionEntry } from "./types.js";
 
 // Canonical owner for session_entries row selection, alias snapshots, and writes.
+
+type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "db">;
 
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_entries"]>;
 export type ResolvedSessionEntryRow = {
@@ -77,7 +85,7 @@ export function createSqliteSessionIdentitySnapshot(
 }
 
 export function readSessionEntryRow(
-  database: OpenClawAgentDatabase,
+  database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
   const db = getSessionKysely(database.db);
@@ -152,7 +160,7 @@ export function assertSqliteSessionEntrySelectionUnchanged(
 }
 
 export function collectSessionEntryLookupKeys(
-  database: OpenClawAgentDatabase,
+  database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): string[] {
   const trimmedKey = sessionKey.trim();
@@ -179,7 +187,7 @@ export function collectSessionEntryLookupKeys(
 }
 
 export function readExactSessionEntryRow(
-  database: OpenClawAgentDatabase,
+  database: OpenClawAgentDatabaseReader,
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
   const db = getSessionKysely(database.db);
@@ -220,6 +228,15 @@ export function readSqliteSessionEntryCount(database: OpenClawAgentDatabase): nu
   );
   const count = row?.entry_count;
   return count === undefined || count === null ? 0 : normalizeSqliteNumber(count);
+}
+
+/** Lists persisted session keys without materializing their entry payloads. */
+export function readSqliteSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select("session_key").orderBy("session_key", "asc"),
+  ).rows.map((row) => row.session_key);
 }
 
 export function resolveSqliteLifecyclePrimaryEntry(
@@ -398,8 +415,17 @@ export function writeSessionEntry(
     sessionKey,
     updatedAt,
   });
+  const conversation = prepareSessionConversation({
+    entry: normalizedEntry,
+    sessionScope: boundSessionRoot.session_scope,
+  });
+  if (conversation) {
+    upsertConversationIdentity(database, conversation.identity, updatedAt);
+  }
   const boundSessionRow = {
     ...boundSessionRoot,
+    primary_conversation_id:
+      conversation?.role === "primary" ? conversation.identity.conversationRef : null,
     transcript_observed_at: transcriptObservedAt,
   };
   const sessionRow = resolveSessionEntryProvenanceRow({
@@ -429,6 +455,7 @@ export function writeSessionEntry(
           chat_type: sessionRow.chat_type,
           channel: sessionRow.channel,
           account_id: sessionRow.account_id,
+          primary_conversation_id: sessionRow.primary_conversation_id,
           model_provider: sessionRow.model_provider,
           model: sessionRow.model,
           agent_harness_id: sessionRow.agent_harness_id,
@@ -438,6 +465,14 @@ export function writeSessionEntry(
         }),
       ),
   );
+  if (conversation) {
+    linkSessionConversation({
+      database,
+      sessionId: sessionRow.session_id,
+      conversation,
+      updatedAt,
+    });
+  }
   writeSessionRoute(database, {
     sessionId: sessionRow.session_id,
     sessionKey,
@@ -453,6 +488,7 @@ export function writeSessionEntry(
         entry_json: JSON.stringify(normalizedEntry),
         updated_at: updatedAt,
         status: normalizeSqliteStatus(normalizedEntry.status),
+        created_by_json: serializeSqliteSessionCreatorIdentity(normalizedEntry.createdBy),
       })
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
@@ -460,6 +496,7 @@ export function writeSessionEntry(
           entry_json: JSON.stringify(normalizedEntry),
           updated_at: updatedAt,
           status: normalizeSqliteStatus(normalizedEntry.status),
+          created_by_json: serializeSqliteSessionCreatorIdentity(normalizedEntry.createdBy),
         }),
       ),
   );

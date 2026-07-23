@@ -3,12 +3,12 @@ import type { OpenClawConfig } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import type { createMSTeamsMessageHandler } from "./message-handler.js";
 
-export type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
-export type TestThreadUser = {
+type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
+type TestThreadUser = {
   id?: string;
   displayName: string;
 };
-export type TestAttachment = {
+type TestAttachment = {
   contentType: string;
   content: string;
 };

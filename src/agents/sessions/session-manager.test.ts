@@ -9,6 +9,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  readTranscriptRawDelta,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
@@ -19,13 +20,14 @@ import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-ma
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { loadSqliteMarkedSessionFile } from "./session-manager-file.js";
 import {
+  buildSessionContext,
   CURRENT_SESSION_VERSION,
-  findMostRecentSession,
   loadEntriesFromFile,
   parseSessionEntries,
   SessionManager,
   type FileEntry,
   type SessionEntry,
+  type SessionMessageEntry,
 } from "./session-manager.js";
 
 const tempPaths: string[] = [];
@@ -41,6 +43,24 @@ describe("SessionManager.open", () => {
     await Promise.all(
       tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("flushes a pending initial file transcript before later appends", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "pending-session.jsonl");
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: Date.now() });
+    await expect(fs.stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+
+    sessionManager.flushPendingPersistence();
+    sessionManager.appendMessage(buildAssistantMessage("answer"));
+
+    expect(
+      loadEntriesFromFile(sessionFile)
+        .filter((entry) => entry.type === "message")
+        .map((entry) => ("content" in entry.message ? entry.message.content : undefined)),
+    ).toEqual(["question", [{ type: "text", text: "answer" }]]);
   });
 
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
@@ -147,6 +167,113 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ id: compactionId, type: "compaction" }),
       ]),
     );
+  });
+
+  it("persists a deduped runtime user entry before its SQLite descendants", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-runtime-user-parent";
+    const sessionKey = "agent:main:dashboard:sqlite-runtime-user-parent";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    const marker = formatSqliteSessionFileMarker(scope);
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-parent:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+    const bootstrap = readTranscriptRawDelta(scope, { maxBytes: 10_000, maxEvents: 100 });
+    expect(bootstrap.kind).toBe("page");
+    if (bootstrap.kind !== "page") {
+      throw new Error(`expected bootstrap page, got ${bootstrap.kind}`);
+    }
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const runtimeUserId = sessionManager.appendMessage(userMessage);
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const resumed = readTranscriptRawDelta(scope, {
+      cursor: bootstrap.cursor,
+      maxBytes: 10_000,
+      maxEvents: 100,
+    });
+
+    expect(resumed.kind).toBe("page");
+    if (resumed.kind !== "page") {
+      throw new Error(`expected append page, got ${resumed.kind}`);
+    }
+    expect(resumed.events.map((row) => (row.event as { id?: string }).id)).toEqual([
+      runtimeUserId,
+      assistantId,
+    ]);
+    const assistantEvent = resumed.events.at(1)?.event as { parentId?: string } | undefined;
+    expect(assistantEvent?.parentId).toBe(runtimeUserId);
+  });
+
+  it("preserves root-to-leaf ordering across session branches", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        timestamp: "2026-07-16T00:00:00.000Z",
+        message: { role: "user", content: "root", timestamp: 1 },
+      },
+      {
+        type: "message",
+        id: "main-leaf",
+        parentId: "root",
+        timestamp: "2026-07-16T00:00:01.000Z",
+        message: { role: "user", content: "main", timestamp: 2 },
+      },
+      {
+        type: "message",
+        id: "side-middle",
+        parentId: "root",
+        timestamp: "2026-07-16T00:00:02.000Z",
+        message: { role: "user", content: "side middle", timestamp: 3 },
+      },
+      {
+        type: "message",
+        id: "side-leaf",
+        parentId: "side-middle",
+        timestamp: "2026-07-16T00:00:03.000Z",
+        message: { role: "user", content: "side leaf", timestamp: 4 },
+      },
+    ] satisfies SessionMessageEntry[];
+    const manager = SessionManager.inMemory();
+    for (const entry of entries) {
+      manager.appendMessage(entry.message);
+      if (entry.id === "main-leaf") {
+        manager.branch(manager.getBranch().at(0)!.id);
+      }
+    }
+
+    expect(buildSessionContext(entries, "side-leaf").messages).toMatchObject([
+      { content: "root" },
+      { content: "side middle" },
+      { content: "side leaf" },
+    ]);
+    expect(
+      manager
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message),
+    ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
+  });
+
+  it("normalizes session names to one line", () => {
+    const manager = SessionManager.inMemory();
+
+    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
+
+    expect(manager.getSessionName()).toBe("first second third");
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {
@@ -556,102 +683,6 @@ describe("SessionManager.open", () => {
 
     expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
     expect(entries.filter((entry) => entry.type === "session")).toHaveLength(1);
-  });
-
-  it("continues a valid recent session when the header exceeds the first read chunk", async () => {
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "long-header-session.jsonl");
-    const longCwd = `/tmp/${"deep/".repeat(120)}`;
-    const header = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "long-header-session",
-      timestamp: "2026-06-18T00:00:00.000Z",
-      cwd: longCwd,
-    };
-    const userEntry = {
-      type: "message",
-      id: "user-1",
-      parentId: null,
-      timestamp: "2026-06-18T00:00:01.000Z",
-      message: { role: "user", content: "resume me" },
-    };
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(userEntry)}\n`,
-      "utf8",
-    );
-
-    expect(Buffer.byteLength(JSON.stringify(header), "utf8")).toBeGreaterThan(512);
-    expect(loadEntriesFromFile(sessionFile)).toHaveLength(2);
-    expect(findMostRecentSession(dir)).toBe(sessionFile);
-    expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
-  });
-
-  it("does not continue a different cwd from a colliding session directory", async () => {
-    const dir = await makeTempDir();
-    const cwdA = "/home/alice/dev/client/app";
-    const cwdB = "/home/alice/dev/client-app";
-    const sessionA = path.join(dir, "session-a.jsonl");
-    const sessionB = path.join(dir, "session-b.jsonl");
-    const headerA = buildSessionHeader(cwdA, "session-a");
-    const headerB = buildSessionHeader(cwdB, "session-b");
-
-    await fs.writeFile(sessionA, `${JSON.stringify(headerA)}\n`, "utf8");
-    await fs.writeFile(sessionB, `${JSON.stringify(headerB)}\n`, "utf8");
-    await fs.utimes(
-      sessionA,
-      new Date("2026-06-18T00:00:00.000Z"),
-      new Date("2026-06-18T00:00:00.000Z"),
-    );
-    await fs.utimes(
-      sessionB,
-      new Date("2026-06-18T00:00:01.000Z"),
-      new Date("2026-06-18T00:00:01.000Z"),
-    );
-
-    expect(findMostRecentSession(dir)).toBe(sessionB);
-    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
-    expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
-    await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
-      expect.objectContaining({ path: sessionA, cwd: cwdA }),
-    ]);
-  });
-
-  it("skips oversized recent session headers instead of hiding valid sessions", async () => {
-    const dir = await makeTempDir();
-    const validSessionFile = path.join(dir, "valid-session.jsonl");
-    const oversizedSessionFile = path.join(dir, "oversized-header-session.jsonl");
-    const validHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "valid-session",
-      timestamp: "2026-06-18T00:00:00.000Z",
-      cwd: "/tmp/task-repo",
-    };
-    const oversizedHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "oversized-header-session",
-      timestamp: "2026-06-18T00:00:01.000Z",
-      cwd: `/tmp/${"deep/".repeat(14_000)}`,
-    };
-
-    await fs.writeFile(validSessionFile, `${JSON.stringify(validHeader)}\n`, "utf8");
-    await fs.writeFile(oversizedSessionFile, `${JSON.stringify(oversizedHeader)}\n`, "utf8");
-    await fs.utimes(
-      validSessionFile,
-      new Date("2026-06-18T00:00:00.000Z"),
-      new Date("2026-06-18T00:00:00.000Z"),
-    );
-    await fs.utimes(
-      oversizedSessionFile,
-      new Date("2026-06-18T00:00:01.000Z"),
-      new Date("2026-06-18T00:00:01.000Z"),
-    );
-
-    expect(Buffer.byteLength(JSON.stringify(oversizedHeader), "utf8")).toBeGreaterThan(64 * 1024);
-    expect(findMostRecentSession(dir)).toBe(validSessionFile);
   });
 
   it("still migrates old transcript versions while bypassing the warm cache", async () => {
@@ -2847,6 +2878,22 @@ describe("SessionManager.open", () => {
     expect(records.find((entry) => entry.id === "side-delivery")?.parentId).toBe(metadata.id);
   });
 
+  it("clears label timestamps when starting a replacement session", async () => {
+    const dir = await makeTempDir();
+    const sessionManager = SessionManager.create(dir, dir);
+    const answerId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    sessionManager.appendLabelChange(answerId, "saved");
+    const state = sessionManager as unknown as {
+      labelTimestampsById: Map<string, string>;
+    };
+
+    expect(state.labelTimestampsById.size).toBe(1);
+
+    sessionManager.newSession();
+
+    expect(state.labelTimestampsById.size).toBe(0);
+  });
+
   it("removes leaf controls that target regenerated labels when branching", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");
@@ -3168,47 +3215,6 @@ describe("parseSessionEntries", () => {
         call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
       ),
     ).toBe(true);
-  });
-
-  it("buildSessionInfo logs warning for malformed lines via SessionManager.list", async () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "session.jsonl");
-    const header = buildSessionHeader(dir);
-    const content = [
-      JSON.stringify(header),
-      "not valid json {{{",
-      JSON.stringify(buildMessageEntry(1, null)),
-    ].join("\n");
-    await fs.writeFile(sessionFile, content, "utf8");
-
-    const sessions = await SessionManager.list(dir, dir);
-
-    expect(sessions).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalled();
-    expect(
-      warnSpy.mock.calls.some((call) =>
-        call[0].includes("buildSessionInfo: skipped 1 malformed JSONL line"),
-      ),
-    ).toBe(true);
-  });
-
-  it("buildSessionInfo does not log warning for clean session listing", async () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "session.jsonl");
-    const header = buildSessionHeader(dir);
-    const content = [JSON.stringify(header), JSON.stringify(buildMessageEntry(1, null))].join("\n");
-    await fs.writeFile(sessionFile, content, "utf8");
-
-    const sessions = await SessionManager.list(dir, dir);
-
-    expect(sessions).toHaveLength(1);
-    // buildSessionInfo must not log any warning for a clean listing.
-    const buildSessionInfoCalls = warnSpy.mock.calls.filter((call) =>
-      call[0].includes("buildSessionInfo"),
-    );
-    expect(buildSessionInfoCalls).toHaveLength(0);
   });
 });
 

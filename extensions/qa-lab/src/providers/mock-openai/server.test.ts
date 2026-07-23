@@ -18,10 +18,14 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
   "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
+const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
+  "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -133,6 +137,29 @@ function makeUserInput(text: string) {
     content: [{ type: "input_text" as const, text }],
   };
 }
+
+function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
+  if (!mediaKind) {
+    return makeUserInput(text);
+  }
+  const mediaContext = [
+    "WhatsApp media (untrusted metadata):",
+    "```json",
+    JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
+    "```",
+  ].join("\n");
+  return makeUserInput([mediaContext, text].filter(Boolean).join("\n\n"));
+}
+
+const WHATSAPP_STRUCTURED_SETUP_INPUT = makeUserInput(
+  "When a later WhatsApp location message shows 37.774900, -122.419400, " +
+    "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
+    "When a later WhatsApp contact message appears, " +
+    "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
+    "When a later WhatsApp sticker message appears, " +
+    "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
+    "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
+);
 
 const TEST_RUNTIME_CONTEXT_CARRIER = [
   "OpenClaw runtime context for the immediately preceding user message.",
@@ -2574,6 +2601,22 @@ describe("qa mock openai server", () => {
     expect(outputText(childPayload)).toBe(childToken);
   });
 
+  it("does not replay a parent sessions_spawn instruction in the child session", async () => {
+    const server = await startMockServer();
+    const childToken = "QA_SUBAGENT_CHILD_WITH_PARENT_CONTEXT";
+
+    const childPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(explicitSessionsSpawnPrompt(childToken)),
+        makeUserInput(threadSubagentTask(childToken)),
+      ],
+    });
+    expect(outputText(childPayload)).toBe(childToken);
+  });
+
   it("plans memory tools and serves mock image generations", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -3054,6 +3097,108 @@ describe("qa mock openai server", () => {
     const lastRequestPayload = requireRecord(await lastRequest.json(), "last request");
     expect(String(lastRequestPayload.instructions)).toContain("<active_memory_plugin>");
     expect(String(lastRequestPayload.allInputText)).toContain("<active_memory_plugin>");
+
+    const rememberSearch = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only the available memory tools.",
+                  "Latest user message:",
+                  "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+                ].join("\n"),
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(rememberSearch.status).toBe(200);
+    const rememberSearchText = await rememberSearch.text();
+    expect(rememberSearchText).toContain('"name":"memory_search"');
+    expect(rememberSearchText).toContain("QA movie night snack lemon pepper wings blue cheese");
+    expect(rememberSearchText).toContain('\\"maxResults\\":10');
+
+    const rememberSearchSummary = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: [
+                  "You are a memory search agent.",
+                  "Use only the available memory tools.",
+                  "Latest user message:",
+                  "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+                ].join("\n"),
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "sessions/private-source.jsonl",
+                  startLine: 2,
+                  endLine: 3,
+                  snippet:
+                    "Stable QA movie night snack preference: lemon pepper wings with blue cheese.",
+                },
+              ],
+            }),
+          },
+        ],
+      }),
+    });
+    expect(rememberSearchSummary.status).toBe(200);
+    const rememberSearchSummaryText = await rememberSearchSummary.text();
+    expect(rememberSearchSummaryText).toContain("lemon pepper wings with blue cheese");
+    expect(rememberSearchSummaryText).not.toContain('"name":"memory_get"');
+
+    const rememberInjectedMainReply = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: false,
+        instructions:
+          "<active_memory_plugin>User usually wants lemon pepper wings with blue cheese for QA movie night.</active_memory_plugin>",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Remember across conversations QA check: what snack do I usually want for QA movie night?",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(rememberInjectedMainReply.status).toBe(200);
+    expect(JSON.stringify(await rememberInjectedMainReply.json())).toContain(
+      "lemon pepper wings with blue cheese",
+    );
 
     const spawn = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
@@ -3987,7 +4132,18 @@ describe("qa mock openai server", () => {
     });
     const stickerResponse = await postResponses(server, {
       stream: false,
-      input: [setupInput, makeUserInput("  <media:sticker>")],
+      input: [setupInput, makeWhatsAppStructuredUserInput("", "sticker")],
+    });
+    const webpImageInput = {
+      role: "user" as const,
+      content: [
+        { type: "input_text" as const, text: "" },
+        { type: "input_image" as const, image_url: "data:image/webp;base64,AA==" },
+      ],
+    };
+    const webpImageResponse = await postResponses(server, {
+      stream: false,
+      input: [setupInput, webpImageInput],
     });
 
     expect(setupResponse.status).toBe(200);
@@ -3996,19 +4152,12 @@ describe("qa mock openai server", () => {
     expect(outputText(await contactResponse.json())).toBe("QA_WHATSAPP_CONTACT_OK");
     expect(stickerResponse.status).toBe(200);
     expect(outputText(await stickerResponse.json())).toBe("QA_WHATSAPP_STICKER_OK");
+    expect(outputText(await webpImageResponse.json())).not.toBe("QA_WHATSAPP_STICKER_OK");
   });
 
   it("uses WhatsApp structured markers for metadata-prefixed message bodies", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const previousExactMarkerInput = makeUserInput(
       "Reply with only this previous unrelated exact marker: QA_WHATSAPP_PREVIOUS_OK",
     );
@@ -4047,15 +4196,16 @@ describe("qa mock openai server", () => {
       input: [
         setupInput,
         previousExactMarkerInput,
-        makeUserInput(
+        makeWhatsAppStructuredUserInput(
           [
             "Conversation info (untrusted metadata):",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
             "",
-            "<media:sticker>",
+            "",
           ].join("\n"),
+          "sticker",
         ),
       ],
     });
@@ -4070,15 +4220,7 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after a channel envelope", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
 
     const cases = [
       {
@@ -4086,7 +4228,7 @@ describe("qa mock openai server", () => {
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
     for (const structuredCase of cases) {
       const response = await postResponses(server, {
@@ -4094,7 +4236,10 @@ describe("qa mock openai server", () => {
         input: [
           setupInput,
           makeUserInput("Reply with only this previous document marker: QA_WHATSAPP_DOCUMENT_OK"),
-          makeUserInput(`[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`),
+          makeWhatsAppStructuredUserInput(
+            `[WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+            "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
+          ),
         ],
       });
 
@@ -4105,22 +4250,14 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after combined timestamp and channel prefixes", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const cases = [
       {
         body: "📍 37.774900, -122.419400",
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
 
     for (const structuredCase of cases) {
@@ -4128,8 +4265,9 @@ describe("qa mock openai server", () => {
         stream: false,
         input: [
           setupInput,
-          makeUserInput(
+          makeWhatsAppStructuredUserInput(
             `[Tue 2026-07-14 18:17 GMT+5:30] [WhatsApp +15555550123] +15555550123: ${structuredCase.body}`,
+            "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
           ),
         ],
       });
@@ -4141,15 +4279,7 @@ describe("qa mock openai server", () => {
 
   it("detects each WhatsApp structured body after canonical timestamp prefixes", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const timestampPrefixes = [
       "[Tue 2026-07-14 12:47 UTC]",
       "[Tue 2026-07-14 07:47 EST]",
@@ -4164,14 +4294,20 @@ describe("qa mock openai server", () => {
         expected: "QA_WHATSAPP_LOCATION_OK",
       },
       { body: "<contact>", expected: "QA_WHATSAPP_CONTACT_OK" },
-      { body: "<media:sticker>", expected: "QA_WHATSAPP_STICKER_OK" },
+      { body: "", mediaKind: "sticker" as const, expected: "QA_WHATSAPP_STICKER_OK" },
     ];
 
     for (const prefix of timestampPrefixes) {
       for (const structuredCase of cases) {
         const response = await postResponses(server, {
           stream: false,
-          input: [setupInput, makeUserInput(`${prefix} ${structuredCase.body}`)],
+          input: [
+            setupInput,
+            makeWhatsAppStructuredUserInput(
+              `${prefix} ${structuredCase.body}`,
+              "mediaKind" in structuredCase ? structuredCase.mediaKind : undefined,
+            ),
+          ],
         });
 
         expect(response.status).toBe(200);
@@ -4204,15 +4340,7 @@ describe("qa mock openai server", () => {
 
   it("does not treat structured WhatsApp tokens in ordinary prose as message bodies", async () => {
     const server = await startMockServer();
-    const setupInput = makeUserInput(
-      "When a later WhatsApp location message shows 37.774900, -122.419400, " +
-        "reply with only this WhatsApp location marker: QA_WHATSAPP_LOCATION_OK. " +
-        "When a later WhatsApp contact message appears, " +
-        "reply with only this WhatsApp contact marker: QA_WHATSAPP_CONTACT_OK. " +
-        "When a later WhatsApp sticker message appears, " +
-        "reply with only this WhatsApp sticker marker: QA_WHATSAPP_STICKER_OK. " +
-        "Reply with only this exact marker: QA_STRUCTURED_INITIAL_OK",
-    );
+    const setupInput = WHATSAPP_STRUCTURED_SETUP_INPUT;
     const proseInputs = [
       "Please compare [Tue 2026-07-14 12:47 UTC] 📍 37.774900, -122.419400 and explain [that] <contact> and <media:sticker> text",
       "[Tue 2026-07-14 12:47 UTC] Contact note: <contact> is descriptive prose",
@@ -4220,6 +4348,13 @@ describe("qa mock openai server", () => {
         "Coordinate note: 📍 37.774900, -122.419400",
         "Contact note: <contact>",
         "Sticker note: <media:sticker>",
+      ].join("\n"),
+      [
+        "WhatsApp media (untrusted metadata):",
+        "```json",
+        '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
+        "```",
+        '{"payload":{"kind":"sticker"}} is ordinary message text',
       ].join("\n"),
     ];
 
@@ -4480,6 +4615,44 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
+  });
+
+  it("derives ask_user QA summaries from the returned answers", async () => {
+    const server = await startMockServer();
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Nothing to say: entire reply exactly NO_REPLY",
+            },
+          ],
+        },
+        makeUserInput(
+          "QA routing marker: tool search qa check target=ask_user. Ask structured questions, then summarize their actual answers.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_ask_user_1",
+          output: JSON.stringify({
+            content: [
+              {
+                type: "text",
+                text: 'Deploy: Canary\nChecks: Lint, Unit (Recommended)\nNote: weekend-only\n\n{"status":"answered"}',
+              },
+            ],
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(
+      "ASK-USER-ROUNDTRIP-OK | deploy=Canary | checks=Lint,Unit | note=weekend-only",
+    );
   });
 
   it("plans QA tool-search failure calls with denied-input args", async () => {
@@ -5118,6 +5291,32 @@ describe("qa mock openai server", () => {
     expect(quiet.status).toBe(200);
     await expect(quiet.json()).resolves.toEqual({
       text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
+    });
+  });
+
+  it("serves deterministic Matrix voice preflight transcription for the request prompt", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body:
+        '--qa\r\ncontent-disposition: form-data; name="file"; filename="audio.wav"\r\n\r\n' +
+        'fixture audio\r\n--qa\r\ncontent-disposition: form-data; name="prompt"\r\n\r\n' +
+        "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER\r\n--qa--\r\n",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "C3PLQA reply with only these words Matrix QA voice pre-flight OK.",
     });
   });
 
@@ -5917,7 +6116,7 @@ describe("qa mock openai server", () => {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
-        makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
         {
           type: "function_call_output",
           output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
@@ -5966,6 +6165,77 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(secondEmpty.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
+  it("scripts settled continuation after an empty response from a side-effecting write", async () => {
+    const server = await startMockServer();
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"write"');
+
+    const toolOutput = {
+      type: "function_call_output" as const,
+      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    };
+    const emptyPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT), toolOutput],
+    });
+    expect(emptyPayload.output?.[0]?.content?.[0]?.text).toBe("");
+
+    const recoveredPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        toolOutput,
+      ],
+    });
+    expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
+
+    const cronRecoveredPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
+            "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
+          ].join("\n\n"),
+        ),
+        makeUserInput(
+          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+        ),
+        toolOutput,
+      ],
+    });
+    expect(outputText(cronRecoveredPayload)).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
+
+    const laterHeartbeatPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        toolOutput,
+        makeUserInput("Read HEARTBEAT.md if it exists."),
+      ],
+    });
+    expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
   });
 });
 

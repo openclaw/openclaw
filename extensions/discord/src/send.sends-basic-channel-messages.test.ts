@@ -1170,6 +1170,144 @@ describe("fetchChannelPermissionsDiscord", () => {
     ).resolves.toBe(true);
   });
 
+  it("uses parent ViewChannel permissions for a public thread", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        guild_id: "guild1",
+        parent_id: "parent1",
+        type: ChannelType.GuildPublicThread,
+      })
+      .mockResolvedValueOnce({
+        id: "parent1",
+        guild_id: "guild1",
+        type: ChannelType.GuildText,
+        permission_overwrites: [
+          {
+            id: "user1",
+            deny: PermissionFlagsBits.ViewChannel.toString(),
+            allow: "0",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: PermissionFlagsBits.ViewChannel.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "thread1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(false);
+    expect(getMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("requires private-thread membership after parent ViewChannel permission", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        guild_id: "guild1",
+        parent_id: "parent1",
+        type: ChannelType.GuildPrivateThread,
+      })
+      .mockResolvedValueOnce({
+        id: "parent1",
+        guild_id: "guild1",
+        type: ChannelType.GuildText,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: PermissionFlagsBits.ViewChannel.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] })
+      .mockResolvedValueOnce({ id: "thread1", user_id: "user1" });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "thread1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(true);
+    expect(getMock).toHaveBeenLastCalledWith(Routes.threadMembers("thread1", "user1"));
+  });
+
+  it("fails closed when a user is not a private-thread member", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        guild_id: "guild1",
+        parent_id: "parent1",
+        type: ChannelType.GuildPrivateThread,
+      })
+      .mockResolvedValueOnce({
+        id: "parent1",
+        guild_id: "guild1",
+        type: ChannelType.GuildText,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [{ id: "guild1", permissions: PermissionFlagsBits.ViewChannel.toString() }],
+      })
+      .mockResolvedValueOnce({ roles: [] })
+      .mockRejectedValueOnce(new Error("404 Unknown Member"));
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "thread1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("allows private-thread moderators without explicit membership", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        guild_id: "guild1",
+        parent_id: "parent1",
+        type: ChannelType.GuildPrivateThread,
+      })
+      .mockResolvedValueOnce({
+        id: "parent1",
+        guild_id: "guild1",
+        type: ChannelType.GuildText,
+        permission_overwrites: [],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          {
+            id: "guild1",
+            permissions: (
+              PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ManageThreads
+            ).toString(),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: [] });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "thread1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(true);
+    expect(getMock).toHaveBeenCalledTimes(4);
+  });
+
   it("fails closed when the channel belongs to a different guild", async () => {
     const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({

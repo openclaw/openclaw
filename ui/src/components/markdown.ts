@@ -840,6 +840,11 @@ function highlightCode(text: string, lang: string): string {
   return escapeHtml(text);
 }
 
+/** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+export function highlightJsonHtml(text: string): string {
+  return highlightCode(text, "json");
+}
+
 function codeClassAttribute(lang: string, highlighted: string): string {
   const classes = [
     highlighted.includes("hljs-") ? "hljs" : "",
@@ -1269,6 +1274,12 @@ installAssistantTranscriptRoleImageRenderer(md, {
   isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
   normalizeLabel: normalizeMarkdownImageLabel,
   assistantLabel: () => t("sessionsView.assistant"),
+  openImageLabel: (alt, hasAlt) =>
+    t("chat.imageLightbox.open", {
+      title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
+    }),
+  interactiveImages: (env) =>
+    (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
 });
 
 // Override fenced code blocks with copy button + JSON collapse
@@ -1340,7 +1351,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {

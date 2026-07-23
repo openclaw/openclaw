@@ -30,9 +30,9 @@ export const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
 const MSTEAMS_MAX_CONVERSATIONS = 1000;
 export const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-const CONVERSATION_LOCK_FILENAME = "msteams-conversations.sqlite.lock";
 const ACCOUNT_SCOPED_CONVERSATION_PREFIX = "\u0000openclaw:msteams:account:";
 const ACCOUNT_SCOPED_CONVERSATION_SEPARATOR = "\u0000conversation:";
+const CONVERSATION_MUTATION_KEY = "conversations";
 
 type MSTeamsConversationStoreStateOptions = {
   env?: NodeJS.ProcessEnv;
@@ -201,7 +201,7 @@ export function createMSTeamsConversationStoreState(
     reference: StoredConversationReference,
   ): Promise<void> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    await withMSTeamsSqliteMutationLock(params, CONVERSATION_LOCK_FILENAME, async () => {
+    await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
       const existing = await lookupStored(normalizedId);
       await register(
         normalizedId,
@@ -216,7 +216,7 @@ export function createMSTeamsConversationStoreState(
 
   const remove = async (conversationId: string): Promise<boolean> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    return await withMSTeamsSqliteMutationLock(params, CONVERSATION_LOCK_FILENAME, async () => {
+    return await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
       return await conversationStore.delete(buildMSTeamsConversationStateKey(normalizedId));
     });
   };

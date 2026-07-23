@@ -14,7 +14,7 @@
         "@anthropic-ai/sdk": "0.109.1",
         "@clack/core": "1.4.2",
         "@clack/prompts": "1.6.0",
-        "@earendil-works/pi-tui": "0.80.3",
+        "@earendil-works/pi-tui": "0.80.9",
         "@google/genai": "2.10.0",
         "@grammyjs/runner": "2.0.3",
         "@grammyjs/transformer-throttler": "1.2.1",
@@ -23,8 +23,8 @@
         "@mistralai/mistralai": "2.4.0",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
-        "@openclaw/fs-safe": "0.4.1",
-        "@openclaw/proxyline": "0.3.3",
+        "@openclaw/fs-safe": "0.4.4",
+        "@openclaw/proxyline": "0.3.4",
         "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
@@ -40,6 +40,7 @@
         "grammy": "1.44.0",
         "highlight.js": "11.11.1",
         "hosted-git-info": "10.1.1",
+        "iconv-lite": "0.7.2",
         "ignore": "7.0.5",
         "jiti": "2.7.0",
         "json5": "2.2.3",
@@ -160,9 +161,9 @@
       }
     },
     "node_modules/@earendil-works/pi-tui": {
-      "version": "0.80.3",
-      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.3.tgz",
-      "integrity": "sha512-2BJI6qwRQfnM0Q7seL1+SbacU/jRRjBnN7Hu3n9BjAn7/s5FaBNnvdD1qBQYRsFTHfjqMaDsjYqanPyqwXj99w==",
+      "version": "0.80.9",
+      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.80.9.tgz",
+      "integrity": "sha512-unPTW8hRgIHEGjV8mJJ2jqm+fzgnRubes6V2FPk9ay1W9ZLofcpYQ3NDfrODXSci+oKbBpX9JyYUMfQV6jCA/A==",
       "license": "MIT",
       "dependencies": {
         "get-east-asian-width": "1.6.0",
@@ -433,28 +434,28 @@
       }
     },
     "node_modules/@openclaw/fs-safe": {
-      "version": "0.4.1",
-      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.1.tgz",
-      "integrity": "sha512-hQi+BxO10KdRFlYUot1syC+hTaUnGeQNdqX5kwkKJig8CFq1tKsYJLPm+zkiiGsSKOprPAquQl/txejEhpKPgg==",
+      "version": "0.4.4",
+      "resolved": "https://registry.npmjs.org/@openclaw/fs-safe/-/fs-safe-0.4.4.tgz",
+      "integrity": "sha512-QklFGshaQDXl7RFyxPeSN/1moYq/X+SJcmX/nY3oXJO/tzVasL9i1g3m4nJqIfd6qUTJQjeu+41aIqw8+SbUww==",
       "license": "MIT",
       "engines": {
         "node": ">=22"
       },
       "optionalDependencies": {
         "jszip": "^3.10.1",
-        "tar": "7.5.19"
+        "tar": "7.5.20"
       }
     },
     "node_modules/@openclaw/proxyline": {
-      "version": "0.3.3",
-      "resolved": "https://registry.npmjs.org/@openclaw/proxyline/-/proxyline-0.3.3.tgz",
-      "integrity": "sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==",
+      "version": "0.3.4",
+      "resolved": "https://registry.npmjs.org/@openclaw/proxyline/-/proxyline-0.3.4.tgz",
+      "integrity": "sha512-WuLE282PW7vLienDNFTjdSI/BCYDAepvr5siOTYABQhqFo8qbP9MgmJzZnwmskUqiYugGzle6gvaRbJTkwbZ8A==",
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"
       },
       "peerDependencies": {
-        "undici": ">=8.3.0 <9"
+        "undici": ">=8.5.0 <9"
       }
     },
     "node_modules/@opentelemetry/semantic-conventions": {
@@ -503,12 +504,6 @@
       "version": "1.0.2",
       "resolved": "https://registry.npmjs.org/@protobufjs/float/-/float-1.0.2.tgz",
       "integrity": "sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==",
-      "license": "BSD-3-Clause"
-    },
-    "node_modules/@protobufjs/inquire": {
-      "version": "1.1.2",
-      "resolved": "https://registry.npmjs.org/@protobufjs/inquire/-/inquire-1.1.2.tgz",
-      "integrity": "sha512-pa0vFRuws4wkvaXKK1uXZMAwAX4/t8ANaJo45iw/oQHNQ9q5xUzwgFmVJGXiga2BeN+zpX7Vf9vmsiIa2J+MUw==",
       "license": "BSD-3-Clause"
     },
     "node_modules/@protobufjs/path": {
@@ -1482,9 +1477,9 @@
       }
     },
     "node_modules/fast-uri": {
-      "version": "3.1.2",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.2.tgz",
-      "integrity": "sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==",
+      "version": "3.1.4",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.4.tgz",
+      "integrity": "sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==",
       "funding": [
         {
           "type": "github",
@@ -2784,9 +2779,9 @@
       "license": "ISC"
     },
     "node_modules/protobufjs": {
-      "version": "7.6.3",
-      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-7.6.3.tgz",
-      "integrity": "sha512-+k0vdJKNdW+Vu+dYe8tZA/VvQb6XKNWexC6URwBFXxNnjLJz9nQJCemGyNgRAWD+B7+nGNc9qMPGwcD7s4nzUw==",
+      "version": "7.6.5",
+      "resolved": "https://registry.npmjs.org/protobufjs/-/protobufjs-7.6.5.tgz",
+      "integrity": "sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==",
       "hasInstallScript": true,
       "license": "BSD-3-Clause",
       "dependencies": {
@@ -2796,7 +2791,6 @@
         "@protobufjs/eventemitter": "^1.1.1",
         "@protobufjs/fetch": "^1.1.1",
         "@protobufjs/float": "^1.0.2",
-        "@protobufjs/inquire": "^1.1.2",
         "@protobufjs/path": "^1.1.2",
         "@protobufjs/pool": "^1.1.0",
         "@protobufjs/utf8": "^1.1.1",

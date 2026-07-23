@@ -1,9 +1,12 @@
 // Msteams tests cover token plugin behavior.
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
+import { setMSTeamsRuntime } from "./runtime.js";
+import { msteamsRuntimeStub } from "./test-support/runtime.js";
 import { readAccessToken } from "./token-response.js";
 import {
   hasConfiguredMSTeamsCredentials,
@@ -19,16 +22,6 @@ const oauthTokenMocks = vi.hoisted(() => ({
 
 vi.mock("./oauth.token.js", () => ({
   refreshMSTeamsDelegatedTokens: oauthTokenMocks.refreshMSTeamsDelegatedTokens,
-}));
-
-vi.mock("./storage.js", () => ({
-  resolveMSTeamsStorePath: ({ filename }: { filename: string }) => {
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required for token tests");
-    }
-    return `${stateDir}/${filename}`;
-  },
 }));
 
 vi.mock("./secret-input.js", () => ({
@@ -330,6 +323,8 @@ describe("resolveDelegatedAccessToken", () => {
   let stateDir: string | undefined;
 
   beforeEach(() => {
+    resetPluginStateStoreForTests();
+    setMSTeamsRuntime(msteamsRuntimeStub);
     saveAndClearEnv();
     stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-msteams-token-"));
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -338,6 +333,7 @@ describe("resolveDelegatedAccessToken", () => {
 
   afterEach(() => {
     restoreEnv();
+    resetPluginStateStoreForTests();
     if (stateDir) {
       rmSync(stateDir, { recursive: true, force: true });
       stateDir = undefined;
@@ -348,16 +344,12 @@ describe("resolveDelegatedAccessToken", () => {
     if (!stateDir) {
       throw new Error("missing stateDir");
     }
-    writeFileSync(
-      path.join(stateDir, "msteams-delegated.json"),
-      `${JSON.stringify({
-        accessToken: "stale-access",
-        refreshToken: "refresh-token",
-        expiresAt,
-        scopes: ["User.Read"],
-      })}\n`,
-      "utf8",
-    );
+    saveDelegatedTokens({
+      accessToken: "stale-access",
+      refreshToken: "refresh-token",
+      expiresAt,
+      scopes: ["User.Read"],
+    });
   }
 
   const delegatedTokens = {
@@ -366,6 +358,17 @@ describe("resolveDelegatedAccessToken", () => {
     expiresAt: Date.now() + 60_000,
     scopes: ["User.Read"],
   };
+
+  it("roundtrips delegated tokens through plugin-state SQLite without a sidecar", () => {
+    writeDelegatedTokens(Date.now() + 60_000);
+
+    expect(loadDelegatedTokens()).toMatchObject({
+      accessToken: "stale-access",
+      refreshToken: "refresh-token",
+    });
+    expect(existsSync(path.join(stateDir!, "state", "openclaw.sqlite"))).toBe(true);
+    expect(existsSync(path.join(stateDir!, "msteams-delegated.json"))).toBe(false);
+  });
 
   it("reuses a valid delegated access token before expiry", async () => {
     writeDelegatedTokens(Date.now() + 60_000);
@@ -394,7 +397,7 @@ describe("resolveDelegatedAccessToken", () => {
     expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).toHaveBeenCalledOnce();
   });
 
-  it("stores delegated tokens separately per account while preserving the default filename", () => {
+  it("stores delegated tokens separately per account in plugin-state SQLite", () => {
     saveDelegatedTokens({ ...delegatedTokens, accessToken: "default-access" });
     saveDelegatedTokens(
       { ...delegatedTokens, accessToken: "secondary-access" },
@@ -404,8 +407,8 @@ describe("resolveDelegatedAccessToken", () => {
     expect(loadDelegatedTokens()?.accessToken).toBe("default-access");
     expect(loadDelegatedTokens({ accountId: "secondary" })?.accessToken).toBe("secondary-access");
     expect(loadDelegatedTokens({ accountId: "finance" })).toBeUndefined();
-    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.json"))).toBe(true);
-    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.secondary.json"))).toBe(true);
+    expect(existsSync(path.join(stateDir ?? "", "state", "openclaw.sqlite"))).toBe(true);
+    expect(existsSync(path.join(stateDir ?? "", "msteams-delegated.json"))).toBe(false);
   });
 });
 

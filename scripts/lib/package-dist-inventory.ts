@@ -143,13 +143,8 @@ async function writePackageInstallGuardMarker(packageRoot: string): Promise<void
   await fs.writeFile(markerPath, "OpenClaw package preinstall has not completed.\n", "utf8");
 }
 
-export async function writePackageDistInventoryForPublish(
-  packageRoot: string,
-  inventory?: string[],
-): Promise<string[]> {
-  await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
-  const entries = inventory ?? (await collectPackageDistInventory(packageRoot));
-  const writtenInventory = await writePackageDistInventoryFile(packageRoot, entries);
+export async function writePackageDistInventoryForPublish(packageRoot: string): Promise<string[]> {
+  const inventory = await writePackageDistInventory(packageRoot);
   await writePackageInstallGuardMarker(packageRoot);
-  return writtenInventory;
+  return inventory;
 }
