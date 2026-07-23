@@ -1401,6 +1401,7 @@ export async function performGatewaySessionReset(params: {
               // new session never observes an unreadable old-session row.
               writeAcpSessionMetaForMigration({
                 sessionKey: committedAcpResetState.sessionKey,
+                sessionId: mutation.nextEntry.sessionId,
                 lifecycleRevision: mutation.nextEntry.lifecycleRevision,
                 meta: committedAcpResetState.meta,
               });

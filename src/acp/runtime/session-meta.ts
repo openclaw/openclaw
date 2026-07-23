@@ -120,15 +120,16 @@ function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
 
 function bindAcpSessionMeta(params: {
   sessionKey: string;
+  sessionId?: string;
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
   updatedAt: number;
 }): Insertable<AcpSessionsTable> {
   return {
     session_key: params.sessionKey,
-    // Kept in the existing column for schema neutrality. The value fences ACP
-    // metadata to one lifecycle window even when reset retains the session id.
-    session_id: params.lifecycleRevision ?? null,
+    // Kept in the existing column for schema neutrality. New rows prefer the
+    // lifecycle revision; pre-revision entries retain the session-id fence.
+    session_id: params.lifecycleRevision ?? params.sessionId ?? null,
     backend: params.meta.backend,
     agent: params.meta.agent,
     runtime_session_name: params.meta.runtimeSessionName,
@@ -288,6 +289,7 @@ function selectAcpSessionRows(options: OpenClawStateDatabaseOptions = {}): AcpSe
 
 export function writeAcpSessionMetaForMigration(params: {
   sessionKey: string;
+  sessionId?: string;
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
   env?: NodeJS.ProcessEnv;
@@ -300,6 +302,7 @@ export function writeAcpSessionMetaForMigration(params: {
   }
   const row = bindAcpSessionMeta({
     sessionKey,
+    sessionId: params.sessionId,
     lifecycleRevision: params.lifecycleRevision,
     meta: params.meta,
     updatedAt: params.now?.() ?? Date.now(),
@@ -716,6 +719,7 @@ export async function upsertAcpSessionMeta(params: {
         database.db,
         bindAcpSessionMeta({
           sessionKey: persisted.sessionKey,
+          sessionId: persisted.entry.sessionId,
           lifecycleRevision: persisted.entry.lifecycleRevision,
           meta: metaToPersist,
           updatedAt,

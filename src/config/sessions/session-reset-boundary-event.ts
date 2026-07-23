@@ -55,9 +55,6 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
     type?: unknown;
     firstKeptEntryId?: unknown;
   };
-  if (boundary.type !== "reset") {
-    return entries.slice(boundaryIndex + 1);
-  }
   const firstKeptIndex =
     typeof boundary.firstKeptEntryId === "string"
       ? entries.findIndex(

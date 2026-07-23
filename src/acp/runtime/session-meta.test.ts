@@ -503,6 +503,50 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
+  it("keeps a session-id fence when ACP metadata is written before a lifecycle revision", async () => {
+    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const sessionKey = "agent:codex:acp:pre-revision";
+      writeAcpSessionMetaForMigration({
+        databasePath,
+        sessionKey,
+        sessionId: "sess-pre-revision",
+        now: () => 100,
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-pre-revision",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        },
+      });
+
+      expect(
+        readAcpSessionMetaForEntry({
+          databasePath,
+          sessionKey,
+          entry: {
+            sessionId: "sess-pre-revision",
+            lifecycleRevision: undefined,
+            sessionStartedAt: 50,
+          },
+        })?.runtimeSessionName,
+      ).toBe("codex-pre-revision");
+      expect(
+        readAcpSessionMetaForEntry({
+          databasePath,
+          sessionKey,
+          entry: {
+            sessionId: "sess-pre-revision",
+            lifecycleRevision: "revision-after-reset",
+            sessionStartedAt: 150,
+          },
+        }),
+      ).toBeUndefined();
+    });
+  });
+
   it("repairs ACP metadata rows when session-store keys are canonicalized", async () => {
     await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

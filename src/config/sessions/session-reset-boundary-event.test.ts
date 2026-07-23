@@ -73,6 +73,49 @@ describe("reset boundary planning", () => {
     });
   });
 
+  it("keeps a compaction retained tail when planning the next reset", () => {
+    const discarded = message({
+      id: "discarded-user",
+      parentId: null,
+      role: "user",
+      content: "discarded",
+      second: 1,
+    });
+    const keptUser = message({
+      id: "compaction-kept-user",
+      parentId: discarded.id,
+      role: "user",
+      content: "kept",
+      second: 2,
+    });
+    const keptAssistant = message({
+      id: "compaction-kept-assistant",
+      parentId: keptUser.id,
+      role: "assistant",
+      content: "kept answer",
+      second: 3,
+    });
+    const compaction = {
+      type: "compaction",
+      id: "compaction-boundary",
+      parentId: keptAssistant.id,
+      timestamp: "2026-07-22T00:00:04.000Z",
+      summary: "summary",
+      firstKeptEntryId: keptUser.id,
+      tokensBefore: 100,
+    };
+
+    expect(
+      buildSessionResetBoundaryEvent({
+        events: [discarded, keptUser, keptAssistant, compaction],
+        reason: "new",
+      }),
+    ).toMatchObject({
+      parentId: compaction.id,
+      firstKeptEntryId: keptUser.id,
+    });
+  });
+
   it("seeds only the bounded replay tail from a legacy transcript", async () => {
     await withTempDir({ prefix: "openclaw-reset-boundary-" }, async (dir) => {
       const sessionFile = path.join(dir, "legacy.jsonl");
