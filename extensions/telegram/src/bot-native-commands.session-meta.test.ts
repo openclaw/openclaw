@@ -1690,13 +1690,15 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(
       (runModelsAuthLoginFlow.mock.calls[0]?.[0] as { profileId?: string } | undefined)?.profileId,
     ).toBeUndefined();
-    expect(sessionMocks.updateSessionStoreEntry).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/openclaw-sessions.json",
-      requireWriteSuccess: true,
-      skipMaintenance: true,
-      update: expect.any(Function),
-    });
+    await vi.waitFor(() =>
+      expect(sessionMocks.updateSessionStoreEntry).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+        requireWriteSuccess: true,
+        skipMaintenance: true,
+        update: expect.any(Function),
+      }),
+    );
     const patchUpdate = (
       sessionMocks.updateSessionStoreEntry.mock.calls[0]?.[0] as {
         update?: (entry: Record<string, unknown>) => Record<string, unknown>;
