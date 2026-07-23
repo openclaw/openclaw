@@ -169,7 +169,7 @@ import {
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
-import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
+import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import {
   flushChatQueueAfterIdleSessionReconciliation,
   switchChatFastMode,
