@@ -155,6 +155,11 @@ Accepted native sub-agent spawns include the resolved child model metadata
 in the tool result: `resolvedModel` contains the applied model ref and
 `resolvedProvider` contains the provider prefix when the ref has one.
 
+Accepted native spawns also include `sessionId` (durable child session UUID)
+and `sessionKey` (same value as `childSessionKey`). Use `sessionId` with
+`/subagents info` / session-store lookups; do not assume the UUID suffix of
+`childSessionKey` equals `sessionId`.
+
 ### Delegation prompt mode
 
 `agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation.
@@ -673,7 +678,7 @@ still need normal device approval for scope upgrades.
 
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending "announce back" work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
-- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
+- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey, sessionId, sessionKey }` immediately. `sessionId` is the durable child UUID (prefer it over parsing `childSessionKey`); `sessionKey` aliases `childSessionKey`.
 - Sub-agent context only injects `AGENTS.md` and `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`). Codex-native subagents follow the same boundary: `TOOLS.md` stays in inherited Codex thread instructions, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1-5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
