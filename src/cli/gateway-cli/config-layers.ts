@@ -62,6 +62,10 @@ export async function loadConfigLayers(
   if (descriptors.length === 0) {
     return null;
   }
+  const firstDescriptor = descriptors[0];
+  if (!firstDescriptor) {
+    return null;
+  }
 
   const envWarnings: EnvSubstitutionWarning[] = [];
   const allowedRoots = resolveIncludeRoots(process.env);
@@ -123,7 +127,7 @@ export async function loadConfigLayers(
   const raw = JSON.stringify(sourceConfig, null, 2);
   return {
     snapshot: {
-      path: descriptors[0].path,
+      path: firstDescriptor.path,
       exists: true,
       raw,
       parsed: sourceConfig,

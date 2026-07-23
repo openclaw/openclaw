@@ -55,6 +55,10 @@ function overlaps(a: readonly string[], b: readonly string[]): boolean {
 }
 
 function setPath(target: Record<string, unknown>, path: readonly string[], value: unknown): void {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
+    return;
+  }
   let cursor = target;
   for (const segment of path.slice(0, -1)) {
     const current = cursor[segment];
@@ -66,7 +70,7 @@ function setPath(target: Record<string, unknown>, path: readonly string[], value
       cursor = next;
     }
   }
-  cursor[path[path.length - 1]] = structuredClone(value);
+  cursor[leaf] = structuredClone(value);
 }
 
 function compareBounded(control: Exclude<Control, "exact">, inherited: unknown, next: unknown) {

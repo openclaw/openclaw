@@ -13,6 +13,7 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
+import type { ConfigFileSnapshot } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginApprovalRequest,

@@ -661,7 +661,6 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   return response;
 }
 
-<<<<<<< HEAD
 async function commitGatewayConfigWriteOrRespond(
   params: Parameters<typeof commitGatewayConfigWrite>[0] & { respond: RespondFn },
 ): Promise<Awaited<ReturnType<typeof commitGatewayConfigWrite>> | null> {
@@ -678,7 +677,8 @@ async function commitGatewayConfigWriteOrRespond(
     );
     return null;
   }
-=======
+}
+
 function rejectReadOnlyConfigWrite(
   context: GatewayRequestContext | undefined,
   respond: RespondFn,
@@ -688,7 +688,6 @@ function rejectReadOnlyConfigWrite(
   }
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, context.configReadOnlyReason));
   return true;
->>>>>>> 2bbf8d8ebc3 (feat(gateway): load ordered config layers)
 }
 
 export const configHandlers: GatewayRequestHandlers = {
