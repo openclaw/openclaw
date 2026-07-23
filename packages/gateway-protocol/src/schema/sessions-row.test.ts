@@ -11,7 +11,7 @@ describe("SessionRowSchema", () => {
       visibility: "suggest",
       sharingRole: "owner",
     };
-    const roundTripped = JSON.parse(JSON.stringify(row)) as typeof row;
+    const roundTripped = structuredClone(row);
 
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(roundTripped).toMatchObject({ visibility: "suggest", sharingRole: "owner" });

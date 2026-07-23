@@ -72,7 +72,9 @@ export function emitSessionsChanged(
     {
       ...(payload.agentId ? { agentId: payload.agentId } : {}),
       dropIfSlow: true,
-      ...(sessionRow ? { sessionKeys: [sessionRow.key] } : {}),
+      // Scope only to a concrete key; a `[undefined]` scope filters no connection
+      // correctly and would strip draft gating, so fall back to an unscoped send.
+      ...(sessionRow?.key ? { sessionKeys: [sessionRow.key] } : {}),
     },
   );
 }

@@ -400,9 +400,10 @@ export function deleteLegacySessionEntryRows(
 // that predates the feature may lack the table; such a DB also has no members
 // to drop. Guard on existence rather than forcing the sharing schema here.
 function clearSessionMembersForKey(database: OpenClawAgentDatabase, sessionKey: string): void {
-  const tableExists = database.db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_members'")
-    .get();
+  const tableExists =
+    database.db /* sqlite-allow-raw: sqlite_master table-existence probe for the additive session_members lazy-ensure */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_members'")
+      .get();
   if (!tableExists) {
     return;
   }

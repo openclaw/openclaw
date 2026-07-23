@@ -53,7 +53,9 @@ export function resolveSessionVisibility(
 }
 
 export function isGatewayAdmin(client: Pick<GatewayClient, "connect"> | null): boolean {
-  return client?.connect.scopes?.includes(ADMIN_SCOPE) === true;
+  // Internal/plugin-runtime runs reach authorization with a client that has no
+  // connect handshake; treat a connect-less client as a non-admin, never a crash.
+  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
 }
 
 export function allowedSessionVisibilities(cfg: OpenClawConfig): SessionVisibility[] {

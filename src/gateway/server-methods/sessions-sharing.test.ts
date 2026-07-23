@@ -39,7 +39,7 @@ const targetResolutionMock = vi.hoisted(() => ({
     | undefined
     | ((
         target: ReturnType<ResolveSessionSharingTarget>,
-        call: number,
+        callIndex: number,
       ) => ReturnType<ResolveSessionSharingTarget>),
 }));
 
@@ -50,8 +50,8 @@ vi.mock("../session-sharing.js", async () => {
     ...actual,
     resolveSessionSharingTarget: (params: Parameters<ResolveSessionSharingTarget>[0]) => {
       const target = actual.resolveSessionSharingTarget(params);
-      const call = ++targetResolutionMock.calls;
-      return targetResolutionMock.override?.(target, call) ?? target;
+      const callIndex = ++targetResolutionMock.calls;
+      return targetResolutionMock.override?.(target, callIndex) ?? target;
     },
   };
 });
@@ -133,8 +133,8 @@ describe("session sharing handlers", () => {
           visibility: "shared",
         },
       );
-      targetResolutionMock.override = (target, call) =>
-        call === 2 && target
+      targetResolutionMock.override = (target, callIndex) =>
+        callIndex === 2 && target
           ? {
               ...target,
               entry: { ...target.entry, sessionId: "session-replaced" },

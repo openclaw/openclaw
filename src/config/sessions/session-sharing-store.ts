@@ -128,9 +128,10 @@ function assertAuthorizedSessionInstance(
   if (expectedSessionId === undefined) {
     return;
   }
-  const row = database.db
-    .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
-    .get(sessionKey) as { session_id?: string } | undefined;
+  const row =
+    database.db /* sqlite-allow-raw: sync TOCTOU re-read of session_id inside a write transaction; Kysely async execution is forbidden in synchronous commit sections */
+      .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
+      .get(sessionKey) as { session_id?: string } | undefined;
   if (row?.session_id !== expectedSessionId) {
     throw new Error("session changed before sharing mutation");
   }
