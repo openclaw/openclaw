@@ -273,6 +273,19 @@ describe("perplexity web search provider", () => {
   });
 
   it("sends search_context_size to the native Search API and caches by value", async () => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockImplementation(
+      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+        await run(
+          new Response(
+            JSON.stringify({
+              results: [{ title: "OpenClaw", url: "https://openclaw.ai", snippet: "Docs" }],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+    );
+
     await withEnvAsync(
       { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
       async () => {
@@ -282,55 +295,29 @@ describe("perplexity web search provider", () => {
           throw new Error("Expected tool definition");
         }
 
-        const previousFetch = globalThis.fetch;
-        const bodies: Array<Record<string, unknown>> = [];
-        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-          bodies.push(parseRequestBody(init));
-          return new Response(
-            JSON.stringify({
-              results: [{ title: "OpenClaw", url: "https://openclaw.ai", snippet: "Docs" }],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        });
-        globalThis.fetch = fetchMock as unknown as typeof fetch;
-        try {
-          const query = `OpenClaw search context native ${Date.now()}`;
-          await tool.execute({ query, search_context_size: "low" });
-          await tool.execute({ query, search_context_size: "high" });
-        } finally {
-          globalThis.fetch = previousFetch;
-        }
+        const query = `OpenClaw search context native ${Date.now()}`;
+        await tool.execute({ query, search_context_size: "low" });
+        await tool.execute({ query, search_context_size: "high" });
 
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-        expect(bodies.map((body) => body.search_context_size)).toEqual(["low", "high"]);
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
+        const bodies = withTrustedWebSearchEndpointMock.mock.calls.map((call) => {
+          const [request] = call as [{ init: RequestInit }];
+          return parseRequestBody(request.init);
+        });
+        expect(bodies.map((body: Record<string, unknown>) => body.search_context_size)).toEqual([
+          "low",
+          "high",
+        ]);
       },
     );
   });
 
   it("sends search_context_size through Sonar compatibility web_search_options", async () => {
-    await withEnvAsync(
-      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
-      async () => {
-        const provider = createPerplexityWebSearchProvider();
-        const tool = provider.createTool({
-          config: {},
-          searchConfig: {
-            perplexity: {
-              apiKey: directPerplexityApiKey,
-              model: "perplexity/sonar-pro",
-            },
-          },
-        });
-        if (!tool) {
-          throw new Error("Expected tool definition");
-        }
-
-        const previousFetch = globalThis.fetch;
-        const bodies: Array<Record<string, unknown>> = [];
-        const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-          bodies.push(parseRequestBody(init));
-          return new Response(
+    withTrustedWebSearchEndpointMock.mockReset();
+    withTrustedWebSearchEndpointMock.mockImplementationOnce(
+      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
+        await run(
+          new Response(
             JSON.stringify({
               choices: [
                 {
@@ -347,20 +334,45 @@ describe("perplexity web search provider", () => {
               ],
             }),
             { status: 200, headers: { "content-type": "application/json" } },
-          );
+          ),
+        ),
+    );
+
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({
+          config: {
+            plugins: {
+              entries: {
+                perplexity: {
+                  config: {
+                    webSearch: {
+                      apiKey: directPerplexityApiKey,
+                      model: "perplexity/sonar-pro",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          searchConfig: {},
         });
-        globalThis.fetch = fetchMock as unknown as typeof fetch;
-        try {
-          await tool.execute({
-            query: `OpenClaw search context chat ${Date.now()}`,
-            search_context_size: "MEDIUM",
-          });
-        } finally {
-          globalThis.fetch = previousFetch;
+        if (!tool) {
+          throw new Error("Expected tool definition");
         }
 
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        expect(bodies[0]?.web_search_options).toEqual({ search_context_size: "medium" });
+        await tool.execute({
+          query: `OpenClaw search context chat ${Date.now()}`,
+          search_context_size: "MEDIUM",
+        });
+
+        expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(1);
+        const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
+        expect(parseRequestBody(request.init).web_search_options).toEqual({
+          search_context_size: "medium",
+        });
       },
     );
   });
