@@ -1,6 +1,7 @@
 // Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import {
   createAgentCapability,
   loadToolsCatalog,
@@ -22,7 +23,10 @@ function deferred<T>() {
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot = { client, phase: "connected" };
+  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
+    client,
+    phase: "connected",
+  };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {

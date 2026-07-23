@@ -25,7 +25,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
   return createSessionCapability({
     snapshot: {
       client,
-      phase: "connected",
+      phase: "connected" as const,
       sessionKey: key,
       assistantAgentId: "main",
       hello: null,

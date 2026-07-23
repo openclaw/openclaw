@@ -23,7 +23,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     hello: GatewayHelloOk | null;
   } = {
     client,
-    phase: "connected",
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,

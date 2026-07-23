@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createAgentIdentityCapability } from "./identity.ts";
 
 function deferred<T>() {
@@ -19,7 +20,10 @@ it("rejects stale identities after reconnecting the same client", async () => {
     .mockImplementationOnce(() => oldRequest.promise)
     .mockImplementationOnce(() => currentRequest.promise);
   const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot = { client, phase: "connected" };
+  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
+    client,
+    phase: "connected",
+  };
   const listeners = new Set<(next: typeof snapshot) => void>();
   const capability = createAgentIdentityCapability({
     get snapshot() {
@@ -60,7 +64,7 @@ it("rejects an in-flight identity after that agent is invalidated", async () => 
     .mockImplementationOnce(() => currentRequest.promise);
   const client = { request } as unknown as GatewayBrowserClient;
   const capability = createAgentIdentityCapability({
-    snapshot: { client, phase: "connected" },
+    snapshot: { client, phase: "connected" as const },
     subscribe: () => () => undefined,
   });
 

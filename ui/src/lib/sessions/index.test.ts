@@ -39,7 +39,7 @@ function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: str
     hello: GatewayHelloOk | null;
   } = {
     client,
-    phase: "connected",
+    phase: "connected" as const,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello:
@@ -416,7 +416,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        phase: "connected",
+        phase: "connected" as const,
         sessionKey: "agent:main:main",
         assistantAgentId: "main",
         hello: null,
@@ -556,7 +556,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        phase: "connected",
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -706,7 +706,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        phase: "connected",
+        phase: "connected" as const,
         sessionKey: "agent:main:source",
         assistantAgentId: "main",
         hello: null,
@@ -757,7 +757,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        phase: "connected",
+        phase: "connected" as const,
         sessionKey: "agent:main:oldest",
         assistantAgentId: "main",
         hello: null,
@@ -812,7 +812,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability({
       snapshot: {
         client,
-        phase: "connected",
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,
@@ -1054,7 +1054,7 @@ describe("createSessionCapability", () => {
     const gateway = {
       snapshot: {
         client,
-        phase: "connected",
+        phase: "connected" as const,
         sessionKey: key,
         assistantAgentId: "main",
         hello: null,

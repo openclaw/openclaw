@@ -176,7 +176,7 @@ describe("model setup first-run redirect", () => {
 
     startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
     listener!({
-      connected: true,
+      phase: "connected" as const,
       client,
       hello: {
         auth: { role: "operator", scopes: ["operator.read"] },
@@ -184,7 +184,7 @@ describe("model setup first-run redirect", () => {
       },
     } as Parameters<GatewayListener>[0]);
     listener!({
-      connected: true,
+      phase: "connected" as const,
       client,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },

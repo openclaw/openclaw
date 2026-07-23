@@ -23,7 +23,7 @@ it("returns a created session before background list reconciliation finishes", a
   const sessions = createSessionCapability({
     snapshot: {
       client,
-      phase: "connected",
+      phase: "connected" as const,
       hello: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
