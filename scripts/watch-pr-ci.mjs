@@ -131,6 +131,8 @@ const findRun = (repo, sha) =>
       " ",
     ),
   )[0]?.databaseId;
+const readRun = (repo, runId) =>
+  ghJson(...`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "));
 
 function readRollup(pr, repo) {
   const [owner, name] = repo.split("/");
@@ -160,13 +162,14 @@ const retry = (phase, error) =>
   );
 
 function precheck(pr, sha, midWait = false) {
-  if (!pr || pr.state !== "OPEN") {
-    return emit(`PR-CLOSED state=${pr?.state ?? "MISSING"}`, 10);
+  const state = String(pr?.state ?? "MISSING").toUpperCase();
+  if (state !== "OPEN") {
+    return emit(`PR-CLOSED state=${state}`, 10);
   }
   if (pr.headRefOid !== sha) {
     return emit(`HEAD-MOVED expected=${sha} actual=${pr.headRefOid}`, 11);
   }
-  if (pr.mergeable === "CONFLICTING") {
+  if (pr.mergeable === false || String(pr.mergeable).toUpperCase() === "CONFLICTING") {
     return emit(
       `${midWait ? "CONFLICTING-MID-WAIT" : "CONFLICTING"} mergeable=CONFLICTING`,
       midWait ? 14 : 12,
@@ -191,7 +194,10 @@ async function main(argv = process.argv.slice(2)) {
       if (blocked !== null) {
         return blocked;
       }
-      runId = findRun(args.repo, args.headSha);
+      const candidateId = findRun(args.repo, args.headSha);
+      if (candidateId && readRun(args.repo, candidateId).conclusion !== "skipped") {
+        runId = candidateId;
+      }
     } catch (error) {
       retry("attach", error);
     }
@@ -218,11 +224,15 @@ async function main(argv = process.argv.slice(2)) {
       lastState = pr.statusCheckRollup?.state ?? "NONE";
       lastPending = result.pendingCount;
       console.log(`STATUS state=${lastState} pending=${lastPending}`);
-      if (result.verdict === "GREEN") {
-        return emit("GREEN", 0);
-      }
       if (result.verdict === "FAILING") {
         return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
+      }
+      const run = readRun(args.repo, runId);
+      if (run.status === "completed" && run.conclusion !== "success") {
+        return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
+      }
+      if (result.verdict === "GREEN" && run.status === "completed") {
+        return emit("GREEN", 0);
       }
     } catch (error) {
       retry("watch", error);
