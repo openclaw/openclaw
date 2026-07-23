@@ -44,6 +44,19 @@ function hasInboundHistoryMedia(ctx: MsgContext): boolean {
   );
 }
 
+/**
+ * Current-turn attachment indexes whose images media understanding already turned into text.
+ * Shared by ACP dispatch and the embedded agent turn so both drop described images natively
+ * instead of forwarding raw bytes to text-only models.
+ */
+export function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
+  return new Set(
+    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
+      (output) => output.attachmentIndex,
+    ) ?? [],
+  );
+}
+
 /** Resolves image attachments for the current agent turn and recent image history. */
 export async function resolveAgentTurnAttachments(params: {
   ctx: MsgContext;

@@ -13,7 +13,10 @@ import {
 import { projectMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { MsgContext } from "../templating.js";
-import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
+import {
+  collectDescribedImageAttachmentIndexes,
+  resolveAgentTurnAttachments,
+} from "./agent-turn-attachments.js";
 
 type CurrentImageAttachment = {
   index: number;
@@ -70,14 +73,6 @@ function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment
     }
     return [];
   });
-}
-
-function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
-  return new Set(
-    ctx.MediaUnderstanding?.filter((output) => output.kind === "image.description").map(
-      (output) => output.attachmentIndex,
-    ) ?? [],
-  );
 }
 
 function createUndescribedImageContext(

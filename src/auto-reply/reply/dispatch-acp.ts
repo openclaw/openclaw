@@ -37,6 +37,7 @@ import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
+  collectDescribedImageAttachmentIndexes,
   loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
@@ -688,7 +689,22 @@ export async function tryDispatchAcpReply(params: {
       cfg: params.cfg,
       includeAttachmentIndexes: true,
     });
-    const mediaAttachments = resolvedTurnAttachments.attachments;
+    // Media understanding already turned these current-turn images into text; forwarding the raw
+    // bytes too makes text-only ACP models reject the turn. Mirrors resolveCurrentTurnImages so
+    // inline images, extracted PDF pages, recent history, and undescribed current images survive.
+    const describedImageIndexes = collectDescribedImageAttachmentIndexes(params.ctx);
+    const mediaAttachments: AcpTurnAttachment[] = [];
+    const mediaAttachmentIndexes: number[] = [];
+    resolvedTurnAttachments.attachments.forEach((attachment, index) => {
+      const sourceIndex = resolvedTurnAttachments.attachmentIndexes?.[index];
+      if (sourceIndex !== undefined && describedImageIndexes.has(sourceIndex)) {
+        return;
+      }
+      mediaAttachments.push(attachment);
+      if (sourceIndex !== undefined) {
+        mediaAttachmentIndexes.push(sourceIndex);
+      }
+    });
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
     const extractedAttachments = resolveInlineAgentImageAttachments(
       extractedFileImages.map(stripExtractedFileImageMetadata),
@@ -707,7 +723,7 @@ export async function tryDispatchAcpReply(params: {
       appendOrderedAcpAttachments({
         entries: attachmentEntries,
         attachments: mediaAttachments,
-        sourceIndexes: resolvedTurnAttachments.attachmentIndexes,
+        sourceIndexes: mediaAttachmentIndexes,
       });
     } else {
       appendOrderedAcpAttachments({
