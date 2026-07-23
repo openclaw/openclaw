@@ -506,7 +506,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       } else {
         pendingDecisionCounts.delete(key);
         const buffer = buffers.get(key);
-        if (buffer && !buffer.timeout) {
+        if (buffer) {
           scheduleFlush(key, buffer);
         }
       }

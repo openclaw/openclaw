@@ -739,6 +739,26 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("uses a short async decision window before the absolute deadline", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 1_000,
+      buildKey: (item) => item.key,
+      resolveDecision: async () => ({ action: "debounce", debounceMs: 10 }),
+      resolveMaxBufferAgeMs: () => 100,
+      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await vi.advanceTimersByTimeAsync(9);
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls).toEqual([["1"]]);
+
+    vi.useRealTimers();
+  });
+
   it("reports buffered items when cancelling a key", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];
