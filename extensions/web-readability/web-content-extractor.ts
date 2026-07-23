@@ -11,6 +11,7 @@ import {
 
 const READABILITY_MAX_HTML_CHARS = 1_000_000;
 const READABILITY_MAX_ESTIMATED_NESTING_DEPTH = 3_000;
+const HTML_MAX_TAG_SCAN_CHARS = 200;
 const HTML_VOID_TAGS = new Set([
   "area",
   "base",
@@ -27,6 +28,17 @@ const HTML_VOID_TAGS = new Set([
   "track",
   "wbr",
 ]);
+const HTML_RAW_TEXT_TAGS = new Set([
+  "iframe",
+  "noembed",
+  "noframes",
+  "plaintext",
+  "script",
+  "style",
+  "textarea",
+  "title",
+  "xmp",
+]);
 
 const READABILITY_MODULE = "@mozilla/readability";
 const LINKEDOM_MODULE = "linkedom";
@@ -38,9 +50,26 @@ const loadReadabilityDeps = createLazyRuntimeModule(() =>
   ]),
 );
 
-function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
+function findClosingRawTextTagStart(lowerHtml: string, tagName: string, start: number): number {
+  const closingPrefix = `</${tagName}`;
+  for (
+    let index = lowerHtml.indexOf(closingPrefix, start);
+    index >= 0;
+    index = lowerHtml.indexOf(closingPrefix, index + closingPrefix.length)
+  ) {
+    const afterName = index + closingPrefix.length;
+    const boundary = lowerHtml.charCodeAt(afterName);
+    if (afterName >= lowerHtml.length || boundary <= 32 || boundary === 47 || boundary === 62) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+export function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boolean {
   let depth = 0;
   const len = html.length;
+  const lowerHtml = html.toLowerCase();
   for (let i = 0; i < len; i++) {
     if (html.charCodeAt(i) !== 60) {
       continue;
@@ -86,26 +115,47 @@ function exceedsEstimatedHtmlNestingDepth(html: string, maxDepth: number): boole
       }
       continue;
     }
-    const tagName = html.slice(nameStart, j).toLowerCase();
+    const tagName = lowerHtml.slice(nameStart, j);
     if (HTML_VOID_TAGS.has(tagName)) {
       continue;
     }
 
-    let selfClosing = false;
-    for (let k = j; k < len && k < j + 200; k++) {
+    let quote = 0;
+    let tagEnd = -1;
+    for (let k = j; k < len && k < j + HTML_MAX_TAG_SCAN_CHARS; k += 1) {
       const c = html.charCodeAt(k);
+      if (quote) {
+        if (c === quote) {
+          quote = 0;
+        }
+        continue;
+      }
+      if (c === 34 || c === 39) {
+        quote = c;
+        continue;
+      }
       if (c === 62) {
-        selfClosing = html.charCodeAt(k - 1) === 47;
+        tagEnd = k;
         break;
       }
     }
+    const selfClosing = tagEnd >= 0 && html.slice(j, tagEnd).trimEnd().endsWith("/");
     if (selfClosing) {
       continue;
     }
 
+    // Count apparent starts conservatively even when the bounded scan misses a distant `>`.
     depth += 1;
     if (depth > maxDepth) {
       return true;
+    }
+    if (tagEnd >= 0 && HTML_RAW_TEXT_TAGS.has(tagName)) {
+      const closingStart = findClosingRawTextTagStart(lowerHtml, tagName, tagEnd + 1);
+      if (closingStart >= 0) {
+        i = closingStart - 1;
+      } else {
+        break;
+      }
     }
   }
   return false;
