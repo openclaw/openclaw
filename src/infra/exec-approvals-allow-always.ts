@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 // Owns durable approval matching and allow-always persistence.
 import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";

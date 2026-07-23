@@ -544,6 +544,7 @@ export {
   maxAsk,
   minSecurity,
   normalizeExecApprovalUnavailableDecisions,
+  OPTIONAL_EXEC_APPROVAL_DECISIONS,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalRequestAllowedDecisions,
