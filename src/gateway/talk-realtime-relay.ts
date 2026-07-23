@@ -759,7 +759,7 @@ export function createTalkRealtimeRelaySession(
       isOpen: () => Boolean(relayRef.current && relaySessions.has(relayRef.current.id)),
       sendAudio: (audio) => {
         const relay = relayRef.current;
-        const recorded = relay?.harness.recordOutputAudio(audio);
+        const recorded = relay?.harness.appendOutputAudio(audio);
         if (relay) {
           broadcastRelayTurnStarted(relay, recorded?.turn.event);
         }
@@ -775,11 +775,11 @@ export function createTalkRealtimeRelaySession(
         );
       },
       clearAudio: (reason) => {
-        const talkEvent = relayRef.current?.harness.finishOutputAudio(reason ?? "clear");
+        const talkEvent = relayRef.current?.harness.completeOutputAudio(reason ?? "clear");
         broadcastEvent({ relaySessionId, type: "clear", ...(reason ? { reason } : {}) }, talkEvent);
       },
       sendMark: (markName) => {
-        const talkEvent = relayRef.current?.harness.finishOutputAudio("mark", { markName });
+        const talkEvent = relayRef.current?.harness.completeOutputAudio("mark", { markName });
         broadcastEvent({ relaySessionId, type: "mark", markName }, talkEvent);
       },
     },
@@ -814,7 +814,7 @@ export function createTalkRealtimeRelaySession(
               ? { responseId: event.responseId ?? currentOutputResponseId }
               : {}),
           },
-          relayRef.current?.harness.finishOutputAudio(event.type),
+          relayRef.current?.harness.completeOutputAudio(event.type),
         );
         currentOutputItemId = undefined;
         currentOutputResponseId = undefined;
@@ -1197,7 +1197,7 @@ function submitRealtimeAgentConsultWorkingResponse(
 }
 
 function ensureRelayTurn(session: RelaySession): string {
-  const turn = session.harness.ensureTurn();
+  const turn = session.harness.ensureActiveTurn();
   broadcastRelayTurnStarted(session, turn.event);
   return turn.turnId;
 }
@@ -1236,7 +1236,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   }
   const session = getRelaySession(params.relaySessionId, params.connId);
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
-  const recorded = session.harness.recordInputAudio(audio);
+  const recorded = session.harness.acceptInputAudio(audio);
   if (!recorded) {
     return;
   }
