@@ -12,6 +12,7 @@ import {
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
   NUSHELL_INLINE_COMMAND_FLAGS,
+  NUSHELL_OPTIONS_WITH_SEPARATE_VALUES,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
@@ -237,8 +238,13 @@ export function unwrapKnownShellMultiplexerInvocation(
 }
 
 function extractPosixShellInlineCommand(argv: string[], baseExecutable: string): string | null {
-  const flags = baseExecutable === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS;
-  return extractInlineCommandByFlags(argv, flags, { allowCombinedC: true });
+  if (baseExecutable === "nu") {
+    return extractInlineCommandByFlags(argv, NUSHELL_INLINE_COMMAND_FLAGS, {
+      allowCombinedC: true,
+      valueOptions: NUSHELL_OPTIONS_WITH_SEPARATE_VALUES,
+    });
+  }
+  return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
 }
 
 function extractCmdInlineCommand(argv: string[]): string | null {
@@ -264,7 +270,7 @@ function extractPowerShellInlineCommand(argv: string[]): string | null {
 function extractInlineCommandByFlags(
   argv: string[],
   flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean } = {},
+  options: { allowCombinedC?: boolean; valueOptions?: ReadonlySet<string> } = {},
 ): string | null {
   return resolveInlineCommandMatch(argv, flags, options).command;
 }

@@ -903,6 +903,36 @@ $0 \\"$1\\"" touch {marker}`,
     },
   );
 
+  it("prevents allowlist bypass for nu command payloads after value options", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "nu");
+    const config = path.join(dir, "allowed.nu");
+    fs.writeFileSync(config, "");
+    makeExecutable(dir, "id");
+    const env = makePathEnv(dir);
+    const result = await evaluateShellAllowlistWithAuthorization({
+      command: `${shell} --config ${config} --commands 'id > marker'`,
+      allowlist: [{ pattern: config, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it("prevents allow-always bypass for caffeinate wrapper chains", async () => {
     if (process.platform === "win32") {
       return;
