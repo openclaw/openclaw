@@ -16,6 +16,28 @@ import { dirname, join, resolve } from "node:path";
 import { runExec } from "../../process/exec.js";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.js";
 
+// Bound the synchronous git branch probe used during footer rendering so a
+// stalled git process cannot freeze the UI thread indefinitely. SIGKILL
+// matches the bounded macOS system probe pattern in src/infra/system-presence.ts.
+//
+// NOTE: This is a best-effort bound, not a hard end-to-end deadline. Node's
+// `spawnSync()` blocks the event loop until the child fully exits, and
+// `timeout` only schedules `killSignal` (SIGKILL here) to be sent at the
+// deadline. In rare scenarios — for example, a child stuck in an
+// uninterruptible kernel I/O path (D state), a zombie not yet reaped, or a
+// signal handler path that cannot be interrupted — the synchronous call
+// may block past `GIT_BRANCH_PROBE_TIMEOUT_MS`. In the common case
+// (slow git, network filesystem stall, hung credentials helper), SIGKILL
+// frees the call promptly after 2s and the caller falls back to the
+// cached / no-branch path. The hard guarantee is provided by the async
+// probe path; this synchronous path is a degraded-mode best effort used
+// only when an immediate answer is required for the first render.
+//
+// Exposed as a named export so the SIGKILL timeout path can be exercised
+// directly by regression tests without duplicating the spawnSync shape.
+/** @public */
+export const GIT_BRANCH_PROBE_TIMEOUT_MS = 2_000;
+
 type GitPaths = {
   repoDir: string;
   commonGitDir: string;
@@ -66,8 +88,14 @@ function findGitPaths(cwd: string): GitPaths | null {
   }
 }
 
-/** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitSync(repoDir: string): string | null {
+/**
+ * Ask git for the current branch. Returns null on detached HEAD or if git is unavailable.
+ *
+ * Exposed as a named export so regression tests can exercise the SIGKILL
+ * timeout path directly against the production helper rather than a copy.
+ * @public
+ */
+export function resolveBranchWithGitSync(repoDir: string): string | null {
   const result = spawnSync(
     "git",
     ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -75,6 +103,8 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_BRANCH_PROBE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     },
   );
   const branch = result.status === 0 ? result.stdout.trim() : "";
