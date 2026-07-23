@@ -48,7 +48,14 @@ export const SessionRowSchema = Type.Object(
         Type.Literal("failed"),
         Type.Literal("killed"),
         Type.Literal("timeout"),
+        Type.Literal("paused"),
       ]),
+    ),
+    pauseReason: Type.Optional(
+      Type.Union([Type.Literal("sessions_yield")], {
+        description:
+          "Why a paused session is waiting; sessions_yield means a yielded main run holds a queued continuation.",
+      }),
     ),
     lastRunError: Type.Optional(Type.String()),
     spawnedBy: Type.Optional(Type.String()),
