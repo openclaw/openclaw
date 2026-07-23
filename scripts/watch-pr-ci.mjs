@@ -5,7 +5,7 @@ import { parseArgs as parseNodeArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--attach-timeout 900] [--timeout 3600] [--interval 120]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120]";
 const FAILURE_CONCLUSIONS = new Set([
   "ACTION_REQUIRED",
   "CANCELLED",
@@ -32,6 +32,7 @@ export function parseArgs(argv) {
       allowPositionals: true,
       options: {
         repo: { type: "string", default: "openclaw/openclaw" },
+        after: { type: "string" },
         "attach-timeout": { type: "string", default: "900" },
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
@@ -52,6 +53,9 @@ export function parseArgs(argv) {
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
   };
+  if (parsed.values.after !== undefined) {
+    args.after = positiveInteger(parsed.values.after, "--after");
+  }
   if (!/^[0-9a-f]{40}$/u.test(args.headSha)) {
     throw new Error("head-sha must be a full 40-character commit SHA");
   }
@@ -142,11 +146,26 @@ export const buildFindRunArgs = (repo, sha) => [
   "--limit",
   "1",
   "--json",
-  "databaseId",
+  "createdAt,databaseId",
 ];
-const findRun = (repo, sha) => ghJson(...buildFindRunArgs(repo, sha))[0]?.databaseId;
+export const selectRunAfter = (runs, after) =>
+  runs.find((run) => after === undefined || run.databaseId > after);
+const findRun = (repo, sha, after) => selectRunAfter(ghJson(...buildFindRunArgs(repo, sha)), after);
 const readRun = (repo, runId) =>
   ghJson(...`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "));
+
+export function classifyRunAttachment(runId, run, after) {
+  if (run.conclusion === "skipped") {
+    return { attach: false };
+  }
+  return {
+    attach: true,
+    warning:
+      after === undefined && String(run.status).toLowerCase() === "completed"
+        ? `WARN attaching to already-completed run ${runId} (started before watcher); pass --after ${runId} to require a fresh run`
+        : undefined,
+  };
+}
 
 function readRollup(pr, repo) {
   const [owner, name] = repo.split("/");
@@ -208,9 +227,19 @@ async function main(argv = process.argv.slice(2)) {
       if (blocked !== null) {
         return blocked;
       }
-      const candidateId = findRun(args.repo, args.headSha);
-      if (candidateId && readRun(args.repo, candidateId).conclusion !== "skipped") {
-        runId = candidateId;
+      const candidate = findRun(args.repo, args.headSha, args.after);
+      if (candidate) {
+        const attachment = classifyRunAttachment(
+          candidate.databaseId,
+          readRun(args.repo, candidate.databaseId),
+          args.after,
+        );
+        if (attachment.attach) {
+          if (attachment.warning) {
+            console.log(attachment.warning);
+          }
+          runId = candidate.databaseId;
+        }
       }
     } catch (error) {
       retry("attach", error);

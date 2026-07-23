@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildFindRunArgs, classifyRollup, parseArgs } from "../../scripts/watch-pr-ci.mjs";
+import {
+  buildFindRunArgs,
+  classifyRollup,
+  classifyRunAttachment,
+  parseArgs,
+  selectRunAfter,
+} from "../../scripts/watch-pr-ci.mjs";
 
 const sha = "a".repeat(40);
 
@@ -19,6 +25,8 @@ describe("watch-pr-ci", () => {
         sha,
         "--repo",
         "fork/project",
+        "--after",
+        "1234",
         "--attach-timeout",
         "30",
         "--timeout",
@@ -26,7 +34,13 @@ describe("watch-pr-ci", () => {
         "--interval",
         "5",
       ]),
-    ).toMatchObject({ repo: "fork/project", attachTimeout: 30, timeout: 90, interval: 5 });
+    ).toMatchObject({
+      repo: "fork/project",
+      after: 1234,
+      attachTimeout: 30,
+      timeout: 90,
+      interval: 5,
+    });
     expect(parseArgs(["1", sha.toUpperCase()]).headSha).toBe(sha);
   });
 
@@ -35,6 +49,9 @@ describe("watch-pr-ci", () => {
     expect(() => parseArgs(["1", "abc"])).toThrow("full 40-character commit SHA");
     expect(() => parseArgs(["1", sha, "--interval", "0"])).toThrow(
       "--interval must be a positive integer",
+    );
+    expect(() => parseArgs(["1", sha, "--after", "0"])).toThrow(
+      "--after must be a positive integer",
     );
   });
 
@@ -53,8 +70,30 @@ describe("watch-pr-ci", () => {
       "--limit",
       "1",
       "--json",
-      "databaseId",
+      "createdAt,databaseId",
     ]);
+  });
+
+  it("filters run ids at and before --after", () => {
+    const newer = { databaseId: 102, createdAt: "2026-07-23T02:00:00Z" };
+    const runs = [newer, { databaseId: 101, createdAt: "2026-07-23T01:00:00Z" }];
+    expect(selectRunAfter(runs, 101)).toBe(newer);
+    expect(selectRunAfter(runs, 102)).toBeUndefined();
+    expect(selectRunAfter(runs)).toBe(newer);
+  });
+
+  it("warns for an already-completed late attachment without changing attachment", () => {
+    expect(classifyRunAttachment(102, { status: "completed", conclusion: "success" })).toEqual({
+      attach: true,
+      warning:
+        "WARN attaching to already-completed run 102 (started before watcher); pass --after 102 to require a fresh run",
+    });
+    expect(classifyRunAttachment(102, { status: "completed", conclusion: "success" }, 101)).toEqual(
+      { attach: true, warning: undefined },
+    );
+    expect(classifyRunAttachment(102, { status: "completed", conclusion: "skipped" })).toEqual({
+      attach: false,
+    });
   });
 
   it("requires aggregate success for a green rollup", () => {
