@@ -8,11 +8,8 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
-import {
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-  type MarkdownRenderOptions,
-} from "../../../components/markdown.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";

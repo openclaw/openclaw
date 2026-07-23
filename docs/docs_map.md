@@ -2111,6 +2111,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Output
   - H2: Many sessions per day
   - H2: Missing summaries
+  - H2: Upgrading the legacy file store
   - H2: Configuration
 
 ## cli/tui.md

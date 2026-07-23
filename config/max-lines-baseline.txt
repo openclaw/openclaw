@@ -1075,7 +1075,6 @@ ui/src/api/types.ts
 ui/src/app/app-host.ts
 ui/src/components/browser/browser-panel.ts
 ui/src/components/config-form.node.ts
-ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
 ui/src/e2e/new-session-page.e2e.test.ts
