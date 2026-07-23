@@ -1729,7 +1729,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/plugin-prerelease-test-plan.test.ts",
     ],
   ],
-  ["scripts/measure-rpc-rtt.mjs", ["test/scripts/measure-rpc-rtt.test.ts"]],
   [
     "scripts/e2e/telegram-user-crabbox-proof.ts",
     ["test/scripts/telegram-user-crabbox-proof.test.ts"],
