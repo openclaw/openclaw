@@ -30,7 +30,10 @@ public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
 public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let sessionKey: String?
     public let agentId: String?
-    public let reason: String
+    public let reason: String?
+    public let phase: String?
+    public let runId: String?
+    public let session: OpenClawChatSessionEntry?
     public let updatedAt: Double?
     public let lastReadAt: Double?
     public let agentStatus: OpenClawChatSessionAgentStatus?
@@ -49,7 +52,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public init(
         sessionKey: String?,
         agentId: String? = nil,
-        reason: String,
+        reason: String? = nil,
+        phase: String? = nil,
+        runId: String? = nil,
+        session: OpenClawChatSessionEntry? = nil,
         updatedAt: Double? = nil,
         lastReadAt: Double? = nil,
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
@@ -68,6 +74,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.sessionKey = sessionKey
         self.agentId = agentId
         self.reason = reason
+        self.phase = phase
+        self.runId = runId
+        self.session = session
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
         self.agentStatus = agentStatus
@@ -88,7 +97,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
         self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
-        self.reason = try container.decode(String.self, forKey: .reason)
+        self.reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        self.phase = try container.decodeIfPresent(String.self, forKey: .phase)
+        self.runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        self.session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
         self.updatedAt = try container.decodeIfPresent(Double.self, forKey: .updatedAt)
         self.lastReadAt = try container.decodeIfPresent(Double.self, forKey: .lastReadAt)
         self.agentStatus = try container.decodeIfPresent(
@@ -113,6 +125,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         case sessionKey
         case agentId
         case reason
+        case phase
+        case runId
+        case session
         case updatedAt
         case lastReadAt
         case agentStatus

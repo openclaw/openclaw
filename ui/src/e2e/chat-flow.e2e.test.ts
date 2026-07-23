@@ -2229,7 +2229,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     },
   );
 
-  it("keeps the pending working row stable through acknowledgement and streaming", async () => {
+  it("keeps the pending telemetry row stable through acknowledgement and streaming", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -2348,6 +2348,20 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
       expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(1);
 
+      await gateway.emitGatewayEvent("agent", {
+        data: { outputTokens: 2_400 },
+        runId,
+        seq: 1,
+        sessionKey: "main",
+        stream: "usage",
+        ts: Date.now(),
+      });
+      await expect
+        .poll(async () =>
+          (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
+        )
+        .toBe("2.4k output tokens");
+
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
         deltaText: response,
@@ -2362,11 +2376,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
 
       await page.getByText(response).waitFor({ timeout: 10_000 });
-      await page.locator(".chat-reading-indicator").waitFor({ state: "detached", timeout: 10_000 });
+      await indicator.waitFor({ timeout: 10_000 });
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
           connected: row.isConnected,
           hasResponse: row.textContent?.includes(visibleResponse) ?? false,
+          hasTokens: row.textContent?.includes("2.4k output tokens") ?? false,
           key: row.getAttribute("data-virtual-row-key"),
         }),
         response,
@@ -2374,6 +2389,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(streamingLayout).toEqual({
         connected: true,
         hasResponse: true,
+        hasTokens: true,
         key: pendingLayout.key,
       });
     } finally {

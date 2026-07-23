@@ -20,6 +20,25 @@ extension OpenClawChatViewModel {
         markTimelineChanged()
     }
 
+    nonisolated static func durableSessionCacheProjection(
+        _ session: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry
+    {
+        var projected = session
+        let wasActive =
+            projected.hasActiveRun == true ||
+            projected.activeRunIds?.isEmpty == false ||
+            projected.hasActiveSubagentRun == true ||
+            projected.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running"
+        projected.hasActiveRun = nil
+        projected.activeRunIds = nil
+        projected.hasActiveSubagentRun = nil
+        if wasActive {
+            projected.startedAt = nil
+            projected.status = nil
+        }
+        return projected
+    }
+
     func persistTranscriptToCache(
         session: SessionSnapshot,
         messages: [OpenClawChatMessage],
@@ -66,10 +85,11 @@ extension OpenClawChatViewModel {
 
     func persistSessionsToCache(_ sessions: [OpenClawChatSessionEntry]) {
         guard let transcriptCache else { return }
+        let durableSessions = sessions.map(Self.durableSessionCacheProjection)
         let previous = pendingCacheWriteTask
         pendingCacheWriteTask = Task.detached {
             await previous?.value
-            await transcriptCache.storeSessions(sessions)
+            await transcriptCache.storeSessions(durableSessions)
         }
     }
 
@@ -86,8 +106,9 @@ extension OpenClawChatViewModel {
                 // A live sessions response (even an empty one) is authoritative;
                 // a slow cache read must never repaint over it.
                 guard self.sessions.isEmpty, !self.hasAppliedLiveSessions else { return }
+                let durableSessions = cached.map(Self.durableSessionCacheProjection)
                 self.sessions = self.applyingLocalUnreadOverrides(
-                    to: OpenClawChatSessionListOrganizer.organize(cached))
+                    to: OpenClawChatSessionListOrganizer.organize(durableSessions))
             }
         }
         guard messages.isEmpty, !hasAppliedLiveHistory else { return }

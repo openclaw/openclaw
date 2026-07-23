@@ -215,16 +215,8 @@ internal class TurnRecapResolver(
 
 @Composable
 internal fun ChatTurnRecapRow(recap: TurnRecap) {
-  val duration = formatLocalizedChatDurationCompact(recap.runtimeMs.coerceAtLeast(1_000L))
-  val tokens =
-    recap.outputTokens?.let { count ->
-      val format = turnRecapTokenFormat(count)
-      if (format.singular) {
-        nativeStringResource("1 token")
-      } else {
-        nativeStringResource("\$count tokens", format.count)
-      }
-    }
+  val duration = formatLocalizedChatDurationFull(recap.runtimeMs.coerceAtLeast(1_000L))
+  val tokens = recap.outputTokens?.let { localizedChatOutputTokens(it) }
   Row(
     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -240,6 +232,16 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
       Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
+  }
+}
+
+@Composable
+internal fun localizedChatOutputTokens(count: Long): String {
+  val format = turnRecapTokenFormat(count)
+  return if (format.singular) {
+    nativeStringResource("1 token")
+  } else {
+    nativeStringResource("\$count tokens", format.count)
   }
 }
 
