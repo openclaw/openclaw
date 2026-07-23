@@ -11,7 +11,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 
 const log = createSubsystemLogger("outbound/message-sent-hook");
 
-export type MessageSentEvent = {
+type MessageSentEvent = {
   success: boolean;
   content: string;
   error?: string;

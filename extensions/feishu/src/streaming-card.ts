@@ -44,7 +44,7 @@ type FeishuStreamingDeps = {
 
 type CardKitResponse = { code?: number; msg?: string };
 
-export type FeishuStreamingCloseResult = {
+type FeishuStreamingCloseResult = {
   visibleReplySent: boolean;
   content?: string;
   messageId?: string;
