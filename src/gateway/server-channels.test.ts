@@ -19,6 +19,7 @@ import {
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -332,6 +333,83 @@ describe("server-channels auto restart", () => {
     expect(signals[1]?.aborted).toBe(false);
   });
 
+  it("allows one bounded health-monitor revival after manager give-up", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 11,
+      "expected crash-loop restarts to reach the maximum attempt cap",
+      { stepMs: 10, maxMs: 500 },
+    );
+    await vi.advanceTimersByTimeAsync(200);
+    await flushMicrotasks();
+
+    const monitor = startChannelHealthMonitor({
+      channelManager: manager,
+      checkIntervalMs: 5,
+      timing: { monitorStartupGraceMs: 0 },
+      cooldownCycles: 0,
+      maxRestartsPerHour: 1,
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(22);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: false,
+      restartPending: false,
+      reconnectAttempts: 11,
+    });
+    monitor.stop();
+  });
+
+  it("preserves manager retry progress while a crash-loop backoff is active", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+    const attemptsAtStart: number[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      attemptsAtStart.push(ctx.getStatus().reconnectAttempts ?? 0);
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const monitor = startChannelHealthMonitor({
+      channelManager: manager,
+      checkIntervalMs: 5,
+      timing: { monitorStartupGraceMs: 0 },
+      cooldownCycles: 0,
+    });
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 6,
+      "expected crash-loop retries while the health monitor is active",
+      { stepMs: 5, maxMs: 200 },
+    );
+    monitor.stop();
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(11);
+    expect(attemptsAtStart).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: false,
+      restartPending: false,
+      reconnectAttempts: 11,
+    });
+    monitor.stop();
+  });
+
   it.each(["resolve", "reject"] as const)(
     "resets the restart counter after a stable run that ends with %s",
     async (outcome) => {
@@ -625,6 +703,79 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(2);
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("lets the health monitor finish timed-out reload recovery after prior crashes", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+    let startCount = 0;
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      startCount += 1;
+      if (startCount <= 2) {
+        throw new Error(`crash ${startCount}`);
+      }
+      ctx.setStatus({
+        accountId: DEFAULT_ACCOUNT_ID,
+        connected: false,
+        lastStartAt: Date.now() - 60_000,
+      });
+      ctx.abortSignal.addEventListener("abort", () => {}, { once: true });
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length === 3,
+      "expected prior crash attempts before the hanging task",
+      { stepMs: 10, maxMs: 100 },
+    );
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: true,
+      restartPending: false,
+      reconnectAttempts: 2,
+    });
+
+    const monitor = startChannelHealthMonitor({
+      channelManager: manager,
+      checkIntervalMs: 10_000,
+      timing: { monitorStartupGraceMs: 0, channelConnectGraceMs: 0 },
+    });
+    await advanceTimersUntil(
+      () =>
+        manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]
+          ?.restartPending === true,
+      "expected the first monitor pass to time out and request recovery",
+      { stepMs: 100, maxMs: 16_000 },
+    );
+
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: false,
+      restartPending: true,
+      reconnectAttempts: 2,
+    });
+    expect(manager.getRestartState("discord", DEFAULT_ACCOUNT_ID)).toBe("idle");
+    expect(startAccount).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks();
+    monitor.stop();
+
+    expect(startAccount).toHaveBeenCalledTimes(4);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID],
+    ).toMatchObject({
+      running: true,
+      restartPending: false,
+      reconnectAttempts: 0,
+      lastError: null,
+    });
   });
 
   it("does not restart when a timed-out recovery stop settles as terminal", async () => {

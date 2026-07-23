@@ -22,6 +22,7 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    getRestartState: vi.fn(() => "idle" as const),
     resetRestartAttempts: vi.fn(),
     ...overrides,
   };
@@ -484,15 +485,18 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("restarts a stopped channel that gave up (reconnectAttempts >= 10)", async () => {
-    const manager = createSnapshotManager({
-      discord: {
-        default: {
-          ...managedStoppedAccount("Failed to resolve Discord application id"),
-          reconnectAttempts: 10,
+  it("uses the health monitor's bounded recovery policy after manager give-up", async () => {
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: {
+            ...managedStoppedAccount("Failed to resolve Discord application id"),
+            reconnectAttempts: 11,
+          },
         },
       },
-    });
+      { getRestartState: vi.fn(() => "gave-up" as const) },
+    );
     const monitor = await startAndRunCheck(manager);
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
