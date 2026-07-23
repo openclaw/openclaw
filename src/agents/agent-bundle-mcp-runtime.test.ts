@@ -65,6 +65,8 @@ async function writeListToolsMcpServer(params: {
   notifyListChangedAfterFirstList?: boolean;
   exitOnListCall?: number;
   listToolsMethodNotFound?: boolean;
+  listToolsErrorCode?: number;
+  listToolsMethodNotFoundMessage?: string;
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   resourceListJsonRpcError?: boolean;
@@ -86,6 +88,10 @@ const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized =
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
 const exitOnListCall = ${params.exitOnListCall ?? 0};
 const listToolsMethodNotFound = ${params.listToolsMethodNotFound === true};
+const listToolsErrorCode = ${params.listToolsErrorCode ?? -32601};
+const listToolsMethodNotFoundMessage = ${JSON.stringify(
+      params.listToolsMethodNotFoundMessage ?? "Method not found",
+    )};
 const tools = ${JSON.stringify(
       params.tools ?? [
         {
@@ -159,7 +165,7 @@ function handle(message) {
       send({
         jsonrpc: "2.0",
         id: message.id,
-        error: { code: -32601, message: "Method not found" },
+        error: { code: listToolsErrorCode, message: listToolsMethodNotFoundMessage },
       });
       return;
     }
@@ -1493,7 +1499,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("keeps resource-only MCP servers available for utility tools", async () => {
+  it("keeps resource-only MCP servers available for unknown-method errors", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-only-"));
     const serverPath = path.join(tempDir, "resource-only.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1502,6 +1508,8 @@ process.on("SIGINT", shutdown);`,
       logPath,
       capabilities: { resources: { listChanged: true } },
       listToolsMethodNotFound: true,
+      listToolsErrorCode: -32000,
+      listToolsMethodNotFoundMessage: "Unknown method",
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
