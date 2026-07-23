@@ -238,12 +238,20 @@ async function waitForDeferredAccountStart(
   if (abortSignal.aborted) {
     return;
   }
-  await Promise.race([
-    deferred,
-    new Promise<void>((resolve) => {
-      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    }),
-  ]);
+  let onAbort: (() => void) | undefined;
+  try {
+    await Promise.race([
+      deferred,
+      new Promise<void>((resolve) => {
+        onAbort = () => resolve();
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) {
+      abortSignal.removeEventListener("abort", onAbort);
+    }
+  }
 }
 
 export type ChannelManager = {
