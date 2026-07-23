@@ -517,15 +517,25 @@ function prepareEmbeddedAgentQueueMessage(
  *
  * - With a sessionId, aborts that single run.
  * - With no sessionId, supports targeted abort modes (for example, compacting runs only).
+ * - An optional captured `handle` scopes a single-session abort to that run only,
+ *   so recovery cannot abort a run a retry path re-registered under the same id.
  */
 export function abortEmbeddedAgentRun(sessionId: string): boolean;
+export function abortEmbeddedAgentRun(
+  sessionId: string,
+  opts: { handle?: EmbeddedAgentQueueHandle },
+): boolean;
 export function abortEmbeddedAgentRun(
   sessionId: undefined,
   opts: { mode: "all" | "compacting"; reason?: "restart" },
 ): boolean;
 export function abortEmbeddedAgentRun(
   sessionId?: string,
-  opts?: { mode?: "all" | "compacting"; reason?: "restart" },
+  opts?: {
+    mode?: "all" | "compacting";
+    reason?: "restart";
+    handle?: EmbeddedAgentQueueHandle;
+  },
 ): boolean {
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
@@ -534,6 +544,12 @@ export function abortEmbeddedAgentRun(
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
+      return false;
+    }
+    // Stuck-session recovery captures the run handle before aborting; a run
+    // re-registered under the same session id after capture must not be killed.
+    if (opts?.handle && handle !== opts.handle) {
+      diag.debug(`abort skipped: sessionId=${sessionId} reason=handle_mismatch`);
       return false;
     }
     if (!isEmbeddedRunHandleAbortable(sessionId, handle)) {
@@ -794,8 +810,19 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   settleMs?: number;
   forceClear?: boolean;
   reason?: string;
+  /**
+   * Captured run handle. When omitted, the currently registered handle is
+   * captured at entry. Aborting and force-clearing then target only that run,
+   * so a run a retry path re-registered mid-recovery is left untouched. Mirrors
+   * the handle-identity guard clearActiveEmbeddedRun already enforces.
+   */
+  handle?: EmbeddedAgentQueueHandle;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  // Capture the run identity once so the abort/drain/force-clear sequence below
+  // cannot act on a different run re-registered under the same session id while
+  // recovery is in flight. clearActiveEmbeddedRun already guards this way.
+  const capturedHandle = params.handle ?? ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
@@ -811,11 +838,17 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
     return { aborted: true, drained, forceCleared: false };
   }
-  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
+  const aborted =
+    abortEmbeddedAgentRun(params.sessionId, { handle: capturedHandle }) || expiredReplyRun;
   const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)
-      ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
+      ? forceClearEmbeddedAgentRun(
+          params.sessionId,
+          params.sessionKey,
+          params.reason,
+          capturedHandle,
+        )
       : false;
   return { aborted, drained, forceCleared };
 }
@@ -950,12 +983,19 @@ function forceClearEmbeddedAgentRun(
   sessionId: string,
   sessionKey?: string,
   reason = "stuck_recovery",
+  handle?: EmbeddedAgentQueueHandle,
 ): boolean {
   let cleared = false;
-  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (handle) {
+  const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  // Recovery passes the run handle it captured; if a retry path has since
+  // re-registered a different run under the same id, leave it registered.
+  if (handle && activeHandle && activeHandle !== handle) {
+    diag.debug(`run force-clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
+    return false;
+  }
+  if (activeHandle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    clearEmbeddedRunAbortability(handle);
+    clearEmbeddedRunAbortability(activeHandle);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId);
