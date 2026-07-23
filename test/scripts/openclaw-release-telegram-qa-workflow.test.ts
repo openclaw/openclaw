@@ -566,6 +566,12 @@ describe("release Telegram QA workflow", () => {
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
+    const createSutStep = job?.steps?.find(
+      (step) => step.name === "Create isolated Telegram SUT identity and launcher",
+    );
+    expect(createSutStep?.run).toMatch(
+      /transport_keys=\([\s\S]*OPENCLAW_BUILD_PRIVATE_QA[\s\S]*OPENCLAW_ENABLE_PRIVATE_QA_CLI[\s\S]*\)/u,
+    );
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_LOG_LEVEL).toBe("trace");
