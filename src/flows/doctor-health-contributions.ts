@@ -86,7 +86,6 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
-const loadCatalogLookupModule = async () => await import("../agents/model-catalog.js");
 const loadPreparedModelCatalogModule = async () =>
   await import("../agents/prepared-model-catalog.js");
 const loadModelSelectionModule = async () => await import("../agents/model-selection.js");

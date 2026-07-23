@@ -22,7 +22,6 @@ import { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import {
   calculateMaxToolResultCharsWithCap,
-  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   resolveAutoLiveToolResultMaxChars,
   resolveLiveToolResultMaxChars,
 } from "../tool-result-limits.js";
