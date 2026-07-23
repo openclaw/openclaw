@@ -338,6 +338,40 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(tail).not.toContain("old\nold\nold\nold\nold\nold\nold\nold\nold");
   });
 
+  it("drops a leading character split by the log tail byte cut", () => {
+    const logPath = path.join(makeTempDir(), "gateway.log");
+    // 100 ASCII bytes + 4-byte emoji + 20 ASCII bytes: a 23-byte window starts
+    // one byte into the emoji, and a 24-byte window starts exactly on it.
+    fs.writeFileSync(
+      logPath,
+      Buffer.concat([Buffer.from("x".repeat(100)), Buffer.from("😀"), Buffer.from("y".repeat(20))]),
+    );
+
+    expect(readLogTail(logPath, 23)).toBe("y".repeat(20));
+    expect(readLogTail(logPath, 24)).toBe(`😀${"y".repeat(20)}`);
+  });
+
+  it("keeps the readiness timeout tail free of split surrogate pairs", async () => {
+    const logPath = path.join(makeTempDir(), "gateway.log");
+    // 4010 UTF-16 units with an emoji at units 9-10: the last-4000 cut starts
+    // on the emoji's low surrogate.
+    fs.writeFileSync(logPath, `${"a".repeat(9)}😀${"b".repeat(3999)}`, "utf8");
+
+    let message = "";
+    try {
+      await waitForLog(logPath, /\[gateway\] ready/u, "gateway", 0);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("did not become ready");
+    const tail = message.split("\n").at(-1) ?? "";
+    expect(tail).toBe("b".repeat(3999));
+    expect(tail).not.toMatch(
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u,
+    );
+  });
+
   it("honors short reads when a log shrinks during tailing", () => {
     vi.spyOn(fs, "statSync").mockReturnValue({
       isFile: () => true,
@@ -509,6 +543,63 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     setTimeoutSpy.mockRestore();
+  });
+
+  it("keeps the command failure stdout tail free of split surrogate pairs", async () => {
+    // 65,540 UTF-16 units of stdout with an emoji at units 3-4: the
+    // last-65,536 failure-tail cut starts on the emoji's low surrogate.
+    const stdoutText = `${"a".repeat(3)}😀${"b".repeat(65_535)}`;
+    let message = "";
+    try {
+      await runCommand({
+        args: ["-e", `process.stdout.write(${JSON.stringify(stdoutText)}); process.exit(2);`],
+        command: process.execPath,
+        cwd: makeTempDir(),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("failed with exit code 2");
+    const marker = "[stdout truncated to last 65536 characters]\n";
+    expect(message).toContain(marker);
+    const tail = message.split(marker).at(-1) ?? "";
+    expect(tail.startsWith("b")).toBe(true);
+    expect(tail).not.toMatch(
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u,
+    );
+  });
+
+  it("decodes command output statefully when a code point splits across stream chunks", async () => {
+    // Two writes separated by a delay arrive as separate pipe chunks; a
+    // chunk-naive toString("utf8") would turn both emoji halves into U+FFFD.
+    const script = [
+      'const emoji = Buffer.from("😀", "utf8");',
+      "process.stdout.write(emoji.subarray(0, 2));",
+      "process.stderr.write(emoji.subarray(0, 2));",
+      "setTimeout(() => {",
+      "  process.stdout.write(emoji.subarray(2));",
+      "  process.stderr.write(emoji.subarray(2));",
+      "  process.exit(2);",
+      "}, 100);",
+    ].join("\n");
+    let message = "";
+    try {
+      await runCommand({
+        args: ["-e", script],
+        command: process.execPath,
+        cwd: makeTempDir(),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("failed with exit code 2");
+    // The command line itself echoes the script's literal emoji; only the
+    // captured stdout/stderr portion below it must decode statefully.
+    const output = message.split("failed with exit code 2\n").at(-1) ?? "";
+    expect(output.match(/😀/g)).toHaveLength(2);
+    expect(output).not.toContain("�");
   });
 
   posixIt("kills timed-out command process groups when the leader exits first", async () => {

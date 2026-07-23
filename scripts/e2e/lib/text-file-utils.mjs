@@ -1,7 +1,7 @@
 // Text file tail helpers for E2E assertions.
 import fs from "node:fs";
 
-function decodeUtf8Tail(buffer, truncated) {
+export function decodeUtf8Tail(buffer, truncated) {
   let start = 0;
   if (truncated) {
     while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
