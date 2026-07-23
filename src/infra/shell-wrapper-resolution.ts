@@ -45,7 +45,6 @@ const POSIX_PARSEABLE_SHELL_WRAPPER_NAMES = [
   "fish",
   "ksh",
   "mksh",
-  "osh",
   "sh",
   "yash",
   "zsh",
@@ -59,7 +58,7 @@ const NUSHELL_STARTUP_OPTIONS_WITH_VALUE = new Set([
   "--plugin-config",
   "--plugins",
 ]);
-const OPAQUE_STARTUP_FILE_SHELL_WRAPPERS = new Set(["csh", "tcsh"]);
+const OPAQUE_STARTUP_FILE_SHELL_WRAPPERS = new Set(["csh", "osh", "tcsh"]);
 function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
   for (const name of names) {

@@ -1049,11 +1049,6 @@ $0 \\"$1\\"" touch {marker}`,
       decoyName: "errexit",
     },
     {
-      name: "osh combined plus set option",
-      argv: ["osh", "+eo", "errexit", "./run.sh"],
-      decoyName: "errexit",
-    },
-    {
       name: "bash combined minus set option",
       argv: ["bash", "-eo", "pipefail", "./run.sh"],
       decoyName: "pipefail",

@@ -1092,12 +1092,6 @@ describe("hardenApprovedExecutionPaths", () => {
         decoyName: "+i",
         expectedArgvIndex: 2,
       },
-      {
-        name: "osh combined plus set option",
-        argv: ["osh", "+eo", "errexit", "./run.sh"],
-        decoyName: "errexit",
-        expectedArgvIndex: 3,
-      },
     ];
 
     for (const testCase of casesValue) {
@@ -1178,11 +1172,12 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("denies startup-file shell wrappers with inline commands", () => {
-    const prepared = buildSystemRunApprovalPlan({
-      command: ["tcsh", "-c", "echo SAFE"],
-    });
-
-    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+    expect(buildSystemRunApprovalPlan({ command: ["tcsh", "-c", "echo SAFE"] })).toEqual(
+      DENIED_RUNTIME_APPROVAL,
+    );
+    expect(
+      buildSystemRunApprovalPlan({ command: ["osh", "--rcfile", "/tmp/evil", "-c", "echo SAFE"] }),
+    ).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
   it("captures fish script operands with plus-prefixed filenames", () => {

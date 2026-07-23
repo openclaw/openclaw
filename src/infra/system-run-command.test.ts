@@ -44,6 +44,7 @@ describe("system run command public boundary", () => {
     { argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"], expected: "script.ps1" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["bash", "script.sh"], expected: null },
+    { argv: ["osh", "-c", "echo hi"], expected: null },
     { argv: ["tcsh", "-c", "echo hi"], expected: null },
   ])("extracts the shell payload for $argv", ({ argv, expected }) => {
     expect(extractShellCommandFromArgv(argv)).toBe(expected);
