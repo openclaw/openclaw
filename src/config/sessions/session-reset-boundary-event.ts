@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import {
-  readRecentUserAssistantReplayRecordsFromJsonl,
+  DEFAULT_REPLAY_MAX_MESSAGES,
+  replayableTranscriptRole,
   selectRecentUserAssistantReplayRecords,
 } from "./transcript-replay.js";
+import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
 export type SessionResetBoundaryReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
@@ -103,7 +105,48 @@ async function readLegacyTranscriptEvents(sessionFile: string | undefined): Prom
     return [];
   }
   try {
-    return await readRecentUserAssistantReplayRecordsFromJsonl({ sourceTranscript: filePath });
+    const newestFirst: unknown[] = [];
+    let boundaryFirstKeptEntryId: string | undefined;
+    let foundBoundary = false;
+    for await (const line of streamSessionTranscriptLinesReverse(filePath)) {
+      let record: unknown;
+      try {
+        record = JSON.parse(line) as unknown;
+      } catch {
+        continue;
+      }
+      const type =
+        record && typeof record === "object" && !Array.isArray(record)
+          ? (record as { type?: unknown }).type
+          : undefined;
+      if (!foundBoundary && (type === "reset" || type === "compaction")) {
+        foundBoundary = true;
+        const firstKept = (record as { firstKeptEntryId?: unknown }).firstKeptEntryId;
+        boundaryFirstKeptEntryId =
+          typeof firstKept === "string" && firstKept.trim() ? firstKept : undefined;
+        if (!boundaryFirstKeptEntryId) {
+          break;
+        }
+        continue;
+      }
+      if (foundBoundary && (type === "reset" || type === "compaction")) {
+        break;
+      }
+      if (replayableTranscriptRole(record as Parameters<typeof replayableTranscriptRole>[0])) {
+        newestFirst.push(record);
+      }
+      if (
+        newestFirst.length >= DEFAULT_REPLAY_MAX_MESSAGES ||
+        (foundBoundary && recordId(record) === boundaryFirstKeptEntryId)
+      ) {
+        break;
+      }
+    }
+    const selected = selectRecentUserAssistantReplayRecords(newestFirst.reverse());
+    return selected.map((record, index) => ({
+      ...(record as Record<string, unknown>),
+      parentId: index === 0 ? null : (recordId(selected[index - 1]) ?? null),
+    }));
   } catch {
     return [];
   }

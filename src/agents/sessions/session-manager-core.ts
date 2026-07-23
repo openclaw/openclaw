@@ -275,6 +275,21 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
+    let latestResetId: string | undefined;
+    const pathContainsNode = (startId: string | null, targetId: string): boolean => {
+      const seen = new Set<string>();
+      let currentId = startId;
+      while (currentId !== null && !seen.has(currentId)) {
+        if (currentId === targetId) {
+          return true;
+        }
+        seen.add(currentId);
+        currentId = this.logicalParentsById.has(currentId)
+          ? (this.logicalParentsById.get(currentId) ?? null)
+          : (this.byId.get(currentId)?.parentId ?? this.opaqueParentsById.get(currentId) ?? null);
+      }
+      return false;
+    };
     for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
         const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
@@ -290,11 +305,18 @@ export class SessionManagerCore {
             opaqueIndex += 1;
             continue;
           }
-          this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
-          this.leafId = leafState.leafId;
-          this.appendParentId = leafState.appendParentId;
+          const crossesResetBoundary =
+            latestResetId !== undefined && !pathContainsNode(leafState.leafId, latestResetId);
+          const effectiveLeafState: typeof leafState = crossesResetBoundary
+            ? { leafId: this.leafId, appendParentId: this.leafId }
+            : leafState;
+          this.opaqueParentsById.set(leafEntry.id, effectiveLeafState.leafId);
+          this.leafId = effectiveLeafState.leafId;
+          this.appendParentId = effectiveLeafState.appendParentId;
           this.promptReleasedSideBranchParentId =
-            leafState.appendMode === "side" ? leafState.appendParentId : undefined;
+            effectiveLeafState.appendMode === "side"
+              ? effectiveLeafState.appendParentId
+              : undefined;
           opaqueIndex += 1;
           continue;
         }
@@ -312,7 +334,12 @@ export class SessionManagerCore {
       if (!isIndexedSessionEntry(entry)) {
         continue;
       }
+      const crossesResetBoundary =
+        latestResetId !== undefined &&
+        !isSessionTranscriptSideAppendEntry(entry) &&
+        !pathContainsNode(entry.parentId, latestResetId);
       if (
+        crossesResetBoundary ||
         !Object.hasOwn(entry, "parentId") ||
         (!isSessionTranscriptSideAppendEntry(entry) &&
           entry.parentId === this.appendParentId &&
@@ -321,6 +348,9 @@ export class SessionManagerCore {
         this.logicalParentsById.set(entry.id, this.leafId);
       }
       this.byId.set(entry.id, entry);
+      if (entry.type === "reset") {
+        latestResetId = entry.id;
+      }
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {
         this.promptReleasedSideBranchParentId = entry.id;

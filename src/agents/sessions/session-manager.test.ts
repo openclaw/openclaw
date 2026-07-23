@@ -206,7 +206,7 @@ describe("SessionManager.open", () => {
 
     const staleManager = SessionManager.open(marker, dir, dir);
     const resetManager = SessionManager.open(marker, dir, dir);
-    resetManager.appendResetBoundary("reset", "initial-user");
+    resetManager.appendResetBoundary("reset");
     expect(() =>
       staleManager.appendMessage({
         role: "assistant",
@@ -231,6 +231,9 @@ describe("SessionManager.open", () => {
     expect(resumed.kind).toBe("page");
     const events = await loadTranscriptEvents(scope);
     expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
+    const context = JSON.stringify(SessionManager.open(marker, dir, dir).buildSessionContext());
+    expect(context).not.toContain("before reset");
+    expect(context).toContain("late append");
 
     expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
     expect(readTranscriptRawDelta(scope, { cursor: cursor.cursor })).toMatchObject({

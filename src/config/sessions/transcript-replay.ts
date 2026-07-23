@@ -6,7 +6,7 @@ import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 /** Tail kept so DM continuity survives silent session rotations. */
-const DEFAULT_REPLAY_MAX_MESSAGES = 6;
+export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 
 type SessionRecord = {
   type?: unknown;
@@ -25,7 +25,9 @@ function isValidReplayTimestamp(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function replayableRole(record: SessionRecord | null): "user" | "assistant" | undefined {
+export function replayableTranscriptRole(
+  record: SessionRecord | null,
+): "user" | "assistant" | undefined {
   if (
     !record ||
     record.type !== "message" ||
@@ -105,7 +107,7 @@ export async function readRecentUserAssistantReplayRecordsFromJsonl(params: {
   for await (const line of streamSessionTranscriptLinesReverse(src)) {
     try {
       const record = JSON.parse(line) as unknown;
-      if (replayableRole(record as SessionRecord | null)) {
+      if (replayableTranscriptRole(record as SessionRecord | null)) {
         recordsNewestFirst.push(record);
         if (recordsNewestFirst.length >= max) {
           break;
@@ -128,7 +130,7 @@ export function selectRecentUserAssistantReplayRecords(
   }
   const kept: KeptParsedRecord[] = [];
   for (const record of records) {
-    const role = replayableRole(record as SessionRecord | null);
+    const role = replayableTranscriptRole(record as SessionRecord | null);
     if (role) {
       kept.push({ role, record });
     }
@@ -147,7 +149,7 @@ async function readRecentUserAssistantReplayLines(params: {
       continue;
     }
     try {
-      const role = replayableRole(JSON.parse(line) as SessionRecord | null);
+      const role = replayableTranscriptRole(JSON.parse(line) as SessionRecord | null);
       if (role) {
         kept.push({ role, line });
       }

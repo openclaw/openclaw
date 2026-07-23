@@ -146,4 +146,72 @@ describe("reset boundary planning", () => {
       expect(plan.event.firstKeptEntryId).toBe("message-14");
     });
   });
+
+  it("respects legacy reset cuts and reparents the selected tail", async () => {
+    await withTempDir({ prefix: "openclaw-reset-boundary-" }, async (dir) => {
+      const sessionFile = path.join(dir, "legacy-reset.jsonl");
+      const oldUser = message({
+        id: "legacy-old-user",
+        parentId: null,
+        role: "user",
+        content: "discarded",
+        second: 1,
+      });
+      const oldAssistant = message({
+        id: "legacy-old-assistant",
+        parentId: oldUser.id,
+        role: "assistant",
+        content: "discarded answer",
+        second: 2,
+      });
+      const keptUser = message({
+        id: "legacy-kept-user",
+        parentId: oldAssistant.id,
+        role: "user",
+        content: "kept",
+        second: 3,
+      });
+      const toolResult = {
+        type: "message",
+        id: "legacy-tool-result",
+        parentId: keptUser.id,
+        timestamp: "2026-07-22T00:00:04.000Z",
+        message: { role: "toolResult", content: "tool" },
+      };
+      const keptAssistant = message({
+        id: "legacy-kept-assistant",
+        parentId: toolResult.id,
+        role: "assistant",
+        content: "kept answer",
+        second: 5,
+      });
+      const reset = {
+        type: "reset",
+        id: "legacy-reset",
+        parentId: keptAssistant.id,
+        timestamp: "2026-07-22T00:00:06.000Z",
+        reason: "new",
+        firstKeptEntryId: keptUser.id,
+      };
+      await fs.writeFile(
+        sessionFile,
+        `${[oldUser, oldAssistant, keptUser, toolResult, keptAssistant, reset]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n")}\n`,
+      );
+
+      const plan = await buildSessionResetBoundaryPlan({
+        events: [],
+        legacySessionFile: sessionFile,
+        reason: "reset",
+      });
+
+      expect(plan.seedEvents).toEqual([
+        expect.objectContaining({ id: keptUser.id, parentId: null }),
+        expect.objectContaining({ id: keptAssistant.id, parentId: keptUser.id }),
+      ]);
+      expect(JSON.stringify(plan.seedEvents)).not.toContain("discarded");
+      expect(plan.event.firstKeptEntryId).toBe(keptUser.id);
+    });
+  });
 });

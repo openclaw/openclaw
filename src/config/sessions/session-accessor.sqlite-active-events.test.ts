@@ -342,7 +342,9 @@ describe("SQLite active transcript event projection", () => {
 
     const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
     expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
-      "old",
+      "kept-user",
+      "kept-assistant",
+      "post-reset",
       "branch-message",
     ]);
   });

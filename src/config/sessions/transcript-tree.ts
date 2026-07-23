@@ -161,6 +161,23 @@ function resolveCanonicalParentId<T>(
   return null;
 }
 
+function pathContainsNode<T>(
+  startId: string | null,
+  targetId: string,
+  byId: ReadonlyMap<string, SessionTranscriptTreeNode<T>>,
+): boolean {
+  const seen = new Set<string>();
+  let currentId = startId;
+  while (currentId !== null && !seen.has(currentId)) {
+    if (currentId === targetId) {
+      return true;
+    }
+    seen.add(currentId);
+    currentId = byId.get(currentId)?.parentId ?? null;
+  }
+  return false;
+}
+
 /**
  * Resolve transcript navigation state in file order.
  *
@@ -177,10 +194,25 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
   let hasLeafUpdate = false;
   let hasExplicitLeafUpdate = false;
   let hasInvalidLeafControl = false;
+  let latestResetId: string | undefined;
   const invalidLeafControlIds = new Set<string>();
 
   for (const [index, entry] of entries.entries()) {
-    const explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
+    let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
+    if (
+      latestResetId &&
+      leafId !== null &&
+      explicitTreeEntry?.leafId !== undefined &&
+      isSessionTranscriptLeafControl(entry) &&
+      !pathContainsNode(explicitTreeEntry.leafId, latestResetId, byId)
+    ) {
+      explicitTreeEntry = {
+        ...explicitTreeEntry,
+        parentId: leafId,
+        leafId,
+        appendParentId: leafId,
+      };
+    }
     const isKnownLeafReference = (id: string | null): boolean =>
       id === null || (byId.has(id) && !invalidLeafControlIds.has(id));
     const invalidLeafControl =
@@ -214,8 +246,13 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
         treeEntry.parentId !== null &&
         !byId.has(treeEntry.parentId) &&
         leafId !== null;
-      const logicalParentId =
-        treeEntry.appendMode !== "side" && canonicalParentIsStale
+      const crossesResetBoundary =
+        latestResetId !== undefined &&
+        treeEntry.appendMode !== "side" &&
+        !pathContainsNode(treeEntry.parentId, latestResetId, byId);
+      const logicalParentId = crossesResetBoundary
+        ? leafId
+        : treeEntry.appendMode !== "side" && canonicalParentIsStale
           ? leafId
           : explicitTreeEntry &&
               treeEntry.appendMode !== "side" &&
@@ -237,6 +274,9 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     const node: SessionTranscriptTreeNode<T> = { ...treeEntry, entry, index };
     nodes.push(node);
     byId.set(node.id, node);
+    if (isRecord(entry) && entry.type === "reset") {
+      latestResetId = node.id;
+    }
     appendParentId = node.appendParentId;
     if (node.leafId !== undefined) {
       leafId = node.leafId;

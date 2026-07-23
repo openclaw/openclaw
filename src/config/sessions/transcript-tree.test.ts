@@ -145,7 +145,7 @@ describe("session transcript tree helpers", () => {
         branchUser,
         leafControl,
       ]),
-    ).toEqual([keptUser, keptAssistant, reset, branchUser]);
+    ).toEqual([keptUser, keptAssistant, reset, { ...branchUser, parentId: reset.id }]);
   });
 
   it("keeps visible history when the next append starts at the root", () => {
