@@ -230,12 +230,31 @@ export function stripInboundMetadata(text: string): string {
     return text;
   }
 
+  // Only strip the leading timestamp prefix when there is at least one
+  // metadata sentinel in the remaining text. Otherwise a standalone
+  // timestamp in clean assistant text would be silently removed.
   const withoutTimestamp = text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+  if (withoutTimestamp === text) {
+    // Fast path — no change means no timestamp; check sentinels directly.
+    if (!SENTINEL_FAST_RE.test(text)) {
+      return text;
+    }
+    return stripMetadataBlocks(text);
+  }
+  // Timestamp was present. Only proceed if there are metadata blocks to strip.
   if (!SENTINEL_FAST_RE.test(withoutTimestamp)) {
-    return withoutTimestamp;
+    return text;
+  }
+  return stripMetadataBlocks(withoutTimestamp);
+}
+
+/** Strips metadata blocks from text that has already had its timestamp prefix removed. */
+function stripMetadataBlocks(text: string): string {
+  if (!SENTINEL_FAST_RE.test(text)) {
+    return text;
   }
 
-  const lines = withoutTimestamp.split("\n");
+  const lines = text.split("\n");
   const strippedLeadingPrefixLines = stripActiveMemoryPromptPrefixBlocks(lines);
   const result: string[] = [];
   let inMetaBlock = false;

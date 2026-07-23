@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import {
@@ -1050,6 +1051,10 @@ function applyAssistantVisibleTextStagePipeline(
     if (!options.preserveDowngradedToolText) {
       cleaned = stripDowngradedToolCallText(cleaned);
     }
+    // Strip OpenClaw-injected inbound metadata blocks (Conversation info,
+    // Sender info, reply context, etc.) from assistant-visible text. These
+    // are AI-facing context only and must never reach users. (#97980)
+    cleaned = stripInboundMetadata(cleaned);
     return cleaned;
   };
 
