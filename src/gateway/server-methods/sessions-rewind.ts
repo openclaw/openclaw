@@ -22,6 +22,7 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
@@ -33,6 +34,7 @@ import {
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   resolveSessionWorkerPlacementMutationError,
@@ -155,7 +157,7 @@ async function mutateSessionAtMessage(
   options: GatewayRequestHandlerOptions,
   action: MessageCutAction,
 ): Promise<void> {
-  const { params, respond, context } = options;
+  const { params, respond, context, client } = options;
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const entryId =
     action === "switch"
@@ -385,6 +387,7 @@ async function mutateSessionAtMessage(
               sessionStoreKey: current.sessionStoreKey,
               storePath: current.storePath,
               targetKey,
+              creation: resolveOperatorSessionCreation(client),
             })
           : action === "rewind"
             ? rewindSessionToMessage({
@@ -415,6 +418,12 @@ async function mutateSessionAtMessage(
       }
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);
+      } else {
+        recordSessionCreated({
+          sessionKey: result.key,
+          agentId: current.target.agentId,
+          entry: result.entry,
+        });
       }
       respond(
         true,

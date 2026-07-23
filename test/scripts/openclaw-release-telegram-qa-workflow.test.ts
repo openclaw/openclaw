@@ -435,8 +435,12 @@ describe("release Telegram QA workflow", () => {
     };
     const buildJob = workflow.jobs?.build_candidate;
     const runJob = workflow.jobs?.run_telegram;
+    const buildRuntimeStep = buildJob?.steps?.find(
+      (step) => step.name === "Build candidate runtime without runner credentials",
+    );
 
     expect(JSON.stringify(buildJob)).not.toContain("secrets.");
+    expect(buildRuntimeStep?.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1");
     expect(runJob?.environment).toBe("qa-live-shared");
     const secretSteps = runJob?.steps
       ?.filter((step) => JSON.stringify(step).includes("secrets."))
@@ -566,6 +570,12 @@ describe("release Telegram QA workflow", () => {
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
+    const createSutStep = job?.steps?.find(
+      (step) => step.name === "Create isolated Telegram SUT identity and launcher",
+    );
+    expect(createSutStep?.run).toMatch(
+      /transport_keys=\([\s\S]*OPENCLAW_BUILD_PRIVATE_QA[\s\S]*OPENCLAW_ENABLE_PRIVATE_QA_CLI[\s\S]*\)/u,
+    );
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("600000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_LOG_LEVEL).toBe("trace");
@@ -578,6 +588,9 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.run).toContain("! grep -Fq '\"openai/gpt-5.6-luna\": {'");
     expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
     expect(runStep?.run).toContain('--model "$qa_model"');
+    expect(runStep?.run).toContain("run_candidate_telegram_qa() (");
+    expect(runStep?.run).toContain("exec node ./dist/index.js qa telegram");
+    expect(runStep?.run).not.toContain('pnpm --dir "$CANDIDATE_ROOT" openclaw qa telegram');
     expect(runStep?.run).toContain(
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );

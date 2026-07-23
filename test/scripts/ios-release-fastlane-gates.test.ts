@@ -118,6 +118,9 @@ describe("iOS Fastlane release upload gates", () => {
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
 
     expect(screenshots).toContain("snapshot_devices.each_with_index");
+    expect(screenshots).toContain(
+      'only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/testConnectedGatewayTabs"]',
+    );
     expect(screenshots).toContain("result_bundle: true");
     expect(screenshots).toContain("number_of_retries: 0");
     expect(screenshots).toContain("stop_after_first_error: true");

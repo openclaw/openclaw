@@ -481,9 +481,7 @@ function parseInfoPlistStrings(source: string): Array<{ key: string; source: str
       key: decodeXml(match[1] ?? ""),
       source: decodeXml(match[2] ?? ""),
     }))
-    .filter(
-      (entry) => entry.key === "CFBundleDisplayName" || entry.key.endsWith("UsageDescription"),
-    );
+    .filter((entry) => entry.key.endsWith("UsageDescription"));
 }
 
 type InfoPlistTranslation = {
@@ -855,9 +853,6 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
       const existing = parseStringsFile(existingSource ?? "");
       const artifact = translations.find((candidate) => candidate.locale === locale);
       const lines = sourceEntries.map(({ key, source }) => {
-        if (key === "CFBundleDisplayName") {
-          return `${stringsLiteral(key)} = ${stringsLiteral(source)};`;
-        }
         const sourceId = sourceIds.get([target.sourcePath, source].join("\u0000"));
         if (!sourceId) {
           throw new Error(`missing native InfoPlist source id for ${target.sourcePath}:${key}`);

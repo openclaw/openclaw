@@ -33,6 +33,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import {
   resolveSourceDeliveryOutcome,
   type SourceDeliveryOutcome,
@@ -738,14 +739,33 @@ async function prepareCronRunContext(params: {
     storePath,
     sessionKey,
     fallbackEntry,
+    resetBoundaryReason,
     update,
   }: {
     storePath: string;
     sessionKey: string;
     fallbackEntry: SessionEntry;
+    resetBoundaryReason?: "cron-stale";
     update: (entry: SessionEntry | undefined) => SessionEntry;
   }) => {
-    const { patchSessionEntry } = await loadSessionAccessorRuntime();
+    const { applySessionEntryLifecycleMutation, patchSessionEntry } =
+      await loadSessionAccessorRuntime();
+    if (resetBoundaryReason) {
+      await applySessionEntryLifecycleMutation({
+        activeSessionKey: sessionKey,
+        agentId,
+        storePath,
+        upserts: [
+          {
+            sessionKey,
+            resetBoundaryReason,
+            buildEntry: ({ currentEntry }) => update(currentEntry),
+          },
+        ],
+        skipMaintenance: true,
+      });
+      return;
+    }
     // Guarded replace: the updater sees the freshest persisted row (or
     // undefined pre-creation) so cron lifecycle claims reject stale owners.
     await patchSessionEntry(
@@ -1698,7 +1718,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const isAborted = () => abortSignal?.aborted ?? false;
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
-  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const isFastTestEnv = isFastTestRuntimeEnv();
   const prepared = await prepareCronRunContext({
     input: { ...params, abortSignal },
     isFastTestEnv,

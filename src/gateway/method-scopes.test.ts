@@ -180,6 +180,29 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: true });
   });
 
+  it("requires admin only when DM pairing approval bootstraps a command owner", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {})).toEqual([
+      "operator.pairing",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual(["operator.pairing", "operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("channels.pairing.approve", ["operator.pairing"], {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod(
+        "channels.pairing.approve",
+        ["operator.pairing", "operator.admin"],
+        { bootstrapCommandOwner: true },
+      ),
+    ).toEqual({ allowed: true });
+  });
+
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
       "operator.write",
@@ -400,7 +423,10 @@ describe("method scope resolution", () => {
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
     ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
-    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
+    [
+      "completionOwnerSessionKey",
+      { key: "agent:main:ios-1", completionOwnerSessionKey: "agent:main:main" },
+    ],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
   ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
