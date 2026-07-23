@@ -98,6 +98,13 @@ function applyMcpOAuthAuthorizationChallenge(
     params.resourceMetadataUrl &&
     current.discoveryState?.resourceMetadataUrl !== params.resourceMetadataUrl
   ) {
+    if (
+      current.tokens?.refresh_token &&
+      current.tokensAuthorizationServerUrl === undefined &&
+      current.discoveryState
+    ) {
+      next.tokensAuthorizationServerUrl = current.discoveryState.authorizationServerUrl;
+    }
     delete next.discoveryState;
   }
   return next;
