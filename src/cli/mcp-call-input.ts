@@ -4,14 +4,14 @@ import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-w
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 
-export const MCP_CALL_INPUT_MAX_BYTES = 1024 * 1024;
+const MCP_CALL_INPUT_MAX_BYTES = 1024 * 1024;
 
-export type McpCallInputOptions = {
+type McpCallInputOptions = {
   input?: string;
   inputFile?: string;
 };
 
-export type McpCallInputParseResult =
+type McpCallInputParseResult =
   | { ok: true; value: Record<string, unknown> }
   | { ok: false; error: string };
 
@@ -19,7 +19,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function parseMcpCallJsonObject(raw: string, sourceLabel: string): McpCallInputParseResult {
+function parseMcpCallJsonObject(raw: string, sourceLabel: string): McpCallInputParseResult {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { ok: false, error: `${sourceLabel} must contain one JSON object.` };

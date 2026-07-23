@@ -1,34 +1,31 @@
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  MCP_CALL_INPUT_MAX_BYTES,
-  parseMcpCallJsonObject,
-  resolveMcpCallInput,
-} from "./mcp-call-input.js";
+import { resolveMcpCallInput } from "./mcp-call-input.js";
 
 describe("mcp call input parsing", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("parses a JSON object and rejects arrays, scalars, and empty input", () => {
-    expect(parseMcpCallJsonObject('{"q":1}', "--input")).toEqual({
+  it("parses a JSON object and rejects arrays, scalars, and empty input", async () => {
+    await expect(resolveMcpCallInput({ input: '{"q":1}' })).resolves.toEqual({
       ok: true,
       value: { q: 1 },
     });
-    expect(parseMcpCallJsonObject("[1]", "--input")).toEqual({
+    await expect(resolveMcpCallInput({ input: "[1]" })).resolves.toEqual({
       ok: false,
       error: "--input must be a JSON object, not an array or scalar.",
     });
-    expect(parseMcpCallJsonObject("true", "--input")).toEqual({
+    await expect(resolveMcpCallInput({ input: "true" })).resolves.toEqual({
       ok: false,
       error: "--input must be a JSON object, not an array or scalar.",
     });
-    expect(parseMcpCallJsonObject("   ", "--input")).toEqual({
-      ok: false,
-      error: "--input must contain one JSON object.",
+    // Whitespace-only --input is normalized away and treated as omitted input.
+    await expect(resolveMcpCallInput({ input: "   " })).resolves.toEqual({
+      ok: true,
+      value: {},
     });
-    expect(parseMcpCallJsonObject("{", "--input").ok).toBe(false);
+    await expect(resolveMcpCallInput({ input: "{" })).resolves.toMatchObject({ ok: false });
   });
 
   it("defaults omitted input to an empty object and rejects conflicting flags", async () => {
@@ -40,10 +37,10 @@ describe("mcp call input parsing", () => {
   });
 
   it("bounds oversized inline input and reads stdin for --input-file -", async () => {
-    const oversized = `{"q":"${"x".repeat(MCP_CALL_INPUT_MAX_BYTES)}}`;
+    const oversized = `{"q":"${"x".repeat(1024 * 1024)}}`;
     await expect(resolveMcpCallInput({ input: oversized })).resolves.toEqual({
       ok: false,
-      error: `MCP call input exceeds ${MCP_CALL_INPUT_MAX_BYTES} bytes.`,
+      error: "MCP call input exceeds 1048576 bytes.",
     });
 
     const stream = Readable.from([Buffer.from('{"q":"stdin"}')]);
