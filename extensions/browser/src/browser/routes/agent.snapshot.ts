@@ -48,7 +48,7 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import { resolveOperationTargetOutcome } from "./agent.snapshot-target.js";
 import {
   resolveSnapshotPlan,
   shouldUsePlaywrightForAriaSnapshot,
@@ -336,7 +336,11 @@ export function registerBrowserAgentSnapshotRoutes(
             signal,
           });
           await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
-          return res.json({ ok: true, targetId: tab.targetId, ...result });
+          const currentTargetId = resolveOperationTargetOutcome({
+            actedOnTargetId: tab.targetId,
+            operationTargetId: tab.targetId,
+          });
+          return res.json({ ok: true, targetId: currentTargetId, ...result });
         }
         const pw = await requirePwAi(res, "navigate");
         if (!pw) {
@@ -348,10 +352,9 @@ export function registerBrowserAgentSnapshotRoutes(
           url,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
-        const currentTargetId = await resolveTargetIdAfterNavigate({
-          oldTargetId: tab.targetId,
-          navigatedUrl: result.url,
-          listTabs: () => profileCtx.listTabs(),
+        const currentTargetId = resolveOperationTargetOutcome({
+          actedOnTargetId: tab.targetId,
+          operationTargetId: result.targetId,
         });
         res.json({ ok: true, targetId: currentTargetId, ...result });
       },
