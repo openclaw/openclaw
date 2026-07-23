@@ -27,6 +27,24 @@ let panelState = "connecting";
 let port = null;
 let reconnectTimer = null;
 let reconnectDelayMs = 250;
+// Recover the composer if a send never gets a terminal event (gateway hang or a
+// silent drop). Idle watchdog: reset on every gateway message so long streams do
+// not trip it, but genuine silence while a send is in flight does.
+let sendIdleTimer = null;
+const SEND_IDLE_TIMEOUT_MS = 45_000;
+
+function armSendWatchdog() {
+  clearTimeout(sendIdleTimer);
+  sendIdleTimer = sending
+    ? setTimeout(() => {
+        if (!sending) {
+          return;
+        }
+        addBubble("system", "No response from the gateway — the run may have stalled.");
+        finalizeStream();
+      }, SEND_IDLE_TIMEOUT_MS)
+    : null;
+}
 
 function setComposerEnabled(enabled) {
   panelReady = enabled;
@@ -73,6 +91,8 @@ function renderHistory(history) {
 }
 
 function finalizeStream() {
+  clearTimeout(sendIdleTimer);
+  sendIdleTimer = null;
   streamingBubble?.classList.remove("streaming");
   streamingBubble = null;
   resetChatStream(stream);
@@ -161,6 +181,8 @@ function updateState(state) {
 
 function handlePortMessage(message) {
   reconnectDelayMs = 250;
+  // Any gateway message means the run is still alive; reset the send idle watchdog.
+  armSendWatchdog();
   if (message?.type === "panel.state") {
     updateState(message);
   } else if (message?.type === "panel.history") {
@@ -230,12 +252,24 @@ async function send() {
   if (!message || !panelReady || sending) {
     return;
   }
+  if (!port) {
+    addBubble("system", "Not connected to the extension background — reopen the panel.");
+    return;
+  }
   addBubble("user", message);
   input.value = "";
   input.style.height = "auto";
   sending = true;
   setComposerEnabled(true);
-  port?.postMessage({ type: "panel.send", message });
+  try {
+    port.postMessage({ type: "panel.send", message });
+  } catch {
+    // A disconnected port throws here; recover the composer instead of locking it.
+    addBubble("system", "Couldn't send — the connection dropped. Try again.");
+    finalizeStream();
+    return;
+  }
+  armSendWatchdog();
 }
 
 input.addEventListener("input", () => {
