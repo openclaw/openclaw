@@ -59,6 +59,7 @@ const NUSHELL_STARTUP_OPTIONS_WITH_VALUE = new Set([
   "--plugin-config",
   "--plugins",
 ]);
+const OPAQUE_STARTUP_FILE_SHELL_WRAPPERS = new Set(["csh", "tcsh"]);
 function withWindowsExeAliases(names: readonly string[]): string[] {
   const expanded = new Set<string>();
   for (const name of names) {
@@ -243,6 +244,9 @@ export function unwrapKnownShellMultiplexerInvocation(
 }
 
 function extractPosixShellInlineCommand(argv: string[], baseExecutable: string): string | null {
+  if (OPAQUE_STARTUP_FILE_SHELL_WRAPPERS.has(baseExecutable)) {
+    return null;
+  }
   if (baseExecutable === "nu") {
     if (hasNushellStartupOptionBeforeInlineCommand(argv)) {
       return null;
@@ -347,16 +351,18 @@ function startupWrapperRequiresFullArgv(params: {
   if (params.baseExecutable === "fish" && hasFishInitCommandOption(params.argv)) {
     return true;
   }
+  const inlineCommandFlags =
+    params.baseExecutable === "nu" ? NUSHELL_INLINE_COMMAND_FLAGS : POSIX_INLINE_COMMAND_FLAGS;
   if (
     LOGIN_STARTUP_SHELL_WRAPPER_CANONICAL.has(params.baseExecutable) &&
-    hasPosixLoginStartupBeforeInlineCommand(params.argv, POSIX_INLINE_COMMAND_FLAGS)
+    hasPosixLoginStartupBeforeInlineCommand(params.argv, inlineCommandFlags)
   ) {
     return (
       params.includeLegacyLoginInlineForm ||
       !isLegacyShLoginInlineForm(params.argv, params.baseExecutable)
     );
   }
-  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, POSIX_INLINE_COMMAND_FLAGS);
+  return hasPosixInteractiveStartupBeforeInlineCommand(params.argv, inlineCommandFlags);
 }
 
 function hasEnvManipulationBeforeShellWrapperInternal(
@@ -489,6 +495,9 @@ export function isBlockedShellWrapperCommand(argv: string[], rawCommand?: string
     baseExecutable === "nu" &&
     hasNushellStartupOptionBeforeInlineCommand(candidate.argv)
   ) {
+    return true;
+  }
+  if (wrapper.kind === "posix" && OPAQUE_STARTUP_FILE_SHELL_WRAPPERS.has(baseExecutable)) {
     return true;
   }
   const extracted = extractShellWrapperCommandInternal(argv, normalizeRawCommand(rawCommand), 0);

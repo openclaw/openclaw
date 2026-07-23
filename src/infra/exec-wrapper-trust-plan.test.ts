@@ -84,7 +84,7 @@ describe("resolveExecWrapperTrustPlan", () => {
       },
     },
     {
-      name: "recognizes additional shell wrappers before evaluating allowlist policy",
+      name: "keeps startup-file shell wrappers opaque before evaluating allowlist policy",
       enabled: true,
       argv: ["tcsh", "-c", "echo hi"],
       expected: {
@@ -93,7 +93,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         wrapperChain: [],
         policyBlocked: false,
         shellWrapperExecutable: true,
-        shellInlineCommand: "echo hi",
+        shellInlineCommand: null,
       },
     },
     {

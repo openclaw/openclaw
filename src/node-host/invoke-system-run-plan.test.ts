@@ -1163,6 +1163,28 @@ describe("hardenApprovedExecutionPaths", () => {
     expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
   });
 
+  it("denies nushell execute payloads hidden by startup modes", () => {
+    const tmp = createFixtureDir("openclaw-nu-startup-execute-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["nu", "--interactive", "--execute", "./run.sh"],
+      cwd: tmp,
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
+  it("denies startup-file shell wrappers with inline commands", () => {
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["tcsh", "-c", "echo SAFE"],
+    });
+
+    expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+  });
+
   it("captures fish script operands with plus-prefixed filenames", () => {
     const casesLocal = [
       {

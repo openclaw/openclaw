@@ -605,8 +605,8 @@ describe("extractShellWrapperCommand", () => {
     },
     {
       argv: ["tcsh", "-c", "echo hi"],
-      expectedInline: "echo hi",
-      expectedCommand: { isWrapper: true, command: "echo hi" },
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
     },
     {
       argv: ["nu", "--commands", "echo hi"],
@@ -622,6 +622,11 @@ describe("extractShellWrapperCommand", () => {
       argv: ["nu", "-e", "echo hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["nu", "--interactive", "-e", "echo hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: null },
     },
     {
       argv: ["elvish", "-c", "echo hi"],
