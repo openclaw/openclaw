@@ -221,9 +221,7 @@ export const discordOnboardingAdapter = createLazyFacadeObjectValue(
 );
 
 /** Collect Discord account status issues from account snapshots. */
-export function collectDiscordStatusIssues(
-  accounts: ChannelAccountStatus[],
-): ChannelStatusIssue[] {
+export function collectDiscordStatusIssues(accounts: ChannelAccountStatus[]): ChannelStatusIssue[] {
   return loadDiscordApiFacadeModule().collectDiscordStatusIssues(accounts);
 }
 
