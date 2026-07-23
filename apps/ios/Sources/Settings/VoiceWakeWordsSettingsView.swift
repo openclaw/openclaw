@@ -105,7 +105,7 @@ struct VoiceWakeWordsSettingsView: View {
         let snapshot = VoiceWakePreferences.sanitizeTriggerWords(self.triggerWords)
         self.syncTask?.cancel()
         self.syncTask = Task { [snapshot, weak appModel = self.appModel] in
-            try? await Task.sleep(nanoseconds: 650_000_000)
+            guard await CancellableDelay.wait(for: .milliseconds(650)) else { return }
             await appModel?.setGlobalWakeWords(snapshot)
         }
     }

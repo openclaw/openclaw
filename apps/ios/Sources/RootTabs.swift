@@ -608,7 +608,7 @@ struct RootTabs: View {
                 }
 
                 self.toastDismissTask = Task {
-                    try? await Task.sleep(nanoseconds: 2_300_000_000)
+                    guard await CancellableDelay.wait(for: .milliseconds(2300)) else { return }
                     await MainActor.run {
                         withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
                             self.voiceWakeToastText = nil
