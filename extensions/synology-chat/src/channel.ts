@@ -274,7 +274,7 @@ async function sendSynologyChatText(
     if (slashCount % 2 === 1 || isInsideCode(offset, codeRegions) || /[<>|]/.test(label + url)) {
       return match;
     }
-    return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([\[\]])/g, "$1")}>`;
+    return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
   });
   const ok = await sendMessage(incomingUrl, text, ctx.to, account.allowInsecureSsl);
   if (!ok) {
