@@ -696,18 +696,55 @@ export function canReceiveSessionEvent(params: {
   client: GatewayWsClient;
   sessionKeys: readonly string[];
   agentId?: string;
+  event?: string;
+  payload?: unknown;
 }): boolean {
   if (isGatewayAdmin(params.client)) {
     return true;
   }
   const identity = gatewayClientSessionCreator(params.client);
   if (!identity) {
+    return params.event !== "session.suggestion" && params.event !== "session.typing";
+  }
+  const visible = params.sessionKeys.every((sessionKey) => {
+    const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
+    if (snapshot.incognito) {
+      return false;
+    }
+    if (snapshot.visibility !== "draft" || snapshot.creatorId === identity.id) {
+      return true;
+    }
+    if (params.event !== "session.typing") {
+      return false;
+    }
+    const target = resolveSessionSharingTarget({
+      cfg: params.cfg,
+      sessionKey,
+      agentId: params.agentId,
+    });
+    return (
+      target !== null &&
+      canManageSessionSharing(resolveSessionSharingRole({ client: params.client, target }))
+    );
+  });
+  if (!visible || params.event !== "session.suggestion") {
+    return visible;
+  }
+  const authorId =
+    params.payload && typeof params.payload === "object"
+      ? (params.payload as { suggestion?: { author?: { id?: unknown } } }).suggestion?.author?.id
+      : undefined;
+  if (authorId === identity.id) {
     return true;
   }
   return params.sessionKeys.every((sessionKey) => {
-    const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
+    const target = resolveSessionSharingTarget({
+      cfg: params.cfg,
+      sessionKey,
+      agentId: params.agentId,
+    });
     return (
-      !snapshot.incognito && (snapshot.visibility !== "draft" || snapshot.creatorId === identity.id)
+      target !== null && resolveSessionSharingRole({ client: params.client, target }) !== "viewer"
     );
   });
 }

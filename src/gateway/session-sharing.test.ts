@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -277,5 +278,71 @@ describe("session sharing policy", () => {
         sessionKeys: ["agent:main:deleted-draft"],
       }),
     ).toBe(false);
+  });
+
+  it("limits suggestion events to participants and the suggestion author", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:suggestions";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-suggestions",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      addSessionMember(
+        { agentId: "main", sessionKey },
+        {
+          identityId: "member",
+          addedBy: "owner",
+          expectedSessionId: "session-suggestions",
+        },
+      );
+      const check = (user: string) =>
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({ user }) as never,
+          sessionKeys: [sessionKey],
+          event: "session.suggestion",
+          payload: { suggestion: { author: { id: "author" } } },
+        });
+
+      expect(check("author")).toBe(true);
+      expect(check("member")).toBe(true);
+      expect(check("owner")).toBe(true);
+      expect(check("viewer")).toBe(false);
+    });
+  });
+
+  it("allows draft members to receive typing events without exposing other draft events", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:draft-typing";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-draft",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "draft",
+        },
+      );
+      addSessionMember(
+        { agentId: "main", sessionKey },
+        { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
+      );
+      const check = (user: string, event: string) =>
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({ user }) as never,
+          sessionKeys: [sessionKey],
+          event,
+        });
+
+      expect(check("member", "session.typing")).toBe(true);
+      expect(check("viewer", "session.typing")).toBe(false);
+      expect(check("member", "session.message")).toBe(false);
+    });
   });
 });

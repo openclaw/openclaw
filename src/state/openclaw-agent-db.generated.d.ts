@@ -192,6 +192,16 @@ export interface SessionMembers {
   session_key: string;
 }
 
+export interface SessionSuggestions {
+  author_id: string;
+  author_label: string | null;
+  created_at: number;
+  id: string;
+  session_key: string;
+  state: string;
+  text: string;
+}
+
 export interface SessionNodes {
   archived_at: number | null;
   category: string | null;
@@ -363,6 +373,7 @@ export interface DB {
   session_conversations: SessionConversations;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
+  session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
