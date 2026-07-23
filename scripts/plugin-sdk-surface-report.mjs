@@ -157,10 +157,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: attributed-range renderer and its options contract.
       // +1: agent-harness transcript visibility projector.
       // +1: outbound formatting capability profile.
+      // +33: public numeric coercion, timer bound, and timestamp helpers.
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      4697,
+      4730,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -174,10 +175,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: generic inbound-root and SCP-host schema validators.
       // +1: attributed-range renderer.
       // +1: agent-harness transcript visibility projector.
+      // +29: public numeric coercion, timer bound, and timestamp helpers.
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      2845,
+      2874,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
