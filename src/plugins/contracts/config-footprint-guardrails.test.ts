@@ -215,8 +215,10 @@ describe("config footprint guardrails", () => {
     ].toSorted((left, right) => left.localeCompare(right));
 
     expect(exportedSchemaNames).toEqual([
+      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
+      "MSTeamsConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);
@@ -230,6 +232,12 @@ describe("config footprint guardrails", () => {
     );
     expect(bundledSource).toMatch(
       /loadBundledConfigSchema<[^;]+?>\(\s*"telegram",\s*"TelegramConfigSchema",?\s*\)/u,
+    );
+    expect(bundledSource).toMatch(
+      /loadBundledConfigSchema<[^;]+?>\(\s*"discord",\s*"DiscordConfigSchema",?\s*\)/u,
+    );
+    expect(bundledSource).toMatch(
+      /loadBundledConfigSchema<[^;]+?>\(\s*"msteams",\s*"MSTeamsConfigSchema",?\s*\)/u,
     );
     // The primitives facade re-exports the canonical channel-config-schema
     // module; only bundled provider schemas bypass it.
