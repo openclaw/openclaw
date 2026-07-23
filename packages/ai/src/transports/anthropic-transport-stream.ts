@@ -82,6 +82,7 @@ import {
   transformTransportMessages,
 } from "./host-policy.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { createModelStreamCooperativeScheduler } from "./openai-transport-shared.js";
 import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
@@ -113,6 +114,8 @@ const ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR = 4;
 // Mirror the fetch sanitizer cap here because compatible routes such as Kimi
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
+const ANTHROPIC_MESSAGES_TOOL_ARGS_REPARSE_MIN_GROWTH_CHARS = 4096;
+const ANTHROPIC_MESSAGES_TOOL_CALL_ARGUMENT_BUFFER_MAX_BYTES = 256_000;
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -174,6 +177,8 @@ type TransportContentBlock =
       name: string;
       arguments: unknown;
       partialJson?: string;
+      partialJsonBytes?: number;
+      lastParsedArgumentsLength?: number;
       index?: number;
     };
 
@@ -1421,7 +1426,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             });
           }
         };
+        const cooperativeScheduler = createModelStreamCooperativeScheduler(transportOptions.signal);
         for await (const event of anthropicStream) {
+          await cooperativeScheduler.afterEvent();
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
             throw new Error(error?.message || "Anthropic Messages stream failed");
@@ -1724,9 +1731,27 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "input_json_delta" &&
               typeof delta.partial_json === "string"
             ) {
+              const nextArgumentBytes = Buffer.byteLength(delta.partial_json, "utf8");
+              const currentBlockArgBytes = block.partialJsonBytes ?? 0;
+              if (
+                currentBlockArgBytes + nextArgumentBytes >
+                ANTHROPIC_MESSAGES_TOOL_CALL_ARGUMENT_BUFFER_MAX_BYTES
+              ) {
+                throw new Error("Exceeded tool-call argument buffer limit");
+              }
+              block.partialJsonBytes = currentBlockArgBytes + nextArgumentBytes;
               const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
               block.partialJson = partialJson;
-              block.arguments = parseAnthropicToolCallArguments(partialJson);
+              // Reparsing the whole accumulated buffer on every delta is O(n^2)
+              // over a large tool argument, so coalesce it by a growth cadence;
+              // content_block_stop parses the complete buffer authoritatively.
+              if (
+                partialJson.length - (block.lastParsedArgumentsLength ?? 0) >=
+                ANTHROPIC_MESSAGES_TOOL_ARGS_REPARSE_MIN_GROWTH_CHARS
+              ) {
+                block.arguments = parseAnthropicToolCallArguments(partialJson);
+                block.lastParsedArgumentsLength = partialJson.length;
+              }
               eventSink.push({
                 type: "toolcall_delta",
                 contentIndex: index,
@@ -1790,7 +1815,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
+              if (block.partialJson) {
+                block.arguments = parseAnthropicToolCallArguments(block.partialJson);
+              }
               delete block.partialJson;
+              delete block.partialJsonBytes;
+              delete block.lastParsedArgumentsLength;
               eventSink.push({
                 type: "toolcall_end",
                 contentIndex: index,
