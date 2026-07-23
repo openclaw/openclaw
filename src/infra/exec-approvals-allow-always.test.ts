@@ -1626,6 +1626,11 @@ $0 \\"$1\\"" touch {marker}`,
       second: "scala --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
     },
     {
+      executable: "scala-cli",
+      first: "scala-cli --execute-script 'println(1)'",
+      second: "scala-cli --script-snippet 'sys.process.Process(\"sh -c id > {marker}\").!'",
+    },
+    {
       executable: "clojure",
       first: "clojure -e '(println 1)'",
       second: 'clojure -e \'(clojure.java.shell/sh "sh" "-c" "id > {marker}")\'',

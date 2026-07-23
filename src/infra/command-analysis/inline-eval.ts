@@ -190,7 +190,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     joinedFlagDenyPrefixes: ["-encoding="],
   },
   {
-    names: ["scala"],
+    names: ["scala", "scala-cli"],
     exactFlags: new Set([
       "-e",
       "--script-snippet",
@@ -222,7 +222,11 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     ],
   },
   { names: ["ghc", "ghci"], exactFlags: new Set(["-e"]), joinedExactFlags: new Set() },
-  { names: ["erl", "werl"], exactFlags: new Set(["-eval", "-run", "-s"]) },
+  {
+    names: ["erl", "werl"],
+    exactFlags: new Set(["-eval", "-run", "-s"]),
+    joinedExactFlags: new Set(),
+  },
   {
     names: ["gdb"],
     exactFlags: new Set([

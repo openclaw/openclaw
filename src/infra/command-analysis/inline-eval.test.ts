@@ -82,6 +82,10 @@ describe("exec inline eval detection", () => {
       expected: "scala --script-snippet",
     },
     {
+      argv: ["scala-cli", "--script-snippet", 'sys.process.Process("id").!'],
+      expected: "scala-cli --script-snippet",
+    },
+    {
       argv: ["scala", "--execute-script", 'sys.process.Process("id").!'],
       expected: "scala --execute-script",
     },
@@ -234,12 +238,16 @@ describe("exec inline eval detection", () => {
     expect(
       detectInterpreterInlineEvalArgv(["scala", "-encoding", "UTF-8", "script.scala"]),
     ).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["scala-cli", "script.scala"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["clojure", "-M", "-m", "app.main"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["clojure", "-e(println 1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["raku", "script.raku"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["raku", "-e say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ghc", "Main.hs"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ghc", "-exclude-module", "Debug.Trace"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["erl", "-sname", "node"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["erl", "-setcookie", "cookie"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["erl", "-shutdown_time", "1000"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["gdb", "--command=commands.gdb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["expect", "script.exp"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();
@@ -268,6 +276,7 @@ describe("exec inline eval detection", () => {
     expect(isInterpreterLikeAllowlistPattern("guile3.0")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/groovy")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("scala")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("scala-cli")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("clojure.exe")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/clj")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("raku")).toBe(true);
