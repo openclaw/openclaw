@@ -160,6 +160,9 @@ type ChatThreadProps = {
   getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: MessageReplyTarget) => void;
+  // Right-click message actions. When false the thread never calls
+  // preventDefault(), so the browser's native context menu opens instead.
+  messageContextMenuEnabled?: boolean;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
@@ -808,6 +811,10 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
 }
 
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
+  // Opt-out: leave the event untouched so the native context menu opens.
+  if (props.messageContextMenuEnabled === false) {
+    return;
+  }
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
   }

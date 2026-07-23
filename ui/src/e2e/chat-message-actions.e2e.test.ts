@@ -325,4 +325,69 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await context.close();
     }
   });
+
+  it("restores the native context menu when message actions are turned off", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const messageText = "Native context menu opt-out proof.";
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: messageText }],
+          timestamp: Date.now(),
+          __openclaw: { id: "assistant-optout-proof", seq: 1 },
+        },
+      ],
+    });
+
+    const bubbleFor = (target: Page) =>
+      target.locator(".chat-bubble").filter({ hasText: messageText }).first();
+    // dispatchEvent() returns false only when a listener called preventDefault(),
+    // so this is a real-browser read of whether the native menu was suppressed.
+    const contextMenuPrevented = (target: Page) =>
+      bubbleFor(target).evaluate(
+        (element) =>
+          !element.dispatchEvent(
+            new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
+          ),
+      );
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await bubbleFor(page).waitFor({ state: "visible" });
+      await bubbleFor(page).click({ button: "right" });
+      await page.locator(".chat-reply-context-menu").waitFor({ state: "visible" });
+      expect(await contextMenuPrevented(page)).toBe(true);
+      await screenshot(page, "04-actions-enabled-default.png");
+      await page.keyboard.press("Escape");
+
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const settingsRow = page
+        .locator(".settings-row--toggle")
+        .filter({ hasText: "Right-click message actions" });
+      const toggle = settingsRow.getByRole("switch");
+      await toggle.waitFor({ state: "visible" });
+      expect(await toggle.getAttribute("aria-checked")).toBe("true");
+      await screenshot(page, "05-setting-on.png");
+      // The row toggles on click everywhere outside the wa-switch itself, whose
+      // shadow control would otherwise intercept the pointer event.
+      await settingsRow.locator(".settings-row__title").click();
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+      await screenshot(page, "06-setting-off.png");
+
+      await page.goto(`${server.baseUrl}chat`);
+      await bubbleFor(page).waitFor({ state: "visible" });
+      expect(await contextMenuPrevented(page)).toBe(false);
+      await bubbleFor(page).click({ button: "right" });
+      await expect.poll(() => page.locator(".chat-reply-context-menu").count()).toBe(0);
+      await screenshot(page, "07-actions-disabled-native-menu.png");
+    } finally {
+      await context.close();
+    }
+  });
 });

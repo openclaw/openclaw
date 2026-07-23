@@ -116,6 +116,9 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  // Right-click message actions in the chat thread. Disable to fall back to the
+  // browser's native context menu.
+  chatMessageContextMenu?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
@@ -364,6 +367,7 @@ export function loadSettings(): UiSettings {
     pinnedAgentIds: [],
     textScale: 100,
     composerHoldToRecord: true,
+    chatMessageContextMenu: true,
   };
 
   try {
@@ -435,6 +439,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.composerHoldToRecord === "boolean"
           ? parsed.composerHoldToRecord
           : defaults.composerHoldToRecord,
+      chatMessageContextMenu:
+        typeof parsed.chatMessageContextMenu === "boolean"
+          ? parsed.chatMessageContextMenu
+          : defaults.chatMessageContextMenu,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       splitRatio:
@@ -575,6 +583,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
       ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
       : {}),
     ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
+    ...(next.chatMessageContextMenu === false ? { chatMessageContextMenu: false } : {}),
     ...(typeof next.talkCameraAutoEnable === "boolean"
       ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),
