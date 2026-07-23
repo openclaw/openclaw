@@ -185,7 +185,6 @@ export async function finishUpdate(params: {
   const postUpdateRoot = params.result.root ?? params.root;
 
   let postCorePluginUpdate;
-  let postUpdateConfigSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
   let pluginsUpdatedInFreshProcess = false;
   if (shouldResumePostCoreInFreshProcess) {
     const freshProcessResult = await continuePostCoreUpdateInFreshProcess({

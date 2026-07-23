@@ -19,6 +19,7 @@ import {
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
+  POST_CORE_UPDATE_STARTED_AT_ENV,
   readPostCorePluginInstallRecordsFile,
   resolvePostCoreUpdateStartedAtMs,
   writePostCorePluginUpdateResultFile,
@@ -64,10 +65,11 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     skipPluginValidation: true,
     suppressFutureVersionWarning: true,
   });
+  const updateStartedAtMs = await resolvePostCoreUpdateStartedAtMs(process.env);
   const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
     sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
     currentSnapshot: configSnapshot,
-    updateStartedAtMs: await resolvePostCoreUpdateStartedAtMs(process.env),
+    updateStartedAtMs,
   });
   configSnapshot = await persistRequestedUpdateChannel({
     configSnapshot,
@@ -77,13 +79,21 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
   const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
     process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
   );
+  // The updated doctor may have repaired or removed plugin installs before this process resumed.
   const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const persistedPluginIndex = await readPersistedInstalledPluginIndex();
-  // A present empty index is authoritative: another lifecycle may have removed every plugin.
-  const pluginInstallRecords =
-    Object.keys(currentPluginInstallRecords).length > 0 || persistedPluginIndex
-      ? currentPluginInstallRecords
-      : parentPluginInstallRecords;
+  const hasForwardedUpdateStart = Boolean(process.env[POST_CORE_UPDATE_STARTED_AT_ENV]?.trim());
+  const currentIndexIsAuthoritative =
+    Object.keys(currentPluginInstallRecords).length > 0 ||
+    Boolean(
+      persistedPluginIndex &&
+      hasForwardedUpdateStart &&
+      updateStartedAtMs !== undefined &&
+      persistedPluginIndex.generatedAtMs >= updateStartedAtMs,
+    );
+  const pluginInstallRecords = currentIndexIsAuthoritative
+    ? currentPluginInstallRecords
+    : parentPluginInstallRecords;
 
   const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
     root: params.root,
