@@ -256,7 +256,8 @@ on pinned current `main` as the exact command and validation contract.
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
    readback, then save the successful plugin run ID.
 7. Publish core from the same branch with the tag, `npm_dist_tag=extended-stable`,
-   all three run IDs, and the saved validation attempt. Require the prepared
+   all three run IDs, and
+   `full_release_validation_run_attempt=<saved-attempt>`. Require the prepared
    tarball and every run to match the branch and release SHA.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
