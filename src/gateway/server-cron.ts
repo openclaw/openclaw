@@ -1252,13 +1252,13 @@ export function buildGatewayCronService(params: {
     }
   };
   const removeCron = cron.remove.bind(cron);
-  cron.remove = async (jobId) => {
+  cron.remove = async (jobId, opts) => {
     const previous = cron.getJob(jobId);
     try {
       if (previous?.schedule.kind === "stream") {
         await streamWatchersRef.current?.stop(jobId, "removed", previous);
       }
-      const result = await removeCron(jobId);
+      const result = await removeCron(jobId, opts);
       if (!result.removed) {
         await routeLiveStreamJobLogged(jobId);
       }

@@ -1,6 +1,4 @@
 // Covers heartbeat tool-response handling and visible reply policy.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
@@ -17,6 +15,8 @@ import {
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
@@ -26,6 +26,7 @@ import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runne
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -287,6 +288,37 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("commits a scratch replacement without exposing it as reply channel data", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      const reply = createHeartbeatToolResponsePayload({
+        outcome: "progress",
+        notify: false,
+        summary: "Updated monitor context.",
+        scratch: "new private scratch",
+      });
+      expect(JSON.stringify(reply)).not.toContain("new private scratch");
+      replySpy.mockResolvedValue(reply);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
+        "new private scratch",
+      );
+    });
+  });
+
   it("persists a meaningful quiet outcome for the base session", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
@@ -410,15 +442,13 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   it("delivers a terminal tool warning without recording successful heartbeat bookkeeping", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      await fs.writeFile(
-        path.join(tmpDir, "HEARTBEAT.md"),
-        `tasks:
+      await seedHeartbeatScratchForTest({
+        content: `tasks:
   - name: check-delivery
     interval: 1m
     prompt: Check delivery
 `,
-        "utf-8",
-      );
+      });
       const cfg = createConfig({ tmpDir, storePath });
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
@@ -847,16 +877,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("uses the heartbeat response tool prompt for due heartbeat tasks", async () => {
     const result = await runPromptScenario({
       config: { visibleReplies: "message_tool" },
-      beforeSeed: async ({ tmpDir }) => {
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `tasks:
+      beforeSeed: async () => {
+        await seedHeartbeatScratchForTest({
+          content: `tasks:
   - name: status
     interval: 1m
     prompt: Check deployment status
 `,
-          "utf-8",
-        );
+        });
       },
     });
 

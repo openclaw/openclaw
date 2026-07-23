@@ -324,6 +324,8 @@ function createCronService(): GatewayCronServiceContract {
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
+    readScratch: vi.fn(async () => ({ currentRevision: 0 })),
+    writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
     wake: vi.fn(() => ({ ok: true })),
   };

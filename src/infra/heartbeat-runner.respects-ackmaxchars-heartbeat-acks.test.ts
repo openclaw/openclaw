@@ -1,5 +1,4 @@
 // Covers heartbeat ack truncation limits.
-import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -7,6 +6,7 @@ import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harne
 import {
   type HeartbeatReplySpy,
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedMainSessionStore,
   seedSessionStore,
   withTempHeartbeatSandbox,
@@ -274,15 +274,13 @@ describe("runHeartbeatOnce ack handling", () => {
   it("records completed tasks when HEARTBEAT_OK delivery fails", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const nowMs = Date.parse("2026-07-06T12:00:00.000Z");
-      await fs.writeFile(
-        `${tmpDir}/HEARTBEAT.md`,
-        `tasks:
+      await seedHeartbeatScratchForTest({
+        content: `tasks:
   - name: check-deployment
     interval: 5m
     prompt: Check deployment status
 `,
-        "utf-8",
-      );
+      });
       const cfg = createHeartbeatConfig({
         tmpDir,
         storePath,
@@ -325,15 +323,13 @@ describe("runHeartbeatOnce ack handling", () => {
   it("records completed tasks when HEARTBEAT_OK readiness checks fail", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const nowMs = Date.parse("2026-07-06T12:00:00.000Z");
-      await fs.writeFile(
-        `${tmpDir}/HEARTBEAT.md`,
-        `tasks:
+      await seedHeartbeatScratchForTest({
+        content: `tasks:
   - name: check-deployment
     interval: 5m
     prompt: Check deployment status
 `,
-        "utf-8",
-      );
+      });
       const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,

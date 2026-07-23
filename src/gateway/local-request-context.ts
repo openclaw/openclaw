@@ -54,6 +54,8 @@ const unavailableCron: GatewayCronServiceContract = {
   enqueueRun: async () => cronUnavailable(),
   getJob: () => undefined,
   readJob: async () => undefined,
+  readScratch: async (): Promise<never> => cronUnavailable(),
+  writeScratch: async () => cronUnavailable(),
   getDefaultAgentId: () => undefined,
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };

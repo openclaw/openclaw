@@ -1,6 +1,4 @@
 // Covers heartbeat commitment checks and runner scheduling behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { listDueCommitmentSessionKeys } from "../commitments/store.js";
@@ -19,6 +17,7 @@ import {
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -230,15 +229,13 @@ describe("runHeartbeatOnce commitments", () => {
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
         };
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `tasks:
+        await seedHeartbeatScratchForTest({
+          content: `tasks:
   - name: deployment-status
     interval: 5m
     prompt: Check deployment status with the normal tools
 `,
-          "utf-8",
-        );
+        });
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",
           lastProvider: "telegram",
@@ -695,7 +692,7 @@ describe("runHeartbeatOnce commitments", () => {
     });
   });
 
-  it("appends HEARTBEAT.md directives to commitment prompt when tasks are configured but none are due", async () => {
+  it("appends scratch directives to commitment prompt when tasks are configured but none are due", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
@@ -713,18 +710,16 @@ describe("runHeartbeatOnce commitments", () => {
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
         };
-        // HEARTBEAT.md has a tasks block (task ran recently — NOT due) plus extra prose directives.
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `Do not contact the user unless critical.
+        // Scratch has a tasks block (task ran recently — NOT due) plus extra prose directives.
+        await seedHeartbeatScratchForTest({
+          content: `Do not contact the user unless critical.
 
 tasks:
   - name: check-deployment
     interval: 5m
     prompt: Check deployment status
 `,
-          "utf-8",
-        );
+        });
         // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval, not due).
         await seedSessionStore(storePath, sessionKey, {
           sessionId: "sid",
@@ -748,7 +743,7 @@ tasks:
             // Must contain commitment text
             expect(ctx.Body).toContain("Due inferred follow-up commitments");
             expect(ctx.Body).toContain("How did the interview go?");
-            // Must also contain HEARTBEAT.md directives outside the tasks block
+            // Must also contain scratch directives outside the tasks block
             expect(ctx.Body).toContain("Do not contact the user unless critical.");
             // Must NOT contain the task prompt (task is not due)
             expect(ctx.Body).not.toContain("Check deployment status");
@@ -804,17 +799,15 @@ tasks:
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
         };
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `Run the global operations audit and surface any unrelated account drift.
+        await seedHeartbeatScratchForTest({
+          content: `Run the global operations audit and surface any unrelated account drift.
 
 tasks:
   - name: global-ops-audit
     interval: 5m
     prompt: Check every dashboard for unrelated account drift
 `,
-          "utf-8",
-        );
+        });
         await seedSessionStore(storePath, sessionKey, {
           sessionId: "sid",
           updatedAt: nowMs,
@@ -854,8 +847,8 @@ tasks:
             expect(ctx.Body).not.toContain("global operations audit");
             expect(ctx.Body).not.toContain("unrelated account drift");
             expect(ctx.Body).not.toContain("Run the following periodic tasks");
-            expect(ctx.Body).not.toContain("Additional context from HEARTBEAT.md");
-            expect(ctx.Body).not.toContain("Read HEARTBEAT.md");
+            expect(ctx.Body).not.toContain("Heartbeat monitor scratch:");
+            expect(ctx.Body).not.toContain("HEARTBEAT.md");
             expect(ctx.OriginatingChannel).toBe("telegram");
             expect(ctx.OriginatingTo).toBe("155462274");
             expect(opts?.disableTools).toBe(true);

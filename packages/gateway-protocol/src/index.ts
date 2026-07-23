@@ -196,6 +196,10 @@ import {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronScratchGetParamsSchema,
+  CronScratchGetResultSchema,
+  CronScratchSetParamsSchema,
+  CronScratchSetResultSchema,
   CronStatusParamsSchema,
   CronUpdateParamsSchema,
   DevicePairApproveParamsSchema,
@@ -950,6 +954,8 @@ export const validateCronUpdateParams = lazyCompile(CronUpdateParamsSchema);
 export const validateCronRemoveParams = lazyCompile(CronRemoveParamsSchema);
 export const validateCronRunParams = lazyCompile(CronRunParamsSchema);
 export const validateCronRunsParams = lazyCompile(CronRunsParamsSchema);
+export const validateCronScratchGetParams = lazyCompile(CronScratchGetParamsSchema);
+export const validateCronScratchSetParams = lazyCompile(CronScratchSetParamsSchema);
 export const validateDevicePairListParams = lazyCompile(DevicePairListParamsSchema);
 export const validateDevicePairApproveParams = lazyCompile(DevicePairApproveParamsSchema);
 export const validateDevicePairRejectParams = lazyCompile(DevicePairRejectParamsSchema);
@@ -1458,6 +1464,10 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  CronScratchGetParamsSchema,
+  CronScratchGetResultSchema,
+  CronScratchSetParamsSchema,
+  CronScratchSetResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
   TerminalOpenParamsSchema,
@@ -1966,6 +1976,10 @@ export type {
   CronRemoveParams,
   CronRunParams,
   CronRunsParams,
+  CronScratchGetParams,
+  CronScratchGetResult,
+  CronScratchSetParams,
+  CronScratchSetResult,
   CronRunLogEntry,
   ApprovalKind,
   ApprovalDecision,

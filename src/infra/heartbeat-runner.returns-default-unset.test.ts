@@ -14,6 +14,7 @@ import {
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -27,7 +28,7 @@ import {
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
-import { seedSessionStore } from "./heartbeat-runner.test-utils.js";
+import { seedHeartbeatScratchForTest, seedSessionStore } from "./heartbeat-runner.test-utils.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatDeliveryTargetWithSessionRoute,
@@ -41,6 +42,7 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 
 let fixtureRoot = "";
 let fixtureCount = 0;
+let previousStateDir: string | undefined;
 
 function normalizeWhatsAppTargetForTest(raw: string): string | null {
   const trimmed = raw
@@ -325,6 +327,8 @@ beforeAll(async () => {
   setActivePluginRegistry(testRegistry);
 
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-suite-"));
+  previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(fixtureRoot, "state");
 });
 
 beforeEach(() => {
@@ -335,6 +339,12 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  closeOpenClawStateDatabaseForTest();
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -1419,17 +1429,16 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  type HeartbeatFileState =
+  type HeartbeatScratchState =
     | "empty"
     | "actionable"
     | "legacy-comment-only"
     | "fenced-empty"
     | "fenced-actionable"
-    | "missing"
-    | "read-error";
+    | "missing";
 
   async function runHeartbeatFileScenario(params: {
-    fileState: HeartbeatFileState;
+    fileState: HeartbeatScratchState;
     source?: "notifications-event";
     reason?: "interval" | "wake";
     unscheduled?: boolean;
@@ -1442,57 +1451,33 @@ describe("runHeartbeatOnce", () => {
     const workspaceDir = path.join(tmpDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
 
-    if (params.fileState === "empty") {
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        "# HEARTBEAT.md\n\n## Tasks\n\n",
-        "utf-8",
-      );
-    } else if (params.fileState === "legacy-comment-only") {
-      // Compatibility case for the pre-198de10523 template shape, before the
-      // docs template started wrapping the scaffold in a fenced ```markdown block.
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        `# Keep this file empty (or with only comments) to skip heartbeat API calls.
+    const scratchContent =
+      params.fileState === "empty"
+        ? "# Heartbeat scratch\n\n## Tasks\n\n"
+        : params.fileState === "legacy-comment-only"
+          ? `# Keep this empty (or with only comments) to skip heartbeat API calls.
 
 # Add tasks below when you want the agent to check something periodically.
-`,
-        "utf-8",
-      );
-    } else if (params.fileState === "fenced-empty") {
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        `# HEARTBEAT.md Template
+`
+          : params.fileState === "fenced-empty"
+            ? `# Heartbeat scratch template
 
 \`\`\`markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this empty (or with only comments) to skip heartbeat API calls.
 
 # Add tasks below when you want the agent to check something periodically.
 \`\`\`
-`,
-        "utf-8",
-      );
-    } else if (params.fileState === "actionable") {
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        "# HEARTBEAT.md\n\n- Check server logs\n- Review pending PRs\n",
-        "utf-8",
-      );
-    } else if (params.fileState === "fenced-actionable") {
-      await fs.writeFile(
-        path.join(workspaceDir, "HEARTBEAT.md"),
-        `\`\`\`markdown
-# Keep this file empty when you want to skip.
+`
+            : params.fileState === "actionable"
+              ? "# Heartbeat scratch\n\n- Check server logs\n- Review pending PRs\n"
+              : params.fileState === "fenced-actionable"
+                ? `\`\`\`markdown
+# Keep this empty when you want to skip.
 
 - Check server logs
 \`\`\`
-`,
-        "utf-8",
-      );
-    } else if (params.fileState === "read-error") {
-      // readFile on a directory triggers EISDIR.
-      await fs.mkdir(path.join(workspaceDir, "HEARTBEAT.md"), { recursive: true });
-    }
+`
+                : null;
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -1504,6 +1489,7 @@ describe("runHeartbeatOnce", () => {
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
     };
+    await seedHeartbeatScratchForTest({ content: scratchContent });
     const sessionKey = resolveMainSessionKey(cfg);
     await seedWhatsAppSession(storePath, sessionKey);
     if (params.queueCronEvent) {
@@ -1540,8 +1526,8 @@ describe("runHeartbeatOnce", () => {
     return { res, replySpy, sendWhatsApp, workspaceDir };
   }
 
-  it("adds explicit workspace HEARTBEAT.md path guidance to heartbeat prompts", async () => {
-    const { res, replySpy, sendWhatsApp, workspaceDir } = await runHeartbeatFileScenario({
+  it("injects actionable monitor scratch without workspace file guidance", async () => {
+    const { res, replySpy, sendWhatsApp } = await runHeartbeatFileScenario({
       fileState: "actionable",
       reason: "interval",
       replyText: "Checked logs and PRs",
@@ -1551,22 +1537,21 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(replySpy).toHaveBeenCalledTimes(1);
       const calledCtx = replyBody(replySpy);
-      const expectedPath = path.join(workspaceDir, "HEARTBEAT.md").replace(/\\/g, "/");
-      expect(calledCtx.Body).toContain(`use workspace file ${expectedPath} (exact case)`);
-      expect(calledCtx.Body).toContain("Do not read docs/heartbeat.md.");
+      expect(calledCtx.Body).toContain("Heartbeat monitor scratch:");
+      expect(calledCtx.Body).toContain("Check server logs");
+      expect(calledCtx.Body).not.toContain("HEARTBEAT.md");
     } finally {
       replySpy.mockRestore();
     }
   });
 
-  it("keeps non-task HEARTBEAT.md context while stripping blank-line-separated task blocks", async () => {
+  it("keeps non-task scratch context while stripping blank-line-separated task blocks", async () => {
     const tmpDir = await createCaseDir("openclaw-hb-tasks-context");
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "HEARTBEAT.md"),
-      `# Keep this header
+    await seedHeartbeatScratchForTest({
+      content: `# Keep this header
 
 Remember escalation policy.
 
@@ -1583,8 +1568,7 @@ Some global directive after tasks.
 
 - Keep this top-level directive too.
 `,
-      "utf-8",
-    );
+    });
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -1614,7 +1598,7 @@ Some global directive after tasks.
     const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
-    expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
+    expect(calledCtx.Body).toContain("Heartbeat monitor scratch");
     expect(calledCtx.Body).toContain("# Keep this header");
     expect(calledCtx.Body).toContain("Remember escalation policy.");
     expect(calledCtx.Body).toContain("Some global directive after tasks.");
@@ -1629,9 +1613,8 @@ Some global directive after tasks.
     const storePath = path.join(tmpDir, "sessions.json");
     const workspaceDir = path.join(tmpDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, "HEARTBEAT.md"),
-      `# Keep this header
+    await seedHeartbeatScratchForTest({
+      content: `# Keep this header
 
 tasks:
 - name: inbox
@@ -1644,8 +1627,7 @@ tasks:
 
 - Keep this top-level directive after tasks.
 `,
-      "utf-8",
-    );
+    });
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -1675,7 +1657,7 @@ tasks:
     const calledCtx = replyBody(replySpy);
     expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
     expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
-    expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
+    expect(calledCtx.Body).toContain("Heartbeat monitor scratch");
     expect(calledCtx.Body).toContain("# Keep this header");
     expect(calledCtx.Body).toContain("- Keep this top-level directive after tasks.");
     expect(calledCtx.Body).not.toContain("name: inbox");
@@ -1685,10 +1667,10 @@ tasks:
     replySpy.mockReset();
   });
 
-  it("applies HEARTBEAT.md gating rules across file states and triggers", async () => {
+  it("applies scratch gating rules across content states and triggers", async () => {
     const cases: Array<{
       name: string;
-      fileState: HeartbeatFileState;
+      fileState: HeartbeatScratchState;
       reason?: "interval" | "wake";
       source?: "notifications-event";
       unscheduled?: boolean;
@@ -1774,13 +1756,6 @@ tasks:
       {
         name: "missing file runs",
         fileState: "missing",
-        expectedStatus: "ran",
-        expectedSendCalls: 1,
-        expectedReplyCalls: 1,
-      },
-      {
-        name: "read error runs",
-        fileState: "read-error",
         expectedStatus: "ran",
         expectedSendCalls: 1,
         expectedReplyCalls: 1,

@@ -106,6 +106,8 @@ const mocks = vi.hoisted(() => ({
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
+  collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
+  maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectWhatsappResponsivenessHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   noteWhatsappResponsivenessHealth: vi.fn().mockResolvedValue(undefined),
   collectDevicePairingHealthFindings: vi.fn(async () => []),
@@ -403,6 +405,11 @@ vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
   maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
 }));
 
+vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
+  collectHeartbeatScratchMigrationFindings: mocks.collectHeartbeatScratchMigrationFindings,
+  maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
+}));
+
 vi.mock("../commands/doctor-whatsapp-responsiveness.js", () => ({
   collectWhatsappResponsivenessHealthFindings: mocks.collectWhatsappResponsivenessHealthFindings,
   noteWhatsappResponsivenessHealth: mocks.noteWhatsappResponsivenessHealth,
@@ -668,6 +675,10 @@ describe("doctor health contributions", () => {
     mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
     mocks.maybeRepairHeartbeatTemplate.mockReset();
     mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
+    mocks.collectHeartbeatScratchMigrationFindings.mockReset();
+    mocks.collectHeartbeatScratchMigrationFindings.mockResolvedValue([]);
+    mocks.maybeMigrateHeartbeatFilesToScratch.mockReset();
+    mocks.maybeMigrateHeartbeatFilesToScratch.mockResolvedValue({ changes: [], warnings: [] });
     mocks.collectWhatsappResponsivenessHealthFindings.mockReset();
     mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValue([]);
     mocks.noteWhatsappResponsivenessHealth.mockReset();

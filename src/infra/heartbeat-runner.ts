@@ -1,7 +1,5 @@
 // Runs heartbeat checks and emits status updates for configured agents.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -12,23 +10,20 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import {
-  listAgentIds,
-  resolveAgentConfig,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
 } from "../auto-reply/heartbeat-reply-payload.js";
-import { resolveHeartbeatToolResponseFromReplyResult } from "../auto-reply/heartbeat-tool-response.js";
+import {
+  resolveHeartbeatScratchProposalFromReplyResult,
+  resolveHeartbeatToolResponseFromReplyResult,
+} from "../auto-reply/heartbeat-tool-response.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
@@ -93,6 +88,8 @@ import {
   type CronActiveJobMarker,
 } from "../cron/active-jobs.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
+import { readHeartbeatMonitorScratch, writeCronJobScratch } from "../cron/scratch-store.js";
+import { resolveCronJobsStorePath } from "../cron/store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import {
@@ -113,7 +110,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import {
   createActiveHoursPredicate,
@@ -174,7 +171,6 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { readRegularFile } from "./regular-file.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -812,7 +808,9 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   shouldInspectPendingEvents: boolean;
   skipReason?: HeartbeatSkipReason;
   tasks?: HeartbeatTask[];
-  heartbeatFileContent?: string;
+  scratchJobId?: string;
+  scratchRevision?: number;
+  heartbeatScratchContent?: string;
 };
 
 async function resolveHeartbeatPreflight(params: {
@@ -879,6 +877,12 @@ async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
+  let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
+  try {
+    monitorScratch = readHeartbeatMonitorScratch(resolveCronJobsStorePath(), params.agentId);
+  } catch (error) {
+    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
+  }
   const basePreflight = {
     ...wakeFlags,
     session,
@@ -887,62 +891,43 @@ async function resolveHeartbeatPreflight(params: {
     dueCommitments,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
+    ...(monitorScratch?.jobId
+      ? {
+          scratchJobId: monitorScratch.jobId,
+          scratchRevision: monitorScratch.state.currentRevision,
+        }
+      : {}),
+    ...(monitorScratch?.state.scratch
+      ? { heartbeatScratchContent: monitorScratch.state.scratch.content }
+      : {}),
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
   if (shouldBypassFileGates) {
     return basePreflight;
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
-  const MAX_HEARTBEAT_FILE_BYTES = 16 * 1024 * 1024;
-  let heartbeatFileContent: string | undefined;
-  try {
-    // Resolve symlinks so a HEARTBEAT.md pointing to a regular file keeps
-    // working; missing/broken symlinks still surface as ENOENT below.
-    const resolvedHeartbeatFilePath = await fs.realpath(heartbeatFilePath);
-    heartbeatFileContent = (
-      await readRegularFile({
-        filePath: resolvedHeartbeatFilePath,
-        maxBytes: MAX_HEARTBEAT_FILE_BYTES,
-      })
-    ).buffer.toString("utf-8");
-    const tasks = parseHeartbeatTasks(heartbeatFileContent);
-    if (
-      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
-      tasks.length === 0 &&
-      dueCommitments.length === 0
-    ) {
-      return {
-        ...basePreflight,
-        skipReason: "empty-heartbeat-file",
-        tasks: [],
-        heartbeatFileContent,
-      };
-    }
-    // Return tasks even if file has other content - backward compatible
+  const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
+  if (heartbeatScratchContent === undefined) {
+    // No scratch row preserves the old missing-file behavior: the model still
+    // gets the generic heartbeat prompt and decides whether anything is due.
+    return basePreflight;
+  }
+  const tasks = parseHeartbeatTasks(heartbeatScratchContent);
+  if (
+    isHeartbeatContentEffectivelyEmpty(heartbeatScratchContent) &&
+    tasks.length === 0 &&
+    dueCommitments.length === 0
+  ) {
     return {
       ...basePreflight,
-      tasks,
-      heartbeatFileContent,
+      skipReason: "empty-heartbeat-file",
+      tasks: [],
     };
-  } catch (err: unknown) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      // Missing HEARTBEAT.md is intentional in some setups (for example, when
-      // heartbeat instructions live outside the file), so keep the run active.
-      // The heartbeat prompt already says "if it exists".
-      return basePreflight;
-    }
-    // Oversized files loaded in full before the cap existed, so tell the
-    // operator why their heartbeat instructions no longer apply instead of
-    // dropping them silently. Other read errors keep proceeding as before.
-    if (err instanceof Error && err.message.startsWith("File exceeds")) {
-      log.warn(`heartbeat: skipping oversized ${DEFAULT_HEARTBEAT_FILENAME}: ${err.message}`);
-    }
-    // For other read errors, proceed with heartbeat as before.
   }
-
-  return basePreflight;
+  return {
+    ...basePreflight,
+    tasks,
+  };
 }
 
 type HeartbeatPromptResolution = {
@@ -969,18 +954,6 @@ function resolveDueHeartbeatTasks(
       startedAt,
     ),
   );
-}
-
-function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
-  if (!/heartbeat\.md/i.test(prompt)) {
-    return prompt;
-  }
-  const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME).replace(/\\/g, "/");
-  const hint = `When reading HEARTBEAT.md, use workspace file ${heartbeatFilePath} (exact case). Do not read docs/heartbeat.md.`;
-  if (prompt.includes(hint)) {
-    return prompt;
-  }
-  return `${prompt}\n${hint}`;
 }
 
 function stripHeartbeatTasksBlock(content: string): string {
@@ -1012,25 +985,16 @@ function stripHeartbeatTasksBlock(content: string): string {
   return kept.join("\n");
 }
 
-/**
- * Append the workspace HEARTBEAT.md directives (everything outside the
- * `tasks:` block) to the prompt. Runs on every heartbeat path that actually
- * dispatches a model call, so prose-style runbooks (the common case in
- * production setups) reach the model — not only files that happen to declare
- * periodic tasks.
- */
-function appendHeartbeatFileDirectives(prompt: string, heartbeatFileContent?: string): string {
-  if (!heartbeatFileContent) {
+/** Appends monitor scratch prose outside the optional `tasks:` block. */
+function appendHeartbeatScratch(prompt: string, heartbeatScratchContent?: string): string {
+  if (!heartbeatScratchContent) {
     return prompt;
   }
-  const directives = stripHeartbeatTasksBlock(heartbeatFileContent).trim();
-  if (!directives) {
+  const directives = stripHeartbeatTasksBlock(heartbeatScratchContent).trim();
+  if (!directives || prompt.includes(directives)) {
     return prompt;
   }
-  if (prompt.includes(directives)) {
-    return prompt;
-  }
-  return `${prompt}\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
+  return `${prompt}\n\nHeartbeat monitor scratch:\n${directives}`;
 }
 
 function resolveHeartbeatRunPrompt(params: {
@@ -1038,10 +1002,9 @@ function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
-  workspaceDir: string;
   startedAt: number;
   dueTasks: HeartbeatTask[];
-  heartbeatFileContent?: string;
+  heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;
   runScope: HeartbeatRunScope;
 }): HeartbeatPromptResolution {
@@ -1101,7 +1064,7 @@ function resolveHeartbeatRunPrompt(params: {
 ${taskList}
 
 ${completionInstruction}`;
-      const prompt = appendHeartbeatFileDirectives(taskListPrompt, params.heartbeatFileContent);
+      const prompt = appendHeartbeatScratch(taskListPrompt, params.heartbeatScratchContent);
       return {
         prompt,
         hasExecCompletion: false,
@@ -1113,7 +1076,7 @@ ${completionInstruction}`;
     }
     if (commitmentPrompt) {
       return {
-        prompt: appendHeartbeatFileDirectives(commitmentPrompt, params.heartbeatFileContent),
+        prompt: appendHeartbeatScratch(commitmentPrompt, params.heartbeatScratchContent),
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
@@ -1145,10 +1108,9 @@ ${completionInstruction}`;
       : baseUsesHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
         : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
-  const basePromptWithHint = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
-  const basePromptWithDirectives = appendHeartbeatFileDirectives(
-    basePromptWithHint,
-    params.heartbeatFileContent,
+  const basePromptWithDirectives = appendHeartbeatScratch(
+    basePrompt,
+    params.heartbeatScratchContent,
   );
   const prompt = commitmentPrompt
     ? `${basePromptWithDirectives}\n\n${commitmentPrompt}`
@@ -1460,7 +1422,6 @@ export async function runHeartbeatOnce(opts: {
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   let useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
@@ -1474,10 +1435,9 @@ export async function runHeartbeatOnce(opts: {
     heartbeat,
     preflight,
     canRelayToUser,
-    workspaceDir,
     startedAt,
     dueTasks: dueHeartbeatTasks,
-    heartbeatFileContent: preflight.heartbeatFileContent,
+    heartbeatScratchContent: preflight.heartbeatScratchContent,
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
     runScope,
   });
@@ -1598,10 +1558,9 @@ export async function runHeartbeatOnce(opts: {
         heartbeat,
         preflight,
         canRelayToUser,
-        workspaceDir,
         startedAt,
         dueTasks: dueHeartbeatTasks,
-        heartbeatFileContent: preflight.heartbeatFileContent,
+        heartbeatScratchContent: preflight.heartbeatScratchContent,
         useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
         runScope,
       });
@@ -1842,8 +1801,32 @@ export async function runHeartbeatOnce(opts: {
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
+    const heartbeatScratchProposal = resolveHeartbeatScratchProposalFromReplyResult(replyResult);
     const heartbeatTerminalToolFailure = resolveHeartbeatTerminalToolFailure(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
+    if (
+      heartbeatScratchProposal !== undefined &&
+      heartbeatToolResponse &&
+      !heartbeatTerminalToolFailure
+    ) {
+      if (!preflight.scratchJobId) {
+        log.warn("heartbeat: scratch update ignored because no monitor job exists");
+      } else {
+        try {
+          const scratchWrite = writeCronJobScratch({
+            storePath: resolveCronJobsStorePath(),
+            jobId: preflight.scratchJobId,
+            content: heartbeatScratchProposal,
+            expectedRevision: preflight.scratchRevision ?? 0,
+          });
+          if (!scratchWrite.ok) {
+            log.warn("heartbeat: scratch update lost a concurrent revision race");
+          }
+        } catch (error) {
+          log.warn(`heartbeat: scratch update failed: ${formatErrorMessage(error)}`);
+        }
+      }
+    }
     if (
       !heartbeatToolResponse &&
       (!replyPayload || !hasOutboundReplyContent(replyPayload)) &&

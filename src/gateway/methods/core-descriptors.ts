@@ -278,6 +278,8 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "cron.get", scope: "operator.read", since: "<=2026.7" },
   { name: "cron.list", scope: "operator.read", since: "<=2026.7" },
   { name: "cron.status", scope: "operator.read", since: "<=2026.7" },
+  { name: "cron.scratch.get", scope: "operator.admin", since: "2026.7" },
+  { name: "cron.scratch.set", scope: "operator.admin", since: "2026.7" },
   { name: "cron.add", scope: "operator.admin", since: "<=2026.7" },
   { name: "cron.update", scope: "operator.admin", since: "<=2026.7" },
   { name: "cron.remove", scope: "operator.admin", since: "<=2026.7" },
