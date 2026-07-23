@@ -7,6 +7,7 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
     async (params: {
       url: string;
       init?: RequestInit;
+      timeoutMs?: number;
       fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     }) => {
       const fetchImpl = params.fetchImpl ?? globalThis.fetch;
@@ -32,6 +33,7 @@ import {
 } from "./oauth.flow.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
+  MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
   MSTEAMS_OAUTH_REDIRECT_URI,
   buildMSTeamsAuthEndpoint,
   buildMSTeamsTokenEndpoint,
@@ -215,7 +217,10 @@ describe("exchangeMSTeamsCodeForTokens", () => {
     expect(body.get("code")).toBe("auth-code");
     expect(body.get("code_verifier")).toBe("pkce-verifier");
     expect(body.get("redirect_uri")).toBe(MSTEAMS_OAUTH_REDIRECT_URI);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
+    const guardCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+    expect(guardCall).not.toHaveProperty("fetchImpl");
+    expect(guardCall?.timeoutMs).toBe(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS);
+    expect(guardCall?.init?.signal).toBeUndefined();
   });
 
   it("throws on a 400 error response", async () => {
@@ -318,6 +323,9 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");
     expect(body.get("client_secret")).toBe("secret-1");
+    const guardCall = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+    expect(guardCall?.timeoutMs).toBe(MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS);
+    expect(guardCall?.init?.signal).toBeUndefined();
   });
 
   it("uses new refresh token when Azure returns one", async () => {
