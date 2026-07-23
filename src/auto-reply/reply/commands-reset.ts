@@ -1,3 +1,8 @@
+import { listAgentIds } from "../../agents/agent-scope-config.js";
+import {
+  resolveAgentExplicitModelPrimary,
+  resolveAgentModelFallbacksOverride,
+} from "../../agents/agent-scope.js";
 /** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
@@ -80,6 +85,17 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
   if (defaultsModel) {
     addModelRefValue(defaultsModel.primary);
     for (const fallback of Array.isArray(defaultsModel.fallbacks) ? defaultsModel.fallbacks : []) {
+      addModelRefValue(fallback);
+    }
+  }
+  // Per-agent overrides (agents.entries.*.model / agents.list[].model) are honored by the
+  // canonical reset-model resolver but are absent from models.providers and the defaults
+  // model, so a native `/new custom/private-model ...` tail would otherwise be misread as a
+  // session name and drop the prompt. Fold every configured agent's explicit primary and
+  // fallback overrides into the ref set so they classify as model directives too.
+  for (const agentId of listAgentIds(params.cfg)) {
+    addModelRefValue(resolveAgentExplicitModelPrimary(params.cfg, agentId));
+    for (const fallback of resolveAgentModelFallbacksOverride(params.cfg, agentId) ?? []) {
       addModelRefValue(fallback);
     }
   }

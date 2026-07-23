@@ -2236,6 +2236,19 @@ class ChatPane extends OpenClawLightDomElement {
         // Recompute rather than null: the builtin snapshot also carries the
         // swarm card, which must survive an observer-only invalidation.
         this.refreshBuiltinBoardSnapshot();
+        // A board-preserving reset reuses the session key instead of calling
+        // sessions.create, so a requested /new --name label must be applied to
+        // the reset session explicitly or it would be silently dropped.
+        if (options?.label && isCurrent()) {
+          const labelAgentId =
+            scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+            resolveAgentIdFromSessionKey(previousSessionKey);
+          await sessions.patch(
+            previousSessionKey,
+            { label: options.label },
+            labelAgentId ? { agentId: labelAgentId } : undefined,
+          );
+        }
       }
       return resetResult !== "failed";
     }

@@ -811,6 +811,31 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps native /new tails using a per-agent model override available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new custom/private-model summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        // The override lives only under a per-agent model, not models.providers or
+        // agents.defaults.model, so classification must still treat it as a model directive.
+        agents: {
+          list: [{ id: "main", default: true, model: { primary: "custom/private-model" } }],
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "custom/private-model summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
   it("allows slashes in native structured /new title args", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry(
