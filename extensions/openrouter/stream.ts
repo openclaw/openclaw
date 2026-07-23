@@ -1,4 +1,5 @@
 // Openrouter plugin module implements stream behavior.
+import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
@@ -232,6 +233,43 @@ function injectOpenRouterRouting(
   );
 }
 
+function isOpenRouterSessionIdForwardingEnabled(ctx: ProviderWrapStreamFnContext): boolean {
+  return ctx.config?.plugins?.entries?.openrouter?.config?.forwardSessionId === true;
+}
+
+// Derives a stable, OpenRouter-scoped identifier from the raw OpenClaw
+// session id instead of forwarding the raw id itself. The namespace prefix
+// domain-separates this from any other subsystem that hashes the same
+// session id, and the fixed 64-char hex digest is well under OpenRouter's
+// 256-character session_id cap.
+function deriveOpenRouterSessionId(sessionId: string): string {
+  return createHash("sha256").update(`openrouter-session:${sessionId}`).digest("hex");
+}
+
+function injectOpenRouterSessionId(baseStreamFn: StreamFn | undefined): StreamFn {
+  // OpenRouter uses session_id as a sticky routing key (keeps a session on one
+  // upstream provider for better prompt-cache hits) and for observability. The
+  // live OpenClaw session id arrives as options.sessionId; forward a derived
+  // opaque value only when the operator opted in, and never override a
+  // caller/config-set value.
+  return createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload, options }) => {
+      if (payload.session_id !== undefined) {
+        return;
+      }
+      const sessionId = readString(options?.sessionId);
+      if (!sessionId) {
+        return;
+      }
+      payload.session_id = deriveOpenRouterSessionId(sessionId);
+    },
+    {
+      shouldPatch: ({ model }) => shouldPatchOpenRouterRoutingPayload(model),
+    },
+  );
+}
+
 function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(
     baseStreamFn,
@@ -310,9 +348,12 @@ export function wrapOpenRouterProviderStream(
     ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
       ? (ctx.extraParams.provider as Record<string, unknown>)
       : undefined;
-  const routedStreamFn = providerRouting
-    ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
+  const sessionAwareStreamFn = isOpenRouterSessionIdForwardingEnabled(ctx)
+    ? injectOpenRouterSessionId(ctx.streamFn)
     : ctx.streamFn;
+  const routedStreamFn = providerRouting
+    ? injectOpenRouterRouting(sessionAwareStreamFn, providerRouting)
+    : sessionAwareStreamFn;
   const wrapStreamFn = openRouterThinkingStreamHooks.wrapStreamFn ?? undefined;
   if (!wrapStreamFn) {
     return createOpenRouterAnthropicPrefillWrapper(
