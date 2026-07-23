@@ -4,7 +4,7 @@ type CacheEntry<T> = {
   staleUntil: number;
 };
 
-export type SessionCatalogListCoordinatorOptions = {
+type SessionCatalogListCoordinatorOptions = {
   freshTtlMs: number;
   staleTtlMs: number;
   maxCacheEntries: number;
@@ -12,7 +12,7 @@ export type SessionCatalogListCoordinatorOptions = {
   now?: () => number;
 };
 
-export type SessionCatalogListCacheKeyInput = {
+type SessionCatalogListCacheKeyInput = {
   catalogIds: readonly string[];
   agentId: string;
   search?: string;
