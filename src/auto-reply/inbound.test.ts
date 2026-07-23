@@ -960,6 +960,42 @@ describe("createInboundDebouncer", () => {
     await Promise.all([first, second]);
   });
 
+  it("keeps async immediate decisions ordered until delivery finishes", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDecision: async () => ({ action: "bypass" }),
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await vi.waitFor(() => {
+      expect(started).toEqual(["1"]);
+    });
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
+  });
+
   it("serializes keyed turns when immediate serialization is enabled", async () => {
     const started: string[] = [];
     let releaseFirst: (() => void) | undefined;

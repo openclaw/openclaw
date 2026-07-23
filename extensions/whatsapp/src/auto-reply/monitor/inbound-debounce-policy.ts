@@ -7,6 +7,10 @@ import { normalizeWebInboundMessage } from "../../inbound/message-aliases.js";
 import type { WebInboundMessageInput } from "../../inbound/types.js";
 import { getRuntimeConfig } from "../config.runtime.js";
 
+// Saved inbound media has a one-hour minimum retention contract. Keep plugin
+// windows well below it so a cleanup sweep cannot remove files before flush.
+const MAX_MEDIA_DEBOUNCE_MS = 5 * 60_000;
+
 export function resolveWhatsAppInboundDebounceDecision(params: {
   cfg: ReturnType<typeof getRuntimeConfig>;
   msg: WebInboundMessageInput;
@@ -40,6 +44,9 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
   }
   const mediaItems =
     normalized.payload.mediaItems ?? (normalized.payload.media ? [normalized.payload.media] : []);
+  const hasMedia = mediaItems.some((entry) =>
+    Boolean(entry.path || entry.url || entry.type || entry.kind),
+  );
   return hookRunner
     .runInboundDebounce(
       {
@@ -50,9 +57,7 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
         defaultDebounceMs: params.defaultDebounceMs,
         conversationKind: admission.conversation.kind,
         message: {
-          hasMedia: mediaItems.some((entry) =>
-            Boolean(entry.path || entry.url || entry.type || entry.kind),
-          ),
+          hasMedia,
           hasLocation: Boolean(normalized.payload.location),
           hasQuote: Boolean(normalized.quote?.id || normalized.quote?.body),
         },
@@ -65,5 +70,18 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
         senderId: admission.sender.id,
       },
     )
-    .then((pluginDecision) => pluginDecision ?? defaultDecision);
+    .then((pluginDecision) => {
+      const decision = pluginDecision ?? defaultDecision;
+      if (!hasMedia || decision.action !== "debounce") {
+        return decision;
+      }
+      const requestedMs =
+        typeof decision.debounceMs === "number" && Number.isFinite(decision.debounceMs)
+          ? Math.max(0, Math.trunc(decision.debounceMs))
+          : params.defaultDebounceMs;
+      return {
+        action: "debounce" as const,
+        debounceMs: Math.min(requestedMs, MAX_MEDIA_DEBOUNCE_MS),
+      };
+    });
 }

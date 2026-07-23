@@ -168,6 +168,9 @@ one admitted message. The first explicit result in priority order wins. Return
 that have the same channel-owned `event.debounceKey`. Returning nothing keeps
 the channel default.
 
+WhatsApp caps plugin-selected media windows at five minutes so persisted
+attachment files remain available until the batch flushes.
+
 The hook receives `ctx.channelId`, `ctx.accountId`, `ctx.conversationId`, and
 `ctx.senderId`, plus the conversation kind and message facts for media,
 location, and quoted replies. This lets plugin-owned config define different

@@ -302,13 +302,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
             await runQueuedFlush(key, generation, [item]);
           });
           const flushTask = flushKey(key);
-          markApplied();
           try {
             await flushTask;
           } finally {
             reservedTask.release();
           }
           await reservedTask.task;
+          markApplied();
           return;
         }
         if (keyChains.has(key)) {
@@ -316,25 +316,25 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           const task = enqueueKeyTask(key, async () => {
             await runQueuedFlush(key, generation, [item]);
           });
-          markApplied();
           await task;
+          markApplied();
           return;
         }
         if (params.serializeImmediate) {
           const task = runKeyTaskNow(key, async () => {
             await runFlush([item]);
           });
-          markApplied();
           await task;
+          markApplied();
           return;
         }
         const task = runFlush([item]);
-        markApplied();
         await task;
+        markApplied();
       } else {
         const task = runFlush([item]);
-        markApplied();
         await task;
+        markApplied();
       }
       return;
     }

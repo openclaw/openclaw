@@ -1107,13 +1107,13 @@ describe("web auto-reply connection", () => {
     ).rejects.toThrow(/legacy flat or canonical nested/);
   });
 
-  it("lets a plugin override the debounce window for a rich message", async () => {
+  it("caps a plugin debounce window for a rich message", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
     inboundDebounceHookMocks.hasHooks.mockReturnValueOnce(true);
     inboundDebounceHookMocks.runInboundDebounce.mockResolvedValueOnce({
       action: "debounce",
-      debounceMs: 120_000,
+      debounceMs: 600_000,
     });
 
     await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
@@ -1144,7 +1144,7 @@ describe("web auto-reply connection", () => {
 
     await expect(capture.getLastOptions()?.resolveDebounceDecision?.(msg)).resolves.toEqual({
       action: "debounce",
-      debounceMs: 120_000,
+      debounceMs: 300_000,
     });
     expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
       expect.objectContaining({
