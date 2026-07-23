@@ -845,11 +845,14 @@ function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
   if (path.join(".") === "auth.profiles") {
     return true;
   }
+  if (path.join(".") === "agents.entries") {
+    return true;
+  }
   return false;
 }
 
 function isProtectedArrayReplacementPath(path: PathSegment[]): boolean {
-  return isProviderModelListPath(path) || path.join(".") === "agents.list";
+  return isProviderModelListPath(path);
 }
 
 function formatRemovedEntries(entries: string[]): string {
