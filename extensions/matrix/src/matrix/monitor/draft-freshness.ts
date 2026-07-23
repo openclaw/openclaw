@@ -338,6 +338,7 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
   agentId: string;
   ctxPayload: Record<string, unknown>;
   draftText?: string;
+  fallbackPayload: ReplyPayload;
   latestPendingHistory?: readonly HistoryEntry[];
   log?: (message: string) => void;
 }): Promise<ReplyPayload | undefined> {
@@ -357,20 +358,26 @@ export async function reviseMatrixFinalReplyWithFreshness(params: {
   });
   if ("error" in prepared) {
     params.log?.(`matrix freshness revision model unavailable: ${prepared.error}`);
-    return undefined;
+    return params.fallbackPayload;
   }
-  const completion = await completeWithPreparedSimpleCompletionModel({
-    model: prepared.model,
-    auth: prepared.auth,
-    context: [
-      {
-        role: "user",
-        content: freshCtxPayload.BodyForAgent,
-      },
-    ] as never,
-    cfg: params.cfg as never,
-  });
-  const text = (completion as { text?: string }).text;
+  let text: string | undefined;
+  try {
+    const completion = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      context: [
+        {
+          role: "user",
+          content: freshCtxPayload.BodyForAgent,
+        },
+      ] as never,
+      cfg: params.cfg as never,
+    });
+    text = (completion as { text?: string }).text;
+  } catch (err) {
+    params.log?.(`matrix freshness revision failed; sending original draft: ${String(err)}`);
+    return params.fallbackPayload;
+  }
   if (!text?.trim() || isSilentReplyText(text)) {
     return undefined;
   }

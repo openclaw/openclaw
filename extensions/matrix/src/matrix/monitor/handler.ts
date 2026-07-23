@@ -143,6 +143,7 @@ import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;
 const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
+const MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS = 2;
 
 const loadMatrixSendModule = createLazyRuntimeModule(() => import("../send.js"));
 
@@ -449,7 +450,11 @@ function resolveMatrixParticipationAgents(params: {
   core: PluginRuntime;
   currentAccountId: string;
   currentAgentId: string;
+  dmSessionScope?: "per-user" | "per-room";
+  eventTs?: number;
   roomId: string;
+  senderId: string;
+  threadId?: string;
   log?: (message: string) => void;
 }): ParticipationAgentIdentity[] {
   const cfg = params.cfg;
@@ -477,14 +482,16 @@ function resolveMatrixParticipationAgents(params: {
   routedAgentAccountIds.set(params.currentAgentId, params.currentAccountId);
   for (const accountId of routeAccountIds) {
     try {
-      const route = params.core.channel.routing.resolveAgentRoute({
+      const { route } = resolveMatrixInboundRoute({
         cfg,
-        channel: "matrix",
         accountId,
-        peer: {
-          kind: "channel",
-          id: params.roomId,
-        },
+        roomId: params.roomId,
+        senderId: params.senderId,
+        isDirectMessage: false,
+        dmSessionScope: params.dmSessionScope,
+        threadId: params.threadId,
+        eventTs: params.eventTs,
+        resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
       });
       if (route.agentId?.trim()) {
         routedAgentAccountIds.set(route.agentId.trim(), accountId);
@@ -818,6 +825,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const { audioPreflightMode, locationPayload, reservedHistorySlot, selfUserId } =
           paramsLocal;
         const messageId = event.event_id ?? "";
+        const latestVisibleIngressSnapshot =
+          isRoom && accountConfig?.freshness?.enabled === true && messageId
+            ? latestVisibleTracker.prepareTrigger("_matrix_ingress", roomId, event)
+            : undefined;
         const threadRootId = resolveMatrixThreadRootId({ event, content });
         const thread = resolveMatrixThreadRouting({
           isDirectMessage,
@@ -1304,7 +1315,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 core,
                 currentAccountId: _route.accountId,
                 currentAgentId: _route.agentId,
+                dmSessionScope,
+                eventTs: eventTs ?? undefined,
                 roomId,
+                senderId,
+                threadId: thread.threadId,
                 log: logVerboseMessage,
               })
             : [];
@@ -1317,9 +1332,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
             : pendingHistoryText || pendingHistoryPollText;
-          if (freshnessEnabled) {
-            latestVisibleTracker.recordPending(roomId, event);
-          }
           if (!(historyLimit > 0 && pendingHistoryBody)) {
             return;
           }
@@ -1562,9 +1574,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           reservedHistorySlotConsumed = true;
         }
         const latestVisibleTriggerSnapshot =
-          freshnessEnabled && messageId
-            ? latestVisibleTracker.prepareTrigger(_route.agentId, roomId, event)
-            : undefined;
+          freshnessEnabled && messageId ? latestVisibleIngressSnapshot : undefined;
         const inboundHistory = preparedTrigger
           ? buildInboundHistoryFromEntries({
               entries: preparedTrigger.history,
@@ -2335,9 +2345,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           selfUserId,
           threadId: threadTarget,
         });
+      const freshnessStateSignature = (state: ReturnType<typeof refreshDraftFreshnessState>) =>
+        JSON.stringify({
+          invalidatingEventIds: state.invalidatingEventIds,
+          recheckEventIds: state.recheckEventIds,
+          latestVisibleEventIds: state.latestVisibleEventIds,
+          latestPendingHistory: (state.latestPendingHistory ?? []).map((entry) => ({
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+            messageId: entry.messageId,
+          })),
+        });
+      const freshnessStateAdvanced = (
+        before: ReturnType<typeof refreshDraftFreshnessState>,
+        after: ReturnType<typeof refreshDraftFreshnessState>,
+      ) => freshnessStateSignature(before) !== freshnessStateSignature(after);
       const resolveFreshnessFinalPayload = async (
         payload: ReplyPayload,
-      ): Promise<ReplyPayload | undefined> => {
+      ): Promise<ReplyPayload | null> => {
         if (!freshnessEnabled || payload.isError || payload.isCompactionNotice) {
           return payload;
         }
@@ -2347,66 +2373,88 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         }
         const draftEventId = draftStream?.eventId();
-        const state = refreshDraftFreshnessState(draftEventId);
-        if (!state.roomChangedSinceDraftStart) {
-          return payload;
+        let state = refreshDraftFreshnessState(draftEventId);
+        for (let attempt = 0; attempt <= MATRIX_FRESHNESS_MAX_ASYNC_RECHECKS; attempt += 1) {
+          if (!state.roomChangedSinceDraftStart) {
+            return payload;
+          }
+          const selectedAction = await chooseMatrixFinalFreshnessAction({
+            allowedActions: freshnessAllowedFinalActions,
+            cfg,
+            config: freshnessConfig,
+            ctxPayload: ctxPayload as Record<string, unknown>,
+            draftText: payload.text,
+            mode: freshnessMode,
+            state,
+            agentId: _route.agentId,
+            log: logVerboseMessage,
+          });
+          const stateAfterActionSelection = refreshDraftFreshnessState(draftEventId);
+          if (freshnessStateAdvanced(state, stateAfterActionSelection)) {
+            state = stateAfterActionSelection;
+            continue;
+          }
+          const finalAction =
+            visibleReplyOutputStarted && selectedAction !== "send-as-is"
+              ? "send-as-is"
+              : selectedAction;
+          logger.info("matrix freshness decision", {
+            roomId,
+            eventId: messageId,
+            agentId: _route.agentId,
+            mode: freshnessMode,
+            action: finalAction,
+            requestedAction: selectedAction,
+            changed: true,
+            reason: state.reason,
+            invalidatingEventIds: state.invalidatingEventIds,
+            recheckEventIds: state.recheckEventIds,
+            latestVisibleEventIds: state.latestVisibleEventIds,
+            visibleReplyOutputStarted,
+            attempt,
+          });
+          if (finalAction === "send-as-is") {
+            return payload;
+          }
+          if (finalAction === "suppress") {
+            return null;
+          }
+          const revised = await reviseMatrixFinalReplyWithFreshness({
+            cfg,
+            config: freshnessConfig,
+            agentId: _route.agentId,
+            ctxPayload: ctxPayload as Record<string, unknown>,
+            draftText: payload.text,
+            fallbackPayload: payload,
+            latestPendingHistory: state.latestPendingHistory,
+            log: logVerboseMessage,
+          });
+          const stateAfterRevision = refreshDraftFreshnessState(draftEventId);
+          if (freshnessStateAdvanced(state, stateAfterRevision)) {
+            state = stateAfterRevision;
+            continue;
+          }
+          return revised ?? null;
         }
-        const selectedAction = await chooseMatrixFinalFreshnessAction({
-          allowedActions: freshnessAllowedFinalActions,
-          cfg,
-          config: freshnessConfig,
-          ctxPayload: ctxPayload as Record<string, unknown>,
-          draftText: payload.text,
-          mode: freshnessMode,
-          state,
-          agentId: _route.agentId,
-          log: logVerboseMessage,
-        });
-        const finalAction =
-          visibleReplyOutputStarted && selectedAction !== "send-as-is"
-            ? "send-as-is"
-            : selectedAction;
-        logger.info("matrix freshness decision", {
+        logger.info("matrix freshness suppress unstable final after async rechecks", {
           roomId,
           eventId: messageId,
           agentId: _route.agentId,
           mode: freshnessMode,
-          action: finalAction,
-          requestedAction: selectedAction,
-          changed: true,
-          reason: state.reason,
           invalidatingEventIds: state.invalidatingEventIds,
           recheckEventIds: state.recheckEventIds,
           latestVisibleEventIds: state.latestVisibleEventIds,
-          visibleReplyOutputStarted,
         });
-        if (finalAction === "send-as-is") {
-          return payload;
-        }
-        if (finalAction === "suppress") {
-          return undefined;
-        }
-        const revised = await reviseMatrixFinalReplyWithFreshness({
-          cfg,
-          config: freshnessConfig,
-          agentId: _route.agentId,
-          ctxPayload: ctxPayload as Record<string, unknown>,
-          draftText: payload.text,
-          latestPendingHistory: state.latestPendingHistory,
-          log: logVerboseMessage,
-        });
-        return revised;
+        return null;
       };
 
       const dispatcherOptions = {
         ...prefixOptions,
         humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
+        beforeDeliver: async (payload: ReplyPayload, info: { kind: string }) =>
+          info.kind === "final" ? await resolveFreshnessFinalPayload(payload) : payload,
         deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-          const deliveryPayload =
-            info.kind === "final" ? await resolveFreshnessFinalPayload(payload) : payload;
-          if (!deliveryPayload) {
-            return;
-          }
+          const deliveryPayload = payload;
           if (draftStream && info.kind !== "tool" && !deliveryPayload.isCompactionNotice) {
             const hasMedia =
               Boolean(deliveryPayload.mediaUrl) || (deliveryPayload.mediaUrls?.length ?? 0) > 0;
