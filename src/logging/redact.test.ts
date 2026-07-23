@@ -801,17 +801,18 @@ describe("redactSensitiveText", () => {
     const secretKey = ["django", "secret", "key", "1234567890"].join("-");
     const passphrase = ["tls", "passphrase", "fixture", "1234567890"].join("-");
     const dbPass = ["db", "pass", "fixture", "1234567890"].join("-");
+    const quoted = (value: string, quote: '"' | "'") => [quote, value, quote].join("");
     const input = [
       `password = ${dbPassword}`,
-      `password = "${dbPassword}"`,
+      ["password", " = ", quoted(dbPassword, '"')].join(""),
       `db_password = ${dbPassword}`,
       `database_password: ${databasePassword}`,
-      `api_secret: '${apiSecret}'`,
+      ["api_secret", ": ", quoted(apiSecret, "'")].join(""),
       `db_password=${dbPassword}`,
       `api_secret: ${apiSecret}`,
       `api_secret=${apiSecret}`,
       `jdbc.password=${dbPassword}`,
-      `jdbc.password="${dbPassword}"`,
+      ["jdbc.password", "=", quoted(dbPassword, '"')].join(""),
       `secret_key = ${secretKey}`,
       `secret_key=${secretKey}`,
       `tls.passphrase: ${passphrase}`,
