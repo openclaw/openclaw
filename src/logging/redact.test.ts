@@ -204,6 +204,22 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("gog gmail watch serve --hook-token abcdef…ghij");
   });
 
+  it("masks AWS secret access key CLI flags by key", () => {
+    const secretWithoutBareHeuristic = Array.from(
+      { length: 40 },
+      (_entry, index) => (["A", "b", "C", "d"] as const)[index % 4] ?? "A",
+    ).join("");
+    const input = [
+      `cmd --aws-secret-access-key=${secretWithoutBareHeuristic}`,
+      `cmd --awsSecretAccessKey ${secretWithoutBareHeuristic}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).not.toContain(secretWithoutBareHeuristic);
+    expect(output).toContain("--aws-secret-access-key=AbCdAb…AbCd");
+    expect(output).toContain("--awsSecretAccessKey AbCdAb…AbCd");
+  });
+
   it("does not treat option-alternative prose as a CLI flag secret", () => {
     const input = "Use either --password or --password-file.";
     const output = redactSensitiveText(input, { mode: "tools" });
