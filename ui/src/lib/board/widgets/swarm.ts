@@ -146,7 +146,7 @@ function collectActiveSwarmGroups(
         phases: [...phases.entries()]
           .toSorted((left, right) => left[1].rank - right[1].rank)
           .map(([title, bucket]) => {
-            const dots =
+            const visibleFirst =
               bucket.dots.length > MAX_RENDERED_DOTS_PER_PHASE
                 ? bucket.dots.toSorted(
                     (left, right) =>
@@ -155,8 +155,8 @@ function collectActiveSwarmGroups(
                 : bucket.dots;
             return {
               title,
-              dots: dots.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
-              hidden: Math.max(0, dots.length - MAX_RENDERED_DOTS_PER_PHASE),
+              dots: visibleFirst.slice(0, MAX_RENDERED_DOTS_PER_PHASE),
+              hidden: Math.max(0, visibleFirst.length - MAX_RENDERED_DOTS_PER_PHASE),
             };
           }),
       } satisfies SwarmGroup;
