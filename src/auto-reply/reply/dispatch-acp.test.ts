@@ -176,11 +176,12 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     mediaUnderstandingMocks.applyMediaUnderstanding(params),
   isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
     error instanceof Error && error.name === "MediaUnderstandingSkipError",
-  normalizeAttachments: (ctx: { MediaPath?: string; MediaType?: string }) =>
-    ctx.MediaPath
+  normalizeAttachments: (ctx: { MediaPath?: string; MediaUrl?: string; MediaType?: string }) =>
+    ctx.MediaPath || ctx.MediaUrl
       ? [
           {
-            path: ctx.MediaPath,
+            path: ctx.MediaPath || undefined,
+            url: ctx.MediaUrl || undefined,
             mime: ctx.MediaType,
             index: 0,
           },
@@ -194,7 +195,10 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
   },
   MediaAttachmentCache: class {
-    constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
+    constructor(
+      private readonly attachments: Array<{ path?: string; url?: string; index: number }>,
+    ) {}
+
     async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
       const attachment = this.attachments.find((item) => item.index === attachmentIndex);
       const pathLocal = attachment?.path;
@@ -205,6 +209,16 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
           mime: "image/png",
           fileName: pathLocal,
           size: buffer.length,
+        };
+      }
+      if (attachment?.url) {
+        const response = await fetch(attachment.url);
+        const remoteBuffer = Buffer.from(await response.arrayBuffer());
+        return {
+          buffer: remoteBuffer,
+          mime: response.headers.get("content-type") ?? "application/octet-stream",
+          fileName: attachment.url,
+          size: remoteBuffer.length,
         };
       }
       const error = new Error("outside allowed roots");
@@ -1495,11 +1509,14 @@ describe("tryDispatchAcpReply", () => {
             constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
             async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
               const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+              if (!attachment?.path) {
+                throw new Error("current attachment unavailable");
+              }
               return {
-                buffer: Buffer.from(attachment?.path ?? ""),
+                buffer: Buffer.from(attachment.path),
                 mime: "image/png",
                 fileName: "history.png",
-                size: attachment?.path?.length ?? 0,
+                size: attachment.path.length,
               };
             }
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
@@ -1631,6 +1648,41 @@ describe("tryDispatchAcpReply", () => {
         data: image.data,
       },
     ]);
+  });
+
+  it("forwards URL-only image attachments into agent runtime turns", async () => {
+    setReadyAcpResolution();
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(Buffer.from("remote-image"), {
+          headers: {
+            "content-type": "image/png",
+          },
+        }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy as typeof fetch);
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "   ",
+      ctxOverrides: {
+        MediaUrl: "https://example.com/inbound.png",
+        MediaType: "image/png",
+      },
+    });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "",
+        attachments: [
+          {
+            mediaType: "image/png",
+            data: Buffer.from("remote-image").toString("base64"),
+          },
+        ],
+      }),
+    );
   });
 
   it("skips agent runtime attachments outside allowed inbound roots", async () => {
