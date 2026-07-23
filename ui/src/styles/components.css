@@ -1689,7 +1689,7 @@ openclaw-session-owner-chip {
    yields to /btw by collapsing to its one-line pill. */
 .chat-observer-hud {
   position: absolute;
-  top: clamp(44px, 5vh, 52px);
+  top: 0;
   right: 12px;
   z-index: 29;
   border: 1px solid var(--border);
@@ -5496,6 +5496,12 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   color: var(--muted);
+}
+
+.session-row-badge--queued {
+  gap: 2px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-row-badge--pull-request[data-pull-request-state="open"],

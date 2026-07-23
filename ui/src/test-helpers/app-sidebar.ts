@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
-  SessionCatalog,
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
@@ -19,6 +18,7 @@ import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,
 } from "../components/app-sidebar-workboard.ts";
+import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -31,42 +31,69 @@ export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["g
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
 
-export type SidebarLifecycleState = HTMLElement & {
-  activeRouteId?: string;
-  activeWorkboardBoardId: string;
-  enabledRouteIds?: readonly NavigationRouteId[];
-  connected: boolean;
-  offline: boolean;
-  lastError: string | null;
-  terminalAvailable: boolean;
-  catalogOpenTarget: "viewer" | "terminal";
-  canPairDevice: boolean;
-  sidebarEntries: readonly string[];
-  workboardBoards: readonly SidebarWorkboardBoard[];
-  workboardBoardsReady: boolean;
-  workboardRenderers?: SidebarWorkboardRenderers;
-  sidebarLiveActivity: boolean;
-  onUpdateSidebarEntries?: (entries: string[]) => void;
-  pinnedAgentIds: readonly string[];
-  sessionKey: string;
-  onNavigate: (
-    routeId: string,
-    options?: { pathname?: string; search?: string; hash?: string },
-  ) => void;
-  sessionCatalogs: SessionCatalog[];
-  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
-  sessionCreatedOrder: Map<string, number>;
-  sessionsAgentId: string | null;
-  sessionsResult: SessionsListResult | null;
-  requestUpdate: () => void;
-  updateComplete: Promise<boolean>;
-  updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateRunning: boolean;
-  onUpdate: () => void;
-  onRetryConnect?: () => void;
-  onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
-  variant: "panel" | "drawer";
-};
+type SidebarTestSessionDataKey =
+  | "sessionCatalogs"
+  | "sessionCreatedOrder"
+  | "sessionRowsByAgent"
+  | "sessionsAgentId"
+  | "sessionsResult";
+
+export type SidebarLifecycleState = HTMLElement &
+  Pick<SessionDataController, SidebarTestSessionDataKey> & {
+    activeRouteId?: string;
+    activeWorkboardBoardId: string;
+    enabledRouteIds?: readonly NavigationRouteId[];
+    connected: boolean;
+    offline: boolean;
+    outboxCountForSession: (sessionKey: string) => number;
+    queuedOutboxCount: number;
+    lastError: string | null;
+    terminalAvailable: boolean;
+    catalogOpenTarget: "viewer" | "terminal";
+    canPairDevice: boolean;
+    sidebarEntries: readonly string[];
+    workboardBoards: readonly SidebarWorkboardBoard[];
+    workboardBoardsReady: boolean;
+    workboardRenderers?: SidebarWorkboardRenderers;
+    sidebarLiveActivity: boolean;
+    onUpdateSidebarEntries?: (entries: string[]) => void;
+    pinnedAgentIds: readonly string[];
+    sessionKey: string;
+    onNavigate: (
+      routeId: string,
+      options?: { pathname?: string; search?: string; hash?: string },
+    ) => void;
+    readonly sessionData: SessionDataController;
+    requestUpdate: () => void;
+    updateComplete: Promise<boolean>;
+    updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
+    updateRunning: boolean;
+    onUpdate: () => void;
+    onRetryConnect?: () => void;
+    onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
+    variant: "panel" | "drawer";
+  };
+
+const sidebarTestSessionDataKeys: readonly SidebarTestSessionDataKey[] = [
+  "sessionCatalogs",
+  "sessionCreatedOrder",
+  "sessionRowsByAgent",
+  "sessionsAgentId",
+  "sessionsResult",
+];
+
+function exposeSessionDataForSidebarTests(sidebar: SidebarLifecycleState): void {
+  for (const key of sidebarTestSessionDataKeys) {
+    Object.defineProperty(sidebar, key, {
+      configurable: true,
+      get: () => sidebar.sessionData[key],
+      set: (value: SessionDataController[SidebarTestSessionDataKey]) => {
+        Reflect.set(sidebar.sessionData, key, value);
+        sidebar.sessionData.requestSessionDataUpdate();
+      },
+    });
+  }
+}
 
 export type LobsterPetElement = HTMLElement & {
   runOutcome: "ok" | "error" | "aborted";
@@ -327,6 +354,7 @@ export async function mountSidebar(
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
+  exposeSessionDataForSidebarTests(sidebar);
   sidebar.variant = variant;
   provider.append(sidebar);
   document.body.append(provider);

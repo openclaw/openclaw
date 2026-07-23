@@ -12,7 +12,8 @@
     "@microsoft/teams.api": "2.0.13",
     "@microsoft/teams.apps": "2.0.13",
     "express": "5.2.1",
-    "typebox": "1.3.3"
+    "typebox": "1.3.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@microsoft/teams.common": "2.0.13",
@@ -59,7 +60,8 @@
         "groupModel": "hybrid",
         "groupAllowFromFallbackToAllowFrom": true,
         "warnOnEmptyGroupSenderAllowlist": true
-      }
+      },
+      "setup": { "fields": [] }
     },
     "install": {
       "npmSpec": "@openclaw/msteams",

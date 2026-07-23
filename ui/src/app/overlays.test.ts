@@ -1,6 +1,6 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
@@ -8,6 +8,12 @@ import { createApplicationOverlays } from "./overlays.ts";
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
     Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+}));
+const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
+  peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
+}));
+vi.mock("../lib/nodes/index.ts", () => ({
+  peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
@@ -49,13 +55,14 @@ function createGatewayHarness(
   };
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const connect = vi.fn();
   const gateway = {
     get snapshot() {
       return snapshot;
     },
     connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
     eventLog: [],
-    connect() {},
+    connect,
     setSessionKey() {},
     start() {},
     stop() {},
@@ -104,6 +111,7 @@ function createGatewayHarness(
       }
     },
     gateway,
+    connect,
     update(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of snapshotListeners) {
@@ -112,6 +120,184 @@ function createGatewayHarness(
     },
   };
 }
+
+describe("device-auth upgrade migration", () => {
+  beforeEach(() => {
+    peekStoredDeviceIdentityIdMock.mockReturnValue("browser-1");
+  });
+
+  it("guides a device-less legacy browser to a secure context", async () => {
+    peekStoredDeviceIdentityIdMock.mockReturnValue(null);
+    const request = vi.fn<RequestFn>(() => Promise.resolve({}));
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(request),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigration.error).toContain("HTTPS or localhost");
+    });
+    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
+    expect(request).not.toHaveBeenCalledWith("device.pair.list", expect.anything());
+    overlays.dispose();
+  });
+
+  it("approves only this browser and reconnects for its device token", async () => {
+    const request = vi.fn<RequestFn>((method, params) => {
+      if (method === "device.pair.list") {
+        return Promise.resolve({
+          pending: [
+            { requestId: "other-request", deviceId: "browser-2" },
+            { requestId: "self-request", deviceId: "browser-1" },
+          ],
+        });
+      }
+      if (method === "device.pair.approve") {
+        expect(params).toEqual({ requestId: "self-request" });
+        return Promise.resolve({ requestId: "self-request" });
+      }
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(request),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
+    });
+    await overlays.secureThisBrowser();
+
+    expect(request).toHaveBeenCalledWith("device.pair.approve", {
+      requestId: "self-request",
+    });
+    expect(harness.connect).toHaveBeenCalledOnce();
+    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
+    overlays.dispose();
+  });
+
+  it("does not reconnect when approval finishes after disposal", async () => {
+    let resolveApproval: (() => void) | undefined;
+    const approvalRequest = new Promise<void>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "device.pair.list") {
+        return Promise.resolve({
+          pending: [{ requestId: "self-request", deviceId: "browser-1" }],
+        });
+      }
+      if (method === "device.pair.approve") {
+        return approvalRequest;
+      }
+      return Promise.resolve([]);
+    });
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(request),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
+    });
+    const securing = overlays.secureThisBrowser();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("device.pair.approve", {
+        requestId: "self-request",
+      });
+    });
+    overlays.dispose();
+    resolveApproval?.();
+    await securing;
+
+    expect(harness.connect).not.toHaveBeenCalled();
+  });
+
+  it("does not approve through a replacement gateway session", async () => {
+    const firstRequest = vi.fn<RequestFn>((method) =>
+      Promise.resolve(
+        method === "device.pair.list"
+          ? { pending: [{ requestId: "self-request", deviceId: "browser-1" }] }
+          : {},
+      ),
+    );
+    const replacementRequest = vi.fn<RequestFn>(() => Promise.resolve({ pending: [] }));
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(firstRequest),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
+    });
+    const securing = overlays.secureThisBrowser();
+    harness.update({ client: client(replacementRequest) });
+    await securing;
+
+    expect(firstRequest).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
+    expect(replacementRequest).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
+    expect(harness.connect).not.toHaveBeenCalled();
+    overlays.dispose();
+  });
+
+  it("does not expose an action for another browser's request", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(
+        method === "device.pair.list"
+          ? { pending: [{ requestId: "other-request", deviceId: "browser-2" }] }
+          : [],
+      ),
+    );
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(request),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigration.error).toContain(
+        "pairing request is not available",
+      );
+    });
+    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
+    await overlays.secureThisBrowser();
+    expect(request).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
+    expect(harness.connect).not.toHaveBeenCalled();
+    overlays.dispose();
+  });
+});
 
 function client(request: RequestFn): GatewayBrowserClient {
   return { request } as unknown as GatewayBrowserClient;

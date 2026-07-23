@@ -66,14 +66,14 @@ import {
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
-import { isCliProvider } from "./model-selection-cli.js";
 import {
   type ModelManifestNormalizationContext,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
+import { isCliProvider } from "./model-selection-cli.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -361,10 +361,10 @@ type ModelFallbackClassifiedResult<T> = Pick<
   "result" | "provider" | "model"
 >;
 
-type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
+type ModelFallbackAuthRuntime = typeof import("./auth-profiles.runtime.js");
 
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
-  () => import("./model-fallback-auth.runtime.js"),
+  () => import("./auth-profiles.runtime.js"),
 );
 const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
 const fallbackCandidateCache = new Map<string, ModelCandidate[]>();

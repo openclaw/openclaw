@@ -787,6 +787,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const result = await createGatewaySession({
       cfg,
       ...opts,
+      creation: { via: "operator", actor: { type: "human" } },
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),

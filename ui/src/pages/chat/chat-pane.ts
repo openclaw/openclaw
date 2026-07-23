@@ -3124,7 +3124,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
       state.sidebarContent.sessionKey === sessionKey;
-    const label = t("chat.sessionDiscussion.show");
+    const label = t(active ? "chat.sessionDiscussion.hide" : "chat.sessionDiscussion.show");
     return html`
       <openclaw-tooltip .content=${label}>
         <button
@@ -3132,7 +3132,7 @@ class ChatPane extends OpenClawLightDomElement {
           type="button"
           aria-label=${label}
           aria-pressed=${String(active)}
-          @click=${() => state.handleOpenSidebar(content)}
+          @click=${() => (active ? state.handleCloseSidebar() : state.handleOpenSidebar(content))}
         >
           ${icons.messageSquare}
         </button>
@@ -3436,6 +3436,7 @@ class ChatPane extends OpenClawLightDomElement {
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
+      queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,

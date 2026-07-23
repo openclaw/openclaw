@@ -15,6 +15,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         ScreenshotTarget(initialTab: "agent", initialDestination: "agents", name: "03-agent-connected"),
         ScreenshotTarget(initialTab: "settings", initialDestination: "settings", name: "04-settings-connected"),
     ]
+    private static let screenshotLaunchRetryThreshold: TimeInterval = 30
 
     private var app: XCUIApplication?
 
@@ -926,8 +927,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
+        let launchStartedAt = Date()
         app.launch()
         self.app = app
+        if screenshotMode,
+           Date().timeIntervalSince(launchStartedAt) >= Self.screenshotLaunchRetryThreshold
+        {
+            // Xcode can return after its idle timeout while the screenshot scene is still
+            // inactive; one fresh launch avoids querying a stalled accessibility tree.
+            app.terminate()
+            let retryStartedAt = Date()
+            app.launch()
+            XCTAssertLessThan(
+                Date().timeIntervalSince(retryStartedAt),
+                Self.screenshotLaunchRetryThreshold,
+                "Screenshot app launch stalled again after one retry")
+        }
 
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
     }

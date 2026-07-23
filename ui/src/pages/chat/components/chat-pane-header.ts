@@ -195,7 +195,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               ${props.title}
             </button>`}
       ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.createdBy : undefined,
+        props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
       )}
       ${!props.catalog && props.workspaceLabel
