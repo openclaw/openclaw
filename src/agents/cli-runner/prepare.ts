@@ -22,7 +22,10 @@ import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../../gateway/mcp-http.loopback-runtime.js";
-import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
+import {
+  resolveMcpLoopbackPolicyTools,
+  resolveMcpLoopbackScopedTools,
+} from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
@@ -103,16 +106,7 @@ import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
-import {
-  buildCliMcpBashElevated,
-  buildCliMcpChannelContext,
-  buildCliMcpExecOverrides,
-  buildCliMcpExecSession,
-  buildCliMcpGrantContext,
-  normalizeOptionalMcpContextValue,
-  resolveCliMcpMessageProvider,
-  resolveCliMcpSessionKey,
-} from "./mcp-grant-context.js";
+import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, resolveNodeClaudePlacement } from "./prepare-claude.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -153,6 +147,7 @@ const prepareDeps = {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
@@ -358,25 +353,36 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  let runtimeToolsAllowPolicy: string[] | undefined;
   if (params.toolsAllow !== undefined) {
     if (params.cliToolAvailability !== undefined) {
       throw new Error(
         `CLI backend ${backendResolved.id} received conflicting runtime tool policies`,
       );
     }
-    const normalizedToolsAllow = expandToolGroups(params.toolsAllow);
-    if (normalizedToolsAllow.includes("*")) {
+    if (params.toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")) {
       params = { ...params, toolsAllow: undefined };
     } else {
-      const canonicalToolsAllow = uniqueStrings(
-        normalizedToolsAllow.map((toolName) => normalizeToolName(toolName)).filter(Boolean),
+      runtimeToolsAllowPolicy = [...params.toolsAllow];
+      const fallbackOpenClawTools = uniqueStrings(
+        expandToolGroups(params.toolsAllow)
+          .map((toolName) => normalizeToolName(toolName))
+          .filter(Boolean),
       );
+      if (
+        fallbackOpenClawTools.includes("write") &&
+        !fallbackOpenClawTools.includes("apply_patch")
+      ) {
+        fallbackOpenClawTools.push("apply_patch");
+      }
       params = {
         ...params,
         toolsAllow: undefined,
         cliToolAvailability: {
           native: [],
-          openClaw: canonicalToolsAllow,
+          // Preserve the prior normalized fallback for modes without a catalog;
+          // catalog-backed paths replace it with exact names below.
+          openClaw: fallbackOpenClawTools,
         },
       };
     }
@@ -509,15 +515,6 @@ export async function prepareCliRunContext(
     bindingExtraSystemPromptStatic !== undefined
       ? hashCliSessionText(bindingExtraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
-  const toolBoundExtraSystemPromptHash = params.cliToolAvailability
-    ? hashCliSessionText(
-        JSON.stringify([
-          baseExtraSystemPromptHash ?? null,
-          params.cliToolAvailability.native.toSorted(),
-          params.cliToolAvailability.openClaw.toSorted(),
-        ]),
-      )
-    : baseExtraSystemPromptHash;
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
   const hasCliSessionBindingFacts = bindingFacts !== undefined;
@@ -678,12 +675,6 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
-  // Bootstrap guidance changes resumable system context. Hash the pending mode
-  // so entering or leaving bootstrap refreshes first-only CLI system prompts.
-  const extraSystemPromptHash =
-    bootstrapMode === "none"
-      ? toolBoundExtraSystemPromptHash
-      : hashCliSessionText(JSON.stringify([toolBoundExtraSystemPromptHash ?? null, bootstrapMode]));
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
   // its native tools, leaving only this openclaw stdio server.
@@ -714,29 +705,83 @@ export async function prepareCliRunContext(
     );
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
+  const runtimeConfig = params.config ?? getRuntimeConfig();
+  const shouldMaterializeRuntimePolicy =
+    runtimeToolsAllowPolicy !== undefined &&
+    !nodeClaudePlacement &&
+    !isSideQuestion &&
+    !systemAgentMcpConfig &&
+    params.disableTools !== true;
+  const mcpContextBase =
+    mcpLoopbackRuntime || shouldMaterializeRuntimePolicy
+      ? buildCliMcpGrantContext({
+          run: params,
+          config: runtimeConfig,
+          requireExplicitMessageTarget,
+          agentId: sessionAgentId,
+          modelProvider,
+          modelId,
+        })
+      : undefined;
+  const requestedLoopbackToolsAllow =
+    runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
+  const mcpProjectionContext =
+    mcpContextBase && requestedLoopbackToolsAllow !== undefined
+      ? { ...mcpContextBase, toolsAllow: [...requestedLoopbackToolsAllow] }
+      : mcpContextBase;
+  const resolveProjectedTools =
+    runtimeToolsAllowPolicy !== undefined
+      ? prepareDeps.resolveMcpLoopbackPolicyTools
+      : prepareDeps.resolveMcpLoopbackScopedTools;
+  const projectedTools =
+    (bundleMcpEnabled || shouldMaterializeRuntimePolicy) && mcpProjectionContext
+      ? resolveProjectedTools({ cfg: runtimeConfig, ...mcpProjectionContext }).tools
+      : [];
+  if (runtimeToolsAllowPolicy !== undefined && shouldMaterializeRuntimePolicy) {
+    params = {
+      ...params,
+      cliToolAvailability: {
+        native: [],
+        openClaw: projectedTools.map((tool) => tool.name),
+      },
+    };
+  }
+  const promptTools = bundleMcpEnabled ? projectedTools : [];
   // A restricted selectable tool surface must also bound the MCP bundle:
   // CLI-side --allowedTools is advisory under bypass permission modes, so
   // user/plugin MCP servers must not be merged into the run's config at all.
   // The loopback server (scoped by the grant allowlist) becomes the complete
   // tool universe for the run.
   const restrictedLoopbackToolsAllow = params.cliToolAvailability?.openClaw;
+  const mcpGrantContext =
+    mcpContextBase && restrictedLoopbackToolsAllow !== undefined
+      ? { ...mcpContextBase, toolsAllow: [...restrictedLoopbackToolsAllow] }
+      : mcpContextBase;
+  const toolBoundExtraSystemPromptHash = params.cliToolAvailability
+    ? hashCliSessionText(
+        JSON.stringify([
+          baseExtraSystemPromptHash ?? null,
+          params.cliToolAvailability.native.toSorted(),
+          params.cliToolAvailability.openClaw.toSorted(),
+        ]),
+      )
+    : baseExtraSystemPromptHash;
+  // Bootstrap guidance changes resumable system context. Hash the pending mode
+  // so entering or leaving bootstrap refreshes first-only CLI system prompts.
+  const extraSystemPromptHash =
+    bootstrapMode === "none"
+      ? toolBoundExtraSystemPromptHash
+      : hashCliSessionText(JSON.stringify([toolBoundExtraSystemPromptHash ?? null, bootstrapMode]));
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
-    const mcpClientGrant = mcpLoopbackRuntime
-      ? prepareDeps.mintMcpLoopbackClientGrant({
-          context: buildCliMcpGrantContext({
-            run: params,
-            config: params.config ?? getRuntimeConfig(),
-            requireExplicitMessageTarget,
-            agentId: sessionAgentId,
-            modelProvider,
-            modelId,
-            toolsAllow: restrictedLoopbackToolsAllow,
-          }),
-          runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-        })
-      : undefined;
+    const mcpClientGrant =
+      mcpLoopbackRuntime && mcpGrantContext
+        ? prepareDeps.mintMcpLoopbackClientGrant({
+            context: mcpGrantContext,
+            runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+          })
+        : undefined;
     const mcpClientGrantCapture =
       mcpClientGrant && mcpLoopbackRuntime
         ? {
@@ -940,54 +985,6 @@ export async function prepareCliRunContext(
       ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
     };
-    const promptTools =
-      bundleMcpEnabled && mcpLoopbackRuntime
-        ? prepareDeps.resolveMcpLoopbackScopedTools({
-            cfg: params.config ?? getRuntimeConfig(),
-            sessionKey: resolveCliMcpSessionKey(
-              params,
-              params.config ?? getRuntimeConfig(),
-              sessionAgentId,
-            ),
-            runtimePolicySessionKey: normalizeOptionalMcpContextValue(
-              params.runtimePolicySessionKey,
-            ),
-            agentId: sessionAgentId,
-            messageProvider: resolveCliMcpMessageProvider(params),
-            clientCaps: params.clientCaps,
-            currentChannelId: params.currentChannelId,
-            // CLI binding hashes omit per-message facts, but identity, owner, and
-            // model policy must match the runtime MCP grant's advertised tools.
-            currentThreadTs: undefined,
-            currentMessageId: undefined,
-            currentInboundAudio: undefined,
-            accountId: params.agentAccountId,
-            inboundEventKind: undefined,
-            sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
-            taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-            requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
-            senderIsOwner: params.senderIsOwner === true,
-            nodeExecAllowed: true,
-            modelProvider,
-            modelId,
-            execSession: buildCliMcpExecSession(params.sessionEntry),
-            execOverrides: buildCliMcpExecOverrides(params.execOverrides),
-            bashElevated: buildCliMcpBashElevated(params.bashElevated),
-            trigger: params.trigger,
-            approvalReviewerDeviceId: normalizeOptionalMcpContextValue(
-              params.approvalReviewerDeviceId,
-            ),
-            channelContext: buildCliMcpChannelContext(params.channelContext, params.senderId),
-            senderName: normalizeOptionalMcpContextValue(params.senderName ?? undefined),
-            senderUsername: normalizeOptionalMcpContextValue(params.senderUsername ?? undefined),
-            senderE164: normalizeOptionalMcpContextValue(params.senderE164 ?? undefined),
-            groupId: normalizeOptionalMcpContextValue(params.groupId ?? undefined),
-            groupChannel: normalizeOptionalMcpContextValue(params.groupChannel ?? undefined),
-            groupSpace: normalizeOptionalMcpContextValue(params.groupSpace ?? undefined),
-            spawnedBy: normalizeOptionalMcpContextValue(params.spawnedBy ?? undefined),
-            toolsAllow: restrictedLoopbackToolsAllow,
-          }).tools
-        : [];
     const promptToolNamesHash =
       bundleMcpEnabled && mcpLoopbackRuntime
         ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))

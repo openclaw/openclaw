@@ -328,6 +328,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
       revokeMcpLoopbackClientGrant: vi.fn(() => true),
+      resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
@@ -2231,16 +2232,16 @@ describe("prepareCliRunContext", () => {
       1,
       expect.objectContaining({
         senderIsOwner: true,
-        currentMessageId: undefined,
-        sourceReplyDeliveryMode: "message_tool_only",
+        currentMessageId: "owner-message",
+        sourceReplyDeliveryMode: undefined,
       }),
     );
     expect(resolveMcpLoopbackScopedTools).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         senderIsOwner: false,
-        currentMessageId: undefined,
-        sourceReplyDeliveryMode: "message_tool_only",
+        currentMessageId: "non-owner-message",
+        sourceReplyDeliveryMode: undefined,
       }),
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
@@ -2384,7 +2385,7 @@ describe("prepareCliRunContext", () => {
     const deactivateMcpLoopbackClientGrantCapture = vi.fn(() => true);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const revokeMcpLoopbackClientGrant = vi.fn(() => true);
-    const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+    const resolveMcpLoopbackScopedTools = vi.fn((_scope: Record<string, unknown>) => ({
       agentId: "main",
       tools: [
         {
@@ -2433,6 +2434,7 @@ describe("prepareCliRunContext", () => {
       provider: "native-cli",
       runId: "run-test-loopback-prompt-tools",
       config: createCliBackendConfig({ bundleMcp: true }),
+      scheduledToolPolicy: { ownerSessionKey: "agent:worker:discord:group:ops" },
       cliSessionBinding: {
         sessionId: "cli-session",
         promptToolNamesHash: "old-tool-surface",
@@ -2445,39 +2447,21 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
+    const projected = resolveMcpLoopbackScopedTools.mock.calls.at(-1)?.[0];
+    const grantContext = mintMcpLoopbackClientGrant.mock.calls.at(-1)?.[0]?.context;
+    expect(projected).toBeDefined();
+    expect(grantContext).toBeDefined();
+    const { cfg: projectedConfig, ...projectedContext } = projected ?? {};
+    expect(projectedConfig).toEqual(expect.any(Object));
+    expect(projectedContext).toEqual(grantContext);
+    expect(projectedContext).toMatchObject({
       sessionKey: "agent:worker:main",
-      runtimePolicySessionKey: undefined,
-      agentId: "worker",
-      messageProvider: undefined,
-      clientCaps: undefined,
-      currentChannelId: undefined,
-      currentThreadTs: undefined,
-      currentMessageId: undefined,
-      currentInboundAudio: undefined,
-      accountId: undefined,
-      inboundEventKind: undefined,
-      sourceReplyDeliveryMode: undefined,
-      taskSuggestionDeliveryMode: undefined,
-      requireExplicitMessageTarget: false,
-      senderIsOwner: false,
-      nodeExecAllowed: true,
+      sessionId: expect.any(String),
+      runId: "run-test-loopback-prompt-tools",
+      workspaceDir: expect.any(String),
       modelProvider: "native-cli",
       modelId: "test-model",
-      execSession: undefined,
-      execOverrides: undefined,
-      bashElevated: undefined,
-      trigger: undefined,
-      approvalReviewerDeviceId: undefined,
-      channelContext: undefined,
-      senderName: undefined,
-      senderUsername: undefined,
-      senderE164: undefined,
-      groupId: undefined,
-      groupChannel: undefined,
-      groupSpace: undefined,
-      spawnedBy: undefined,
+      scheduledToolPolicy: { ownerSessionKey: "agent:worker:discord:group:ops" },
     });
     expect(context.systemPrompt).toContain("## Memory Recall");
     expect(context.systemPrompt).toContain("tools=memory_search");
@@ -2823,6 +2807,45 @@ describe("prepareCliRunContext", () => {
     expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
   });
 
+  it("materializes runtime toolsAllow for selectable backends without bundle MCP", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: Record<string, unknown>) => ({
+      agentId: "main",
+      tools: ["write", "apply_patch"].map((name) => ({ name })),
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({ resolveMcpLoopbackPolicyTools });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      toolsAllow: ["write"],
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({
+      native: [],
+      openClaw: ["write", "apply_patch"],
+    });
+    expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
+      expect.objectContaining({ toolsAllow: ["write"] }),
+    );
+  });
+
   it("requires prepared-execution backends to acknowledge exact enforcement and cleans up", async () => {
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ cleanup }));
@@ -2920,6 +2943,10 @@ describe("prepareCliRunContext", () => {
       ...context.baseArgs,
     ]);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    const resolveMcpLoopbackPolicyTools = vi.fn((_scope: Record<string, unknown>) => ({
+      agentId: "main",
+      tools: ["write", "apply_patch"].map((name) => ({ name })),
+    }));
     setRawCliBackendForPrepareTest({
       id: "claude-cli",
       pluginId: "anthropic",
@@ -2946,7 +2973,7 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant,
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+      resolveMcpLoopbackPolicyTools,
     });
 
     let cleanup: (() => Promise<void>) | undefined;
@@ -2954,7 +2981,7 @@ describe("prepareCliRunContext", () => {
       const context = await fixture.prepare({
         sessionKey: "agent:main:main",
         provider: "claude-cli",
-        toolsAllow: ["group:fs", "exec", "browser", "image"],
+        toolsAllow: ["write"],
         scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
       });
       cleanup = context.preparedBackend.cleanup;
@@ -2962,20 +2989,32 @@ describe("prepareCliRunContext", () => {
       expect(context.params.toolsAllow).toBeUndefined();
       expect(context.params.cliToolAvailability).toEqual({
         native: [],
-        openClaw: ["read", "write", "edit", "apply_patch", "exec", "browser", "image"],
+        openClaw: ["write", "apply_patch"],
       });
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual([
-        "read",
         "write",
-        "edit",
         "apply_patch",
-        "exec",
-        "browser",
-        "image",
       ]);
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.scheduledToolPolicy).toEqual({
         ownerSessionKey: "agent:main:discord:group:ops",
       });
+      expect(resolveMcpLoopbackPolicyTools).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolsAllow: ["write"],
+          scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
+        }),
+      );
+      const projected = resolveMcpLoopbackPolicyTools.mock.calls[0]?.[0];
+      const grantContext = mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context;
+      const {
+        cfg: _projectedConfig,
+        toolsAllow: projectedPolicy,
+        ...projectedTrustedContext
+      } = projected ?? {};
+      const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
+      expect(projectedPolicy).toEqual(["write"]);
+      expect(grantedTools).toEqual(["write", "apply_patch"]);
+      expect(projectedTrustedContext).toEqual(grantTrustedContext);
     } finally {
       await cleanup?.();
     }
