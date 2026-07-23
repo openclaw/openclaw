@@ -427,12 +427,13 @@ function protectMSTeamsCode(
   const rewritten = rewriteMarkdownIR(
     { ...ir, styles: adjustedStyles },
     codeSpans.map((span) => {
+      const codeStyle = span.style === "code_block" ? "code_block" : "code";
       const source = protectedValues.reduce(
         (text, protectedValue) => restoreTokens(text, protectedValue.prefix, protectedValue.values),
         ir.text.slice(span.start, span.end),
       );
       const quoteDepth =
-        span.style === "code_block"
+        codeStyle === "code_block"
           ? ir.styles.filter(
               (candidate) =>
                 candidate.style === "blockquote" &&
@@ -440,13 +441,13 @@ function protectMSTeamsCode(
                 span.start < candidate.end,
             ).length
           : 0;
-      const rendered = renderMSTeamsCode(span.style, source);
+      const rendered = renderMSTeamsCode(codeStyle, source);
       let quoted =
         quoteDepth > 0
           ? `${"> ".repeat(quoteDepth)}${rendered.replaceAll("\n", `\n${"> ".repeat(quoteDepth)}`)}`
           : rendered;
       const hasTrailingQuotedText =
-        span.style === "code_block" &&
+        codeStyle === "code_block" &&
         ir.styles.some(
           (candidate) =>
             candidate.style === "blockquote" &&

@@ -71,7 +71,7 @@ function createProtectedTokenStore(source: string) {
   const values = new Map<string, string>();
   const reusable = new Map<string, string>();
   let rangeIndex = 0;
-  let codePoint = PROTECTED_TOKEN_RANGES[0][0];
+  let codePoint: number = PROTECTED_TOKEN_RANGES[0][0];
   const next = (value: string): string => {
     while (rangeIndex < PROTECTED_TOKEN_RANGES.length) {
       const range = PROTECTED_TOKEN_RANGES[rangeIndex];
