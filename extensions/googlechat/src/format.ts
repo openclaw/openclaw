@@ -140,7 +140,8 @@ function projectUnsafeCodeFallbacks(ir: MarkdownIR): MarkdownIR {
       (span.style === "code" && content.includes("`")) ||
       (span.style === "code_block" && content.includes("```"));
     if (unsafe) {
-      const replacement = [...content]
+      const replacement = content
+        .split("")
         .map((character) => GOOGLE_CHAT_LITERAL_FALLBACKS.get(character) ?? character)
         .join("");
       text = `${text.slice(0, span.start)}${replacement}${text.slice(span.end)}`;
@@ -330,10 +331,4 @@ export function formatGoogleChatTextChunks(
     measureRendered: (rendered: string) => new TextEncoder().encode(rendered).byteLength,
     renderChunk: (chunk) => renderGoogleChatIR(chunk, prepared.markers),
   }).map((chunk) => chunk.rendered);
-}
-
-/** Renders one uncapped CommonMark value for non-transport formatting callers. */
-export function formatGoogleChatText(text: string): string {
-  const prepared = prepareGoogleChatIR(text);
-  return renderGoogleChatIR(prepared.ir, prepared.markers);
 }

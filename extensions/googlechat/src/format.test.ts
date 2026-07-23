@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatGoogleChatText,
-  formatGoogleChatTextChunks,
-  GOOGLE_CHAT_FORMAT_PROFILE,
-} from "./format.js";
+import { formatGoogleChatTextChunks, GOOGLE_CHAT_FORMAT_PROFILE } from "./format.js";
+
+const formatGoogleChatText = (text: string) => formatGoogleChatTextChunks(text).join("");
 
 const DIALECT_FIXTURES = [
   { name: "bold", input: "**bold**", before: "**bold**", after: "*bold*" },
