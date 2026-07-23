@@ -9,7 +9,8 @@ enum ExecAllowlistMatcher {
         guard let resolution, !entries.isEmpty else { return nil }
         if let wildcard = entries.first(where: {
             $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines) == "*" &&
-                ($0.argPattern?.isEmpty ?? true)
+                ($0.argPattern?.isEmpty ?? true) &&
+                $0.source != "allow-always"
         }) {
             return wildcard
         }
@@ -29,6 +30,11 @@ enum ExecAllowlistMatcher {
             case let .valid(pattern):
                 guard self.matchesExecutable(pattern: pattern, resolution: resolution) else { continue }
                 guard let argPattern = entry.argPattern, !argPattern.isEmpty else {
+                    // Old generated allow-always entries were path-only and could authorize
+                    // changed argv after upgrade. Manual path-only entries have no source.
+                    if entry.source == "allow-always" {
+                        continue
+                    }
                     if pathOnlyMatch == nil {
                         pathOnlyMatch = entry
                     }

@@ -384,6 +384,7 @@ export function matchAllowlist(
   resolution: ExecutableResolution | null,
   argv?: string[],
   platform?: string | null,
+  options: { allowLegacyGeneratedPathOnly?: boolean } = {},
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
@@ -391,7 +392,12 @@ export function matchAllowlist(
   // A bare "*" wildcard allows any parsed executable command.
   // Check it before the resolvedPath guard so unresolved PATH lookups still
   // match (for example platform-specific executables without known extensions).
-  const bareWild = entries.find((e) => e.pattern?.trim() === "*" && !e.argPattern);
+  const bareWild = entries.find(
+    (e) =>
+      e.pattern?.trim() === "*" &&
+      !e.argPattern &&
+      (options.allowLegacyGeneratedPathOnly || e.source !== "allow-always"),
+  );
   if (bareWild && resolution) {
     return bareWild;
   }
@@ -415,6 +421,11 @@ export function matchAllowlist(
       continue;
     }
     if (!entry.argPattern) {
+      // Old generated allow-always entries were path-only and could authorize
+      // changed argv after upgrade. Manual path-only entries have no source.
+      if (entry.source === "allow-always" && !options.allowLegacyGeneratedPathOnly) {
+        continue;
+      }
       if (!pathOnlyMatch) {
         pathOnlyMatch = entry;
       }

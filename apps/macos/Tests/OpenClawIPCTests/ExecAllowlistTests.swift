@@ -184,6 +184,22 @@ struct ExecAllowlistTests {
         #expect(ExecAllowlistMatcher.match(entries: [fallback, restricted], resolution: unsafe)?.id == "fallback")
     }
 
+    @Test func `match ignores legacy generated path only allow always entries`() {
+        let executable = "/usr/bin/python3"
+        let legacyGenerated = ExecAllowlistEntry(pattern: executable, source: "allow-always")
+        let manual = ExecAllowlistEntry(pattern: executable)
+        let resolution = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "python3",
+            cwd: nil,
+            argv: [executable, "unsafe.py"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [legacyGenerated], resolution: resolution) == nil)
+        #expect(ExecAllowlistMatcher.match(entries: [manual], resolution: resolution) != nil)
+    }
+
     @Test func `match enforces generated nul arg patterns including zero args`() {
         let executable = "/usr/bin/printf"
         let zeroArgs = ExecAllowlistEntry(pattern: executable, argPattern: "^\0\0$")
