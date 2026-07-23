@@ -606,11 +606,8 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    public init(params: GatewayTLSParams) {
-        self.params = params
-        self.configuration = .default
-        self.pinningState = GatewayTLSPinningState(expectedFingerprint: params.expectedFingerprint)
-        super.init()
+    public convenience init(params: GatewayTLSParams) {
+        self.init(params: params, configuration: .default)
     }
 
     init(params: GatewayTLSParams, configuration: URLSessionConfiguration) {
@@ -689,11 +686,6 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         let task = self.session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
-    }
-
-    public func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        self.registerExpectedAuthority(url: request.url)
-        return try await self.session.data(for: request)
     }
 
     public func data(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
