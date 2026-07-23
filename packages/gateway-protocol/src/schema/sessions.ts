@@ -529,6 +529,11 @@ export const SessionsDeleteParamsSchema = closedObject({
   // lease so it exempts the initiating turn from admission interruption instead
   // of deadlocking on the caller's own unreleased work.
   admissionHandoffId: Type.Optional(NonEmptyString),
+  // Chat run id of the /close turn initiating this deletion. A chat /close runs
+  // as its own gateway chat run; the server aborts competing runs on the session
+  // before deleting, and without this the initiating turn would abort itself and
+  // lose its success reply. The server exempts this run from that session abort.
+  exemptChatRunId: Type.Optional(NonEmptyString),
   /**
    * Restricts the delete to already-archived sessions (archive-then-delete).
    * operator.write callers must set this; deletes without it require

@@ -8,6 +8,7 @@ import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { getPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import {
   resolveAgentModelFallbackValues,
@@ -100,6 +101,34 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
     addModelRefValue(resolveAgentExplicitModelPrimary(params.cfg, activeAgentId));
     for (const fallback of resolveAgentModelFallbacksOverride(params.cfg, activeAgentId) ?? []) {
       addModelRefValue(fallback);
+    }
+  }
+  // Plugin-supplied providers publish their models only into the prepared model
+  // catalog, not into cfg.models.providers, so a bare plugin ref like "acme/widget"
+  // is invisible to the config-only refs above and would be captured as a session
+  // name even though the reset-model resolver honors it. Fold in the already
+  // published catalog to recognize it as a directive instead. Use the snapshot
+  // accessor that reads the CURRENT published catalog without waiting or starting
+  // discovery, so this never cold-loads plugins on the /new hot path; it simply
+  // returns undefined until the catalog is warm (graceful degradation to config refs).
+  const catalog = getPreparedModelCatalogSnapshot({
+    config: params.cfg,
+    ...(activeAgentId ? { agentId: activeAgentId } : {}),
+  });
+  for (const entry of catalog?.entries ?? []) {
+    const providerId = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    if (providerId) {
+      refs.add(providerId.toLowerCase());
+    }
+    for (const value of [entry.id, entry.name]) {
+      const normalizedValue = typeof value === "string" ? value.trim() : "";
+      if (!normalizedValue) {
+        continue;
+      }
+      refs.add(normalizedValue.toLowerCase());
+      if (providerId) {
+        refs.add(`${providerId}/${normalizedValue}`.toLowerCase());
+      }
     }
   }
   return refs;

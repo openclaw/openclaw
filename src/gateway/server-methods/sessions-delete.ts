@@ -208,6 +208,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       params: {
         sessionKey: abortSessionKey,
         ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+        ...(p.exemptChatRunId ? { exemptRunId: p.exemptChatRunId } : {}),
       },
       respond: (ok, _payload, error) => {
         abortResult = { ok, ...(error ? { error } : {}) };

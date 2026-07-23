@@ -94,6 +94,13 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
         identities: [params.sessionKey],
       })
     : undefined;
+  // A /close issued from a gateway client (e.g. Control UI) arrives as a chat run
+  // and is itself registered in the gateway's chat-run table. The nested
+  // sessions.delete aborts competing runs on this session before deleting; without
+  // exempting the initiating run, that abort would terminate this very turn and the
+  // client would surface an "aborted" state instead of the deletion success reply.
+  // Pass the initiating run id so the server skips it during the session-wide abort.
+  const exemptChatRunId = params.opts?.runId;
   const deletion = await callGateway<{
     deleted?: boolean;
     worktreePreserved?: { id: string; branch: string; path: string };
@@ -114,6 +121,7 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
       expectedLifecycleRevision: targetEntry?.lifecycleRevision,
       expectedSessionUpdatedAt: targetEntry?.updatedAt,
       ...(admissionHandoffId ? { admissionHandoffId } : {}),
+      ...(exemptChatRunId ? { exemptChatRunId } : {}),
     },
   });
   if (!deletion?.deleted) {

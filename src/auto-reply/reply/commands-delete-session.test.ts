@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
@@ -189,6 +189,33 @@ describe("delete session command", () => {
         expectedSessionUpdatedAt: 42,
       },
     });
+  });
+
+  it("forwards the initiating chat run id so the /close turn is not self-aborted", async () => {
+    const storePath = await createStorePath();
+    const params = buildDeleteParams("/close", storePath);
+    params.opts = { runId: "run-close-42" } as never;
+
+    await handleDeleteSessionCommand(params, true);
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({ exemptChatRunId: "run-close-42" }),
+      }),
+    );
+  });
+
+  it("omits exemptChatRunId when no initiating run id is available", async () => {
+    const storePath = await createStorePath();
+    const params = buildDeleteParams("/close", storePath);
+
+    await handleDeleteSessionCommand(params, true);
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params: Record<string, unknown>;
+    };
+    expect(call.params).not.toHaveProperty("exemptChatRunId");
   });
 
   it("rejects delete command arguments instead of deleting the current session", async () => {

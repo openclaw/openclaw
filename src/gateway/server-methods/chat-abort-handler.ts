@@ -59,11 +59,13 @@ export async function handleChatAbortRequest({
     sessionKey: rawSessionKey,
     runId,
     preserveSideRuns,
+    exemptRunId,
   } = params as {
     sessionKey: string;
     agentId?: string;
     runId?: string;
     preserveSideRuns?: boolean;
+    exemptRunId?: string;
   };
   const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
   const abortCfg = context.getRuntimeConfig();
@@ -124,6 +126,7 @@ export async function handleChatAbortRequest({
       stopReason: "rpc",
       requester,
       preserveSideRuns,
+      exemptRunId,
     });
     if (res.unauthorized) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));

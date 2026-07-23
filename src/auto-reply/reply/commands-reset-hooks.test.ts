@@ -5,8 +5,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -19,6 +19,9 @@ const routeReplyMock = vi.hoisted(() =>
 const resetMocks = vi.hoisted(() => ({
   resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
   resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
+}));
+const preparedCatalogMock = vi.hoisted(() => ({
+  getPreparedModelCatalogSnapshot: vi.fn((): unknown => undefined),
 }));
 
 let tempRoots: string[] = [];
@@ -61,6 +64,13 @@ vi.mock("../../channels/plugins/binding-targets.js", () => ({
 
 vi.mock("./commands-acp/targets.js", () => ({
   resolveBoundAcpThreadSessionKey: resetMocks.resolveBoundAcpThreadSessionKey,
+}));
+
+vi.mock("../../agents/prepared-model-catalog.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/prepared-model-catalog.js")>(
+    "../../agents/prepared-model-catalog.js",
+  )),
+  getPreparedModelCatalogSnapshot: preparedCatalogMock.getPreparedModelCatalogSnapshot,
 }));
 
 vi.mock("./commands-handlers.runtime.js", () => ({
@@ -158,6 +168,7 @@ describe("handleCommands reset hooks", () => {
     clearBootstrapSnapshotSpy = vi.spyOn(bootstrapCache, "clearBootstrapSnapshot");
     resetMocks.resetConfiguredBindingTargetInPlace.mockResolvedValue({ ok: true });
     resetMocks.resolveBoundAcpThreadSessionKey.mockReturnValue(undefined);
+    preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
     triggerInternalHookMock.mockResolvedValue(undefined);
   });
 
@@ -1021,6 +1032,80 @@ describe("handleCommands reset hooks", () => {
     });
     expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
       "custom/private-model notes",
+    );
+  });
+
+  it("recognizes a model published only in the prepared catalog as a directive", async () => {
+    // A plugin-supplied provider publishes its models into the prepared model catalog,
+    // not into cfg.models.providers, so "acme/widget" is invisible to the config-only
+    // refs. The warm catalog snapshot must let classification treat it as a model
+    // directive (falling through to the reset-model resolver) instead of capturing it
+    // as a multi-word session name.
+    preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue({
+      entries: [{ id: "widget", name: "Widget", provider: "acme" }],
+      routeVariants: [],
+    });
+    const params = buildResetParams(
+      "/new acme/widget summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "acme/widget summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("names a fresh session from a plugin model tail when the catalog is not warm yet", async () => {
+    // getPreparedModelCatalogSnapshot returns undefined until the catalog is published.
+    // Classification must degrade gracefully to config refs instead of cold-loading
+    // plugins on the /new hot path, so an unrecognized tail stays a session name.
+    preparedCatalogMock.getPreparedModelCatalogSnapshot.mockReturnValue(undefined);
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new acme/widget notes",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "acme/widget notes" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “acme/widget notes”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "acme/widget notes",
     );
   });
 
