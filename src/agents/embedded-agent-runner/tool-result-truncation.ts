@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,6 +12,7 @@ import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -80,7 +81,51 @@ export const toolResultWarningDedupe = {
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
   minKeepChars?: number;
+  /**
+   * Optional token-equivalent budget applied in addition to the physical
+   * `maxChars` ceiling. When set, the retained result must satisfy BOTH the raw
+   * UTF-16 `maxChars` limit and `estimateStringChars(result) <= estimatedMaxChars`.
+   * Defaults to no estimated limit (physical-only), which keeps persistence-path
+   * callers unchanged.
+   */
+  estimatedMaxChars?: number;
 };
+
+/**
+ * Token-equivalent budget for a single tool result: the context-share limit
+ * expressed in CJK-aware characters (the unit `estimateStringChars` returns).
+ * This is the estimated half of the two-budget contract; the physical half is
+ * the raw UTF-16 `toolResultMaxChars` ceiling, kept separate on purpose.
+ */
+function resolveEstimatedToolResultBudget(contextWindowTokens: number): number {
+  if (!Number.isFinite(contextWindowTokens)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(1, Math.floor(contextWindowTokens * MAX_TOOL_RESULT_CONTEXT_SHARE) * 4);
+}
+
+/**
+ * Largest raw UTF-16 cut index whose retained prefix satisfies the
+ * token-equivalent budget: `estimateStringChars(text.slice(0, i)) <= budget`.
+ * Measured on the actual prefix (not a whole-input average) so a compositionally
+ * uneven slice cannot exceed the token budget.
+ */
+function rawCutForEstimatedBudget(text: string, estimatedBudget: number): number {
+  if (!Number.isFinite(estimatedBudget) || estimateStringChars(text) <= estimatedBudget) {
+    return text.length;
+  }
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateStringChars(sliceUtf16Safe(text, 0, mid)) <= estimatedBudget) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return low;
+}
 
 const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
@@ -160,23 +205,41 @@ function resolveEffectiveMinKeepChars(params: {
 function appendBoundedTruncationSuffix(params: {
   keptText: string;
   originalTextLength: number;
-  maxChars: number;
+  rawMaxChars: number;
+  estimatedMaxChars: number;
   suffixFactory: (truncatedChars: number) => string;
 }): string {
   const build = (keptText: string) =>
     keptText + params.suffixFactory(Math.max(1, params.originalTextLength - keptText.length));
+  // The complete assembled result (kept prefix/tail/marker + suffix) must fit
+  // both the raw ceiling and the token-equivalent budget. Measuring the actual
+  // assembled text — not a per-input average — is what keeps an uneven CJK/ASCII
+  // slice from exceeding the estimated budget.
+  const fitsBudgets = (finalText: string) =>
+    finalText.length <= params.rawMaxChars &&
+    estimateStringChars(finalText) <= params.estimatedMaxChars;
 
   let keptText = params.keptText;
   while (true) {
     const finalText = build(keptText);
-    if (finalText.length <= params.maxChars) {
+    if (fitsBudgets(finalText)) {
       return finalText;
     }
     if (keptText.length === 0) {
-      return truncateUtf16Safe(finalText, params.maxChars);
+      const rawCeil = Math.min(
+        params.rawMaxChars,
+        rawCutForEstimatedBudget(finalText, params.estimatedMaxChars),
+      );
+      return sliceUtf16Safe(finalText, 0, Math.max(0, rawCeil));
     }
-    const overflow = finalText.length - params.maxChars;
-    const nextKeptText = sliceUtf16Safe(keptText, 0, Math.max(0, keptText.length - overflow));
+    const rawOverflow = Math.max(0, finalText.length - params.rawMaxChars);
+    const estimatedOverflow = Number.isFinite(params.estimatedMaxChars)
+      ? Math.max(0, estimateStringChars(finalText) - params.estimatedMaxChars)
+      : 0;
+    // Each removed UTF-16 unit drops the estimate by at least 1, so shrinking by
+    // the larger overflow converges without overshooting into an empty result.
+    const shrinkBy = Math.max(1, rawOverflow, estimatedOverflow);
+    const nextKeptText = sliceUtf16Safe(keptText, 0, Math.max(0, keptText.length - shrinkBy));
     keptText =
       nextKeptText.length < keptText.length ? nextKeptText : sliceUtf16Safe(keptText, 0, -1);
   }
@@ -205,7 +268,17 @@ function hasImportantTail(text: string): boolean {
 }
 
 /**
- * Truncate a single text string to fit within maxChars.
+ * Truncate a single text string to fit within two independent budgets:
+ * a physical raw UTF-16 ceiling (`physicalMaxChars`) and an optional
+ * token-equivalent budget (`options.estimatedMaxChars`, default unbounded).
+ *
+ * The physical ceiling keeps the raw output bounded; the estimated budget keeps
+ * the token cost bounded so CJK-heavy content cannot silently exceed its share
+ * of the context window. Both are enforced on the actual retained result, so a
+ * compositionally uneven slice cannot exceed the token budget.
+ *
+ * For pure ASCII (`estimateStringChars === text.length`) with no estimated
+ * budget the behavior is identical to a plain raw-length truncation.
  *
  * Uses a head+tail strategy when the tail contains important content
  * (errors, results, JSON structure), otherwise preserves the beginning.
@@ -214,20 +287,30 @@ function hasImportantTail(text: string): boolean {
  */
 function truncateToolResultText(
   text: string,
-  maxChars: number,
+  physicalMaxChars: number,
   options: ToolResultTruncationOptions = {},
 ): string {
   const suffixFactory = resolveSuffixFactory(options.suffix);
+  const estimatedMaxChars = options.estimatedMaxChars ?? Number.POSITIVE_INFINITY;
+  // Short-circuit when the text already fits both the physical and estimated
+  // budgets.
+  if (text.length <= physicalMaxChars && estimateStringChars(text) <= estimatedMaxChars) {
+    return text;
+  }
+  // Internal slicing works on raw UTF-16 indices. The effective raw budget is
+  // the largest prefix length that fits BOTH the physical ceiling and the
+  // token-equivalent budget for this specific text.
+  const rawMaxChars = Math.max(
+    1,
+    Math.min(physicalMaxChars, rawCutForEstimatedBudget(text, estimatedMaxChars)),
+  );
   const minKeepChars = resolveEffectiveMinKeepChars({
-    maxChars,
+    maxChars: rawMaxChars,
     minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
     suffixFactory,
   });
-  if (text.length <= maxChars) {
-    return text;
-  }
-  const defaultSuffix = suffixFactory(Math.max(1, text.length - maxChars));
-  const budget = Math.max(minKeepChars, maxChars - defaultSuffix.length);
+  const defaultSuffix = suffixFactory(Math.max(1, text.length - rawMaxChars));
+  const budget = Math.max(minKeepChars, rawMaxChars - defaultSuffix.length);
 
   // If tail looks important, split budget between head and tail
   if (hasImportantTail(text) && budget > minKeepChars * 2) {
@@ -253,7 +336,8 @@ function truncateToolResultText(
       return appendBoundedTruncationSuffix({
         keptText,
         originalTextLength: text.length,
-        maxChars,
+        rawMaxChars,
+        estimatedMaxChars,
         suffixFactory,
       });
     }
@@ -269,7 +353,8 @@ function truncateToolResultText(
   return appendBoundedTruncationSuffix({
     keptText,
     originalTextLength: text.length,
-    maxChars,
+    rawMaxChars,
+    estimatedMaxChars,
     suffixFactory,
   });
 }
@@ -355,7 +440,9 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
 }
 
 /**
- * Get the total character count of text content blocks in a tool result message.
+ * Get the total raw UTF-16 length of text content blocks in a tool result
+ * message. This is the physical measurement enforced against the physical
+ * `toolResultMaxChars` ceiling and the aggregate raw budget.
  */
 function getToolResultTextLength(msg: AgentMessage): number {
   if (!msg || (msg as { role?: string }).role !== "toolResult") {
@@ -378,17 +465,46 @@ function getToolResultTextLength(msg: AgentMessage): number {
 }
 
 /**
- * Truncate a tool result message's text content blocks to fit within maxChars.
- * Returns a new message (does not mutate the original).
+ * Get the total token-equivalent (CJK-aware) length of text content blocks in a
+ * tool result message. This is the estimated measurement enforced against the
+ * per-result token-share budget, so CJK-heavy results are not undercounted by
+ * up to 4x against the physical-character cap.
+ */
+function getToolResultEstimatedTextLength(msg: AgentMessage): number {
+  if (!msg || (msg as { role?: string }).role !== "toolResult") {
+    return 0;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let totalLength = 0;
+  for (const block of content) {
+    if (isToolResultTextBlock(block)) {
+      const text = block.text;
+      if (typeof text === "string") {
+        totalLength += estimateStringChars(text);
+      }
+    }
+  }
+  return totalLength;
+}
+
+/**
+ * Truncate a tool result message's text content blocks to fit within the
+ * physical `physicalMaxChars` ceiling and, when supplied, the token-equivalent
+ * `options.estimatedMaxChars` budget. Returns a new message (does not mutate the
+ * original).
  */
 export function truncateToolResultMessage(
   msg: AgentMessage,
-  maxChars: number,
+  physicalMaxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
   const suffixFactory = resolveSuffixFactory(options.suffix);
+  const estimatedMaxChars = options.estimatedMaxChars ?? Number.POSITIVE_INFINITY;
   const minKeepChars = resolveEffectiveMinKeepChars({
-    maxChars,
+    maxChars: physicalMaxChars,
     minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
     suffixFactory,
   });
@@ -397,13 +513,15 @@ export function truncateToolResultMessage(
     return msg;
   }
 
-  // Calculate total text size
-  const totalTextChars = getToolResultTextLength(msg);
-  if (totalTextChars <= maxChars) {
+  // Fits both budgets? Physical is raw UTF-16 length; estimated is token-equivalent.
+  const totalRawChars = getToolResultTextLength(msg);
+  const totalEstimatedChars = getToolResultEstimatedTextLength(msg);
+  if (totalRawChars <= physicalMaxChars && totalEstimatedChars <= estimatedMaxChars) {
     return msg;
   }
 
-  // Distribute the budget proportionally among text blocks
+  // Distribute each budget proportionally among text blocks: the physical budget
+  // by raw share, the estimated budget by token-equivalent share.
   const newContent = content.map((block: unknown) => {
     if (!isToolResultTextBlock(block)) {
       return block; // Keep non-text blocks (images) as-is
@@ -412,19 +530,26 @@ export function truncateToolResultMessage(
     if (typeof textBlock.text !== "string") {
       return block;
     }
-    // Proportional budget for this block
-    const blockShare = textBlock.text.length / totalTextChars;
-    const defaultSuffix = suffixFactory(
-      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
-    );
-    const proportionalBudget = Math.floor(maxChars * blockShare);
-    const blockBudget = Math.max(
+    const blockRawChars = textBlock.text.length;
+    const blockEstimatedChars = estimateStringChars(textBlock.text);
+    const physicalShare = totalRawChars > 0 ? blockRawChars / totalRawChars : 1;
+    const estimatedShare = totalEstimatedChars > 0 ? blockEstimatedChars / totalEstimatedChars : 1;
+    const proportionalPhysicalBudget = Math.floor(physicalMaxChars * physicalShare);
+    const defaultSuffix = suffixFactory(Math.max(1, blockRawChars - proportionalPhysicalBudget));
+    const blockPhysicalBudget = Math.max(
       1,
-      Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
+      Math.min(
+        physicalMaxChars,
+        Math.max(minKeepChars + defaultSuffix.length, proportionalPhysicalBudget),
+      ),
     );
-    const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
+    const blockEstimatedBudget = Number.isFinite(estimatedMaxChars)
+      ? Math.max(1, Math.floor(estimatedMaxChars * estimatedShare))
+      : Number.POSITIVE_INFINITY;
+    const truncatedText = truncateToolResultText(textBlock.text, blockPhysicalBudget, {
       suffix: suffixFactory,
       minKeepChars,
+      estimatedMaxChars: blockEstimatedBudget,
     });
     const nextBlock = Object.assign({}, textBlock, { text: truncatedText });
     if (typeof textBlock.content === "string") {
@@ -627,6 +752,7 @@ export function truncateOversizedToolResultsInMessages(
   const plan = buildToolResultReplacementPlan({
     branch,
     maxChars,
+    estimatedMaxChars: resolveEstimatedToolResultBudget(contextWindowTokens),
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
     protectTrailingToolResults: Boolean(projectionState),
@@ -1022,10 +1148,12 @@ function clearToolResultText(
 function buildOversizedToolResultReplacements(params: {
   branch: ToolResultBranchEntry[];
   maxChars: number;
+  estimatedMaxChars?: number;
   minKeepChars?: number;
   protectedEntryIds?: Set<string>;
 }): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
+  const estimatedMaxChars = params.estimatedMaxChars ?? Number.POSITIVE_INFINITY;
   const replacements: ToolResultReplacement[] = [];
 
   for (const entry of params.branch) {
@@ -1036,7 +1164,12 @@ function buildOversizedToolResultReplacements(params: {
     if ((msg as { role?: string }).role !== "toolResult") {
       continue;
     }
-    if (getToolResultTextLength(msg) <= params.maxChars) {
+    // Oversized if it exceeds either budget: the physical raw ceiling or the
+    // token-equivalent budget.
+    if (
+      getToolResultTextLength(msg) <= params.maxChars &&
+      getToolResultEstimatedTextLength(msg) <= estimatedMaxChars
+    ) {
       continue;
     }
     const replacementMinKeepChars = params.protectedEntryIds?.has(entry.id)
@@ -1049,6 +1182,7 @@ function buildOversizedToolResultReplacements(params: {
       entryId: entry.id,
       message: truncateToolResultMessage(msg, maxChars, {
         minKeepChars: replacementMinKeepChars,
+        estimatedMaxChars,
         ...(suffixFactory ? { suffix: suffixFactory } : {}),
       }),
     });
@@ -1106,6 +1240,7 @@ function applyToolResultReplacementsToBranch(
 function buildToolResultReplacementPlan(params: {
   branch: ToolResultBranchEntry[];
   maxChars: number;
+  estimatedMaxChars?: number;
   aggregateBudgetChars: number;
   minKeepChars?: number;
   protectTrailingToolResults?: boolean;
@@ -1124,6 +1259,7 @@ function buildToolResultReplacementPlan(params: {
   const oversizedReplacements = buildOversizedToolResultReplacements({
     branch: params.branch,
     maxChars: params.maxChars,
+    estimatedMaxChars: params.estimatedMaxChars,
     minKeepChars,
     protectedEntryIds,
   });
@@ -1184,6 +1320,7 @@ function buildRecoveryToolResultReplacementPlan(params: {
     plan: buildToolResultReplacementPlan({
       branch: params.branch,
       maxChars,
+      estimatedMaxChars: resolveEstimatedToolResultBudget(params.contextWindowTokens),
       aggregateBudgetChars,
       minKeepChars: RECOVERY_MIN_KEEP_CHARS,
       protectTrailingToolResults: params.protectTrailingToolResults,
@@ -1229,6 +1366,7 @@ export function estimateToolResultReductionPotential(params: {
   const plan = buildToolResultReplacementPlan({
     branch,
     maxChars,
+    estimatedMaxChars: resolveEstimatedToolResultBudget(contextWindowTokens),
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
   });

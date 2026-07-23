@@ -82,8 +82,12 @@ limits.
 `toolResultMaxChars` is unset by default, so OpenClaw derives the live
 tool-result cap from the effective model context window: `16000` chars below
 100K tokens, `32000` chars at 100K+ tokens, `64000` chars at 200K+ tokens.
-The runtime context-share guard still caps a single tool result at 30% of the
-context window even when a larger explicit ceiling is configured.
+`toolResultMaxChars` is a physical UTF-16 character ceiling. Independently, a
+token-equivalent context-share guard caps a single tool result at 30% of the
+context window; that guard counts CJK and other East Asian scripts covered by
+the character-width estimator at roughly its real per-character token cost, so a
+CJK-heavy result cannot exceed its share of
+the window even though the physical ceiling is measured in raw characters.
 
 Large provider windows are not enabled automatically when they materially
 change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
