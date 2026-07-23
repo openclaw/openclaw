@@ -118,6 +118,7 @@ agent decides whether a user-facing update is needed.
     - If the turn needs child output, call `sessions_yield` after spawning. Do not poll `/subagents list`, `sessions_list`, `sessions_history`, or sleep-loops waiting for completion.
     - Keep the spawn `task` aligned with the full user intent the requester will review. Avoid shrinking the child to a fragment and inventing the rest in the parent without evidence from the Result or transcript.
     - Prefer `/subagents info`, announce stats, or `sessions_history` for inspection. Raw transcript fields may be SQLite session markers, not JSONL filesystem paths.
+
   </Accordion>
 </AccordionGroup>
 
