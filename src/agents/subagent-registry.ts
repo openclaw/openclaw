@@ -16,6 +16,7 @@ import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  GatewayDrainingError,
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -67,6 +68,7 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_EXPIRY_MS,
+  backfillCollectorArchiveAtMs,
   MAX_ANNOUNCE_RETRY_COUNT,
   PROVISIONAL_KILL_RECONCILIATION_MS,
   reconcileOrphanedRestoredRuns,
@@ -865,6 +867,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+  getRuntimeConfig: () => subagentRegistryDeps.getRuntimeConfig(),
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   clearPendingLifecycleError,
@@ -1071,12 +1074,17 @@ function restoreSubagentRunsOnce() {
     if (restoredCount === 0) {
       return;
     }
-    if (
-      reconcileOrphanedRestoredRuns({
-        runs: subagentRuns,
-        resumedRuns,
-      })
-    ) {
+    const cfg = subagentRegistryDeps.getRuntimeConfig();
+    let restoredStateChanged = reconcileOrphanedRestoredRuns({
+      runs: subagentRuns,
+      resumedRuns,
+    });
+    for (const entry of subagentRuns.values()) {
+      if (backfillCollectorArchiveAtMs(entry, cfg)) {
+        restoredStateChanged = true;
+      }
+    }
+    if (restoredStateChanged) {
       persistSubagentRuns();
     }
     const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
@@ -1144,32 +1152,37 @@ function restoreSubagentRunsOnce() {
             .filter((candidate) => candidate.execution?.status === "running")
             .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
           start: async () => {
-            const response = await subagentRegistryDeps.callGateway({
-              method: "agent",
-              params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
-              // Restart replay must restore the trusted launch capability; otherwise
-              // the queued child silently falls back to its session/default route.
-              ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
-              timeoutMs: launch.timeoutMs,
-            });
-            const gatewayRunId = readGatewayRunId(response) ?? runId;
-            try {
-              if (!startQueuedSubagentRun(runId, gatewayRunId)) {
-                throw new Error(
-                  "collector registry row could not transition from queued to running",
-                );
-              }
-            } catch (error) {
-              await terminateAcceptedRestoredCollectorRun({
-                entry,
-                gatewayRunId,
+            await runWithGatewayIndependentRootWorkAdmission(async () => {
+              const response = await subagentRegistryDeps.callGateway({
+                method: "agent",
+                params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
+                // Restart replay must restore the trusted launch capability; otherwise
+                // the queued child silently falls back to its session/default route.
+                ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
                 timeoutMs: launch.timeoutMs,
               });
-              launchTerminationConfirmed = true;
-              throw error;
-            }
+              const gatewayRunId = readGatewayRunId(response) ?? runId;
+              try {
+                if (!startQueuedSubagentRun(runId, gatewayRunId)) {
+                  throw new Error(
+                    "collector registry row could not transition from queued to running",
+                  );
+                }
+              } catch (error) {
+                await terminateAcceptedRestoredCollectorRun({
+                  entry,
+                  gatewayRunId,
+                  timeoutMs: launch.timeoutMs,
+                });
+                launchTerminationConfirmed = true;
+                throw error;
+              }
+            });
           },
           onStartFailure: (error) => {
+            if (error instanceof GatewayDrainingError) {
+              return false;
+            }
             return failAndCleanupRestoredQueuedRun(
               runId,
               entry,
@@ -1827,12 +1840,9 @@ async function sweepSubagentRuns() {
           continue;
         }
         let deleteFailed = false;
-        // Lifecycle cleanup already attempted each delete-mode session. Retry
-        // here only so a transient cleanup failure cannot survive group archive.
+        // Group retention owns the final session archive for both keep- and
+        // delete-mode collectors. Retry every member so the batch is idempotent.
         for (const [candidateRunId, candidate] of groupEntries) {
-          if (candidate.cleanup !== "delete") {
-            continue;
-          }
           try {
             await subagentRegistryDeps.callGateway({
               method: "sessions.delete",
@@ -2027,6 +2037,7 @@ function ensureListener() {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = startedAt;
           }
+          entry.execution = { ...entry.execution, status: "running", startedAt };
           persistSubagentRuns();
         }
         return;

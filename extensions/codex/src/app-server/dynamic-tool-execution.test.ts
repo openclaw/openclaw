@@ -4,6 +4,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS } from "./client.js";
 import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
@@ -138,9 +139,11 @@ describe("dynamic tool execution helpers", () => {
         config: {
           agents: {
             defaults: {
-              imageGenerationModel: {
-                primary: "openai/gpt-image-1",
-                timeoutMs: 180_000,
+              mediaModels: {
+                image: {
+                  primary: "openai/gpt-image-1",
+                  timeoutMs: 180_000,
+                },
               },
             },
           },
@@ -361,12 +364,12 @@ describe("dynamic tool execution helpers", () => {
         config: undefined,
       }),
     ).toBe(150_000);
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
-        config: undefined,
-      }),
-    ).toBe(630_000);
+    const fullWaitTimeoutMs = resolveDynamicToolCallTimeoutMs({
+      call: { ...call, arguments: { ids: ["run-1"], timeoutSeconds: 600 } },
+      config: undefined,
+    });
+    expect(fullWaitTimeoutMs).toBe(630_000);
+    expect(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS).toBeGreaterThan(fullWaitTimeoutMs);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {

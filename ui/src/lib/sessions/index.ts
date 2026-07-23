@@ -189,7 +189,7 @@ export type SessionMessageSubscription = {
 
 export type SessionCapability = {
   readonly state: SessionState;
-  /** Advances only when a canonical sessions.list response is published. */
+  /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   setCreatorFilter: (creatorId: string | null) => Promise<void>;
@@ -869,7 +869,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return null;
     }
     const result = await requestSessionList(scope.client, options);
-    return isCurrentConnection(scope) ? (result ?? null) : null;
+    return isCurrentConnection(scope) ? swarmActivity.decorate(result ?? null) : null;
   };
 
   const publish = (next: SessionState) => {
@@ -1419,7 +1419,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    swarmActivity.observe(payload);
     const base = reconcileSessionChanged(state.result, payload, options);
     const result = swarmActivity.decorate(base.result);
     const reconciled =
