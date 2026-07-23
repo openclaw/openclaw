@@ -9,6 +9,7 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -19,18 +20,29 @@ export type NormalizedAllowFrom = {
   invalidEntries: string[];
 };
 
-const warnedInvalidEntries = new Set<string>();
+const MAX_WARNED_INVALID_ENTRIES = 256;
+// Retain warn-once state for recently seen invalid entries without letting
+// config churn accumulate keys for the process lifetime. LRU eviction
+// intentionally lets long-evicted invalid entries warn again.
+const warnedInvalidEntries = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_INVALID_ENTRIES,
+});
 const log = createSubsystemLogger("telegram/bot-access");
+
+/** @internal Reset the invalid-entry warn dedupe state. Exported for tests only. */
+export function resetInvalidAllowFromWarnings(): void {
+  warnedInvalidEntries.clear();
+}
 
 function warnInvalidAllowFromEntries(entries: string[]) {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
   for (const entry of entries) {
-    if (warnedInvalidEntries.has(entry)) {
+    if (warnedInvalidEntries.check(entry)) {
       continue;
     }
-    warnedInvalidEntries.add(entry);
     log.warn(
       [
         "Invalid allowFrom entry:",
