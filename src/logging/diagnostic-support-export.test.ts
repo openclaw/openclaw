@@ -836,6 +836,9 @@ describe("diagnostic support export", () => {
               `${userProfile}\\openclaw\\dist\\index.js`,
               "--config",
               `${stateDir}\\openclaw.json`,
+              `--aws-secret-access-key=${fakeAwsSecretAccessKey()}`,
+              "--awsSecretAccessKey",
+              fakeAwsSecretAccessKey(),
             ],
             sourcePath: "c:\\users\\support-user\\AppData\\Local\\openclaw\\gateway-service.json",
           },
@@ -845,8 +848,11 @@ describe("diagnostic support export", () => {
     );
     const serialized = JSON.stringify(status);
     expect(serialized).not.toContain("support-user");
+    expect(serialized).not.toContain(fakeAwsSecretAccessKey());
     expect(serialized).toContain("~\\\\openclaw\\\\dist\\\\index.js");
     expect(serialized).toContain("$OPENCLAW_STATE_DIR\\\\openclaw.json");
+    expect(serialized).toContain("--aws-secret-access-key=<redacted>");
+    expect(serialized).toContain("--awsSecretAccessKey");
     expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
 
