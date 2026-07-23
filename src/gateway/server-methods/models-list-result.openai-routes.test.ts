@@ -34,6 +34,7 @@ async function listModels(params: {
     loadGatewayModelCatalog: vi.fn(() => Promise.resolve(params.catalog)),
     loadGatewayModelCatalogSnapshot: vi.fn(() =>
       Promise.resolve({
+        agentId: "main",
         agentDir: "/tmp/models-list-openai-agent",
         config,
         entries: params.catalog,
@@ -227,6 +228,42 @@ describe("models.list OpenAI routes", () => {
       agentId: "worker",
       readOnly: false,
     });
+  });
+
+  it("does not project an ownerless catalog as the requested agent", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [
+          { id: "main", default: true },
+          {
+            id: "worker",
+            models: { "openai/gpt-ownerless": { agentRuntime: { id: "openclaw" } } },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const ownerlessEntry = catalogEntry("gpt-ownerless", "openai-responses");
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(() =>
+        Promise.resolve({
+          agentDir: "/tmp/models-list-openai-agent",
+          config,
+          entries: [ownerlessEntry],
+          routeVariants: [ownerlessEntry],
+        }),
+      ),
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({
+        context,
+        agentId: "worker",
+        params: { view: "all" },
+      }),
+    ).resolves.toEqual({ models: [] });
   });
 
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {

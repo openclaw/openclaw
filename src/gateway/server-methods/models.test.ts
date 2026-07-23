@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -51,6 +52,7 @@ function requestModelsList(params: {
   runtimeConfig?: OpenClawConfig;
   getRuntimeConfig?: () => OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
+    agentId?: string;
     agentDir?: string;
     readOnly?: boolean;
     workspaceDir?: string;
@@ -88,9 +90,11 @@ function requestModelsList(params: {
         loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
       ) => {
         const entries = await params.loadGatewayModelCatalog(loadParams);
+        const config = getRuntimeConfig();
         return {
+          agentId: loadParams?.agentId ?? resolveDefaultAgentId(config),
           agentDir: "/tmp/models-list-agent",
-          config: getRuntimeConfig(),
+          config,
           entries,
           routeVariants: entries,
         };
