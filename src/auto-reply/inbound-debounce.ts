@@ -416,45 +416,45 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     }
     const isSynchronousBypass =
       rawDecision !== undefined && "action" in rawDecision && rawDecision.action === "bypass";
+    if (isSynchronousBypass) {
+      for (const release of pendingDecisionReleases.get(key) ?? []) {
+        release();
+      }
+      return enqueueResolved(item, key, rawDecision, undefined, generation);
+    }
     const rawDecisionPromise = Promise.resolve(rawDecision);
     // Decisions start eagerly, so observe rejection before an earlier same-key
     // item finishes applying. The returned enqueue task still carries the error.
     void rawDecisionPromise.catch(() => undefined);
     let decision = rawDecisionPromise;
-    if (isSynchronousBypass) {
-      for (const release of pendingDecisionReleases.get(key) ?? []) {
-        release();
-      }
-    } else {
-      pendingDecisionCounts.set(key, (pendingDecisionCounts.get(key) ?? 0) + 1);
-      const heldBuffer = buffers.get(key);
-      if (heldBuffer?.timeout) {
-        clearTimeout(heldBuffer.timeout);
-        heldBuffer.timeout = null;
-      }
-      let releasePending!: () => void;
-      const released = new Promise<undefined>((resolve) => {
-        releasePending = () => resolve(undefined);
-      });
-      const releases = pendingDecisionReleases.get(key) ?? new Set<() => void>();
-      releases.add(releasePending);
-      pendingDecisionReleases.set(key, releases);
-      decision = Promise.race([rawDecisionPromise, released]);
-      void decision.then(
-        () => {
-          releases.delete(releasePending);
-          if (releases.size === 0) {
-            pendingDecisionReleases.delete(key);
-          }
-        },
-        () => {
-          releases.delete(releasePending);
-          if (releases.size === 0) {
-            pendingDecisionReleases.delete(key);
-          }
-        },
-      );
+    pendingDecisionCounts.set(key, (pendingDecisionCounts.get(key) ?? 0) + 1);
+    const heldBuffer = buffers.get(key);
+    if (heldBuffer?.timeout) {
+      clearTimeout(heldBuffer.timeout);
+      heldBuffer.timeout = null;
     }
+    let releasePending!: () => void;
+    const released = new Promise<undefined>((resolve) => {
+      releasePending = () => resolve(undefined);
+    });
+    const releases = pendingDecisionReleases.get(key) ?? new Set<() => void>();
+    releases.add(releasePending);
+    pendingDecisionReleases.set(key, releases);
+    decision = Promise.race([rawDecisionPromise, released]);
+    void decision.then(
+      () => {
+        releases.delete(releasePending);
+        if (releases.size === 0) {
+          pendingDecisionReleases.delete(key);
+        }
+      },
+      () => {
+        releases.delete(releasePending);
+        if (releases.size === 0) {
+          pendingDecisionReleases.delete(key);
+        }
+      },
+    );
     let releaseApplied!: () => void;
     const applied = new Promise<void>((resolve) => {
       releaseApplied = resolve;
@@ -466,16 +466,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       }
       appliedReleased = true;
       releaseApplied();
-      if (!isSynchronousBypass) {
-        const remaining = (pendingDecisionCounts.get(key) ?? 1) - 1;
-        if (remaining > 0) {
-          pendingDecisionCounts.set(key, remaining);
-        } else {
-          pendingDecisionCounts.delete(key);
-          const buffer = buffers.get(key);
-          if (buffer && !buffer.timeout) {
-            scheduleFlush(key, buffer);
-          }
+      const remaining = (pendingDecisionCounts.get(key) ?? 1) - 1;
+      if (remaining > 0) {
+        pendingDecisionCounts.set(key, remaining);
+      } else {
+        pendingDecisionCounts.delete(key);
+        const buffer = buffers.get(key);
+        if (buffer && !buffer.timeout) {
+          scheduleFlush(key, buffer);
         }
       }
     };

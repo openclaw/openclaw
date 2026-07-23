@@ -580,6 +580,7 @@ describe("createInboundDebouncer", () => {
   });
 
   it("releases a pending decision before applying a later synchronous bypass", async () => {
+    vi.useFakeTimers();
     const never = new Promise<InboundDebounceDecision>(() => {});
     const calls: Array<string[]> = [];
     const debouncer = createInboundDebouncer<{ key: string; id: string }>({
@@ -591,8 +592,12 @@ describe("createInboundDebouncer", () => {
 
     const first = debouncer.enqueue({ key: "a", id: "1" });
     const bypass = debouncer.enqueue({ key: "a", id: "2" });
-    await Promise.all([first, bypass]);
-    expect(calls).toEqual([["1"], ["2"]]);
+    await bypass;
+    expect(calls).toEqual([["2"]]);
+    await first;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(calls).toEqual([["2"], ["1"]]);
+    vi.useRealTimers();
   });
 
   it("cancels an item whose async decision is still pending", async () => {
@@ -994,6 +999,41 @@ describe("createInboundDebouncer", () => {
     releaseFirst();
     await Promise.all([first, second]);
     expect(started).toEqual(["1", "2"]);
+  });
+
+  it("lets a synchronous bypass preempt active async immediate delivery", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDecision: (item) =>
+        item.id === "2" ? { action: "bypass" } : Promise.resolve({ action: "bypass" }),
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await vi.waitFor(() => {
+      expect(started).toEqual(["1"]);
+    });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(started).toEqual(["1", "2"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await first;
   });
 
   it("serializes keyed turns when immediate serialization is enabled", async () => {

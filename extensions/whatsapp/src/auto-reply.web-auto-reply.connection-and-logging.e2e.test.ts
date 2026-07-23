@@ -1107,11 +1107,11 @@ describe("web auto-reply connection", () => {
     ).rejects.toThrow(/legacy flat or canonical nested/);
   });
 
-  it("caps a plugin debounce window for a rich message", async () => {
+  it("caps plugin debounce windows that may join rich batches", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
-    inboundDebounceHookMocks.hasHooks.mockReturnValueOnce(true);
-    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValueOnce({
+    inboundDebounceHookMocks.hasHooks.mockReturnValue(true);
+    inboundDebounceHookMocks.runInboundDebounce.mockResolvedValue({
       action: "debounce",
       debounceMs: 600_000,
     });
@@ -1159,6 +1159,25 @@ describe("web auto-reply connection", () => {
         conversationId: "120363@g.us",
         senderId: "15550001111@s.whatsapp.net",
       }),
+    );
+
+    await expect(
+      capture.getLastOptions()?.resolveDebounceDecision?.({
+        ...msg,
+        event: { id: "text-1" },
+        debounceKey: "custom:text-message",
+        payload: { body: "follow-up" },
+      }),
+    ).resolves.toEqual({
+      action: "debounce",
+      debounceMs: 300_000,
+    });
+    expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        debounceKey: "custom:text-message",
+        message: { hasMedia: false, hasLocation: false, hasQuote: false },
+      }),
+      expect.any(Object),
     );
   });
 

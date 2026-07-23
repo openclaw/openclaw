@@ -7,9 +7,9 @@ import { normalizeWebInboundMessage } from "../../inbound/message-aliases.js";
 import type { WebInboundMessageInput } from "../../inbound/types.js";
 import { getRuntimeConfig } from "../config.runtime.js";
 
-// Saved inbound media has a one-hour minimum retention contract. Keep plugin
-// windows well below it so a cleanup sweep cannot remove files before flush.
-const MAX_MEDIA_DEBOUNCE_MS = 5 * 60_000;
+// Any text item may join a batch that already owns saved media. Keep all plugin
+// windows below the one-hour media TTL floor so files remain available at flush.
+const MAX_PLUGIN_DEBOUNCE_MS = 5 * 60_000;
 
 export function resolveWhatsAppInboundDebounceDecision(params: {
   cfg: ReturnType<typeof getRuntimeConfig>;
@@ -72,7 +72,7 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
     )
     .then((pluginDecision) => {
       const decision = pluginDecision ?? defaultDecision;
-      if (!hasMedia || decision.action !== "debounce") {
+      if (decision.action !== "debounce") {
         return decision;
       }
       const requestedMs =
@@ -81,7 +81,7 @@ export function resolveWhatsAppInboundDebounceDecision(params: {
           : params.defaultDebounceMs;
       return {
         action: "debounce" as const,
-        debounceMs: Math.min(requestedMs, MAX_MEDIA_DEBOUNCE_MS),
+        debounceMs: Math.min(requestedMs, MAX_PLUGIN_DEBOUNCE_MS),
       };
     });
 }
