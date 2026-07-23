@@ -293,6 +293,7 @@ describe("session-entry compaction budgeting", () => {
     }
     expect(JSON.stringify(result.value.messagesToSummarize)).not.toContain("hidden tool result");
     expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("hidden tool result");
+    expect(["entry-5", "entry-6"]).toContain(result.value.firstKeptEntryId);
   });
 });
 

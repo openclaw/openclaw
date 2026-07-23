@@ -735,6 +735,7 @@ export function prepareCompaction(
 
   let previousSummary: string | undefined;
   let effectiveEntries = pathEntries;
+  let resetPreludeMessages: AgentMessage[] = [];
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
@@ -749,7 +750,11 @@ export function prepareCompaction(
         firstKeptEntryIndex >= 0
           ? pathEntries.slice(firstKeptEntryIndex, prevBoundaryIndex).filter(isResetReplayableEntry)
           : [];
-      effectiveEntries = [...keptEntries, ...pathEntries.slice(prevBoundaryIndex + 1)];
+      resetPreludeMessages = keptEntries.flatMap((entry) => {
+        const message = getMessageFromEntryForCompaction(entry);
+        return message ? [message] : [];
+      });
+      effectiveEntries = pathEntries.slice(prevBoundaryIndex + 1);
       prevBoundaryIndex = -1;
     } else {
       boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
@@ -777,7 +782,7 @@ export function prepareCompaction(
   const firstKeptEntryId = firstKeptEntry.id;
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
-  const messagesToSummarize: AgentMessage[] = [];
+  const messagesToSummarize: AgentMessage[] = [...resetPreludeMessages];
   for (let i = boundaryStart; i < historyEnd; i++) {
     const entry = effectiveEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
