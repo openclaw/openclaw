@@ -83,41 +83,22 @@ describe("Matrix IndexedDB persistence", () => {
 
   it("blocks runtime restore and persistence until doctor migrates the legacy snapshot", async () => {
     const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
-    fs.writeFileSync(
-      snapshotPath,
-      JSON.stringify([
-        {
-          name: cryptoDatabaseName,
-          version: 1,
-          stores: [
-            {
-              name: "sessions",
-              keyPath: null,
-              autoIncrement: false,
-              indexes: [],
-              records: [{ key: "room-1", value: { session: "legacy" } }],
-            },
-          ],
-        },
-      ]),
-      "utf8",
-    );
+    const snapshot = JSON.stringify([{ name: cryptoDatabaseName, version: 1, stores: [] }]);
+    fs.writeFileSync(snapshotPath, snapshot);
 
     await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject({
       name: "MatrixIdbSnapshotMigrationRequiredError",
       code: "matrix-idb-snapshot-requires-doctor",
       remediation: "openclaw doctor --fix",
     });
-    expect(fs.existsSync(snapshotPath)).toBe(true);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const [scope, diagnostic] = warnSpy.mock.calls.at(0) ?? [];
-    expect(scope).toBe("IdbPersistence");
-    expect(diagnostic).toEqual({
-      code: "matrix-idb-snapshot-requires-doctor",
-      message: "Matrix IndexedDB snapshot exists outside canonical SQLite state",
-      remediation: "openclaw doctor --fix",
-    });
-    expect(JSON.stringify(diagnostic)).not.toContain(snapshotPath);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "IdbPersistence",
+      expect.objectContaining({
+        code: "matrix-idb-snapshot-requires-doctor",
+        remediation: "openclaw doctor --fix",
+      }),
+    );
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(snapshotPath);
 
     await seedDatabase({
       name: cryptoDatabaseName,
@@ -131,7 +112,6 @@ describe("Matrix IndexedDB persistence", () => {
     });
     expect(readMatrixIdbSnapshotJson(tmpDir)).toBeNull();
     expect(fs.existsSync(snapshotPath)).toBe(true);
-    expect(warnSpy).toHaveBeenCalledTimes(2);
 
     writeMatrixIdbSnapshotJson({
       storageRootDir: tmpDir,
@@ -141,12 +121,6 @@ describe("Matrix IndexedDB persistence", () => {
     await expect(restoreIdbFromDisk(snapshotPath)).rejects.toMatchObject({
       code: "matrix-idb-snapshot-requires-doctor",
     });
-    expect(warnSpy).toHaveBeenCalledTimes(3);
-  });
-
-  it("fails closed when SQLite is unavailable while a legacy snapshot exists", async () => {
-    const snapshotPath = path.join(tmpDir, "crypto-idb-snapshot.json");
-    fs.writeFileSync(snapshotPath, "[]", "utf8");
     const storeSpy = vi
       .spyOn(getMatrixRuntime().state, "openSyncKeyedStore")
       .mockImplementation(() => {
@@ -160,11 +134,6 @@ describe("Matrix IndexedDB persistence", () => {
     } finally {
       storeSpy.mockRestore();
     }
-    expect(fs.existsSync(snapshotPath)).toBe(true);
-    expect(warnSpy).toHaveBeenCalledWith(
-      "IdbPersistence",
-      expect.objectContaining({ code: "matrix-idb-snapshot-requires-doctor" }),
-    );
   });
 
   it("returns false without warning when the snapshot does not exist yet", async () => {

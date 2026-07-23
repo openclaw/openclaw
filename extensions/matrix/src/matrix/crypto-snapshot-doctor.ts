@@ -19,19 +19,23 @@ import {
   readLegacyMatrixIdbSnapshotStateUnlocked,
 } from "./sdk/idb-persistence.js";
 
-export async function migrateLegacyMatrixIdbSnapshot(params: {
+type SnapshotMigrationParams = {
   storageRootDir: string;
   context: PluginDoctorStateMigrationContext;
   changes: string[];
   notices: string[];
   warnings: string[];
-}): Promise<void> {
+};
+
+export async function migrateLegacyMatrixIdbSnapshot(
+  params: SnapshotMigrationParams,
+): Promise<void> {
   const snapshotPath = path.join(params.storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
   try {
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
-    await withFileLock(snapshotPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
-      await migrateLegacyMatrixIdbSnapshotLocked(params);
-    });
+    await withFileLock(snapshotPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, () =>
+      migrateLegacyMatrixIdbSnapshotLocked(params),
+    );
   } catch (err) {
     params.warnings.push(
       `Failed locking Matrix IndexedDB snapshot for ${params.storageRootDir}: ${String(err)}; left legacy source in place`,
@@ -39,13 +43,9 @@ export async function migrateLegacyMatrixIdbSnapshot(params: {
   }
 }
 
-async function migrateLegacyMatrixIdbSnapshotLocked(params: {
-  storageRootDir: string;
-  context: PluginDoctorStateMigrationContext;
-  changes: string[];
-  notices: string[];
-  warnings: string[];
-}): Promise<void> {
+async function migrateLegacyMatrixIdbSnapshotLocked(
+  params: SnapshotMigrationParams,
+): Promise<void> {
   const sourcePath = path.join(params.storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
   let snapshot: ReturnType<typeof readLegacyMatrixIdbSnapshotStateUnlocked>;
   try {
