@@ -1,6 +1,5 @@
 // Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
-import { msteamsZhTw } from "./msteams.js";
 
 export const zh_TW = {
   common: {
@@ -746,7 +745,38 @@ export const zh_TW = {
       userIdHelpLowercase: "3) 使用者 ID 通常是 Nextcloud 中的小寫使用者名稱",
       userIdTitle: "Nextcloud Talk 使用者 ID",
     },
-    msteams: msteamsZhTw,
+    msteams: {
+      allowFromPrompt: "MS Teams allowFrom（使用者名稱或 ID）",
+      allowlistIntro: "透過顯示名稱、UPN/信箱或使用者 ID 為 MS Teams DM 設定允許清單。",
+      allowlistResolve: "憑證允許時，會透過 Microsoft Graph 將名稱解析為使用者 ID。",
+      allowlistTitle: "MS Teams 允許清單",
+      appIdPrompt: "輸入 MS Teams App ID",
+      appPasswordPrompt: "輸入 MS Teams App Password",
+      channelLookupFailed: "頻道查找失敗；保留原始輸入。{error}",
+      channelsLabel: "MS Teams 頻道",
+      couldNotResolve: "無法解析：{entries}",
+      credentialsKeep: "MS Teams 憑證已設定。保留目前值？",
+      credentialsTitle: "MS Teams 憑證",
+      delegatedAuthConfigured: "Delegated auth 已設定",
+      delegatedAuthPrompt: "啟用 delegated auth？（reaction 和寫入操作需要）",
+      delegatedAuthRetry: "之後可以透過設定精靈重試。",
+      delegatedAuthTitle: "MS Teams delegated auth",
+      delegatedOAuthProgress: "MSTeams Delegated OAuth",
+      enterAtLeastOneUser: "至少輸入一個使用者。",
+      envPrompt: "偵測到 MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID。使用環境變數？",
+      examples: "範例：",
+      graphLookupUnavailable: "Graph 查找不可用。請只使用使用者 ID。",
+      helpAzureBot: "1) Azure Bot registration -> 取得 App ID + Tenant ID",
+      helpClientSecret: "2) 新增 client secret（App Password）",
+      helpEnvTip: "提示：也可以設定 MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID。",
+      helpWebhook: "3) 設定 webhook URL 和 messaging endpoint",
+      resolvedChannels: "已解析頻道：{entries}",
+      resolvedTeams: "已解析團隊：{entries}",
+      tenantIdPrompt: "輸入 MS Teams Tenant ID",
+      unresolvedKept: "未解析（保留原始輸入）：{entries}",
+      webhookPortInvalid: "請輸入 1 到 65535 之間的 TCP 連接埠",
+      webhookPortPrompt: "輸入 MS Teams webhook 連接埠",
+    },
     whatsapp: {
       allowedSenderNumbers: "允許的傳送者號碼（逗號分隔，E.164）",
       allowFromPrompt: "WhatsApp allowFrom（可選預允許清單）",

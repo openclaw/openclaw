@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -401,6 +402,20 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect.objectContaining({ cloud: "Public", oauthDefaultConnectionName: "graph" }),
     );
     expect(createMSTeamsSsoTokenStoreFs).toHaveBeenCalledWith({ accountId: "support" });
+    const handlerDeps = registerMSTeamsHandlers.mock.calls.at(-1)?.[1];
+    if (!handlerDeps) {
+      throw new Error("expected named Teams account handler dependencies");
+    }
+    expect(handlerDeps.cfg.channels?.msteams?.defaultAccount).toBe("support");
+    expect(resolveMSTeamsAccountConfig(handlerDeps.cfg, "support")).toMatchObject({
+      appId: "support-app-id",
+      appPassword: "support-app-password",
+      tenantId: "tenant-id",
+      webhook: {
+        port: 0,
+        path: "/api/messages",
+      },
+    });
 
     abort.abort();
     const result = await task;

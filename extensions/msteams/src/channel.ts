@@ -493,14 +493,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       message: msteamsMessageAdapter,
       directory: createChannelDirectoryAdapter({
         self: async ({ cfg, accountId }) => {
-          const msteamsCfg = resolveMSTeamsAccountConfig(cfg, accountId);
-          const normalizedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
-          const creds = resolveMSTeamsCredentials(msteamsCfg, {
-            allowEnvFallback: normalizedAccountId === DEFAULT_ACCOUNT_ID,
+          const account = resolveMSTeamsAccount({ cfg, accountId });
+          const creds = resolveMSTeamsCredentials(account.config, {
+            allowEnvFallback: account.accountId === DEFAULT_ACCOUNT_ID,
             pathPrefix:
-              normalizedAccountId === DEFAULT_ACCOUNT_ID
+              account.accountId === DEFAULT_ACCOUNT_ID
                 ? "channels.msteams"
-                : `channels.msteams.accounts.${normalizedAccountId}`,
+                : `channels.msteams.accounts.${account.accountId}`,
           });
           if (!creds) {
             return null;

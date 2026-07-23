@@ -548,6 +548,7 @@ describe("msteams directory contract", () => {
       const cfg = {
         channels: {
           msteams: {
+            defaultAccount: "support",
             accounts: {
               support: {
                 appId: "support-app-id",
@@ -562,7 +563,6 @@ describe("msteams directory contract", () => {
       await expect(
         msteamsDirectoryContractPlugin.directory.self?.({
           cfg,
-          accountId: "support",
           runtime: {} as never,
         }),
       ).resolves.toBeNull();

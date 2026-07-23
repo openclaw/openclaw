@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 // Msteams API module exposes the plugin public contract.
 import type { ChannelDirectoryAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { listDirectoryEntriesFromSources } from "openclaw/plugin-sdk/directory-runtime";
-import { resolveMSTeamsAccountConfig } from "./src/accounts.js";
+import { resolveMSTeamsAccount, resolveMSTeamsAccountConfig } from "./src/accounts.js";
 import { normalizeMSTeamsMessagingTarget } from "./src/resolve-allowlist.js";
 import { resolveMSTeamsCredentials } from "./src/token.js";
 
@@ -22,8 +22,8 @@ function resolveDirectoryCredentials(
 
 const msteamsDirectoryContractAdapter: ChannelDirectoryAdapter = {
   self: async ({ cfg, accountId }) => {
-    const msteamsCfg = resolveMSTeamsAccountConfig(cfg, accountId);
-    const creds = resolveDirectoryCredentials(msteamsCfg, accountId);
+    const account = resolveMSTeamsAccount({ cfg, accountId });
+    const creds = resolveDirectoryCredentials(account.config, account.accountId);
     return creds ? { kind: "user" as const, id: creds.appId, name: creds.appId } : null;
   },
   listPeers: async ({ cfg, accountId, query, limit }) => {

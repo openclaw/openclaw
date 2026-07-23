@@ -32,6 +32,23 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("ms
 export const listMSTeamsAccountIds = listAccountIds;
 export const resolveDefaultMSTeamsAccountId = resolveDefaultAccountId;
 
+export function withAccountScopedMSTeamsConfig(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  accountConfig: MSTeamsConfig;
+}): OpenClawConfig {
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      msteams:
+        params.accountId === DEFAULT_ACCOUNT_ID
+          ? params.accountConfig
+          : { ...params.accountConfig, defaultAccount: params.accountId },
+    },
+  };
+}
+
 function accountDefinesIdentity(account: Partial<MSTeamsConfig> | undefined): boolean {
   return Boolean(account?.appId || account?.appPassword || account?.webhook?.port);
 }

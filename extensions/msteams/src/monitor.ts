@@ -12,7 +12,7 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import { resolveMSTeamsAccountConfig } from "./accounts.js";
+import { resolveMSTeamsAccountConfig, withAccountScopedMSTeamsConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import {
   createAccountScopedMSTeamsConversationStore,
@@ -110,13 +110,7 @@ export async function monitorMSTeamsProvider(
     },
   };
 
-  cfg = {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: msteamsCfg,
-    },
-  };
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const configuredAllowFrom = msteamsCfg.allowFrom;
   const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
@@ -197,13 +191,7 @@ export async function monitorMSTeamsProvider(
     groupAllowFrom,
     teams: teamsConfig,
   };
-  cfg = {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: msteamsCfg,
-    },
-  };
+  cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
