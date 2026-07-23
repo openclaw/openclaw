@@ -56,6 +56,20 @@ const TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD = 5;
 const TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS = 10_000;
 const TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS = 60_000;
 
+// Socket-level body timeout for getUpdates requests. When the network path
+// changes (proxy restart, TUN switch, VPN flap), undici's keep-alive sockets
+// can become TCP Half-Open. The JS-level AbortController.abort() only rejects
+// the Promise – it does not close the OS socket. A bodyTimeout tells undici to
+// close the TCP connection if no data arrives within this window, preventing
+// the polling loop from hanging indefinitely on a dead connection.
+const TELEGRAM_POLLING_BODY_TIMEOUT_MS = 90_000;
+
+// Socket-level headers timeout for getUpdates requests. When a network path
+// change leaves the connection in a TCP Half-Open state where even HTTP headers
+// never arrive, undici's headersTimeout ensures the connection is physically
+// closed rather than hanging indefinitely.
+const TELEGRAM_POLLING_HEADERS_TIMEOUT_MS = 60_000;
+
 type TelegramAgentPoolOptions = {
   allowH2: false;
   keepAliveTimeout: number;
@@ -90,7 +104,10 @@ type TelegramDispatcherAttempt = {
 };
 
 type TelegramTransportAttempt = {
-  createDispatcher: () => TelegramDispatcher;
+  createDispatcher: (timeouts?: {
+    bodyTimeout?: number;
+    headersTimeout?: number;
+  }) => TelegramDispatcher;
   exportAttempt: TelegramDispatcherAttempt;
   logLevel?: "debug" | "warn";
   logMessage?: string;
@@ -126,6 +143,8 @@ const FALLBACK_RETRY_ERROR_CODES = [
   "EHOSTUNREACH",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_SOCKET",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
 ] as const;
 
 type TelegramTransportFallbackContext = {
@@ -209,6 +228,26 @@ function buildTelegramConnectOptions(params: {
   return connect;
 }
 
+function isTelegramGetUpdatesRequest(input: RequestInfo | URL): boolean {
+  try {
+    let urlStr: string;
+    if (typeof input === "string") {
+      urlStr = input;
+    } else if (input instanceof URL) {
+      urlStr = input.toString();
+    } else if (input instanceof Request) {
+      urlStr = input.url;
+    } else {
+      return false;
+    }
+    const pathname = new URL(urlStr).pathname;
+    const segments = pathname.split("/").filter(Boolean);
+    return segments.at(-1)?.toLowerCase() === "getupdates";
+  } catch {
+    return false;
+  }
+}
+
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
   return hasEnvHttpProxyAgentConfigured(env);
 }
@@ -278,7 +317,10 @@ function withPinnedLookup(
   return options ? { ...options, lookup } : { lookup };
 }
 
-function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
+function createTelegramDispatcher(
+  policy: PinnedDispatcherPolicy,
+  timeouts?: { bodyTimeout?: number; headersTimeout?: number },
+): {
   dispatcher: TelegramDispatcher;
   mode: TelegramDispatcherMode;
   effectivePolicy: PinnedDispatcherPolicy;
@@ -286,7 +328,11 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   // Telegram polling uses long-lived connections. Undici 8 enables HTTP/2 ALPN
   // by default, which can stall Telegram long-polling on Windows/IPv6 networks.
   // Force HTTP/1.1 for every dispatcher while keeping bounded pool defaults.
-  const poolOptions = telegramAgentPoolOptions();
+  const poolOptions = {
+    ...telegramAgentPoolOptions(),
+    ...(timeouts?.bodyTimeout != null ? { bodyTimeout: timeouts.bodyTimeout } : {}),
+    ...(timeouts?.headersTimeout != null ? { headersTimeout: timeouts.headersTimeout } : {}),
+  };
 
   if (policy.mode === "explicit-proxy") {
     const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
@@ -484,10 +530,23 @@ function createTelegramTransportAttempts(params: {
 }): TelegramTransportAttempt[] {
   params.ownedDispatchers.add(params.defaultDispatcher.dispatcher);
 
+  const defaultPolicy = params.defaultDispatcher.effectivePolicy;
+  let getUpdatesDefaultDispatcher: TelegramDispatcher | null = null;
+
   const attempts: TelegramTransportAttempt[] = [
     {
-      createDispatcher: () => params.defaultDispatcher.dispatcher,
-      exportAttempt: { dispatcherPolicy: params.defaultDispatcher.effectivePolicy },
+      createDispatcher: (timeouts) => {
+        if (timeouts) {
+          if (!getUpdatesDefaultDispatcher) {
+            const fresh = createTelegramDispatcher(defaultPolicy, timeouts);
+            getUpdatesDefaultDispatcher = fresh.dispatcher;
+            params.ownedDispatchers.add(getUpdatesDefaultDispatcher);
+          }
+          return getUpdatesDefaultDispatcher;
+        }
+        return params.defaultDispatcher.dispatcher;
+      },
+      exportAttempt: { dispatcherPolicy: defaultPolicy },
     },
   ];
 
@@ -499,7 +558,12 @@ function createTelegramTransportAttempts(params: {
 
   let ipv4Dispatcher: TelegramDispatcher | null = null;
   attempts.push({
-    createDispatcher: () => {
+    createDispatcher: (timeouts) => {
+      if (timeouts) {
+        const fresh = createTelegramDispatcher(fallbackPolicy, timeouts);
+        ownedDispatchers.add(fresh.dispatcher);
+        return fresh.dispatcher;
+      }
       if (!ipv4Dispatcher) {
         ipv4Dispatcher = createTelegramDispatcher(fallbackPolicy).dispatcher;
         ownedDispatchers.add(ipv4Dispatcher);
@@ -524,7 +588,12 @@ function createTelegramTransportAttempts(params: {
   };
   let fallbackIpDispatcher: TelegramDispatcher | null = null;
   attempts.push({
-    createDispatcher: () => {
+    createDispatcher: (timeouts) => {
+      if (timeouts) {
+        const fresh = createTelegramDispatcher(fallbackIpPolicy, timeouts);
+        ownedDispatchers.add(fresh.dispatcher);
+        return fresh.dispatcher;
+      }
       if (!fallbackIpDispatcher) {
         fallbackIpDispatcher = createTelegramDispatcher(fallbackIpPolicy).dispatcher;
         ownedDispatchers.add(fallbackIpDispatcher);
@@ -738,6 +807,13 @@ export function resolveTelegramTransport(
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
+    const isGetUpdatesRequest = !callerProvidedDispatcher && isTelegramGetUpdatesRequest(input);
+    const getUpdatesTimeouts = isGetUpdatesRequest
+      ? {
+          bodyTimeout: TELEGRAM_POLLING_BODY_TIMEOUT_MS,
+          headersTimeout: TELEGRAM_POLLING_HEADERS_TIMEOUT_MS,
+        }
+      : undefined;
     const stickyStartIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
     const stickyCooldownError = callerProvidedDispatcher
       ? null
@@ -798,7 +874,7 @@ export function resolveTelegramTransport(
       try {
         const response = await sourceFetch(
           input,
-          withDispatcherIfMissing(init, attempt.createDispatcher()),
+          withDispatcherIfMissing(init, attempt.createDispatcher(getUpdatesTimeouts)),
         );
         captureHttpExchange({
           url: resolveRequestUrl(input),
