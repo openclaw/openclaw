@@ -22,7 +22,11 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
-import { appendSessionResetBoundary } from "../agents/sessions/reset-boundary.js";
+import {
+  appendSessionResetBoundary,
+  rollbackSessionResetBoundary,
+  type AppendedSessionResetBoundary,
+} from "../agents/sessions/reset-boundary.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -45,7 +49,10 @@ import {
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -1177,8 +1184,35 @@ export async function performGatewaySessionReset(params: {
         : undefined;
 
       let createdNewEntry = false;
-      let resetBoundaryAppended = false;
-      const lifecycle = await resetSessionEntryLifecycle({
+      const boundaryEntry = loadSessionEntry(
+        params.key,
+        requestedAgentId ? { agentId: requestedAgentId } : undefined,
+      ).entry;
+      if (boundaryEntry?.sessionId !== entry?.sessionId) {
+        params.assertCurrent?.();
+        throw new Error(`Session ${params.key} changed before reset boundary append.`);
+      }
+      const resetSessionFile = boundaryEntry?.sessionId
+        ? ((parseSqliteSessionFileMarker(boundaryEntry.sessionFile)
+            ? boundaryEntry.sessionFile
+            : undefined) ??
+          formatSqliteSessionFileMarker({
+            agentId,
+            sessionId: boundaryEntry.sessionId,
+            storePath,
+          }))
+        : undefined;
+      const resetBoundary: AppendedSessionResetBoundary | undefined = resetSessionFile
+        ? appendSessionResetBoundary({
+            insideLifecycleMutation: true,
+            reason: params.reason,
+            sessionFile: resetSessionFile,
+            sessionKey: legacyKey ?? canonicalKey ?? params.key,
+          })
+        : undefined;
+      const resetBoundaryAppended = resetBoundary !== undefined;
+      let lifecycleCommitted = false;
+      const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
         storePath,
@@ -1209,16 +1243,14 @@ export async function performGatewaySessionReset(params: {
           const now = Date.now();
           const nextSessionId = currentEntry?.sessionId ?? randomUUID();
           const sessionFile =
-            currentEntry?.sessionFile ??
+            (currentEntry ? resetSessionFile : undefined) ??
             formatSqliteSessionFileMarker({
               agentId: sessionAgentId,
               sessionId: nextSessionId,
               storePath,
             });
-          if (currentEntry) {
-            resetBoundaryAppended = Boolean(
-              appendSessionResetBoundary({ reason: params.reason, sessionFile }),
-            );
+          if (currentEntry && !resetBoundary) {
+            throw new Error("reset boundary was not prepared for the current session");
           }
           const creationStamp = currentEntry
             ? {
@@ -1335,6 +1367,7 @@ export async function performGatewaySessionReset(params: {
           return nextEntry;
         },
         afterEntryMutation: async (mutation) => {
+          lifecycleCommitted = true;
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,
             sessionKey: target.canonicalKey ?? params.key,
@@ -1395,6 +1428,15 @@ export async function performGatewaySessionReset(params: {
           });
         },
       });
+      let lifecycle: Awaited<ReturnType<typeof resetSessionEntryLifecycle>>;
+      try {
+        lifecycle = await lifecyclePromise;
+      } catch (error) {
+        if (resetBoundary && !lifecycleCommitted) {
+          rollbackSessionResetBoundary(resetBoundary);
+        }
+        throw error;
+      }
       handleSessionStateSessionReset(target.canonicalKey ?? params.key);
       const next = lifecycle.nextEntry;
       const selectedModel = resolveSessionModelRef(cfg, next, target.agentId);

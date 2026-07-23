@@ -2,7 +2,10 @@ import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
-import { appendSessionResetBoundary } from "../../agents/sessions/reset-boundary.js";
+import {
+  appendSessionResetBoundary,
+  rollbackSessionResetBoundary,
+} from "../../agents/sessions/reset-boundary.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
@@ -114,11 +117,9 @@ export async function resetReplyRunSession(params: {
       storePath: params.storePath,
     });
   nextEntry.sessionFile = nextSessionFile;
-  const resetBoundaryAppended = Boolean(
-    appendSessionResetBoundary({ reason: "reset", sessionFile: nextSessionFile }),
-  );
-  clearBootstrapSnapshotOnSessionBoundary({
-    boundaryAppended: resetBoundaryAppended,
+  const resetBoundary = appendSessionResetBoundary({
+    reason: "reset",
+    sessionFile: nextSessionFile,
     sessionKey: params.sessionKey,
   });
   params.activeSessionStore[params.sessionKey] = nextEntry;
@@ -132,10 +133,19 @@ export async function resetReplyRunSession(params: {
       storePath: params.storePath,
     });
   } catch (err) {
+    if (resetBoundary) {
+      rollbackSessionResetBoundary(resetBoundary);
+    }
+    params.activeSessionStore[params.sessionKey] = prevEntry;
     deps.error(
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
     );
+    throw err;
   }
+  clearBootstrapSnapshotOnSessionBoundary({
+    boundaryAppended: resetBoundary !== undefined,
+    sessionKey: params.sessionKey,
+  });
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({

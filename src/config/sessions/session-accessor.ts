@@ -180,6 +180,7 @@ export {
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
+  appendTranscriptLifecycleEventSync,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,

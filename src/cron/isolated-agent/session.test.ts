@@ -191,7 +191,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBe(0);
       expect(result.sessionEntry.sendPolicy).toBe("allow");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+      expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
+      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("creates new sessionId when forceNew is true", () => {

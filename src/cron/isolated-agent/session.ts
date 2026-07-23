@@ -1,11 +1,7 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
-import {
-  clearBootstrapSnapshotOnSessionBoundary,
-  clearBootstrapSnapshotOnSessionRollover,
-} from "../../agents/bootstrap-cache.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
-import { appendSessionResetBoundary } from "../../agents/sessions/reset-boundary.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   resolveSessionLifecycleTimestamps,
@@ -171,7 +167,7 @@ export function resolveCronSession(params: {
   let sessionId: string;
   let isNewSession: boolean;
   let systemSent: boolean;
-  let resetBoundaryAppended = false;
+  let resetBoundaryPending: { reason: "cron-stale"; sessionFile: string } | undefined;
   let staleBoundaryReset = false;
 
   if (!params.forceNew && entry?.sessionId) {
@@ -212,9 +208,7 @@ export function resolveCronSession(params: {
             sessionId,
             storePath,
           });
-        resetBoundaryAppended = Boolean(
-          appendSessionResetBoundary({ reason: "cron-stale", sessionFile }),
-        );
+        resetBoundaryPending = { reason: "cron-stale", sessionFile };
       }
     }
   } else {
@@ -228,10 +222,6 @@ export function resolveCronSession(params: {
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,
-  });
-  clearBootstrapSnapshotOnSessionBoundary({
-    boundaryAppended: resetBoundaryAppended,
-    sessionKey: params.sessionKey,
   });
 
   const baseEntry = entry
@@ -262,7 +252,7 @@ export function resolveCronSession(params: {
       : {}),
     systemSent,
   };
-  if (resetBoundaryAppended) {
+  if (resetBoundaryPending) {
     clearAllCliSessions(sessionEntry);
     sessionEntry.agentHarnessId = undefined;
     sessionEntry.compactionCount = 0;
@@ -275,7 +265,7 @@ export function resolveCronSession(params: {
     systemSent,
     isNewSession,
     previousSessionId,
-    resetBoundaryAppended,
+    resetBoundaryPending,
     initialSessionEntry: targetEntry,
   };
 }

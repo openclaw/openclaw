@@ -10,7 +10,11 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
-import { appendSessionResetBoundary } from "../../agents/sessions/reset-boundary.js";
+import {
+  appendSessionResetBoundary,
+  rollbackSessionResetBoundary,
+  type AppendedSessionResetBoundary,
+} from "../../agents/sessions/reset-boundary.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -38,6 +42,10 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import {
@@ -1049,9 +1057,33 @@ async function initSessionStateAttemptLocked(
     // snapshot through /new; the next turn must rebuild the visible skill list.
     sessionEntry.skillsSnapshot = undefined;
   }
-  // Archive old transcript so it doesn't accumulate on disk (#14869).
-  let resetBoundaryAppended = false;
-  const committed = await commitReplySessionInitialization({
+  const resetReason =
+    previousSessionEndReason === "new" ||
+    previousSessionEndReason === "reset" ||
+    previousSessionEndReason === "idle" ||
+    previousSessionEndReason === "daily"
+      ? previousSessionEndReason
+      : "reset";
+  const resetSessionFile = previousSessionEntry?.sessionId
+    ? ((parseSqliteSessionFileMarker(previousSessionEntry.sessionFile)
+        ? previousSessionEntry.sessionFile
+        : undefined) ??
+      formatSqliteSessionFileMarker({
+        agentId,
+        sessionId: previousSessionEntry.sessionId,
+        storePath,
+      }))
+    : undefined;
+  const resetBoundary: AppendedSessionResetBoundary | undefined = resetSessionFile
+    ? appendSessionResetBoundary({
+        insideLifecycleMutation: true,
+        reason: resetReason,
+        sessionFile: resetSessionFile,
+        sessionKey,
+      })
+    : undefined;
+  const resetBoundaryAppended = resetBoundary !== undefined;
+  const committedPromise = commitReplySessionInitialization({
     activeSessionKey: sessionKey,
     agentId,
     archivePreviousTranscript: false,
@@ -1089,19 +1121,6 @@ async function initSessionStateAttemptLocked(
       if (!previousSessionEntry || !currentEntry) {
         return;
       }
-      const reason =
-        previousSessionEndReason === "new" ||
-        previousSessionEndReason === "reset" ||
-        previousSessionEndReason === "idle" ||
-        previousSessionEndReason === "daily"
-          ? previousSessionEndReason
-          : "reset";
-      resetBoundaryAppended = Boolean(
-        appendSessionResetBoundary({
-          reason,
-          sessionFile: currentEntry.sessionFile ?? entryToCommit.sessionFile,
-        }),
-      );
       if (resetBoundaryAppended) {
         clearAllCliSessions(entryToCommit);
         entryToCommit.agentHarnessId = undefined;
@@ -1114,7 +1133,19 @@ async function initSessionStateAttemptLocked(
     snapshotEntry: initializationSnapshot.currentEntry,
     storePath,
   });
+  let committed: Awaited<ReturnType<typeof commitReplySessionInitialization>>;
+  try {
+    committed = await committedPromise;
+  } catch (error) {
+    if (resetBoundary) {
+      rollbackSessionResetBoundary(resetBoundary);
+    }
+    throw error;
+  }
   if (!committed.ok) {
+    if (resetBoundary) {
+      rollbackSessionResetBoundary(resetBoundary);
+    }
     if (!staleSnapshotRetried) {
       return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
     }

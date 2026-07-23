@@ -1,7 +1,12 @@
 /** Mutates and persists isolated cron session state around one run. */
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
+import {
+  appendSessionResetBoundary,
+  rollbackSessionResetBoundary,
+} from "../../agents/sessions/reset-boundary.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -99,6 +104,12 @@ export function createPersistCronSessionEntry(params: {
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
+    const resetBoundary = params.cronSession.resetBoundaryPending
+      ? appendSessionResetBoundary({
+          ...params.cronSession.resetBoundaryPending,
+          sessionKey: params.agentSessionKey,
+        })
+      : undefined;
     const liveEntry = params.cronSession.sessionEntry;
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
@@ -108,7 +119,7 @@ export function createPersistCronSessionEntry(params: {
         : liveEntry;
     let committedEntry = persistedEntry;
     let mergedLiveEntry = liveEntry;
-    await params.persistSessionEntry({
+    const persistPromise = params.persistSessionEntry({
       storePath: params.cronSession.storePath,
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
@@ -163,6 +174,19 @@ export function createPersistCronSessionEntry(params: {
         return committedEntry;
       },
     });
+    try {
+      await persistPromise;
+    } catch (error) {
+      if (resetBoundary) {
+        rollbackSessionResetBoundary(resetBoundary);
+      }
+      throw error;
+    }
+    clearBootstrapSnapshotOnSessionBoundary({
+      boundaryAppended: resetBoundary !== undefined,
+      sessionKey: params.agentSessionKey,
+    });
+    params.cronSession.resetBoundaryPending = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
     params.cronSession.sessionEntry = mergedLiveEntry;

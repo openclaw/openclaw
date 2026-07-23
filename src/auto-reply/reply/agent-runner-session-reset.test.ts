@@ -17,6 +17,38 @@ import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.tes
 const refreshQueuedFollowupSessionMock = vi.fn();
 const errorMock = vi.fn();
 
+async function writeFileTranscript(filePath: string, sessionId: string): Promise<void> {
+  await fs.writeFile(
+    filePath,
+    [
+      {
+        type: "session",
+        version: 3,
+        id: sessionId,
+        timestamp: new Date(0).toISOString(),
+        cwd: "/",
+      },
+      {
+        type: "message",
+        id: "user-before-reset",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "before reset" },
+      },
+      {
+        type: "message",
+        id: "assistant-before-reset",
+        parentId: "user-before-reset",
+        timestamp: new Date(2).toISOString(),
+        message: { role: "assistant", content: "answer" },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+    "utf8",
+  );
+}
+
 describe("resetReplyRunSession", () => {
   let rootDir = "";
 
@@ -88,6 +120,7 @@ describe("resetReplyRunSession", () => {
     };
     const sessionStore = { main: sessionEntry };
     const followupRun = createTestFollowupRun();
+    await writeFileTranscript(sessionEntry.sessionFile!, sessionEntry.sessionId);
     await writeTestSessionStore(storePath, "main", sessionEntry);
 
     let activeSessionEntry: SessionEntry | undefined = sessionEntry;
@@ -197,7 +230,7 @@ describe("resetReplyRunSession", () => {
   it("retains the transcript when cleanup was requested by the old rotation path", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");
-    await fs.writeFile(oldTranscriptPath, "old", "utf8");
+    await writeFileTranscript(oldTranscriptPath, "old-session");
     const sessionEntry: SessionEntry = {
       sessionId: "old-session",
       updatedAt: 1,
@@ -228,7 +261,7 @@ describe("resetReplyRunSession", () => {
   it("preserves the old transcript and session id when cleanup is disabled", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");
-    await fs.writeFile(oldTranscriptPath, "old", "utf8");
+    await writeFileTranscript(oldTranscriptPath, "old-session");
     const sessionEntry: SessionEntry = {
       sessionId: "old-session",
       updatedAt: 1,
@@ -335,7 +368,7 @@ describe("resetReplyRunSession", () => {
     ).toMatchObject({ reason: "reset", firstKeptEntryId: expect.any(String) });
   });
 
-  it("continues SQLite reset when previous replay source is unreadable", async () => {
+  it("rejects reset when the previous transcript cannot accept a boundary", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionKey = "main";
     const unreadableReplaySource = path.join(rootDir, "previous-transcript-dir");
@@ -349,26 +382,27 @@ describe("resetReplyRunSession", () => {
     await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     let activeSessionEntry: SessionEntry | undefined;
-    const reset = await resetReplyRunSession({
-      options: {
-        failureLabel: "role ordering conflict",
-        buildLogMessage: (next) => `reset ${next}`,
-      },
-      sessionKey,
-      queueKey: sessionKey,
-      activeSessionEntry: sessionEntry,
-      activeSessionStore: sessionStore,
-      storePath,
-      followupRun: createTestFollowupRun(),
-      onActiveSessionEntry: (entry) => {
-        activeSessionEntry = entry;
-      },
-      onNewSession: () => {},
-    });
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "role ordering conflict",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: sessionKey,
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun(),
+        onActiveSessionEntry: (entry) => {
+          activeSessionEntry = entry;
+        },
+        onNewSession: () => {},
+      }),
+    ).rejects.toThrow();
 
-    expect(reset).toBe(true);
-    expect(activeSessionEntry?.sessionId).toBe("old-session");
-    expect(activeSessionEntry?.sessionFile).toBe(unreadableReplaySource);
+    expect(activeSessionEntry).toBeUndefined();
+    expect(sessionStore[sessionKey]).toBe(sessionEntry);
     await expect(
       loadTranscriptEvents({
         agentId: "main",

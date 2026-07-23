@@ -279,6 +279,20 @@ export function appendSqliteTranscriptEventSync(
   return appended;
 }
 
+/** Appends while the caller owns the session lifecycle writer and has validated the row. */
+export function appendSqliteTranscriptLifecycleEventSync(
+  scope: SessionTranscriptAccessScope,
+  event: TranscriptEvent,
+): boolean {
+  assertNonMessageTranscriptEvent(event);
+  const resolved = resolveSqliteTranscriptScope(scope);
+  let appended = false;
+  runOpenClawAgentWriteTransaction((database) => {
+    appended = appendTranscriptEventInTransaction(database, resolved, event);
+  }, toDatabaseOptions(resolved));
+  return appended;
+}
+
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
 export async function appendSqliteExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
