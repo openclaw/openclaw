@@ -1046,6 +1046,7 @@ export async function runCopilotAttempt(
         throw new Error("Copilot runtime is not waiting for user input.");
       },
       isStreaming: () => !settled && !aborted,
+      isAborted: () => aborted,
       isCompacting: () => bridge?.isCompacting() ?? false,
       sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
       cancel: () => {
