@@ -126,6 +126,7 @@ describe("chat pane session suggestion lifecycle", () => {
     listed.resolve({ suggestions: [], role: "viewer" });
     await pending;
     expect(pane.sessionSuggestions).toEqual([eventSuggestion]);
+    expect(pane.sessionSuggestionRole).toBe("viewer");
   });
 
   it("preserves an author's resolved event while its role is still loading", () => {

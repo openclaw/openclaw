@@ -105,6 +105,34 @@ function assertSessionInstance(
   }
 }
 
+function pruneResolvedSessionSuggestions(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): void {
+  const db = suggestionDb(database);
+  const resolvedRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_suggestions")
+      .select("id")
+      .where("session_key", "=", sessionKey)
+      .where("state", "!=", "pending")
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc"),
+  ).rows.slice(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS);
+  if (resolvedRows.length === 0) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("session_suggestions").where(
+      "id",
+      "in",
+      resolvedRows.map((row) => row.id),
+    ),
+  );
+}
+
 export function addSessionSuggestion(
   scope: SessionAccessScope,
   params: {
@@ -136,26 +164,7 @@ export function addSessionSuggestion(
   runOpenClawAgentWriteTransaction((database) => {
     assertSessionInstance(database, sessionKey, params.expectedSessionId);
     const db = suggestionDb(database);
-    const resolvedRows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_suggestions")
-        .select("id")
-        .where("session_key", "=", sessionKey)
-        .where("state", "!=", "pending")
-        .orderBy("created_at", "desc")
-        .orderBy("id", "desc"),
-    ).rows.slice(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS);
-    if (resolvedRows.length > 0) {
-      executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("session_suggestions").where(
-          "id",
-          "in",
-          resolvedRows.map((row) => row.id),
-        ),
-      );
-    }
+    pruneResolvedSessionSuggestions(database, sessionKey);
     const pendingRows = executeSqliteQuerySync(
       database.db,
       db
@@ -264,8 +273,10 @@ export function resolveSessionSuggestion(
         .where("id", "=", params.id)
         .where("state", "=", "pending"),
     );
-    return (updated.numAffectedRows ?? 0n) > 0n
-      ? { ...toSuggestion(row), state: params.state }
-      : null;
+    if ((updated.numAffectedRows ?? 0n) === 0n) {
+      return null;
+    }
+    pruneResolvedSessionSuggestions(database, sessionKey);
+    return { ...toSuggestion(row), state: params.state };
   }, options);
 }

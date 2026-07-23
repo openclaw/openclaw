@@ -43,6 +43,7 @@ export type TestChatPane = HTMLElement & {
   taskSuggestions: TaskSuggestion[];
   presencePayload?: { presence: unknown[] };
   sessionSuggestionAddOperation: symbol | undefined;
+  sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
   addCurrentSessionSuggestion: () => Promise<void>;
   resetSessionSuggestions: () => void;
   sessionSuggestions: SessionSuggestion[];

@@ -819,11 +819,14 @@ class ChatPane extends OpenClawLightDomElement {
           ...scopedAgentParamsForSession(scope.state, sessionKey),
         },
       );
-      if (
-        requestVersion !== this.sessionSuggestionsRequestVersion ||
-        !this.isConnectionScopeCurrent(scope) ||
-        scope.state.sessionKey !== sessionKey
-      ) {
+      if (!this.isConnectionScopeCurrent(scope) || scope.state.sessionKey !== sessionKey) {
+        return;
+      }
+      if (requestVersion !== this.sessionSuggestionsRequestVersion) {
+        if (this.sessionSuggestionRole === undefined) {
+          this.sessionSuggestionRole = result.role;
+          this.requestUpdate();
+        }
         return;
       }
       this.sessionSuggestions = result.suggestions;

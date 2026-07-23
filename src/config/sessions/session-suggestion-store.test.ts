@@ -143,19 +143,11 @@ describe("session suggestion store", () => {
           expectedSessionId: "session-a",
         });
       }
-      addSessionSuggestion(scope, {
-        id: "pending",
-        authorId: "alice",
-        text: "pending",
-        createdAt: 10_000,
-        expectedSessionId: "session-a",
-      });
       const rows = listSessionSuggestions(scope);
       expect(rows.filter((row) => row.state !== "pending")).toHaveLength(
         MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
       );
       expect(rows.some((row) => row.id === "resolved-0")).toBe(false);
-      expect(rows.at(-1)?.id).toBe("pending");
     });
   });
 });
