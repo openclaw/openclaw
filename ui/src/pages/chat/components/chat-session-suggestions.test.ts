@@ -22,7 +22,7 @@ afterEach(() => {
   container = undefined;
 });
 
-function mount(role: "owner" | "viewer", row = suggestion) {
+function mount(role: "owner" | "viewer", row = suggestion, canResolve = true) {
   const onResolve = vi.fn();
   container = document.createElement("div");
   document.body.append(container);
@@ -31,6 +31,7 @@ function mount(role: "owner" | "viewer", row = suggestion) {
       suggestions: [row],
       role,
       busyIds: new Set(),
+      canResolve,
       onResolve,
     }),
     container,
@@ -73,6 +74,7 @@ describe("chat session suggestions", () => {
         suggestions: [suggestion],
         role: undefined,
         busyIds: new Set(),
+        canResolve: true,
         onResolve,
       }),
       container,
@@ -90,11 +92,18 @@ describe("chat session suggestions", () => {
         suggestions: [suggestion],
         role: "member",
         busyIds: new Set(),
+        canResolve: true,
         onResolve,
       }),
       container,
     );
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("Pending");
+  });
+
+  it("hides owner actions when the resolve method is unavailable", () => {
+    const view = mount("owner", suggestion, false);
+    expect(view.container.querySelector("button")).toBeNull();
+    expect(view.container.textContent).toContain("Pending");
   });
 });

@@ -952,7 +952,6 @@ class ChatPane extends OpenClawLightDomElement {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text);
@@ -976,13 +975,6 @@ class ChatPane extends OpenClawLightDomElement {
       this.sessionSuggestions = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
     } catch (error) {
       if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
-        if (
-          resolution === "edit" &&
-          previousEditDraft !== undefined &&
-          scope.state.chatMessage === suggestion.text
-        ) {
-          scope.state.handleChatDraftChange(previousEditDraft);
-        }
         scope.state.chatError = error instanceof Error ? error.message : String(error);
         scope.state.lastError = scope.state.chatError;
       }
@@ -4156,6 +4148,11 @@ class ChatPane extends OpenClawLightDomElement {
       sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
       sessionSuggestionRole: this.sessionSuggestionRole,
       sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
+      canResolveSessionSuggestions:
+        state.connected &&
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.resolve") ===
+          true,
       onResolveSessionSuggestion: (suggestion, resolution) =>
         void this.resolveCurrentSessionSuggestion(suggestion, resolution),
       canAcceptTaskSuggestions:

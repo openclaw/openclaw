@@ -268,6 +268,7 @@ export type ChatProps = {
   sessionSuggestions?: readonly SessionSuggestion[];
   sessionSuggestionRole?: SessionSharingRole;
   sessionSuggestionBusyIds?: ReadonlySet<string>;
+  canResolveSessionSuggestions?: boolean;
   onResolveSessionSuggestion?: (
     suggestion: SessionSuggestion,
     resolution: SessionSuggestionResolution,
@@ -607,6 +608,7 @@ export function renderChat(props: ChatProps) {
                 suggestions: props.sessionSuggestions ?? [],
                 role: props.sessionSuggestionRole,
                 busyIds: props.sessionSuggestionBusyIds ?? new Set(),
+                canResolve: props.canResolveSessionSuggestions === true,
                 onResolve: (suggestion, resolution) =>
                   props.onResolveSessionSuggestion?.(suggestion, resolution),
               })}

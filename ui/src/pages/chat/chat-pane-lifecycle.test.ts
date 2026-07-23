@@ -202,6 +202,36 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(state.chatMessage).toBe("new session draft");
     expect(state.chatError).not.toBe("old request failed");
   });
+
+  it("keeps suggested text after an ambiguous edit failure", async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw new Error("response lost");
+      }),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const suggestion: SessionSuggestion = {
+      id: "edit-ambiguous",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text: "preserve this suggestion",
+      createdAt: 1,
+      state: "pending",
+    };
+    state.handleChatDraftChange = (next) => {
+      state.chatMessage = next;
+    };
+    state.chatMessage = "owner draft";
+
+    await pane.resolveCurrentSessionSuggestion(suggestion, "edit");
+
+    expect(state.chatMessage).toBe("preserve this suggestion");
+    expect(state.chatError).toBe("response lost");
+  });
 });
 
 function createConfirmationOwner() {

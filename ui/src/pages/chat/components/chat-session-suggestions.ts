@@ -31,12 +31,13 @@ export function renderChatSessionSuggestions(props: {
   suggestions: readonly SessionSuggestion[];
   role?: SessionSharingRole;
   busyIds: ReadonlySet<string>;
+  canResolve: boolean;
   onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
 }) {
   if (props.suggestions.length === 0) {
     return nothing;
   }
-  const canResolve = props.role === "owner" || props.role === "admin";
+  const canResolve = props.canResolve && (props.role === "owner" || props.role === "admin");
   return html`
     <div class="session-suggestions" aria-live="polite">
       ${props.suggestions.map((suggestion) => {
