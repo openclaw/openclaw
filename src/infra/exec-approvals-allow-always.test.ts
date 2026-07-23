@@ -872,6 +872,48 @@ $0 \\"$1\\"" touch {marker}`,
     },
   );
 
+  it("prevents Windows fallback from allowlisting opaque shell inline payloads", () => {
+    const dir = makeTempDir();
+    const shell = makeExecutable(dir, "nu.exe");
+    const safeTool = makeExecutable(dir, "safe-tool.exe");
+    const env = makePathEnv(dir);
+    const platform = "win32";
+    const analysis = analyzeArgvCommand({
+      argv: [shell, "--commands", "safe-tool arg"],
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const entries = resolveAllowAlwaysPatternEntries({
+      segments: analysis.segments,
+      cwd: dir,
+      env,
+      platform,
+    });
+    expect(entries).toStrictEqual([]);
+
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: safeTool, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform,
+    });
+
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: result.analysisOk,
+        allowlistSatisfied: result.allowlistSatisfied,
+      }),
+    ).toBe(true);
+  });
+
   it.each(["--commands", "--execute", "-e"])(
     "prevents allowlist bypass for nu %s inline shell payloads",
     async (commandFlag) => {
@@ -991,6 +1033,65 @@ $0 \\"$1\\"" touch {marker}`,
         allowlistSatisfied: result.allowlistSatisfied,
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "mksh separate plus set option",
+      argv: ["mksh", "+o", "errexit", "./run.sh"],
+      decoyName: "errexit",
+    },
+    {
+      name: "yash separate plus set option",
+      argv: ["yash", "+o", "errexit", "./run.sh"],
+      decoyName: "errexit",
+    },
+    {
+      name: "osh combined plus set option",
+      argv: ["osh", "+eo", "errexit", "./run.sh"],
+      decoyName: "errexit",
+    },
+    {
+      name: "bash combined minus set option",
+      argv: ["bash", "-eo", "pipefail", "./run.sh"],
+      decoyName: "pipefail",
+    },
+  ])("does not bind option values as shell script allowlist targets for $name", (testCase) => {
+    const dir = makeTempDir();
+    makeExecutable(dir, testCase.argv[0] ?? "sh");
+    const script = path.join(dir, "run.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho ok\n");
+    fs.chmodSync(script, 0o755);
+    const decoy = path.join(dir, testCase.decoyName);
+    fs.writeFileSync(decoy, "decoy\n");
+    const env = makePathEnv(dir);
+    const analysis = analyzeArgvCommand({
+      argv: testCase.argv,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(analysis.ok).toBe(true);
+
+    const decoyResult = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: decoy, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(decoyResult.allowlistSatisfied).toBe(false);
+
+    const scriptResult = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: script, source: "allow-always" }],
+      safeBins: resolveSafeBins(undefined),
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(scriptResult.allowlistSatisfied).toBe(true);
   });
 
   it("prevents allow-always bypass for caffeinate wrapper chains", async () => {
