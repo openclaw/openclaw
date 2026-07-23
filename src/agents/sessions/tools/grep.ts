@@ -159,7 +159,12 @@ export function createGrepToolDefinition(
         // Keep cancellation live from the first await through async result formatting.
         // Settlement owns listener cleanup; spawned children stop without waiting for close.
         let settled = false;
-        let child: ReturnType<typeof spawnCommand> | undefined;
+        let child:
+          | {
+              nodeChildProcess: { killed: boolean };
+              kill: () => void;
+            }
+          | undefined;
         let childClosed = false;
         let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
