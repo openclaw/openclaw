@@ -365,7 +365,7 @@ export async function projectSqliteSessionEntryLifecycleMutation(
     changedSessionKeys.add(sessionKey);
     const resetBoundaryPlan =
       upsert.resetBoundaryReason && expectedEntry?.sessionId
-        ? buildSessionResetBoundaryPlan({
+        ? await buildSessionResetBoundaryPlan({
             events: loadSqliteTranscriptEventsFromDatabase(database, expectedEntry.sessionId),
             legacySessionFile: expectedEntry.sessionFile,
             reason: upsert.resetBoundaryReason,

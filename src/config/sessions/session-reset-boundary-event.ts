@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
-import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
+import {
+  readRecentUserAssistantReplayRecordsFromJsonl,
+  selectRecentUserAssistantReplayRecords,
+} from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
 export type SessionResetBoundaryReason = "new" | "reset" | "idle" | "daily" | "cron-stale";
@@ -38,6 +40,40 @@ function uniqueBoundaryId(records: readonly unknown[]): string {
   }
 }
 
+function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
+  const boundaryIndex = entries.findLastIndex((entry) => {
+    const type =
+      entry && typeof entry === "object" && !Array.isArray(entry)
+        ? (entry as { type?: unknown }).type
+        : undefined;
+    return type === "compaction" || type === "reset";
+  });
+  if (boundaryIndex < 0) {
+    return [...entries];
+  }
+  const boundary = entries[boundaryIndex] as {
+    type?: unknown;
+    firstKeptEntryId?: unknown;
+  };
+  if (boundary.type !== "reset") {
+    return entries.slice(boundaryIndex + 1);
+  }
+  const firstKeptIndex =
+    typeof boundary.firstKeptEntryId === "string"
+      ? entries.findIndex(
+          (entry, index) => index < boundaryIndex && recordId(entry) === boundary.firstKeptEntryId,
+        )
+      : -1;
+  const kept =
+    firstKeptIndex < 0
+      ? []
+      : entries.slice(firstKeptIndex, boundaryIndex).filter((entry) => {
+          const role = (entry as { message?: { role?: unknown } } | null)?.message?.role;
+          return role === "user" || role === "assistant";
+        });
+  return [...kept, ...entries.slice(boundaryIndex + 1)];
+}
+
 export function buildSessionResetBoundaryEvent(params: {
   events: readonly unknown[];
   reason: SessionResetBoundaryReason;
@@ -50,7 +86,9 @@ export function buildSessionResetBoundaryEvent(params: {
       (event as { type?: unknown }).type !== "session",
   );
   const activeEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
-  const keptEntries = selectRecentUserAssistantReplayRecords(activeEntries);
+  const keptEntries = selectRecentUserAssistantReplayRecords(
+    projectLatestBoundaryWindow(activeEntries),
+  );
   const firstKeptEntryId = recordId(keptEntries[0]);
   return {
     type: "reset",
@@ -62,35 +100,23 @@ export function buildSessionResetBoundaryEvent(params: {
   };
 }
 
-function readLegacyTranscriptEvents(sessionFile: string | undefined): unknown[] {
+async function readLegacyTranscriptEvents(sessionFile: string | undefined): Promise<unknown[]> {
   const filePath = sessionFile?.trim();
   if (!filePath || parseSqliteSessionFileMarker(filePath)) {
     return [];
   }
   try {
-    return fs
-      .readFileSync(filePath, "utf8")
-      .split(/\r?\n/u)
-      .flatMap((line) => {
-        if (!line.trim()) {
-          return [];
-        }
-        try {
-          return [JSON.parse(line) as unknown];
-        } catch {
-          return [];
-        }
-      });
+    return await readRecentUserAssistantReplayRecordsFromJsonl({ sourceTranscript: filePath });
   } catch {
     return [];
   }
 }
 
-export function buildSessionResetBoundaryPlan(params: {
+export async function buildSessionResetBoundaryPlan(params: {
   events: readonly unknown[];
   legacySessionFile?: string;
   reason: SessionResetBoundaryReason;
-}): SessionResetBoundaryPlan {
+}): Promise<SessionResetBoundaryPlan> {
   const hasConversationEvents = params.events.some(
     (event) =>
       event !== null &&
@@ -100,7 +126,7 @@ export function buildSessionResetBoundaryPlan(params: {
   );
   const legacyEvents = hasConversationEvents
     ? []
-    : readLegacyTranscriptEvents(params.legacySessionFile);
+    : await readLegacyTranscriptEvents(params.legacySessionFile);
   const seedEvents = legacyEvents.filter(
     (event) =>
       event !== null &&

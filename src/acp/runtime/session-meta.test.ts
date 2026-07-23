@@ -438,6 +438,7 @@ describe("ACP session metadata SQLite store", () => {
         entry: {
           sessionId: "sess-existing",
           lifecycleRevision: "revision-existing",
+          sessionStartedAt: 50,
           updatedAt: 100,
         },
       });
@@ -446,6 +447,7 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         sessionKey,
         lifecycleRevision: "sess-existing",
+        now: () => 100,
         meta: {
           backend: "acpx",
           agent: "codex",
@@ -460,6 +462,44 @@ describe("ACP session metadata SQLite store", () => {
         "codex-legacy",
       );
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
+      expect(
+        readAcpSessionMetaForEntry({
+          databasePath,
+          sessionKey,
+          entry: {
+            sessionId: "sess-existing",
+            lifecycleRevision: "revision-next",
+            sessionStartedAt: 150,
+          },
+        }),
+      ).toBeUndefined();
+
+      const staleKey = `${sessionKey}:stale`;
+      await seedAcpSessionEntry({
+        storePath,
+        sessionKey: staleKey,
+        entry: {
+          sessionId: "sess-stale",
+          lifecycleRevision: "revision-after-reset",
+          sessionStartedAt: 150,
+          updatedAt: 150,
+        },
+      });
+      writeAcpSessionMetaForMigration({
+        databasePath,
+        sessionKey: staleKey,
+        lifecycleRevision: "sess-stale",
+        now: () => 100,
+        meta: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-stale-legacy",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        },
+      });
+      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey: staleKey })?.acp).toBeUndefined();
     });
   });
 

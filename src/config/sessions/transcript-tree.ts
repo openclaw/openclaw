@@ -284,16 +284,29 @@ export function selectSessionTranscriptActiveEntries<T, R>(params: {
   const firstActiveNode = activePath[0];
   for (let index = (firstActiveNode?.index ?? 0) - 1; index >= 0; index -= 1) {
     const record = records[index];
-    if (
-      typeof record === "object" &&
-      record !== null &&
-      !Array.isArray(record) &&
-      ((record as TranscriptRecord).type === "compaction" ||
-        (record as TranscriptRecord).type === "reset")
-    ) {
-      const entry = params.entries[index];
-      return entry === undefined ? activeEntries : [entry, ...activeEntries];
+    if (!isRecord(record) || (record.type !== "compaction" && record.type !== "reset")) {
+      continue;
     }
+    const entry = params.entries[index];
+    if (entry === undefined) {
+      return activeEntries;
+    }
+    if (record.type === "reset") {
+      const resetId = readNonEmptyString(record.id);
+      const firstKeptEntryId = readNonEmptyString(record.firstKeptEntryId);
+      if (resetId && firstKeptEntryId) {
+        const resetPath = selectSessionTranscriptTreePathNodes(tree, resetId);
+        const keptStart = resetPath.findIndex((node) => node.id === firstKeptEntryId);
+        if (keptStart >= 0) {
+          const retainedResetPath = resetPath.slice(keptStart).flatMap((node) => {
+            const retained = params.entries[node.index];
+            return retained === undefined ? [] : [retained];
+          });
+          return [...retainedResetPath, ...activeEntries];
+        }
+      }
+    }
+    return [entry, ...activeEntries];
   }
   return activeEntries;
 }
@@ -402,12 +415,15 @@ export function selectSessionTranscriptLeafControlledPath<T>(
   if (!tree.hasLeafControl) {
     return undefined;
   }
-  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => {
-    if (!isRecord(node.entry) || node.entry.parentId === node.parentId) {
-      return node.entry;
-    }
-    // Consumers rebuild context from the selected entries, so preserve the
-    // logical ancestry normalized while scanning disjoint append cursors.
-    return Object.assign({}, node.entry, { parentId: node.parentId }) as T;
-  });
+  return selectSessionTranscriptActiveEntries({ entries, recordOf: (entry) => entry, tree }).map(
+    (entry) => {
+      const node = isRecord(entry) ? tree.byId.get(readNonEmptyString(entry.id) ?? "") : undefined;
+      if (!node || !isRecord(entry) || entry.parentId === node.parentId) {
+        return entry;
+      }
+      // Consumers rebuild context from the selected entries, so preserve the
+      // logical ancestry normalized while scanning disjoint append cursors.
+      return Object.assign({}, entry, { parentId: node.parentId }) as T;
+    },
+  );
 }

@@ -231,27 +231,6 @@ function resolveResetMessageWindow(projection: ResetWindowProjection): ResetMess
     if (cached.generation === generation && cached.indexedSeq === projection.state.indexedSeq) {
       return cached.window;
     }
-    if (cached.generation === generation && cached.indexedSeq < projection.state.indexedSeq) {
-      const appendedRows = executeSqliteQuerySync(
-        projection.database.db,
-        getResetWindowKysely(projection.database)
-          .selectFrom("transcript_events")
-          .select("event_json")
-          .where("session_id", "=", projection.resolved.sessionId)
-          .where("seq", ">", cached.indexedSeq)
-          .orderBy("seq", "asc"),
-      ).rows;
-      if (
-        appendedRows.every((row) => {
-          const type = parseTranscriptEventType(row.event_json);
-          return type !== "reset" && type !== "compaction" && type !== "leaf";
-        })
-      ) {
-        const extended = { ...cached, indexedSeq: projection.state.indexedSeq };
-        cacheResetMessageWindow(key, extended);
-        return extended.window;
-      }
-    }
   }
   const window = findLatestResetMessageWindow(projection, generation);
   cacheResetMessageWindow(key, {

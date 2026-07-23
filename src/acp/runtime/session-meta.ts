@@ -48,6 +48,8 @@ export type AcpSessionStoreEntry = {
 type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 type AcpSessionRow = Selectable<AcpSessionsTable>;
+type AcpSessionEntryBinding = Pick<SessionEntry, "lifecycleRevision"> &
+  Partial<Pick<SessionEntry, "sessionId" | "sessionStartedAt">>;
 
 function resolveStoreSessionKey(
   entries: readonly SessionEntrySummary[],
@@ -155,16 +157,62 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
 
 function acpSessionRowMatchesEntry(
   row: AcpSessionRow,
-  entry:
-    | (Pick<SessionEntry, "lifecycleRevision"> & Partial<Pick<SessionEntry, "sessionId">>)
-    | undefined,
+  entry: AcpSessionEntryBinding | undefined,
 ): boolean {
   return (
     row.session_id == null ||
     row.session_id === entry?.lifecycleRevision ||
     // Rows written before reset boundaries stored the logical session id in this
     // schema-neutral column. The next ACP metadata write rebinds them to the revision.
-    row.session_id === entry?.sessionId
+    (row.session_id === entry?.sessionId &&
+      (entry?.sessionStartedAt === undefined || row.updated_at >= entry.sessionStartedAt))
+  );
+}
+
+function resolveReadableAcpSessionRow(params: {
+  row: AcpSessionRow | undefined;
+  entry: AcpSessionEntryBinding | undefined;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): AcpSessionRow | undefined {
+  const { row, entry } = params;
+  if (!row || !acpSessionRowMatchesEntry(row, entry)) {
+    return undefined;
+  }
+  const legacySessionId = entry?.sessionId;
+  const lifecycleRevision = entry?.lifecycleRevision;
+  if (
+    !legacySessionId ||
+    !lifecycleRevision ||
+    row.session_id !== legacySessionId ||
+    row.session_id === lifecycleRevision
+  ) {
+    return row;
+  }
+  return runOpenClawStateWriteTransaction(
+    (database) => {
+      const current = selectAcpSessionRow(database.db, row.session_key);
+      if (!current) {
+        return undefined;
+      }
+      if (current.session_id === lifecycleRevision || current.session_id == null) {
+        return current;
+      }
+      if (current.session_id !== legacySessionId) {
+        return undefined;
+      }
+      executeSqliteQuerySync(
+        database.db,
+        getAcpSessionKysely(database.db)
+          .updateTable("acp_sessions")
+          .set({ session_id: lifecycleRevision })
+          .where("session_key", "=", row.session_key)
+          .where("session_id", "=", legacySessionId),
+      );
+      return { ...current, session_id: lifecycleRevision };
+    },
+    { env: params.env, path: params.databasePath },
+    { operationLabel: "acp.session-meta.rebind-legacy-lifecycle" },
   );
 }
 
@@ -188,8 +236,13 @@ export function readAcpSessionMeta(params: {
     env: params.env,
     path: params.databasePath,
   });
-  const row = selectAcpSessionRow(database.db, storeEntry.storeSessionKey);
-  if (!row || !acpSessionRowMatchesEntry(row, storeEntry.entry)) {
+  const row = resolveReadableAcpSessionRow({
+    row: selectAcpSessionRow(database.db, storeEntry.storeSessionKey),
+    entry: storeEntry.entry,
+    env: params.env,
+    databasePath: params.databasePath,
+  });
+  if (!row) {
     return undefined;
   }
   return rowToAcpSessionMeta(row);
@@ -197,9 +250,7 @@ export function readAcpSessionMeta(params: {
 
 export function readAcpSessionMetaForEntry(params: {
   sessionKey: string;
-  entry:
-    | (Pick<SessionEntry, "lifecycleRevision"> & Partial<Pick<SessionEntry, "sessionId">>)
-    | undefined;
+  entry: AcpSessionEntryBinding | undefined;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
 }): SessionAcpMeta | undefined {
@@ -211,8 +262,13 @@ export function readAcpSessionMetaForEntry(params: {
     env: params.env,
     path: params.databasePath,
   });
-  const row = selectAcpSessionRow(database.db, sessionKey);
-  if (!row || !acpSessionRowMatchesEntry(row, params.entry)) {
+  const row = resolveReadableAcpSessionRow({
+    row: selectAcpSessionRow(database.db, sessionKey),
+    entry: params.entry,
+    env: params.env,
+    databasePath: params.databasePath,
+  });
+  if (!row) {
     return undefined;
   }
   return rowToAcpSessionMeta(row);
@@ -259,7 +315,7 @@ export function writeAcpSessionMetaForMigration(params: {
 export function repairAcpSessionMetaKeyForMigration(params: {
   sessionKey: string;
   candidateSessionKeys?: Iterable<string | null | undefined>;
-  entry?: Pick<SessionEntry, "lifecycleRevision"> & Partial<Pick<SessionEntry, "sessionId">>;
+  entry?: AcpSessionEntryBinding;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
   now?: () => number;
@@ -412,9 +468,13 @@ export function readAcpSessionEntry(params: {
     env: params.env,
     path: params.databasePath,
   });
-  const row = selectAcpSessionRow(database.db, storeEntry.storeSessionKey);
-  const acp =
-    row && acpSessionRowMatchesEntry(row, storeEntry.entry) ? rowToAcpSessionMeta(row) : undefined;
+  const row = resolveReadableAcpSessionRow({
+    row: selectAcpSessionRow(database.db, storeEntry.storeSessionKey),
+    entry: storeEntry.entry,
+    env: params.env,
+    databasePath: params.databasePath,
+  });
+  const acp = row ? rowToAcpSessionMeta(row) : undefined;
   return {
     cfg: storeEntry.cfg,
     agentId: storeEntry.agentId,
@@ -461,7 +521,13 @@ export async function listAcpSessionEntries(params: {
     const entry = sessionEntries.find(
       (candidate) => candidate.sessionKey === storeSessionKey,
     )?.entry;
-    if (!entry || !acpSessionRowMatchesEntry(row, entry)) {
+    const readableRow = resolveReadableAcpSessionRow({
+      row,
+      entry,
+      env: params.env,
+      databasePath: params.databasePath,
+    });
+    if (!entry || !readableRow) {
       continue;
     }
     entries.push({
@@ -471,7 +537,7 @@ export async function listAcpSessionEntries(params: {
       sessionKey,
       storeSessionKey,
       entry,
-      acp: rowToAcpSessionMeta(row),
+      acp: rowToAcpSessionMeta(readableRow),
     });
   }
 

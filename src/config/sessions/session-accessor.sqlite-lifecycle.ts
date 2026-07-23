@@ -164,7 +164,7 @@ export async function resetSqliteSessionEntryLifecycle(
         params.resetBoundaryReason &&
         current?.entry.sessionId &&
         !sqliteSessionEntriesEqual(current.entry, nextEntry)
-          ? buildSessionResetBoundaryPlan({
+          ? await buildSessionResetBoundaryPlan({
               events: loadSqliteTranscriptEventsFromDatabase(database, current.entry.sessionId),
               legacySessionFile: current.entry.sessionFile,
               reason: params.resetBoundaryReason,

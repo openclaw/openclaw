@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 /** Tail kept so DM continuity survives silent session rotations. */
@@ -100,18 +101,21 @@ export async function readRecentUserAssistantReplayRecordsFromJsonl(params: {
   if (max === 0 || !src || !fs.existsSync(src)) {
     return [];
   }
-  const records: unknown[] = [];
-  for (const line of (await fsp.readFile(src, "utf-8")).split(/\r?\n/)) {
-    if (!line.trim()) {
-      continue;
-    }
+  const recordsNewestFirst: unknown[] = [];
+  for await (const line of streamSessionTranscriptLinesReverse(src)) {
     try {
-      records.push(JSON.parse(line) as unknown);
+      const record = JSON.parse(line) as unknown;
+      if (replayableRole(record as SessionRecord | null)) {
+        recordsNewestFirst.push(record);
+        if (recordsNewestFirst.length >= max) {
+          break;
+        }
+      }
     } catch {
       // Skip malformed lines.
     }
   }
-  return selectRecentUserAssistantReplayRecords(records, max);
+  return selectRecentUserAssistantReplayRecords(recordsNewestFirst.reverse(), max);
 }
 
 export function selectRecentUserAssistantReplayRecords(

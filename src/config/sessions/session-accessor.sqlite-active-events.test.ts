@@ -291,6 +291,62 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
   });
 
+  it("recomputes a cached reset window after a branch-changing message", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept-user",
+          parentId: "old",
+          message: { role: "user", content: "kept" },
+        },
+        {
+          eventId: "kept-assistant",
+          parentId: "kept-user",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept-assistant",
+      timestamp: "2026-07-22T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept-user",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-reset",
+          parentId: "reset-boundary",
+          message: { role: "user", content: "post reset" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    expect(readSessionTranscriptMessageEventCount(scope)).toBe(3);
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "branch-message",
+          parentId: "old",
+          message: { role: "assistant", content: "branched" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
+
+    const page = readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 });
+    expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
+      "old",
+      "branch-message",
+    ]);
+  });
+
   it("reconciles work scheduled while an earlier pass is yielding", async () => {
     const secondScope = { ...scope, sessionId: "session-2", sessionKey: "agent:main:second" };
     for (const target of [scope, secondScope]) {
