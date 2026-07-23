@@ -2066,6 +2066,7 @@ describe("exec approvals store helpers", () => {
       approvals,
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
+      platform: "linux",
       segments: [
         {
           raw: "/usr/bin/tool ok",
