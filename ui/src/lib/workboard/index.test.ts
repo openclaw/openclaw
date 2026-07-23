@@ -6,16 +6,6 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  createDeferred,
-  createGatewaySession,
-  createLifecycleHarness,
-  createWorkboardCard,
-  createWorkboardExecution,
-  createWorkboardTask,
-  createWorkboardTestClient as createClient,
-  type WorkboardTestClient,
-} from "./index.test-helpers.ts";
-import {
   addWorkboardCardComment,
   archiveWorkboardCard,
   captureSessionToWorkboard,
@@ -38,6 +28,16 @@ import {
   type WorkboardTaskSummary,
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
+import {
+  createDeferred,
+  createGatewaySession,
+  createLifecycleHarness,
+  createWorkboardCard,
+  createWorkboardExecution,
+  createWorkboardTask,
+  createWorkboardTestClient as createClient,
+  type WorkboardTestClient,
+} from "./test/index-helpers.ts";
 
 function requestPatch(client: ReturnType<typeof createClient>, index: number) {
   return (client.request.mock.calls[index]?.[1] as { patch?: Record<string, unknown> } | undefined)

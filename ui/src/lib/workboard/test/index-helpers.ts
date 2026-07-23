@@ -1,8 +1,8 @@
 import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import { getWorkboardState } from "./runtime.ts";
-import type { WorkboardCard, WorkboardTaskSummary } from "./types.ts";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../../api/types.ts";
+import { getWorkboardState } from "../runtime.ts";
+import type { WorkboardCard, WorkboardTaskSummary } from "../types.ts";
 
 type RequestHandler = (method: string, params: unknown) => unknown;
 type RequestResponses = Record<string, unknown> | RequestHandler;
