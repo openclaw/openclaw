@@ -37,7 +37,7 @@ type PendingChannelDeliveryAttempt = {
   error?: unknown;
 };
 
-const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "OPENCLAW_CHANNEL_PARTIAL_DELIVERY";
+const CHANNEL_PARTIAL_DELIVERY_ERROR_CODE = "CHANNEL_PARTIAL_DELIVERY";
 
 function resolvePartialChannelDeliveryResult(
   error: unknown,
