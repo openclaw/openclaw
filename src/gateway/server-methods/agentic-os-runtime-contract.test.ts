@@ -3,6 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -34,6 +37,7 @@ type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 
 let agenticOsRuntimeContractHandlers: GatewayRequestHandlers;
 let runtimeStateDir: string | undefined;
+type RuntimeSnapshotDatabase = Pick<OpenClawStateKyselyDatabase, "agentic_os_runtime_snapshots">;
 
 const acquireParams = {
   client_lease_id: "lease-a",
@@ -107,7 +111,7 @@ async function invoke(
 }
 
 function payload(call: RespondCall): Record<string, unknown> {
-  expect(call[0]).toBe(true);
+  expect(call[0], call[2]?.message).toBe(true);
   return call[1] as Record<string, unknown>;
 }
 
@@ -172,12 +176,10 @@ describe("Agentic OS runtime contract v1", () => {
 
   it("requires operator.admin for connected allow lease acquire callers", async () => {
     expectInvalid(
-      await invoke(
-        "subagents.allowLease.acquire",
-        acquireParams,
-        "device-write",
-        ["operator.write", "operator.read"],
-      ),
+      await invoke("subagents.allowLease.acquire", acquireParams, "device-write", [
+        "operator.write",
+        "operator.read",
+      ]),
       "missing scope: operator.admin",
     );
     const response = payload(
@@ -283,6 +285,10 @@ describe("Agentic OS runtime contract v1", () => {
     expect(accepted.status).toBe("accepted");
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock).toHaveBeenLastCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ agentSessionKey: "agent:main" }),
+    );
     const replayed = payload(await invoke("sessions_spawn", spawnParams));
     expect(replayed.session_key).toBe(accepted.session_key);
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
@@ -293,7 +299,7 @@ describe("Agentic OS runtime contract v1", () => {
     );
   });
 
-  it("persists lease, session, and idempotency authority across Gateway module restart", async () => {
+  it("persists lease, session, and idempotency authority in the canonical state database", async () => {
     const gatewayLeaseId = await acquireLease();
     const spawnParams = {
       task: "persist across restart",
@@ -310,16 +316,16 @@ describe("Agentic OS runtime contract v1", () => {
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
 
-    vi.resetModules();
-    ({ agenticOsRuntimeContractHandlers } = await import("./agentic-os-runtime-contract.js"));
-
-    const listedLeases = payload(await invoke("subagents.allowLease.status"));
-    expect(listedLeases.leases).toEqual(
-      expect.arrayContaining([expect.objectContaining({ gateway_lease_id: gatewayLeaseId })]),
-    );
-    const replayedSpawn = payload(await invoke("sessions_spawn", spawnParams));
-    expect(replayedSpawn.session_key).toBe(accepted.session_key);
-    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const database = openOpenClawStateDatabase();
+    const row = executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
+        .selectFrom("agentic_os_runtime_snapshots")
+        .select("payload_json")
+        .where("key", "=", "agentic-os-runtime-contract-v1"),
+    ).rows[0];
+    expect(row?.payload_json).toEqual(expect.stringContaining(gatewayLeaseId));
+    expect(row?.payload_json).toEqual(expect.stringContaining("spawn-idem-a"));
     const status = payload(
       await invoke("sessions_status", { session_key: accepted.session_key as string }),
     );
@@ -331,8 +337,6 @@ describe("Agentic OS runtime contract v1", () => {
       gateway_lease_id: gatewayLeaseId,
     };
     const released = payload(await invoke("subagents.allowLease.release", releaseParams));
-    vi.resetModules();
-    ({ agenticOsRuntimeContractHandlers } = await import("./agentic-os-runtime-contract.js"));
     expect(payload(await invoke("subagents.allowLease.release", releaseParams))).toEqual(released);
   });
 
@@ -354,7 +358,6 @@ describe("Agentic OS runtime contract v1", () => {
     };
     payload(await invoke("sessions_spawn", spawnParams));
     for (const changed of [
-      { mode: "session" },
       { cleanup: "delete" },
       { context: "isolated" },
       { lightContext: false },
@@ -364,6 +367,28 @@ describe("Agentic OS runtime contract v1", () => {
         "conflicting sessions_spawn idempotency_key",
       );
     }
+  });
+
+  it("rejects sessions_spawn session mode before advertising unsupported thread semantics", async () => {
+    const gatewayLeaseId = await acquireLease();
+    expectInvalid(
+      await invoke("sessions_spawn", {
+        task: "unsupported session mode",
+        runtime: "subagent",
+        mode: "session",
+        agentId: "ai-engineer",
+        gateway_lease_id: gatewayLeaseId,
+        client_request_id: "spawn-session-mode",
+        idempotency_key: "spawn-session-mode-idem",
+        metadata: {
+          ...sessionMetadata,
+          client_request_id: "spawn-session-mode",
+          idempotency_key: "spawn-session-mode-idem",
+        },
+      }),
+      "sessions_spawn mode session is not supported",
+    );
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported sessions_spawn runtime before the runner", async () => {

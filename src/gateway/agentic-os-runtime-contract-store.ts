@@ -1,9 +1,14 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { resolveOpenClawStateSqliteDir } from "../state/openclaw-state-db.paths.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 const SNAPSHOT_KEY = "agentic-os-runtime-contract-v1";
+type RuntimeSnapshotDatabase = Pick<OpenClawStateKyselyDatabase, "agentic_os_runtime_snapshots">;
 
 export type AgenticOsRuntimeSnapshot = {
   leases: unknown[];
@@ -11,67 +16,61 @@ export type AgenticOsRuntimeSnapshot = {
   sessions: unknown[];
 };
 
-function resolveRuntimeStorePath(): string {
-  return path.join(resolveOpenClawStateSqliteDir(process.env), "agentic-os-runtime-contract.sqlite");
-}
-
-function openRuntimeStore() {
-  const storePath = resolveRuntimeStorePath();
-  mkdirSync(path.dirname(storePath), { recursive: true });
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(storePath);
-  db.exec(`
-    PRAGMA busy_timeout = 5000;
-    PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS runtime_snapshots (
-      key TEXT PRIMARY KEY,
-      payload_json TEXT NOT NULL,
-      updated_at_ms INTEGER NOT NULL
-    ) STRICT;
-  `);
-  return { db, storePath };
-}
-
 export function runtimeSnapshotPath(): string {
-  return resolveRuntimeStorePath();
+  return resolveOpenClawStateSqlitePath(process.env);
 }
 
 export function loadAgenticOsRuntimeSnapshot(): AgenticOsRuntimeSnapshot | undefined {
-  const { db } = openRuntimeStore();
-  try {
-    const row = db
-      .prepare("SELECT payload_json FROM runtime_snapshots WHERE key = ?")
-      .get(SNAPSHOT_KEY) as { payload_json?: unknown } | undefined;
-    return typeof row?.payload_json === "string"
-      ? (JSON.parse(row.payload_json) as AgenticOsRuntimeSnapshot)
-      : undefined;
-  } finally {
-    db.close();
-  }
+  const database = openOpenClawStateDatabase();
+  const row = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
+      .selectFrom("agentic_os_runtime_snapshots")
+      .select("payload_json")
+      .where("key", "=", SNAPSHOT_KEY),
+  ).rows[0];
+  return typeof row?.payload_json === "string"
+    ? (JSON.parse(row.payload_json) as AgenticOsRuntimeSnapshot)
+    : undefined;
 }
 
 export function saveAgenticOsRuntimeSnapshot(snapshot: AgenticOsRuntimeSnapshot): void {
-  const { db } = openRuntimeStore();
-  try {
-    db.prepare(
-      `
-        INSERT INTO runtime_snapshots (key, payload_json, updated_at_ms)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-          payload_json = excluded.payload_json,
-          updated_at_ms = excluded.updated_at_ms
-      `,
-    ).run(SNAPSHOT_KEY, JSON.stringify(snapshot), Date.now());
-  } finally {
-    db.close();
-  }
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
+          .insertInto("agentic_os_runtime_snapshots")
+          .values({
+            key: SNAPSHOT_KEY,
+            payload_json: JSON.stringify(snapshot),
+            updated_at_ms: Date.now(),
+          })
+          .onConflict((oc) =>
+            oc.column("key").doUpdateSet((eb) => ({
+              payload_json: eb.ref("excluded.payload_json"),
+              updated_at_ms: eb.ref("excluded.updated_at_ms"),
+            })),
+          ),
+      );
+    },
+    {},
+    { operationLabel: "agentic-os-runtime-contract.snapshot.save" },
+  );
 }
 
 export function resetAgenticOsRuntimeStoreForTest(): void {
-  const { db } = openRuntimeStore();
-  try {
-    db.prepare("DELETE FROM runtime_snapshots WHERE key = ?").run(SNAPSHOT_KEY);
-  } finally {
-    db.close();
-  }
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<RuntimeSnapshotDatabase>(database.db)
+          .deleteFrom("agentic_os_runtime_snapshots")
+          .where("key", "=", SNAPSHOT_KEY),
+      );
+    },
+    {},
+    { operationLabel: "agentic-os-runtime-contract.snapshot.reset" },
+  );
+  closeOpenClawStateDatabaseForTest();
 }

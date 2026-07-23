@@ -1,124 +1,38 @@
-/* oxlint-disable max-lines -- TODO: split Agentic OS runtime contract state machine after PR #112589 blocker rework. */
 import { randomUUID } from "node:crypto";
 import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
+import {
+  AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS,
+  AGENTIC_OS_RUNTIME_MAX_RECORDS,
+  AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS,
+  AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS,
+  ALLOW_LEASE_IDENTITY_FIELDS,
+  ALLOW_LEASE_OWNER_FIELDS,
+  CONTRACT_VERSION,
+  ContractInputError,
+  FORBIDDEN_HISTORY_CAMEL_ALIASES,
+  FORBIDDEN_LEASE_CAMEL_ALIASES,
+  FORBIDDEN_RELEASE_ALIASES,
+  FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES,
+  FORBIDDEN_SPAWN_CAMEL_ALIASES,
+  SESSION_METADATA_FIELDS,
+  assertNoForbiddenAliases,
+  isRecord,
+  pickStrings,
+  readPositiveInteger,
+  readString,
+  stableJson,
+  type LeaseRecord,
+  type ReleaseReplay,
+  type RuntimeMetadata,
+  type SessionRecord,
+  type SpawnPending,
+} from "./agentic-os-runtime-contract-shared.js";
 import {
   loadAgenticOsRuntimeSnapshot,
   resetAgenticOsRuntimeStoreForTest,
   runtimeSnapshotPath,
   saveAgenticOsRuntimeSnapshot,
 } from "./agentic-os-runtime-contract-store.js";
-
-const CONTRACT_VERSION = "v1";
-const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
-const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
-const AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS = 5 * 60 * 1000;
-const AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-const ALLOW_LEASE_IDENTITY_FIELDS = [
-  "client_lease_id",
-  "idempotency_key",
-  "run_id",
-  "phase",
-  "transition_id",
-  "agent_id",
-  "requester_agent_id",
-] as const;
-
-const ALLOW_LEASE_OWNER_FIELDS = [
-  "client_lease_id",
-  "run_id",
-  "phase",
-  "transition_id",
-  "agent_id",
-  "requester_agent_id",
-] as const;
-
-const SESSION_METADATA_FIELDS = [
-  "run_id",
-  "transition_id",
-  "client_request_id",
-  "idempotency_key",
-  "phase",
-  "agent_id",
-  "task_digest",
-] as const;
-
-const FORBIDDEN_LEASE_CAMEL_ALIASES = [
-  "clientLeaseId",
-  "idempotencyKey",
-  "runId",
-  "transitionId",
-  "agentId",
-  "requesterAgentId",
-  "ttlMs",
-  "gatewayLeaseId",
-] as const;
-
-const FORBIDDEN_SPAWN_CAMEL_ALIASES = [
-  "clientRequestId",
-  "idempotencyKey",
-  "gatewayLeaseId",
-] as const;
-
-const FORBIDDEN_RELEASE_ALIASES = [
-  ...FORBIDDEN_LEASE_CAMEL_ALIASES,
-  "releaseIdempotencyKey",
-  "idempotency_key",
-] as const;
-
-const FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES = ["sessionKey"] as const;
-
-const FORBIDDEN_HISTORY_CAMEL_ALIASES = ["session_key"] as const;
-
-const FORBIDDEN_ALL_CAMEL_ALIASES = [...FORBIDDEN_LEASE_CAMEL_ALIASES, "clientRequestId"] as const;
-
-type RuntimeMetadata = {
-  metadata_contract_version: "v1";
-  normalized: Record<string, unknown>;
-  raw_json: string;
-};
-
-type LeaseRecord = {
-  gatewayLeaseId: string;
-  fingerprint: string;
-  acquireIdempotencyKey: string;
-  clientLeaseId: string;
-  owner: Record<(typeof ALLOW_LEASE_IDENTITY_FIELDS)[number], string>;
-  spawnOwner: Record<(typeof ALLOW_LEASE_OWNER_FIELDS)[number], string>;
-  authenticatedPrincipalId: string;
-  acquireMetadata: RuntimeMetadata;
-  created_at_ms: number;
-  expires_at_ms: number;
-  released_at_ms?: number;
-};
-
-type SessionRecord = {
-  sessionKey: string;
-  fingerprint: string;
-  clientRequestId: string;
-  idempotencyKey: string;
-  gatewayLeaseId: string;
-  metadata: RuntimeMetadata;
-  taskName?: string;
-  agentId: string;
-  authenticatedPrincipalId: string;
-  runId?: string;
-  created_at_ms: number;
-};
-
-type ReleaseReplay = {
-  releaseIdempotencyKey: string;
-  fingerprint: string;
-  response: Record<string, unknown>;
-  createdAtMs: number;
-  authenticatedPrincipalId: string;
-};
-
-type SpawnPending = {
-  fingerprint: string;
-  promise: Promise<SessionRecord>;
-  authenticatedPrincipalId: string;
-};
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
 const acquireByIdempotencyKey = new Map<string, LeaseRecord>();
@@ -137,25 +51,6 @@ type RuntimeSnapshot = {
 };
 
 let loadedSnapshotPath: string | undefined;
-
-class ContractInputError extends Error {}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
-  }
-  if (isRecord(value)) {
-    return `{${Object.keys(value)
-      .toSorted()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
 
 function snapshotRuntimeState(): RuntimeSnapshot {
   return {
@@ -200,11 +95,13 @@ function ensureRuntimeStateLoaded(): void {
   if (loadedSnapshotPath === storePath) {
     return;
   }
-  hydrateRuntimeSnapshot((loadAgenticOsRuntimeSnapshot() as RuntimeSnapshot | undefined) ?? {
-    leases: [],
-    releaseReplays: [],
-    sessions: [],
-  });
+  hydrateRuntimeSnapshot(
+    (loadAgenticOsRuntimeSnapshot() as RuntimeSnapshot | undefined) ?? {
+      leases: [],
+      releaseReplays: [],
+      sessions: [],
+    },
+  );
   loadedSnapshotPath = storePath;
 }
 
@@ -218,43 +115,6 @@ export function resetAgenticOsRuntimeContractForTest(): void {
   resetAgenticOsRuntimeStoreForTest();
   loadedSnapshotPath = runtimeSnapshotPath();
   hydrateRuntimeSnapshot({ leases: [], releaseReplays: [], sessions: [] });
-}
-
-function assertNoForbiddenAliases(
-  params: Record<string, unknown>,
-  aliases: readonly string[] = FORBIDDEN_ALL_CAMEL_ALIASES,
-) {
-  const alias = aliases.find((key) => Object.hasOwn(params, key));
-  if (alias) {
-    throw new ContractInputError(`conflicting alias is not accepted: ${alias}`);
-  }
-}
-
-function readString(params: Record<string, unknown>, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new ContractInputError(`missing required string: ${key}`);
-  }
-  return value;
-}
-
-function readPositiveInteger(params: Record<string, unknown>, key: string): number {
-  const value = params[key];
-  if (!Number.isInteger(value) || typeof value !== "number" || value <= 0) {
-    throw new ContractInputError(`missing required positive integer: ${key}`);
-  }
-  return value;
-}
-
-function pickStrings<const T extends readonly string[]>(
-  params: Record<string, unknown>,
-  fields: T,
-): Record<T[number], string> {
-  const picked = {} as Record<T[number], string>;
-  for (const field of fields) {
-    picked[field as T[number]] = readString(params, field);
-  }
-  return picked;
 }
 
 function metadataEnvelope(normalized: Record<string, unknown>): RuntimeMetadata {
@@ -424,7 +284,14 @@ export function listAgenticOsAllowLeases(
 ): Record<string, unknown> {
   ensureRuntimeStateLoaded();
   pruneExpiredLeases();
-  const leases = [...leasesByGatewayId.values()]
+  const activeLeases = new Map<string, LeaseRecord>();
+  for (const record of acquireByIdempotencyKey.values()) {
+    if (!record.released_at_ms) {
+      activeLeases.set(record.gatewayLeaseId, record);
+      leasesByGatewayId.set(record.gatewayLeaseId, record);
+    }
+  }
+  const leases = [...activeLeases.values()]
     .filter(
       (record) =>
         !record.released_at_ms && record.authenticatedPrincipalId === authenticatedPrincipalId,
@@ -603,7 +470,10 @@ export async function spawnAgenticOsSession(
   }
   const taskName =
     typeof params.taskName === "string" && params.taskName ? params.taskName : undefined;
-  const mode = params.mode === "session" ? "session" : "run";
+  if (params.mode === "session") {
+    return rejectConflict("sessions_spawn mode session is not supported by this contract");
+  }
+  const mode = "run";
   const cleanup =
     params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined;
   const context =
@@ -689,7 +559,7 @@ export async function spawnAgenticOsSession(
           expectsCompletionMessage: false,
         },
         {
-          agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}:main`,
+          agentSessionKey: `agent:${lease.spawnOwner.requester_agent_id}`,
           requesterAgentIdOverride: lease.spawnOwner.requester_agent_id,
           authorizedTargetAgentId: lease.spawnOwner.agent_id,
         },

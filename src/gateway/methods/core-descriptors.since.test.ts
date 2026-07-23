@@ -107,6 +107,19 @@ describe("core gateway method release trains", () => {
     });
   });
 
+  it("appends Agentic OS runtime aliases after the existing core protocol table", () => {
+    const methods = listCoreGatewayMethodMetadata().map((method) => method.name);
+    expect(methods.slice(-7)).toEqual([
+      "subagents.allowLease.acquire",
+      "subagents.allowLease.status",
+      "subagents.allowLease.release",
+      "sessions_spawn",
+      "sessions_list",
+      "sessions_status",
+      "sessions_history",
+    ]);
+  });
+
   it("records a valid train for every method and dates the 2026.7 families", () => {
     const methods = listCoreGatewayMethodMetadata();
 

@@ -188,6 +188,9 @@ describe("tools.catalog handler", () => {
         "metadata",
       ]),
     });
+    expect(
+      runtimeMethods.find((method) => method.name === "sessions_spawn")?.parameters,
+    ).not.toContain("mode");
     const catalog = payload.tools ?? payload.groups.flatMap((group) => group.tools);
     expect(catalog.map((tool) => tool.id)).not.toContain("subagents.allowLease.acquire");
     expect(catalog.map((tool) => tool.id)).not.toContain("sessions_status");

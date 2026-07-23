@@ -125,28 +125,6 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tools.catalog", scope: "operator.read", since: "<=2026.7" },
   { name: "tools.effective", scope: "operator.read", since: "<=2026.7", startup: true },
   { name: "tools.invoke", scope: "operator.write", since: "<=2026.7" },
-  {
-    name: "subagents.allowLease.acquire",
-    scope: "operator.admin",
-    since: "2026.7",
-    nativeProtocol: false,
-  },
-  {
-    name: "subagents.allowLease.status",
-    scope: "operator.read",
-    since: "2026.7",
-    nativeProtocol: false,
-  },
-  {
-    name: "subagents.allowLease.release",
-    scope: "operator.write",
-    since: "2026.7",
-    nativeProtocol: false,
-  },
-  { name: "sessions_spawn", scope: "operator.write", since: "2026.7", nativeProtocol: false },
-  { name: "sessions_list", scope: "operator.read", since: "2026.7", nativeProtocol: false },
-  { name: "sessions_status", scope: "operator.read", since: "2026.7", nativeProtocol: false },
-  { name: "sessions_history", scope: "operator.read", since: "2026.7", nativeProtocol: false },
   { name: "mcp.app.view", scope: "operator.read", since: "<=2026.7" },
   { name: "mcp.app.listTools", scope: "operator.read", since: "<=2026.7" },
   { name: "mcp.app.listResources", scope: "operator.read", since: "<=2026.7" },
@@ -481,6 +459,28 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // the answer is ephemeral and never mutates the run or its transcript.
   { name: "sessions.observer.ask", scope: "operator.read", since: "2026.7" },
   { name: "sessions.observer.visibility", scope: "operator.read", since: "2026.7" },
+  {
+    name: "subagents.allowLease.acquire",
+    scope: "operator.admin",
+    since: "2026.7",
+    nativeProtocol: false,
+  },
+  {
+    name: "subagents.allowLease.status",
+    scope: "operator.read",
+    since: "2026.7",
+    nativeProtocol: false,
+  },
+  {
+    name: "subagents.allowLease.release",
+    scope: "operator.write",
+    since: "2026.7",
+    nativeProtocol: false,
+  },
+  { name: "sessions_spawn", scope: "operator.write", since: "2026.7", nativeProtocol: false },
+  { name: "sessions_list", scope: "operator.read", since: "2026.7", nativeProtocol: false },
+  { name: "sessions_status", scope: "operator.read", since: "2026.7", nativeProtocol: false },
+  { name: "sessions_history", scope: "operator.read", since: "2026.7", nativeProtocol: false },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

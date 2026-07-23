@@ -33,7 +33,6 @@ export const AGENTIC_OS_RUNTIME_METHOD_DESCRIPTORS = [
       "task",
       "taskName",
       "runtime",
-      "mode",
       "cleanup",
       "context",
       "lightContext",
