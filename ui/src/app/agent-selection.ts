@@ -34,14 +34,11 @@ export function createAgentSelectionCapability(
 ): AgentSelectionCapability {
   const resolveScopeId = (value: string | null): string | null => {
     const scopeId = value?.trim() ? normalizeAgentId(value) : null;
-    if (!scopeId) {
-      return null;
-    }
     // System agents remain valid concrete chat targets, but never become shared page filters.
-    const rosterEntry = roster.state.agentsList?.agents.find(
-      (agent) => normalizeAgentId(agent.id) === scopeId,
+    const isSystem = roster.state.agentsList?.agents.some(
+      (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === scopeId,
     );
-    return rosterEntry?.kind === "system" ? null : scopeId;
+    return isSystem ? null : scopeId;
   };
   const initialId = gateway.snapshot.assistantAgentId
     ? normalizeAgentId(gateway.snapshot.assistantAgentId)

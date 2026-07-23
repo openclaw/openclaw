@@ -20,13 +20,11 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
   const requestedSelected = params.selectedId ?? params.selection.state.scopeId ?? "";
   const selectedId = requestedSelected ? normalizeAgentId(requestedSelected) : "";
   const allowAll = params.allowAll !== false;
-  // Historical and selected IDs may be absent from the current roster, but a known
-  // system row must not be synthesized back into an ordinary-agent selector.
-  const systemAgentIds = new Set(
-    params.agents
-      .filter((agent) => agent.kind === "system")
-      .map((agent) => normalizeAgentId(agent.id)),
-  );
+  // Do not let historical or selected IDs reintroduce a typed system row.
+  const isSystemAgentId = (agentId: string) =>
+    params.agents.some(
+      (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === agentId,
+    );
   const selectableAgents = listSelectableAgents(params.agents);
   const agentsById = new Map(
     selectableAgents.map((agent) => {
@@ -39,17 +37,17 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
       continue;
     }
     const agentId = normalizeAgentId(value);
-    if (!systemAgentIds.has(agentId) && !agentsById.has(agentId)) {
+    if (!isSystemAgentId(agentId) && !agentsById.has(agentId)) {
       agentsById.set(agentId, { id: agentId });
     }
   }
-  if (selectedId && !systemAgentIds.has(selectedId) && !agentsById.has(selectedId)) {
+  if (selectedId && !isSystemAgentId(selectedId) && !agentsById.has(selectedId)) {
     agentsById.set(selectedId, { id: selectedId });
   }
   const agents = [...agentsById.values()].toSorted((left, right) =>
     normalizeAgentLabel(left).localeCompare(normalizeAgentLabel(right)),
   );
-  const selected = systemAgentIds.has(selectedId)
+  const selected = isSystemAgentId(selectedId)
     ? allowAll
       ? ""
       : (agents[0]?.id ?? "")
