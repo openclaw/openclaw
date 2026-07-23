@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -18,18 +18,19 @@ import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("SQLite lifecycle cleanup races", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-cleanup-race-"));
+    tempDir = tempDirs.make("openclaw-session-cleanup-race-");
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("revalidates entries before deleting their transcript state", async () => {
