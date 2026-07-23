@@ -61,11 +61,7 @@ function client(params: {
   };
 }
 
-function target(createdActor?: {
-  type: "human";
-  id: string;
-  label?: string;
-}): SharingTarget {
+function target(createdActor?: { type: "human"; id: string; label?: string }): SharingTarget {
   return {
     agentId: "main",
     canonicalKey: "agent:main:main",
@@ -75,6 +71,7 @@ function target(createdActor?: {
       visibility: "draft",
       ...(createdActor ? { createdActor } : {}),
     },
+    storeKey: "agent:main:main",
     storePath: "/tmp/sessions.json",
   };
 }

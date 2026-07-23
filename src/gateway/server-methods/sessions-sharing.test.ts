@@ -11,7 +11,12 @@ import {
   listSessionMembers,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { ensureProfileForEmail, listProfiles, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
@@ -87,9 +92,12 @@ function identifiedClient(profileId: string, displayName: string | null = null):
   };
 }
 
-function context(broadcast: ReturnType<typeof vi.fn>): GatewayRequestContext {
+function context(
+  broadcast: ReturnType<typeof vi.fn>,
+  runtimeConfig: ReturnType<GatewayRequestContext["getRuntimeConfig"]> = {},
+): GatewayRequestContext {
   return {
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => runtimeConfig,
     broadcast,
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
@@ -236,6 +244,95 @@ describe("session sharing handlers", () => {
       expect(payload?.sessions?.find((session) => session.key === sessionKey)?.sharingRole).toBe(
         "member",
       );
+    });
+  });
+
+  it("lists profile ids and authorizes a selected profile as a member", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:profile-member";
+      const profile = ensureProfileForEmail("member@example.com");
+      setDisplayName(profile.id, "Member");
+      const selectable = listProfiles().find((item) => item.id === profile.id);
+      expect(selectable).toMatchObject({ id: profile.id, displayName: "Member" });
+      if (!selectable) {
+        throw new Error("expected member profile in picker identities");
+      }
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-profile-member",
+          updatedAt: 1,
+          visibility: "read-only",
+        },
+      );
+      const requestContext = context(vi.fn());
+
+      const listed = await call("session.members.list", { sessionKey }, requestContext);
+      expect(listed[0]?.[1]).toMatchObject({
+        identities: expect.arrayContaining([
+          expect.objectContaining({ type: "human", id: profile.id, label: "Member" }),
+        ]),
+      });
+      expect(
+        await call(
+          "session.members.add",
+          { sessionKey, identityId: selectable.id },
+          requestContext,
+        ),
+      ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
+      expect(
+        authorizeResolvedSessionMutation({
+          cfg: {},
+          client: identifiedClient(profile.id, "Member"),
+          sessionKey,
+          agentId: "main",
+        }),
+      ).toBeNull();
+    });
+  });
+
+  it("stores and lists membership against an alias-backed session row", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const canonicalKey = "agent:ops:work";
+      const aliasKey = "agent:ops:main";
+      const cfg = {
+        session: { mainKey: "work" },
+        agents: { list: [{ id: "ops", default: true }] },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const profile = ensureProfileForEmail("alias-member@example.com");
+      await upsertSessionEntry(
+        { agentId: "ops", sessionKey: canonicalKey },
+        { sessionId: "session-alias-member", updatedAt: 1, visibility: "read-only" },
+      );
+      const database = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
+      database.db
+        .prepare("UPDATE session_entries SET session_key = ? WHERE session_key = ?")
+        .run(aliasKey, canonicalKey);
+      expect(
+        database.db
+          .prepare("SELECT session_key FROM session_entries WHERE session_key = ?")
+          .get(canonicalKey),
+      ).toBeUndefined();
+      clearSessionStoreCacheForTest();
+      const requestContext = context(vi.fn(), cfg);
+
+      expect(
+        await call(
+          "session.members.add",
+          { sessionKey: aliasKey, identityId: profile.id },
+          requestContext,
+        ),
+      ).toEqual([
+        [true, { ok: true, sessionKey: canonicalKey, identityId: profile.id }, undefined],
+      ]);
+      expect(listSessionMembers({ agentId: "ops", sessionKey: aliasKey })).toEqual([
+        expect.objectContaining({ identityId: profile.id }),
+      ]);
+      const listed = await call("session.members.list", { sessionKey: aliasKey }, requestContext);
+      expect(listed[0]?.[1]).toMatchObject({
+        sessionKey: canonicalKey,
+        members: [expect.objectContaining({ identityId: profile.id })],
+      });
     });
   });
 

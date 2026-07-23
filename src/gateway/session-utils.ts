@@ -1019,7 +1019,8 @@ export function loadSessionEntryReadOnly(
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns both the freshest entry and the exact persisted key that owns it. */
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {

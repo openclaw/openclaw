@@ -275,7 +275,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               sessionKeys: [],
               storePath: target.storePath,
             };
-            group.sessionKeys.push(target.canonicalKey);
+            group.sessionKeys.push(target.storeKey);
             groups.set(groupKey, group);
           }
           for (const group of groups.values()) {
@@ -326,7 +326,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                         client,
                         target: sharingTarget,
                         isMember: membershipKeys.has(
-                          `${sharingTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.canonicalKey}`,
+                          `${sharingTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.storeKey}`,
                         ),
                       }),
                     }

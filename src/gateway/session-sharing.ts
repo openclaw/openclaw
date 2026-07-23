@@ -18,7 +18,7 @@ import { gatewayClientSessionCreator } from "./server-methods/gateway-client-ide
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveFreshestSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
@@ -29,6 +29,7 @@ type SessionSharingTarget = {
   agentId: string;
   canonicalKey: string;
   entry: SessionEntry;
+  storeKey: string;
   storePath: string;
 };
 
@@ -82,12 +83,13 @@ export function resolveSessionSharingTarget(params: {
     key: params.sessionKey,
     agentId: params.agentId,
   });
-  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
-  return entry
+  const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  return match
     ? {
         agentId: target.agentId,
         canonicalKey: target.canonicalKey,
-        entry,
+        entry: match.entry,
+        storeKey: match.key,
         storePath: target.storePath,
       }
     : null;
@@ -120,7 +122,7 @@ export function resolveSessionSharingRole(params: {
     isSessionMember(
       {
         agentId: params.target.agentId,
-        sessionKey: params.target.canonicalKey,
+        sessionKey: params.target.storeKey,
         storePath: params.target.storePath,
       },
       identity.id,

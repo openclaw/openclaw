@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -20,8 +19,8 @@ import {
 } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { listProfiles } from "../../state/user-profiles.js";
 import {
   allowedSessionVisibilities,
   canManageSessionSharing,
@@ -117,10 +116,10 @@ function requireCurrentManagedTarget(params: {
   return current;
 }
 
-async function knownSessionIdentities(params: {
+function knownSessionIdentities(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   actor: SessionSharingIdentity;
-}): Promise<SessionSharingIdentity[]> {
+}): SessionSharingIdentity[] {
   const identities = new Map<string, SessionSharingIdentity>();
   const remember = (identity: SessionCreatedActor | null) => {
     if (!identity?.id) {
@@ -137,17 +136,12 @@ async function knownSessionIdentities(params: {
   for (const entry of Object.values(loadCombinedSessionStoreForGateway(params.cfg).store)) {
     remember(entry.createdActor ?? null);
   }
-  const pairing = await listDevicePairing();
-  for (const device of pairing.paired) {
-    if (!(device.roles ?? (device.role ? [device.role] : [])).includes("operator")) {
-      continue;
-    }
-    const id = normalizeOptionalString(device.deviceId);
-    if (!id) {
-      continue;
-    }
-    const label = normalizeOptionalString(device.operatorLabel ?? device.displayName);
-    remember({ type: "human", id, ...(label ? { label } : {}) });
+  for (const profile of listProfiles()) {
+    remember({
+      type: "human",
+      id: profile.id,
+      ...(profile.displayName ? { label: profile.displayName } : {}),
+    });
   }
   return [...identities.values()].toSorted(
     (left, right) =>
@@ -318,10 +312,10 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     const actor = actorIdentity(client);
     const members = listSessionMembers({
       agentId: target.agentId,
-      sessionKey: target.canonicalKey,
+      sessionKey: target.storeKey,
       storePath: target.storePath,
     });
-    const identities = await knownSessionIdentities({
+    const identities = knownSessionIdentities({
       cfg,
       actor,
     });
@@ -368,7 +362,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       return;
     }
     const actor = actorIdentity(client);
-    const known = await knownSessionIdentities({
+    const known = knownSessionIdentities({
       cfg,
       actor,
     });
@@ -380,7 +374,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
       const scope = {
         agentId: current.agentId,
-        sessionKey: current.canonicalKey,
+        sessionKey: current.storeKey,
         storePath: current.storePath,
       };
       const now = Date.now();
@@ -450,7 +444,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
       const scope = {
         agentId: current.agentId,
-        sessionKey: current.canonicalKey,
+        sessionKey: current.storeKey,
         storePath: current.storePath,
       };
       const removed = removeSessionMember(
