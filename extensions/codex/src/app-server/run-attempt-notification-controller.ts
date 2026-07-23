@@ -4,6 +4,7 @@ import {
   isTerminalCodexTurnNotificationForTurn,
 } from "./attempt-notification-state.js";
 import {
+  codexExecutionToolName,
   describeNotificationActivity,
   isAssistantCompletionReleaseNotification,
   isRawFunctionToolOutputCompletionNotification,
@@ -11,7 +12,7 @@ import {
   readRawResponseToolCallId,
 } from "./attempt-notifications.js";
 import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, CodexThreadItem } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import {
@@ -27,7 +28,13 @@ export function createCodexAttemptNotificationController(
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
 ) {
-  const { prompt, state: resourceState, projectorRef, registerNativeSubagentMonitor } = resources;
+  const {
+    prompt,
+    state: resourceState,
+    projectorRef,
+    registerNativeSubagentMonitor,
+    runSafety,
+  } = resources;
   const { context, turnState } = prompt;
   const { attemptTools, runtime } = context;
   const { connection } = runtime;
@@ -236,6 +243,21 @@ export function createCodexAttemptNotificationController(
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
       }
       const nativeItem = readCodexNotificationItem(notification.params);
+      if (
+        nativeItem &&
+        (notification.method === "item/started" || notification.method === "item/completed")
+      ) {
+        const toolAttempt = readCodexRunSafetyToolAttempt(nativeItem);
+        if (toolAttempt) {
+          runSafety.recordToolCall(toolAttempt);
+          if (notification.method === "item/completed") {
+            const outcome = readCodexRunSafetyToolOutcome(nativeItem);
+            if (outcome) {
+              runSafety.recordToolOutcome({ ...toolAttempt, ...outcome });
+            }
+          }
+        }
+      }
       if (nativeItem?.type === "webSearch") {
         projector.recordNativeToolOutcome(nativeItem);
       }
@@ -276,3 +298,79 @@ export function createCodexAttemptNotificationController(
 export type CodexAttemptNotificationController = ReturnType<
   typeof createCodexAttemptNotificationController
 >;
+
+function readCodexRunSafetyToolAttempt(item: CodexThreadItem) {
+  const toolName = codexExecutionToolName(item) ?? readAdditionalCodexToolName(item);
+  if (!toolName) {
+    return undefined;
+  }
+  const args =
+    item.type === "commandExecution"
+      ? { command: item.command }
+      : item.type === "fileChange"
+        ? { changes: item.changes }
+        : item.type === "webSearch"
+          ? { query: item.query }
+          : item.type === "collabAgentToolCall"
+            ? {
+                tool: item.tool,
+                prompt: item.prompt,
+                model: item.model,
+                receiverThreadIds: item.receiverThreadIds,
+              }
+            : item.type === "sleep"
+              ? { durationMs: item.durationMs }
+              : item.arguments;
+  return {
+    toolName,
+    toolCallId: item.id,
+    ...(args !== undefined ? { arguments: args } : {}),
+  };
+}
+
+function readAdditionalCodexToolName(item: CodexThreadItem): string | undefined {
+  switch (item.type) {
+    case "collabAgentToolCall":
+      return typeof item.tool === "string" && item.tool ? item.tool : "collaboration";
+    case "imageGeneration":
+      return "image_generation";
+    case "imageView":
+      return "view_image";
+    case "sleep":
+      return "clock.sleep";
+    default:
+      return undefined;
+  }
+}
+
+function readCodexRunSafetyToolOutcome(item: CodexThreadItem) {
+  const status = item.status?.trim().toLowerCase();
+  if (status === "completed" || status === "succeeded" || status === "success") {
+    return { success: true as const };
+  }
+  if (status !== "failed" && status !== "error" && status !== "declined") {
+    return undefined;
+  }
+  return {
+    success: false as const,
+    error:
+      item.aggregatedOutput?.trim() ||
+      safeCodexRunSafetyValue(item.error) ||
+      safeCodexRunSafetyValue(item.result) ||
+      status,
+  };
+}
+
+function safeCodexRunSafetyValue(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return `[unserializable ${typeof value}]`;
+  }
+}

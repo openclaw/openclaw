@@ -304,6 +304,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     terminalState.explicitCancellationReason ??= reason;
     runAbortController.abort(reason);
   };
+  const abortForAttemptFailure = (reason: unknown) => {
+    if (terminalState.terminalOutcomeFrozen) {
+      return;
+    }
+    // Internal safety failures must stop the provider turn without being
+    // misreported as a user cancellation by the outer reply operation.
+    terminalState.explicitCancellationObserved = true;
+    terminalState.explicitCancellationReason ??= reason;
+    runAbortController.abort(reason);
+  };
   const abortFromUpstream = () => {
     abortExplicitly(params.abortSignal?.reason ?? "upstream_abort");
   };
@@ -399,6 +409,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     runAbortController,
     terminalState,
     abortExplicitly,
+    abortForAttemptFailure,
     abortFromUpstream,
     resolveReviewerPolicyContext,
     resolveRuntimeOptionsForCurrentBinding,

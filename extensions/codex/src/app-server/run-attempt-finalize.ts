@@ -35,6 +35,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { formatCodexRunSafetyAlert } from "./run-safety.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
@@ -54,7 +55,13 @@ export async function finalizeCodexAttempt(
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
   activeTurn: CodexAttemptActiveTurn,
 ): Promise<EmbeddedRunAttemptResult> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const {
+    prompt,
+    state: resourceState,
+    trajectoryRecorder,
+    markTrajectoryEndRecorded,
+    runSafety,
+  } = resources;
   const { context, systemPromptReport } = prompt;
   const { runtime, attemptTools, activeTranscriptTarget, historyState, hookContext } = context;
   const { hookContextWindowFields, hookRunner, promptState } = context;
@@ -146,18 +153,32 @@ export async function finalizeCodexAttempt(
   const result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,
   });
+  const runSafetyTrip = runSafety.readTrip();
+  const runSafetyPromptError = runSafetyTrip
+    ? new Error(
+        formatCodexRunSafetyAlert({
+          objective: "complete the current Codex turn",
+          trip: runSafetyTrip,
+        }),
+      )
+    : undefined;
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
   const isFinalAborted = () =>
-    result.aborted ||
-    terminalState.explicitCancellationObserved ||
-    (runAbortController.signal.aborted && !state.clientClosedAbort && !recoveredTurnWatchTimeout);
+    runSafetyTrip
+      ? false
+      : result.aborted ||
+        terminalState.explicitCancellationObserved ||
+        (runAbortController.signal.aborted &&
+          !state.clientClosedAbort &&
+          !recoveredTurnWatchTimeout);
   const clientClosedPromptErrorForFinal =
     state.clientClosedPromptError && hasRecoverableCompletedAssistant
       ? undefined
       : state.clientClosedPromptError;
   let finalPromptError =
+    runSafetyPromptError ??
     clientClosedPromptErrorForFinal ??
     (effectiveTurnCompletionIdleTimedOut
       ? state.turnCompletionIdleTimeoutMessage
@@ -226,7 +247,9 @@ export async function finalizeCodexAttempt(
     });
   }
   const finalPromptErrorSource =
-    effectiveTimedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
+    runSafetyTrip || effectiveTimedOut || clientClosedPromptErrorForFinal
+      ? "prompt"
+      : result.promptErrorSource;
   const codexAppServerFailureKind = clientClosedPromptErrorForFinal
     ? "client_closed_before_turn_completed"
     : effectiveTurnCompletionIdleTimedOut

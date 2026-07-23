@@ -38,7 +38,7 @@ export function createCodexAttemptServerRequestController(
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
 ) {
-  const { prompt, state: resourceState, projectorRef, trajectoryRecorder } = resources;
+  const { prompt, state: resourceState, projectorRef, trajectoryRecorder, runSafety } = resources;
   const { context } = prompt;
   const { runtime, attemptTools } = context;
   const { connection } = runtime;
@@ -135,6 +135,22 @@ export function createCodexAttemptServerRequestController(
       const call = readCodexDynamicToolCallParams(request.params);
       if (!call || call.threadId !== resourceState.thread.threadId || call.turnId !== turnId) {
         return undefined;
+      }
+      const canExecuteToolCall = runSafety.recordToolCall({
+        toolName: call.tool,
+        toolCallId: call.callId,
+        arguments: call.arguments,
+      });
+      if (!canExecuteToolCall) {
+        return {
+          success: false,
+          contentItems: [
+            {
+              type: "inputText",
+              text: "OpenClaw stopped this turn after reaching a tool-loop safety limit.",
+            },
+          ],
+        } as JsonValue;
       }
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
@@ -236,6 +252,15 @@ export function createCodexAttemptServerRequestController(
         );
         const response = await execution;
         const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+        runSafety.recordToolOutcome({
+          toolName: call.tool,
+          toolCallId: call.callId,
+          arguments: call.arguments,
+          success: protocolResponse.success,
+          ...(!protocolResponse.success
+            ? { error: safeCodexRunSafetyValue(protocolResponse.contentItems) }
+            : {}),
+        });
         if (!protocolResponse.success && toolCallOrdinal !== undefined) {
           suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
           params.onToolOutcome?.({
@@ -305,6 +330,13 @@ export function createCodexAttemptServerRequestController(
         }
         return protocolResponse as JsonValue;
       } catch (error) {
+        runSafety.recordToolOutcome({
+          toolName: call.tool,
+          toolCallId: call.callId,
+          arguments: call.arguments,
+          success: false,
+          error: error instanceof Error ? error.message : safeCodexRunSafetyValue(error),
+        });
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (
           !terminalDiagnosticObserved &&
@@ -353,4 +385,15 @@ export function createCodexAttemptServerRequestController(
     }
   };
   return { handleServerRequest };
+}
+
+function safeCodexRunSafetyValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }

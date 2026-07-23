@@ -905,4 +905,101 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
+
+  it("stops after the second matching tool failure and preserves prior successful work", async () => {
+    const sessionFile = path.join(tempDir, "session-run-safety.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-run-safety");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const onRunAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
+    params.onAgentEvent = onRunAgentEvent;
+    params.onToolResult = onToolResult;
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "successful-command",
+          type: "commandExecution",
+          command: "git status -sb",
+          status: "inProgress",
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "successful-command",
+          type: "commandExecution",
+          command: "git status -sb",
+          status: "completed",
+          aggregatedOutput: "clean",
+        },
+      },
+    });
+
+    const sendGoalFailure = async (id: string, status: string) =>
+      await harness.handleServerRequest({
+        id: `request-${id}`,
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: id,
+          namespace: null,
+          tool: "update_goal",
+          arguments: { status },
+        },
+      });
+    await sendGoalFailure("goal-failure-1", "blocked");
+    await sendGoalFailure("goal-failure-2", " BLOCKED ");
+
+    const result = await run;
+    const safetyEvent = onRunAgentEvent.mock.calls
+      .map(([event]) => event as { data?: Record<string, unknown>; stream?: string })
+      .find((event) => event.data?.phase === "stopped");
+    const failureBrief = onToolResult.mock.calls
+      .map(([payload]) => payload as { isError?: boolean; text?: string })
+      .find((payload) => payload.isError === true);
+
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toBeInstanceOf(Error);
+    expect((result.promptError as Error).message).toContain("Unknown OpenClaw tool: update_goal");
+    expect(safetyEvent).toMatchObject({
+      stream: "item",
+      data: {
+        phase: "stopped",
+        safetyKind: "identical_failure",
+        attempts: 2,
+        toolCallCount: 3,
+        toolName: "update_goal",
+        lastSuccessfulStep: "bash",
+      },
+    });
+    expect(failureBrief?.text).toContain("Failed operation: update_goal");
+    expect(failureBrief?.text).toContain("Attempts: 2");
+    expect(failureBrief?.text).toContain("Last successful step: bash");
+    expect(
+      harness.request.mock.calls.filter(([method]) => method === "turn/interrupt"),
+    ).toHaveLength(1);
+    expect(
+      onRunAgentEvent.mock.calls.some(
+        ([event]) =>
+          (event as { stream?: string; data?: { name?: string; phase?: string } }).stream ===
+            "tool" &&
+          (event as { data?: { name?: string; phase?: string } }).data?.name === "bash" &&
+          (event as { data?: { name?: string; phase?: string } }).data?.phase === "result",
+      ),
+    ).toBe(true);
+  });
 });

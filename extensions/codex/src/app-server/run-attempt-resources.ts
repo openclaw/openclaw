@@ -17,7 +17,13 @@ import {
 } from "./native-hook-relay.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
+import {
+  createCodexRunSafetyController,
+  formatCodexRunSafetyAlert,
+  formatCodexRunSafetyCheckpoint,
+} from "./run-safety.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
@@ -42,6 +48,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     sandbox,
     options,
     nativeHookRelayEvents,
+    abortForAttemptFailure,
   } = connection;
   const { toolBridge } = attemptTools;
   const hostTrajectoryRecorder = (
@@ -86,6 +93,68 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   };
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   const projectorRef: { current?: CodexAppServerEventProjector } = {};
+  const runSafetyObjective = "complete the current Codex turn";
+  const deliverRunSafetyUpdate = (text: string, isError: boolean) => {
+    try {
+      void Promise.resolve(
+        params.onToolResult?.({
+          text,
+          ...(isError ? { isError: true } : {}),
+          channelData: { openclawProgressKind: "codex-run-safety" },
+        }),
+      ).catch((error: unknown) => {
+        embeddedAgentLog.debug("codex app-server run-safety delivery failed", { error });
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server run-safety delivery threw", { error });
+    }
+  };
+  const runSafety = createCodexRunSafetyController({
+    onWarning: (checkpoint) => {
+      embeddedAgentLog.warn("codex app-server tool-call checkpoint reached", {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...checkpoint,
+      });
+      void emitCodexAppServerEvent(params, {
+        stream: "item",
+        data: {
+          kind: "status",
+          title: "Tool-call safety",
+          phase: "warning",
+          objective: runSafetyObjective,
+          ...checkpoint,
+        },
+      });
+      deliverRunSafetyUpdate(formatCodexRunSafetyCheckpoint(checkpoint), false);
+    },
+    onTrip: (trip) => {
+      const { kind: safetyKind, ...tripDetails } = trip;
+      embeddedAgentLog.error("codex app-server stopped a runaway tool loop", {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...trip,
+      });
+      void emitCodexAppServerEvent(params, {
+        stream: "item",
+        data: {
+          kind: "status",
+          title: "Tool-call safety",
+          phase: "stopped",
+          objective: runSafetyObjective,
+          safetyKind,
+          ...tripDetails,
+        },
+      });
+      deliverRunSafetyUpdate(
+        formatCodexRunSafetyAlert({ objective: runSafetyObjective, trip }),
+        true,
+      );
+      abortForAttemptFailure(`codex_run_safety:${trip.kind}`);
+    },
+  });
   const emitNativePreToolUseFailure = (failure: CodexNativePreToolUseFailure) => {
     emitCodexNativePreToolUseFailureDiagnostic({
       agentId: sessionAgentId,
@@ -218,6 +287,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       onPreToolUseFailure: (failure) => {
+        runSafety.recordNativePreToolUseFailure(failure);
         const projector = projectorRef.current;
         if (projector) {
           projector.recordNativeToolPreToolUseFailure(failure);
@@ -245,6 +315,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   return {
     prompt,
     trajectoryRecorder,
+    runSafety,
     state,
     projectorRef,
     pendingNativePreToolUseFailures,

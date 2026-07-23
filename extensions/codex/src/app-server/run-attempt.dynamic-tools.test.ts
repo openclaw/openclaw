@@ -58,6 +58,73 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("warns at 25 dynamic calls and stops before executing call 50", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-tool-limit.jsonl"),
+      path.join(tempDir, "workspace-tool-limit"),
+    );
+    const onRunAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
+    params.onAgentEvent = onRunAgentEvent;
+    params.onToolResult = onToolResult;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const responses = [];
+    for (let index = 1; index <= 50; index += 1) {
+      responses.push(
+        await harness.handleServerRequest({
+          id: `request-${index}`,
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            callId: `call-${index}`,
+            namespace: null,
+            tool: `unknown_tool_${index}`,
+            arguments: {},
+          },
+        }),
+      );
+    }
+
+    const result = await run;
+    const safetyEvents = onRunAgentEvent.mock.calls.map(
+      ([event]) => event as { data?: Record<string, unknown>; stream?: string },
+    );
+    const warning = safetyEvents.find((event) => event.data?.phase === "warning");
+    const stopped = safetyEvents.find((event) => event.data?.phase === "stopped");
+
+    expect(responses[48]).toMatchObject({
+      success: false,
+      contentItems: [{ text: "Unknown OpenClaw tool: unknown_tool_49" }],
+    });
+    // Aborting the turn releases its request route before the blocked response
+    // can be returned to Codex, so the 50th call has no executable result.
+    expect(responses[49]).toBeUndefined();
+    expect(warning).toMatchObject({
+      stream: "item",
+      data: { phase: "warning", toolCallCount: 25 },
+    });
+    expect(stopped).toMatchObject({
+      stream: "item",
+      data: {
+        phase: "stopped",
+        safetyKind: "tool_call_limit",
+        attempts: 50,
+        toolCallCount: 50,
+      },
+    });
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toBeInstanceOf(Error);
+    expect(
+      onToolResult.mock.calls.some(
+        ([payload]) => (payload as { text?: string }).text?.includes("used 25 tool calls") === true,
+      ),
+    ).toBe(true);
+  });
+
   it.each(["cancelled", "timed_out"] as const)(
     "preserves the %s terminal reason in trusted tool diagnostics",
     async (terminalReason) => {
