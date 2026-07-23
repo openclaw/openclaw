@@ -25,7 +25,7 @@ When you run `/new` or `/reset` to start a fresh session:
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Chooses filename slug** - Uses a local timestamp by default, or an LLM-generated description when `llmSlug` is enabled
-4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default without delaying the `/new` or `/reset` reply
+4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default (or under a configured `subdir`) without delaying the `/new` or `/reset` reply
 
 ## Output Format
 
@@ -61,11 +61,12 @@ When `llmSlug` is enabled, the hook uses your configured LLM provider to generat
 
 The hook supports optional configuration:
 
-| Option     | Type    | Default       | Description                                                                                 |
-| ---------- | ------- | ------------- | ------------------------------------------------------------------------------------------- |
-| `messages` | number  | 15            | Number of user/assistant messages to include in the memory file                             |
-| `llmSlug`  | boolean | false         | Use your configured model to generate descriptive filename slugs instead of timestamp slugs |
-| `model`    | string  | agent default | Configured alias, bare model ID on the default provider, or `provider/model` override       |
+| Option     | Type    | Default       | Description                                                                                                                                                         |
+| ---------- | ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `messages` | number  | 15            | Number of user/assistant messages to include in the memory file                                                                                                     |
+| `llmSlug`  | boolean | false         | Use your configured model to generate descriptive filename slugs instead of timestamp slugs                                                                         |
+| `model`    | string  | agent default | Configured alias, bare model ID on the default provider, or `provider/model` override                                                                               |
+| `subdir`   | string  | `""`          | Sub-directory under `memory/` to write notes into. Supports `{YYYY}`, `{MM}`, `{YYYY-MM}` tokens from the note's local date. Default is the top level of `memory/`. |
 
 Example configuration:
 
@@ -78,13 +79,19 @@ Example configuration:
           "enabled": true,
           "messages": 25,
           "llmSlug": true,
-          "model": "sonnet"
+          "model": "sonnet",
+          "subdir": "sessions/{YYYY-MM}"
         }
       }
     }
   }
 }
 ```
+
+With `subdir: "sessions/{YYYY-MM}"`, a note captured on 2026-01-16 is written to
+`<workspace>/memory/sessions/2026-01/2026-01-16-1430.md`, keeping the top level of
+`memory/` reserved for curated daily notes. The value is resolved relative to
+`memory/`; leading path traversal is stripped so writes stay inside the workspace.
 
 The hook automatically:
 

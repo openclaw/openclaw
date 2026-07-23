@@ -97,6 +97,29 @@ function formatLocalSessionTimestamp(date: Date): {
   };
 }
 
+/**
+ * Resolve the optional `subdir` hook option into a safe, relative memory
+ * sub-directory. Supports `{YYYY}`, `{MM}` and `{YYYY-MM}` tokens taken from the
+ * note's local date, so notes can be filed under e.g. `sessions/{YYYY-MM}`.
+ * Returns "" (top level, unchanged default) when unset. Any leading path
+ * traversal is stripped so the write can never escape `<workspace>/memory`.
+ */
+function resolveSessionMemorySubdir(subdir: unknown, localDate: string): string {
+  if (typeof subdir !== "string" || subdir.trim() === "") {
+    return "";
+  }
+  const [year = "", month = ""] = localDate.split("-");
+  const replaced = subdir
+    .replaceAll("{YYYY-MM}", `${year}-${month}`)
+    .replaceAll("{YYYY}", year)
+    .replaceAll("{MM}", month);
+  const normalized = path
+    .normalize(replaced)
+    .replace(/^(?:\.\.(?:[/\\]|$))+/, "")
+    .replace(/^[/\\]+/, "");
+  return normalized === "." || normalized === ".." ? "" : normalized;
+}
+
 async function resolveAvailableMemoryFilename(params: {
   memoryDir: string;
   dateStr: string;
@@ -188,13 +211,19 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       workspaceDir: contextWorkspaceDir,
       sessionKey: event.sessionKey,
     });
-    const memoryDir = path.join(workspaceDir, "memory");
-    await fs.mkdir(memoryDir, { recursive: true });
+    // Read hook config once; used for the write sub-directory and message count.
+    const hookConfig = resolveHookConfig(cfg, "session-memory");
 
     // Use the user's local timezone for memory artifact names and headings.
     const now = new Date(event.timestamp);
     const localTimestamp = formatLocalSessionTimestamp(now);
     const dateStr = localTimestamp.date;
+
+    // Optional configurable sub-directory (e.g. "sessions/{YYYY-MM}") keeps the
+    // top level of memory/ reserved for curated notes. Defaults to top level.
+    const subdir = resolveSessionMemorySubdir(hookConfig?.subdir, dateStr);
+    const memoryDir = path.join(workspaceDir, "memory", subdir);
+    await fs.mkdir(memoryDir, { recursive: true });
 
     // Generate descriptive slug from session when explicitly enabled
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
@@ -237,7 +266,6 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
-    const hookConfig = resolveHookConfig(cfg, "session-memory");
     const messageCount =
       typeof hookConfig?.messages === "number" && hookConfig.messages > 0
         ? hookConfig.messages
