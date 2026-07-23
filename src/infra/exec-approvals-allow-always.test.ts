@@ -1701,6 +1701,11 @@ $0 \\"$1\\"" touch {marker}`,
       second: "gdb -eval-c 'shell id > {marker}'",
     },
     {
+      executable: "gdb",
+      first: "gdb -eiex 'print 1'",
+      second: "gdb -early-init-eval 'shell id > {marker}'",
+    },
+    {
       executable: "expect",
       first: "expect -c 'puts ok'",
       second: "expect -c 'exec sh -c \"id > {marker}\"'",

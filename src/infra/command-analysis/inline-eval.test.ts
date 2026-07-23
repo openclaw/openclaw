@@ -160,6 +160,20 @@ describe("exec inline eval detection", () => {
     { argv: ["gdb", "--init-eval-command=shell id"], expected: "gdb --init-eval-command" },
     { argv: ["gdb", "--init-eval=shell id"], expected: "gdb --init-eval-command" },
     { argv: ["gdb", "-init-eval-command=shell id"], expected: "gdb -init-eval-command" },
+    { argv: ["gdb", "-eiex", "shell id"], expected: "gdb -eiex" },
+    { argv: ["gdb", "-eiex=shell id"], expected: "gdb -eiex" },
+    {
+      argv: ["gdb", "-early-init-eval", "shell id"],
+      expected: "gdb -early-init-eval-command",
+    },
+    {
+      argv: ["gdb", "--early-init-eval=shell id"],
+      expected: "gdb --early-init-eval-command",
+    },
+    {
+      argv: ["gdb", "-early-init-eval-command=shell id"],
+      expected: "gdb -early-init-eval-command",
+    },
     { argv: ["expect", "-c", "spawn id"], expected: "expect -c" },
     { argv: ["expect", "-cspawn id"], expected: "expect -c" },
     { argv: ["lua", "-eprint(1)"], expected: "lua -e" },
@@ -249,6 +263,8 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["erl", "-setcookie", "cookie"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["erl", "-shutdown_time", "1000"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["gdb", "--command=commands.gdb"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["gdb", "-eix", "early.gdb"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["gdb", "-early-init-command", "early.gdb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["expect", "script.exp"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["awk", "-f", "script.awk", "data.csv"])).toBeNull();
