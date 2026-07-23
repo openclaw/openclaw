@@ -297,7 +297,7 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     expect(callArgs.accountId).toBe("acc1");
     expect(callArgs.payloads).toHaveLength(1);
     expect(expectDefined(callArgs.payloads[0], "callArgs.payloads[0] test invariant").text).toBe(
-      '📝 "hello world"',
+      '🎙️ "hello world"',
     );
   });
 

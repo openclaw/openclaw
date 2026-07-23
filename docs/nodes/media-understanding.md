@@ -66,7 +66,7 @@ Per-capability (`image`/`audio`/`video`) keys:
 | `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                 |
 | `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                      |
 | `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
-| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
+| `echoFormat`     | `string`  | `'🎙️ "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
 Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
 

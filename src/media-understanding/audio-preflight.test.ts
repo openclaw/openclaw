@@ -12,7 +12,7 @@ vi.mock("./audio-transcription-runner.js", () => ({
 }));
 
 vi.mock("./echo-transcript.js", () => ({
-  DEFAULT_ECHO_TRANSCRIPT_FORMAT: '📝 "{transcript}"',
+  DEFAULT_ECHO_TRANSCRIPT_FORMAT: '🎙️ "{transcript}"',
   sendTranscriptEcho: (...args: unknown[]) => sendTranscriptEchoMock(...args),
 }));
 

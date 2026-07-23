@@ -66,6 +66,7 @@ describe("sendTranscriptEcho", () => {
       bestEffort: true,
       durability: "best_effort",
     });
+    expect(DEFAULT_ECHO_TRANSCRIPT_FORMAT).toBe('🎙️ "{transcript}"');
   });
 
   it("uses a custom format when provided", async () => {
@@ -73,7 +74,7 @@ describe("sendTranscriptEcho", () => {
       ctx: createCtx(),
       cfg: EMPTY_CONFIG,
       transcript: "custom message",
-      format: "🎙️ Heard: {transcript}",
+      format: "🎤 Heard: {transcript}",
     });
 
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
@@ -82,7 +83,7 @@ describe("sendTranscriptEcho", () => {
       to: "+10000000001",
       accountId: "acc1",
       threadId: undefined,
-      payloads: [{ text: "🎙️ Heard: custom message" }],
+      payloads: [{ text: "🎤 Heard: custom message" }],
       bestEffort: true,
       durability: "best_effort",
     });
@@ -97,9 +98,40 @@ describe("sendTranscriptEcho", () => {
 
     expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        payloads: [{ text: '📝 "tickets cost $$40, wait for the deal & confirm with $&"' }],
+        payloads: [{ text: '🎙️ "tickets cost $$40, wait for the deal & confirm with $&"' }],
       }),
     );
+  });
+
+  it("threads the echo as a reply to the inbound voice message when MessageSid is set", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "telegram",
+        From: undefined,
+        OriginatingTo: "telegram:42",
+        MessageSid: "73299",
+        MessageSidFull: "telegram:73299",
+      }),
+      cfg: EMPTY_CONFIG,
+      transcript: "what the agent heard",
+    });
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
+      cfg: EMPTY_CONFIG,
+      channel: "telegram",
+      to: "telegram:42",
+      accountId: "acc1",
+      threadId: undefined,
+      replyToId: "telegram:73299",
+      payloads: [
+        {
+          text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "what the agent heard"),
+          replyToId: "telegram:73299",
+        },
+      ],
+      bestEffort: true,
+      durability: "best_effort",
+    });
   });
 
   it("skips non-deliverable channels", async () => {
