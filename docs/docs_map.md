@@ -2317,6 +2317,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Default location
   - H2: Extra workspace folders
   - H2: Workspace file map
+  - H2: Advanced workspace capability inventory
   - H2: What is NOT in the workspace
   - H2: Git backup (recommended, private)
   - H2: Do not commit secrets
@@ -3111,6 +3112,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Example
   - H2: Providers + credentials
   - H2: Related
+
+## concepts/workspace-capabilities.md
+
+- Route: /concepts/workspace-capabilities
+- Headings:
+  - H2: Location
+  - H2: Inventory record format
+  - H2: What belongs here
+  - H2: Discovery behavior
+  - H2: Agent guidance
 
 ## date-time.md
 
