@@ -190,15 +190,12 @@ export async function deliverQueuedSessionDelivery(params: {
     return;
   }
 
-  if (
-    params.entry.expectedSessionId &&
-    (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
-  ) {
-    log.warn("restart continuation skipped: session changed", {
+  if (params.entry.expectedSessionId && !entry) {
+    log.warn("restart continuation skipped: session missing", {
       sessionKey: canonicalKey,
       queueId: params.entry.id,
       expectedSessionId: params.entry.expectedSessionId,
-      actualSessionId: entry?.sessionId ?? null,
+      actualSessionId: null,
     });
     enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
