@@ -543,7 +543,7 @@ describe("chat pane initialization", () => {
     const snapshot = {
       ...pane.context.gateway.snapshot,
       client,
-      connected: true,
+      phase: "connected",
       hello,
       sessionKey: canonicalSessionKey,
     };

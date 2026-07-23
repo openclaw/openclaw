@@ -16,7 +16,7 @@ function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListR
 function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot = {
     client: client as GatewayBrowserClient | null,
-    connected: true,
+    phase: "connected",
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
     hello: null,
@@ -36,7 +36,11 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish(connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) {
-      snapshot = { ...snapshot, client: nextClient, connected };
+      snapshot = {
+        ...snapshot,
+        client: nextClient,
+        phase: connected ? "connected" : "reconnecting",
+      };
       for (const listener of listeners) {
         listener(snapshot);
       }

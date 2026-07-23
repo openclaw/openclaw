@@ -19,7 +19,7 @@ it("rejects stale identities after reconnecting the same client", async () => {
     .mockImplementationOnce(() => oldRequest.promise)
     .mockImplementationOnce(() => currentRequest.promise);
   const client = { request } as unknown as GatewayBrowserClient;
-  let snapshot = { client, connected: true };
+  let snapshot = { client, phase: "connected" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   const capability = createAgentIdentityCapability({
     get snapshot() {
@@ -31,7 +31,7 @@ it("rejects stale identities after reconnecting the same client", async () => {
     },
   });
   const publish = (connected: boolean) => {
-    snapshot = { client, connected };
+    snapshot = { client, phase: connected ? "connected" : "reconnecting" };
     for (const listener of listeners) {
       listener(snapshot);
     }
@@ -60,7 +60,7 @@ it("rejects an in-flight identity after that agent is invalidated", async () => 
     .mockImplementationOnce(() => currentRequest.promise);
   const client = { request } as unknown as GatewayBrowserClient;
   const capability = createAgentIdentityCapability({
-    snapshot: { client, connected: true },
+    snapshot: { client, phase: "connected" },
     subscribe: () => () => undefined,
   });
 

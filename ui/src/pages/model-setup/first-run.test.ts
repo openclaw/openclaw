@@ -84,7 +84,7 @@ describe("model setup first-run redirect", () => {
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;
     const snapshot = {
-      connected: true,
+      phase: "connected",
       client,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
@@ -131,7 +131,7 @@ describe("model setup first-run redirect", () => {
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;
     const snapshot = {
-      connected: true,
+      phase: "connected",
       client,
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },

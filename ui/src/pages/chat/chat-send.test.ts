@@ -406,7 +406,7 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
     createSessionCapability({
       snapshot: {
         client: host.client,
-        connected: host.connected,
+        phase: host.connected ? "connected" : "reconnecting",
         hello: host.hello,
       },
       subscribe: () => () => undefined,

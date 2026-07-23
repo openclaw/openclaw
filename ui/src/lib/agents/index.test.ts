@@ -22,7 +22,7 @@ function deferred<T>() {
 }
 
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot = { client, connected: true };
+  let snapshot = { client, phase: "connected" };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
@@ -35,7 +35,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       },
     },
     publish(connected: boolean) {
-      snapshot = { client, connected };
+      snapshot = { client, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }
