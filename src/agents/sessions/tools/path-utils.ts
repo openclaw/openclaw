@@ -7,6 +7,7 @@ import { accessSync, constants } from "node:fs";
 import * as os from "node:os";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeWindowsPosixDrivePath } from "./windows-posix-path.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -43,7 +44,9 @@ function normalizeAtPrefix(filePath: string): string {
 }
 
 function expandPath(filePath: string): string {
-  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+  const normalized = normalizeWindowsPosixDrivePath(
+    normalizeUnicodeSpaces(normalizeAtPrefix(filePath)),
+  );
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
