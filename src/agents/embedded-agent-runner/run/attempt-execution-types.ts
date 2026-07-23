@@ -33,6 +33,9 @@ export type EmbeddedAttemptExecutionState = {
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
   trajectoryEndRecorded: boolean;
+  /** Captured at finalize; emitted on session.ended after cleanup (#102014). */
+  trajectoryTerminalStatus?: "success" | "error" | "interrupted";
+  trajectoryTerminalError?: string;
 };
 
 export type EmbeddedAttemptExecutionPhaseInput = {

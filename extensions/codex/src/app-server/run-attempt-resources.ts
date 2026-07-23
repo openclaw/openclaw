@@ -66,6 +66,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     routeActivated: false,
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
+    /** Captured at finalize; emitted on session.ended after cleanup (#102014). */
+    trajectoryTerminalStatus: undefined as "success" | "error" | "interrupted" | undefined,
+    trajectoryTerminalPromptError: undefined as string | null | undefined,
+    trajectoryTerminalTimedOut: undefined as boolean | undefined,
+    trajectoryTerminalYieldDetected: undefined as boolean | undefined,
     nativeHookRelay: undefined as NativeHookRelayRegistrationHandle | undefined,
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>

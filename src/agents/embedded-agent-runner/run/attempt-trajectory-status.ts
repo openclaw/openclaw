@@ -12,7 +12,7 @@ type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
 /** Normalized terminal status recorded for an embedded run attempt trajectory. */
-type AttemptTrajectoryTerminal = {
+export type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };

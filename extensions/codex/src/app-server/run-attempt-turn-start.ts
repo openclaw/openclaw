@@ -179,14 +179,6 @@ export async function startCodexAttemptTurn(
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: message },
       });
-      trajectoryRecorder?.recordEvent("session.ended", {
-        status: "error",
-        threadId: resourceState.thread.threadId,
-        timedOut: state.timedOut,
-        aborted: runAbortController.signal.aborted,
-        promptError: message,
-      });
-      markTrajectoryEndRecorded();
       runAgentHarnessLlmOutputHook({
         event: {
           runId: params.runId,
@@ -244,6 +236,16 @@ export async function startCodexAttemptTurn(
       activateNativePreToolUseFailureFallback();
       resourceState.nativeHookRelay?.unregister();
       await releaseSandboxExecEnvironment();
+      // Record session.ended after startup-failure teardown so its timestamp
+      // reflects real session end rather than the turn-start failure instant (#102014).
+      trajectoryRecorder?.recordEvent("session.ended", {
+        status: "error",
+        threadId: resourceState.thread.threadId,
+        timedOut: state.timedOut,
+        aborted: runAbortController.signal.aborted,
+        promptError: message,
+      });
+      markTrajectoryEndRecorded();
       await runAgentCleanupStep({
         runId: params.runId,
         sessionId: params.sessionId,

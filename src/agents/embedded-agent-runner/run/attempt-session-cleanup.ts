@@ -37,6 +37,8 @@ type CleanupEmbeddedAttemptSessionInput = {
   buildAbortSettlePromise: () => Promise<void> | null;
   trajectoryRecorder: TrajectoryRecorder | null;
   trajectoryEndRecorded: boolean;
+  trajectoryTerminalStatus?: "success" | "error" | "interrupted";
+  trajectoryTerminalError?: string;
   cleanupYieldAborted: boolean;
   emitDiagnosticRunCompleted?: EmitDiagnosticRunCompleted;
   readState: () => {
@@ -75,30 +77,35 @@ function shouldPreservePromptErrorAfterCleanupError(params: {
   );
 }
 
+function resolveSessionEndedStatus(params: {
+  cleanupFailed: boolean;
+  trajectoryTerminalStatus?: "success" | "error" | "interrupted";
+  promptError: unknown;
+  aborted: boolean;
+  timedOut: boolean;
+}): "success" | "error" | "interrupted" | "cleanup" {
+  if (params.cleanupFailed) {
+    return "error";
+  }
+  if (params.trajectoryTerminalStatus) {
+    return params.trajectoryTerminalStatus;
+  }
+  if (params.promptError) {
+    return "error";
+  }
+  if (params.aborted || params.timedOut) {
+    return "interrupted";
+  }
+  return "cleanup";
+}
+
 export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
 ): Promise<void> {
   const { attempt } = input;
-  const initialState = input.readState();
-  if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
-    input.trajectoryRecorder.recordEvent("session.ended", {
-      status: initialState.promptError
-        ? "error"
-        : initialState.aborted || initialState.timedOut
-          ? "interrupted"
-          : "cleanup",
-      aborted: initialState.aborted,
-      externalAbort: initialState.externalAbort,
-      timedOut: initialState.timedOut,
-      idleTimedOut: initialState.idleTimedOut,
-      timedOutDuringCompaction: initialState.timedOutDuringCompaction,
-      timedOutDuringToolExecution: initialState.timedOutDuringToolExecution,
-      timedOutByRunBudget: initialState.timedOutByRunBudget,
-      promptError: initialState.promptError
-        ? formatErrorMessage(initialState.promptError)
-        : undefined,
-    });
-  }
+
+  // Persist model.completed / trace.artifacts before teardown so a hung cleanup
+  // cannot strand the earlier trajectory events in memory.
   await flushEmbeddedAttemptTrajectoryRecorder({
     runId: attempt.runId,
     sessionId: attempt.sessionId,
@@ -160,6 +167,36 @@ export async function cleanupEmbeddedAttemptSessionPhase(
     promptError: finalState.promptError,
     cleanupError: cleanupFailure,
   });
+
+  // Record session.ended after cleanup so its timestamp reflects actual session
+  // end rather than model.completed (#102014).
+  if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
+    input.trajectoryRecorder.recordEvent("session.ended", {
+      status: resolveSessionEndedStatus({
+        cleanupFailed: Boolean(cleanupFailure),
+        trajectoryTerminalStatus: input.trajectoryTerminalStatus,
+        promptError: finalState.promptError,
+        aborted: finalState.aborted,
+        timedOut: finalState.timedOut,
+      }),
+      aborted: finalState.aborted,
+      externalAbort: finalState.externalAbort,
+      timedOut: finalState.timedOut,
+      idleTimedOut: finalState.idleTimedOut,
+      timedOutDuringCompaction: finalState.timedOutDuringCompaction,
+      timedOutDuringToolExecution: finalState.timedOutDuringToolExecution,
+      timedOutByRunBudget: finalState.timedOutByRunBudget,
+      promptError: finalState.promptError ? formatErrorMessage(finalState.promptError) : undefined,
+      terminalError: input.trajectoryTerminalError,
+    });
+    await flushEmbeddedAttemptTrajectoryRecorder({
+      runId: attempt.runId,
+      sessionId: attempt.sessionId,
+      log,
+      trajectoryRecorder: input.trajectoryRecorder,
+    });
+  }
+
   input.emitDiagnosticRunCompleted?.(
     cleanupFailure
       ? "error"

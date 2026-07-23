@@ -270,7 +270,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         beforeAgentRunBlocked: true,
         beforeAgentRunBlockedBy: "before_agent",
         promptError: null,
-        trajectoryEndRecorded: true,
+        // session.ended is deferred to cleanup so the flag stays false here (#102014).
+        trajectoryEndRecorded: false,
       }),
     );
     expect(fixture.sessionRuntimeState).toEqual(
@@ -301,6 +302,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         }),
         subscription: fixture.subscription,
         trajectoryRecorder: fixture.trajectoryRecorder,
+        onTrajectoryTerminal: expect.any(Function),
       }),
     );
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
@@ -395,5 +397,34 @@ describe("runEmbeddedAttemptSettledPhase", () => {
 
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toThrow(failure);
     expect(fixture.order).toContain("clear-active-run");
+  });
+
+  it("captures Pi settle terminal ownership for deferred session.ended after cleanup", async () => {
+    const fixture = createFixture();
+    mocks.completeResult.mockImplementationOnce(
+      (input: {
+        onTrajectoryTerminal?: (terminal: {
+          status: "success" | "error" | "interrupted";
+          terminalError?: string;
+        }) => void;
+      }) => {
+        fixture.order.push("result");
+        input.onTrajectoryTerminal?.({
+          status: "success",
+        });
+        return fixture.result;
+      },
+    );
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    // Stream/Pi settle must not mark the trajectory end; cleanup owns session.ended (#102014).
+    expect(fixture.state.trajectoryEndRecorded).toBe(false);
+    expect(fixture.state).toEqual(
+      expect.objectContaining({
+        trajectoryTerminalStatus: "success",
+      }),
+    );
+    expect(fixture.order.indexOf("clear-active-run")).toBeLessThan(fixture.order.indexOf("result"));
   });
 });
