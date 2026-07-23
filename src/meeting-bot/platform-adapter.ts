@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { createMeetingChromeTransport } from "./chrome-transport.js";
 import type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,
@@ -480,6 +481,7 @@ function createMeetingPlatformAdapter<
 
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
+  createChromeTransport: createMeetingChromeTransport,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
 };
