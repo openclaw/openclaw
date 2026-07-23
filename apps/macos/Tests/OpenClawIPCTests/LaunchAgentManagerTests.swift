@@ -27,4 +27,23 @@ struct LaunchAgentManagerTests {
         let args = try #require(object["ProgramArguments"] as? [String])
         #expect(args == ["/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"])
     }
+
+    @Test func `launch at login plist preserves OpenClaw profile environment overrides`() throws {
+        setenv("OPENCLAW_CONFIG_PATH", "/tmp/custom-openclaw.json", 1)
+        setenv("OPENCLAW_STATE_DIR", "/tmp/openclaw-state", 1)
+        defer {
+            unsetenv("OPENCLAW_CONFIG_PATH")
+            unsetenv("OPENCLAW_STATE_DIR")
+        }
+
+        let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
+        let data = try #require(plist.data(using: .utf8))
+        let object = try #require(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+
+        let environment = try #require(object["EnvironmentVariables"] as? [String: String])
+        #expect(environment["OPENCLAW_CONFIG_PATH"] == "/tmp/custom-openclaw.json")
+        #expect(environment["OPENCLAW_STATE_DIR"] == "/tmp/openclaw-state")
+        #expect(environment["PATH"]?.isEmpty == false)
+    }
 }
