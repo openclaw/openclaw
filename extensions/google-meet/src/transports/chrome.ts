@@ -51,10 +51,7 @@ type ChromeNodeRealtimeAudioBridgeHandle = MeetingRealtimeAudioEngineHandle & {
 
 function shouldCaptureCaptions(mode: GoogleMeetMode, fullConfig?: OpenClawConfig): boolean {
   return (
-    mode === "transcribe" ||
-    (fullConfig
-      ? resolveTranscriptsConfig(fullConfig.transcripts).enabled
-      : GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.enabled(mode))
+    mode === "transcribe" || !fullConfig || resolveTranscriptsConfig(fullConfig.transcripts).enabled
   );
 }
 
