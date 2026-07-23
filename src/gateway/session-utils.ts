@@ -902,7 +902,7 @@ function resolveTranscriptUsageFallback(params: {
 function readAcpMetaForDeletedAgentCheck(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-  entry?: Pick<SessionEntry, "acp" | "sessionId"> | null;
+  entry?: Pick<SessionEntry, "acp" | "lifecycleRevision"> | null;
   acpMetadataSessionKey?: string | null;
 }) {
   if (params.entry?.acp) {
@@ -1019,7 +1019,8 @@ export function loadSessionEntryReadOnly(
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
-function resolveFreshestSessionStoreMatchFromStoreKeys(
+/** Returns both the freshest entry and the exact persisted key that owns it. */
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -2254,6 +2255,7 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
+    visibility: entry ? (entry.visibility ?? "shared") : undefined,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     // The live registry controller takes precedence over the persisted spawner.
     controlOwnerSessionKey: subagentOwner || entry?.spawnedBy,

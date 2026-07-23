@@ -125,7 +125,7 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
             }
           | null
           | undefined;
-        if (record?.type === "compaction") {
+        if (record?.type === "compaction" || record?.type === "reset") {
           compactedAfterLatestAssistant = true;
           continue;
         }

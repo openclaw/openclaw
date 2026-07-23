@@ -125,8 +125,6 @@ extensions/file-transfer/src/shared/node-invoke-policy.ts
 extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
-extensions/google-meet/src/cli.test.ts
-extensions/google-meet/src/cli.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -1075,9 +1073,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/components/browser/browser-panel.ts
-ui/src/components/config-form.node.ts
-ui/src/components/markdown.ts
 ui/src/components/terminal/terminal-panel.ts
 ui/src/e2e/chat-flow.e2e.test.ts
 ui/src/e2e/new-session-page.e2e.test.ts

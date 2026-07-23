@@ -435,8 +435,12 @@ describe("release Telegram QA workflow", () => {
     };
     const buildJob = workflow.jobs?.build_candidate;
     const runJob = workflow.jobs?.run_telegram;
+    const buildRuntimeStep = buildJob?.steps?.find(
+      (step) => step.name === "Build candidate runtime without runner credentials",
+    );
 
     expect(JSON.stringify(buildJob)).not.toContain("secrets.");
+    expect(buildRuntimeStep?.run).toContain("OPENCLAW_BUILD_PRIVATE_QA=1");
     expect(runJob?.environment).toBe("qa-live-shared");
     const secretSteps = runJob?.steps
       ?.filter((step) => JSON.stringify(step).includes("secrets."))

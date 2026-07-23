@@ -485,6 +485,10 @@ enum class GatewayMethod(
   BoardAction("board.action"),
   SessionsObserverAsk("sessions.observer.ask"),
   SessionsObserverVisibility("sessions.observer.visibility"),
+  SessionVisibilitySet("session.visibility.set"),
+  SessionMembersList("session.members.list"),
+  SessionMembersAdd("session.members.add"),
+  SessionMembersRemove("session.members.remove"),
 }
 
 enum class GatewayEvent(
@@ -498,6 +502,7 @@ enum class GatewayEvent(
   SessionMessage("session.message"),
   SessionObserver("session.observer"),
   SessionOperation("session.operation"),
+  SessionSharing("session.sharing"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),
   Presence("presence"),

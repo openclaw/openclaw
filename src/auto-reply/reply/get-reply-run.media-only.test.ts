@@ -1399,6 +1399,13 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.images).toBeUndefined();
     expect(call.followupRun.imageOrder).toBeUndefined();
     expect(call.followupRun.prompt).toContain("a tiny dot image");
+    expect(
+      (
+        call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
+      )?.["__openclaw"],
+    ).toMatchObject({
+      mediaImageLayout: { slots: [], suppressedFactIndexes: [0, 1] },
+    });
   });
 
   it("rehydrates only current MediaPaths missing image understanding", async () => {
@@ -1462,6 +1469,16 @@ describe("runPreparedReply media-only handling", () => {
         mimeType: "image/png",
       },
     ]);
+    expect(
+      (
+        call.followupRun.userTurnTranscriptRecorder?.message as unknown as Record<string, unknown>
+      )?.["__openclaw"],
+    ).toMatchObject({
+      mediaImageLayout: {
+        slots: [{ kind: "inline", factIndex: 1 }],
+        suppressedFactIndexes: [0],
+      },
+    });
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
     expect(call.followupRun.prompt).toContain("a tiny dot image");
   });

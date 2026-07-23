@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
@@ -462,13 +463,16 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   }
   try {
     const mirrorPromise = (async () => {
-      const userPromptMessage = attachUpstreamUserText(
-        attachCodexMirrorIdentity(
-          await buildResolvedCodexUserPromptMessage(params.params),
-          `${params.turnId}:prompt`,
+      const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: params.params.trigger === "memory",
+        message: attachUpstreamUserText(
+          attachCodexMirrorIdentity(
+            await buildResolvedCodexUserPromptMessage(params.params),
+            `${params.turnId}:prompt`,
+          ),
+          params.upstreamUserText,
         ),
-        params.upstreamUserText,
-      );
+      });
       const mirrorResult = await mirror({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -608,6 +612,10 @@ async function mirror(params: {
           // identity so retries cannot turn a stale idempotency hit into evidence.
           messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
         }
+        messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: (message as { display?: boolean }).display === false,
+          message: messageToAppend,
+        });
         const appended = await transcript.appendMessage({
           message: messageToAppend,
           idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",

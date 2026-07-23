@@ -56,6 +56,7 @@ import {
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -2145,19 +2146,22 @@ describe("session accessor seam", () => {
     ).resolves.toEqual([]);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
+  it("persists reset lifecycle entry changes with an in-log boundary", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
-    const nextTranscript = path.join(tempDir, "next-session.jsonl");
     const previousEntry: SessionEntry = {
       sessionFile: previousTranscript,
       sessionId: "previous-session",
       updatedAt: now,
     };
     const nextEntry: SessionEntry = {
-      sessionFile: nextTranscript,
-      sessionId: "next-session",
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: previousEntry.sessionId,
+        storePath,
+      }),
+      sessionId: previousEntry.sessionId,
       updatedAt: now + 1,
     };
     fs.writeFileSync(
@@ -2187,33 +2191,36 @@ describe("session accessor seam", () => {
       agentId: "main",
       cleanupPreviousTranscript: true,
       nextEntry,
-      nextSessionFile: nextTranscript,
+      nextSessionFile: nextEntry.sessionFile!,
       previousEntry,
       previousSessionId: previousEntry.sessionId,
       sessionKey,
       storePath,
     });
 
-    expect(result.replayedMessages).toBe(2);
+    expect(result.replayedMessages).toBe(0);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
-    expect(fs.existsSync(previousTranscript)).toBe(false);
+    expect(fs.existsSync(previousTranscript)).toBe(true);
     const archivedPreviousTranscripts = fs
       .readdirSync(tempDir)
       .filter((file) => file.startsWith("previous-session.jsonl.reset."));
-    expect(archivedPreviousTranscripts).toHaveLength(1);
-    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
-    const archivedPreviousTranscript = path.join(
-      tempDir,
-      expectDefined(
-        archivedPreviousTranscriptName,
-        "archivedPreviousTranscriptName test invariant",
-      ),
-    );
-    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
-      '"id":"previous-session"',
-    );
-    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
-    expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
+    expect(archivedPreviousTranscripts).toEqual([]);
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: previousEntry.sessionId,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "msg-user", parentId: null }),
+      expect.objectContaining({ id: "msg-assistant", parentId: "msg-user" }),
+      expect.objectContaining({
+        type: "reset",
+        reason: "reset",
+        firstKeptEntryId: "msg-user",
+      }),
+    ]);
   });
 
   it("trims a manual compact transcript and clears stale token metadata", async () => {

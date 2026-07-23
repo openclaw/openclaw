@@ -379,7 +379,9 @@ describe("Dockerfile", () => {
   it("keeps build-stage workspace packages readable by non-root live tests", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const sourceCopyIndex = dockerfile.indexOf("COPY . .");
-    const readabilityIndex = dockerfile.indexOf("RUN chmod -R a+rX /app");
+    const readabilityIndex = dockerfile.indexOf(
+      "RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +",
+    );
     const buildIndex = dockerfile.indexOf("pnpm build:docker");
 
     expect(sourceCopyIndex).toBeGreaterThan(-1);

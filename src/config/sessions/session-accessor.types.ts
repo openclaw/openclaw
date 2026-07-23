@@ -835,7 +835,9 @@ export type {
 };
 
 export type ResetSessionEntryLifecycleParams = {
-  /** Runs after the persisted entry rotates and retired transcripts are archived. */
+  /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
+  archivePreviousTranscript?: boolean;
+  /** Runs after the persisted entry changes and any requested archival completes. */
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
@@ -844,6 +846,8 @@ export type ResetSessionEntryLifecycleParams = {
     currentEntry?: SessionEntry;
     primaryKey: string;
   }) => Promise<SessionEntry> | SessionEntry;
+  /** Atomically append this boundary with the reset entry mutation. */
+  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
