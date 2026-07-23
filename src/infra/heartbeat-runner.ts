@@ -169,7 +169,6 @@ import {
   type HeartbeatWakeRequest,
   type HeartbeatWakeSource,
   isRetryableHeartbeatBusySkipReason,
-  requestHeartbeat,
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
