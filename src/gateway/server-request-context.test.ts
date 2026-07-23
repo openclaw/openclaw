@@ -15,6 +15,7 @@ type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
+  const config = {} as never;
   const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
@@ -29,7 +30,8 @@ function makeContextParams(
   return {
     deps: {} as never,
     runtimeState,
-    getRuntimeConfig: vi.fn(() => ({}) as never),
+    getRuntimeConfig: vi.fn(() => config),
+    sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,
       block: { kind: "disabled" as const },
@@ -39,7 +41,12 @@ function makeContextParams(
     pluginApprovalManager: undefined,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+      agentDir: "/tmp/model-catalog-agent",
+      config,
+      entries: [],
+      routeVariants: [],
+    })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },

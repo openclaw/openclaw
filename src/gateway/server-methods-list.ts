@@ -45,6 +45,7 @@ export const GATEWAY_EVENTS = [
   "session.message",
   "session.observer",
   "session.operation",
+  "session.sharing",
   "session.tool",
   "sessions.changed",
   "presence",

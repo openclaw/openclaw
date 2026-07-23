@@ -29,8 +29,8 @@ function createContext(
 ): ApplicationContext<RouteId> {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -93,8 +93,8 @@ function createConnectedContext(
 ) {
   let snapshot: ApplicationGatewaySnapshot = {
     client: { request } as GatewayBrowserClient,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
@@ -156,7 +156,7 @@ function createConnectedContext(
   return {
     context,
     emitConnected(connected: boolean) {
-      snapshot = { ...snapshot, connected };
+      snapshot = { ...snapshot, phase: connected ? "connected" : "reconnecting" };
       for (const listener of listeners) {
         listener(snapshot);
       }

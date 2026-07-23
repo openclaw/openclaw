@@ -1658,6 +1658,7 @@ describe("plugins cli install", () => {
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
     expect(record.clawpackSize).toBe(4096);
+    expect(readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("Installed plugin: demo")).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
@@ -1765,13 +1766,13 @@ describe("plugins cli install", () => {
     expect(clawHubInstallCall().spec).toBe("clawhub:demo");
   });
 
-  it("does not persist incomplete config entries for config-gated bundled installs", async () => {
+  it("preserves non-config policy for unconfigured bundled installs", async () => {
     const pluginId = "config-required-plugin";
     const cfg = {
       plugins: {
         entries: {
           [pluginId]: {
-            config: {},
+            hooks: { timeoutMs: 5_000 },
           },
         },
         load: {
@@ -1800,7 +1801,10 @@ describe("plugins cli install", () => {
     const writtenConfig = writeConfigFile.mock.calls[
       writeConfigFile.mock.calls.length - 1
     ]?.[0] as OpenClawConfig;
-    expect(writtenConfig.plugins?.entries?.[pluginId]).toBeUndefined();
+    expect(writtenConfig.plugins?.entries?.[pluginId]).toEqual({
+      enabled: false,
+      hooks: { timeoutMs: 5_000 },
+    });
     expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     const record = persistedInstallRecord(pluginId);
     expect(record.source).toBe("path");
@@ -1809,6 +1813,38 @@ describe("plugins cli install", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(runtimeLogsContain("requires configuration first")).toBe(true);
+  });
+
+  it("rejects invalid authored config for config-gated bundled installs", async () => {
+    const pluginId = "config-required-plugin";
+    const cfg = {
+      plugins: {
+        entries: {
+          [pluginId]: {
+            config: {},
+            hooks: { timeoutMs: 5_000 },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue({
+      pluginId,
+      localPath: `/app/dist/extensions/${pluginId}`,
+      configSchema: {
+        type: "object",
+        required: ["token"],
+        properties: { token: { type: "string" } },
+      },
+      requiresConfig: true,
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", pluginId])).rejects.toThrow(
+      "has invalid configured settings",
+    );
+
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
   });
 
   it("enables config-gated bundled installs when provider-backed config is explicit", async () => {

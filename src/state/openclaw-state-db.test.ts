@@ -1227,6 +1227,32 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
   });
 
+  it("detects schema migrations committed in an uncheckpointed WAL", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const opened = openOpenClawStateDatabase(options);
+    const databasePath = opened.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        PRAGMA user_version = 2;
+        UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
+      `);
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "strict-tables-v3",
+        path: databasePath,
+      });
+    } finally {
+      writer.close();
+    }
+  });
+
   it("rejects a placement turn claim tuple without an owner", () => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
@@ -2289,6 +2315,50 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       .all() as Array<{ name?: unknown }>;
 
     expect(columns.map((column) => column.name)).toContain("startup_reason");
+  });
+
+  it("adds and backfills Claw package update timestamps in existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    database.db
+      .prepare(
+        "INSERT INTO claw_package_refs (" +
+          "agent_id, package_kind, package_source, package_ref, package_version, " +
+          "package_integrity, schema_version, claw_name, package_status, relationship, origin, independent_owner, installed_at_ms, updated_at_ms" +
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "incident",
+        "plugin",
+        "clawhub",
+        "@owner/audit",
+        "2.0.1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "openclaw.clawPackageRef.v1",
+        "incident-claw",
+        "complete",
+        "referenced",
+        "claw-introduced",
+        0,
+        1234,
+        5678,
+      );
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE claw_package_refs DROP COLUMN updated_at_ms");
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      reopened.db.prepare("SELECT installed_at_ms, updated_at_ms FROM claw_package_refs").get(),
+    ).toEqual({ installed_at_ms: 1234, updated_at_ms: 1234 });
   });
 
   it("adds worker bootstrap lifecycle columns to existing state databases", () => {

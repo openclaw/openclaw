@@ -142,6 +142,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let settled = false;
     let stdout = "";
     let stderr = "";
+    let stdoutListener = input.onStdout;
+    let stderrListener = input.onStderr;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
@@ -209,6 +211,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
+              secretInput: input.secretInput,
             });
 
       registry.updateState(runId, "running", { pid: adapter.pid });
@@ -269,14 +272,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (captureOutput) {
           stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
-        input.onStdout?.(chunk);
+        stdoutListener?.(chunk);
         touchOutput();
       });
       adapter.onStderr((chunk) => {
         if (captureOutput) {
           stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
-        input.onStderr?.(chunk);
+        stderrListener?.(chunk);
         touchOutput();
       });
 
@@ -346,6 +349,10 @@ export function createProcessSupervisor(): ProcessSupervisor {
         wait: async () => await waitPromise,
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
+        },
+        detachOutput: () => {
+          stdoutListener = undefined;
+          stderrListener = undefined;
         },
       };
 

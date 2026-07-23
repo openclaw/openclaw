@@ -9,11 +9,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
+import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  GatewayDrainingError,
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -50,6 +53,7 @@ import {
   getDeliveryLastError,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
+import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -64,6 +68,7 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   ANNOUNCE_EXPIRY_MS,
+  backfillCollectorArchiveAtMs,
   MAX_ANNOUNCE_RETRY_COUNT,
   PROVISIONAL_KILL_RECONCILIATION_MS,
   reconcileOrphanedRestoredRuns,
@@ -89,6 +94,8 @@ import {
 } from "./subagent-registry-run-manager.js";
 import {
   clearSubagentRunsReadCacheForTest,
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
@@ -142,6 +149,8 @@ type SubagentRegistryDeps = {
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
+  getSubagentRunsSnapshotForChildSession: typeof getSubagentRunsSnapshotForChildSession;
+  getSubagentRunsSnapshotForController: typeof getSubagentRunsSnapshotForController;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: typeof onAgentEvent;
@@ -185,6 +194,8 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   getRuntimeConfig,
   onAgentEvent,
@@ -264,7 +275,7 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
-const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
 const SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS = 6 * 60 * 60_000;
 const SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;
@@ -783,7 +794,7 @@ async function terminateAcceptedRestoredCollectorRun(params: {
         return;
       } catch {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+          const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
           timer.unref?.();
         });
       }
@@ -856,6 +867,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   runs: subagentRuns,
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
+  getRuntimeConfig: () => subagentRegistryDeps.getRuntimeConfig(),
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   clearPendingLifecycleError,
@@ -1062,12 +1074,17 @@ function restoreSubagentRunsOnce() {
     if (restoredCount === 0) {
       return;
     }
-    if (
-      reconcileOrphanedRestoredRuns({
-        runs: subagentRuns,
-        resumedRuns,
-      })
-    ) {
+    const cfg = subagentRegistryDeps.getRuntimeConfig();
+    let restoredStateChanged = reconcileOrphanedRestoredRuns({
+      runs: subagentRuns,
+      resumedRuns,
+    });
+    for (const entry of subagentRuns.values()) {
+      if (backfillCollectorArchiveAtMs(entry, cfg)) {
+        restoredStateChanged = true;
+      }
+    }
+    if (restoredStateChanged) {
       persistSubagentRuns();
     }
     const requesterTurns = new Map<string, Map<string, SubagentRunRecord[]>>();
@@ -1135,29 +1152,37 @@ function restoreSubagentRunsOnce() {
             .filter((candidate) => candidate.execution?.status === "running")
             .map((candidate) => candidate.schedulerSlotId ?? candidate.runId),
           start: async () => {
-            const response = await subagentRegistryDeps.callGateway({
-              method: "agent",
-              params: launch.request,
-              timeoutMs: launch.timeoutMs,
-            });
-            const gatewayRunId = readGatewayRunId(response) ?? runId;
-            try {
-              if (!startQueuedSubagentRun(runId, gatewayRunId)) {
-                throw new Error(
-                  "collector registry row could not transition from queued to running",
-                );
-              }
-            } catch (error) {
-              await terminateAcceptedRestoredCollectorRun({
-                entry,
-                gatewayRunId,
+            await runWithGatewayIndependentRootWorkAdmission(async () => {
+              const response = await subagentRegistryDeps.callGateway({
+                method: "agent",
+                params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
+                // Restart replay must restore the trusted launch capability; otherwise
+                // the queued child silently falls back to its session/default route.
+                ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
                 timeoutMs: launch.timeoutMs,
               });
-              launchTerminationConfirmed = true;
-              throw error;
-            }
+              const gatewayRunId = readGatewayRunId(response) ?? runId;
+              try {
+                if (!startQueuedSubagentRun(runId, gatewayRunId)) {
+                  throw new Error(
+                    "collector registry row could not transition from queued to running",
+                  );
+                }
+              } catch (error) {
+                await terminateAcceptedRestoredCollectorRun({
+                  entry,
+                  gatewayRunId,
+                  timeoutMs: launch.timeoutMs,
+                });
+                launchTerminationConfirmed = true;
+                throw error;
+              }
+            });
           },
           onStartFailure: (error) => {
+            if (error instanceof GatewayDrainingError) {
+              return false;
+            }
             return failAndCleanupRestoredQueuedRun(
               runId,
               entry,
@@ -1221,7 +1246,7 @@ async function failAndCleanupRestoredQueuedRun(
         }
       }
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+        const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
         timer.unref?.();
       });
     }
@@ -1249,7 +1274,7 @@ async function failAndCleanupRestoredQueuedRun(
       });
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -1815,12 +1840,9 @@ async function sweepSubagentRuns() {
           continue;
         }
         let deleteFailed = false;
-        // Lifecycle cleanup already attempted each delete-mode session. Retry
-        // here only so a transient cleanup failure cannot survive group archive.
+        // Group retention owns the final session archive for both keep- and
+        // delete-mode collectors. Retry every member so the batch is idempotent.
         for (const [candidateRunId, candidate] of groupEntries) {
-          if (candidate.cleanup !== "delete") {
-            continue;
-          }
           try {
             await subagentRegistryDeps.callGateway({
               method: "sessions.delete",
@@ -2015,6 +2037,7 @@ function ensureListener() {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = startedAt;
           }
+          entry.execution = { ...entry.execution, status: "running", startedAt };
           persistSubagentRuns();
         }
         return;
@@ -2440,7 +2463,7 @@ export { prependAgentSteeringPrompt };
 
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
-    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
+    subagentRegistryDeps.getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
     controllerSessionKey,
   );
 }
@@ -2597,7 +2620,9 @@ export function getLatestSubagentRunByChildSessionKey(
   }
 
   let latest: SubagentRunRecord | null = null;
-  for (const entry of subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+  for (const entry of subagentRegistryDeps
+    .getSubagentRunsSnapshotForChildSession(subagentRuns, key)
+    .values()) {
     if (entry.childSessionKey !== key) {
       continue;
     }

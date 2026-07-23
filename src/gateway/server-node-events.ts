@@ -713,7 +713,7 @@ export const handleNodeEvent = async (
             log: ctx.logGateway,
             supportsInlineImages,
             // server-node-events dispatches via agentCommandFromIngress which
-            // has no ctx.MediaPaths wiring; reject non-image attachments
+            // has no structured media wiring; reject non-image attachments
             // explicitly rather than saving them where the agent cannot reach them.
             acceptNonImage: false,
           });
@@ -1145,6 +1145,25 @@ export const handleNodeEvent = async (
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      if ("action" in obj) {
+        const cleared = ctx.clearNodePresenceActivity?.({ nodeId, connId: opts?.connId });
+        if (cleared === null || cleared === undefined) {
+          return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+        }
+        if (cleared) {
+          ctx.broadcast(
+            "node.presence",
+            { nodeId, lastActiveAtMs: null, presenceUpdatedAtMs: null },
+            { dropIfSlow: true },
+          );
+        }
+        return {
+          ok: true,
+          event: evt.event,
+          handled: true,
+          reason: cleared ? "cleared" : "already_clear",
+        };
       }
       if (opts?.presenceAllowed !== true) {
         return { ok: true, event: evt.event, handled: false, reason: "permission_required" };

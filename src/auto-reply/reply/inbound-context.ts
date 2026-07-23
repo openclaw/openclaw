@@ -2,9 +2,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { resolveMediaFacts } from "../../media/media-facts.js";
+import {
+  projectMediaFacts,
+  resolveMediaFacts,
+  resolveStagedMediaFacts,
+} from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type { FinalizedMsgContext, FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
 export type FinalizeInboundContextOptions = {
@@ -14,7 +18,25 @@ export type FinalizeInboundContextOptions = {
   forceConversationLabel?: boolean;
 };
 
-const DEFAULT_MEDIA_TYPE = "application/octet-stream";
+const LEGACY_MEDIA_CONTEXT_KEYS = [
+  "MediaPath",
+  "MediaUrl",
+  "MediaType",
+  "MediaPaths",
+  "MediaUrls",
+  "MediaTypes",
+  "MediaDir",
+  "MediaWorkspaceDir",
+  "MediaTranscribedIndexes",
+  "MediaStaged",
+] as const;
+type LegacyMediaContextKey = (typeof LEGACY_MEDIA_CONTEXT_KEYS)[number];
+
+export function stripLegacyMediaContextFields(ctx: Record<string, unknown>): void {
+  for (const key of LEGACY_MEDIA_CONTEXT_KEYS) {
+    delete ctx[key];
+  }
+}
 
 function normalizeTextField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -28,21 +50,6 @@ function normalizeTrustedTextField(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeInboundTextNewlines(value);
-}
-
-function normalizeMediaType(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function countMediaEntries(ctx: MsgContext): number {
-  const pathCount = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths.length : 0;
-  const urlCount = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls.length : 0;
-  const single = ctx.MediaPath || ctx.MediaUrl ? 1 : 0;
-  return Math.max(pathCount, urlCount, single);
 }
 
 function applySupplementalContext(ctx: MsgContext): void {
@@ -74,9 +81,10 @@ function applySupplementalContext(ctx: MsgContext): void {
   delete ctx.SupplementalContext;
 }
 
-export function finalizeInboundContext<T extends Record<string, unknown>>(
+function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   ctx: T,
-  opts: FinalizeInboundContextOptions = {},
+  opts: FinalizeInboundContextOptions,
+  preserveLegacyMedia: boolean,
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
   applySupplementalContext(normalized);
@@ -143,40 +151,41 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     normalized.CommandSource = undefined;
   }
 
-  // MediaType/MediaTypes alignment:
-  // - No media: do not inject defaults.
-  // - Media present: ensure MediaType is always set, and MediaTypes is padded to match
-  //   MediaPaths/MediaUrls length when possible.
-  const mediaCount = countMediaEntries(normalized);
-  if (mediaCount > 0) {
-    const mediaType = normalizeMediaType(normalized.MediaType);
-    const rawMediaTypes = Array.isArray(normalized.MediaTypes) ? normalized.MediaTypes : undefined;
-    const normalizedMediaTypes = rawMediaTypes?.map((entry) => normalizeMediaType(entry));
-
-    let mediaTypesFinal: string[] | undefined;
-    if (normalizedMediaTypes && normalizedMediaTypes.length > 0) {
-      const filled = normalizedMediaTypes.slice();
-      while (filled.length < mediaCount) {
-        filled.push(undefined);
-      }
-      mediaTypesFinal = filled.map((entry) => entry ?? DEFAULT_MEDIA_TYPE);
-    } else if (mediaType) {
-      mediaTypesFinal = [mediaType];
-      while (mediaTypesFinal.length < mediaCount) {
-        mediaTypesFinal.push(DEFAULT_MEDIA_TYPE);
-      }
-    } else {
-      mediaTypesFinal = Array.from({ length: mediaCount }, () => DEFAULT_MEDIA_TYPE);
-    }
-
-    normalized.MediaTypes = mediaTypesFinal;
-    normalized.MediaType = mediaType ?? mediaTypesFinal[0] ?? DEFAULT_MEDIA_TYPE;
-  }
-
-  const media = resolveMediaFacts(normalized);
+  const mediaSource =
+    !preserveLegacyMedia &&
+    (normalized.MediaStaged === true || normalizeOptionalString(normalized.MediaWorkspaceDir))
+      ? resolveStagedMediaFacts(normalized)
+      : resolveMediaFacts(normalized);
+  const media = mediaSource.map((fact) =>
+    (fact.path || fact.url) && !fact.contentType && !fact.kind
+      ? Object.assign(fact, { contentType: "application/octet-stream" })
+      : fact,
+  );
   if (media.length > 0) {
     normalized.media = media;
+    if (preserveLegacyMedia) {
+      Object.assign(normalized, projectMediaFacts(media));
+    }
+  }
+  if (!preserveLegacyMedia) {
+    stripLegacyMediaContextFields(normalized);
   }
 
   return normalized as T & FinalizedMsgContext;
+}
+
+export function finalizeInboundContext<T extends Record<string, unknown>>(
+  ctx: T,
+  opts: FinalizeInboundContextOptions = {},
+): Omit<T, LegacyMediaContextKey> & FinalizedRuntimeMsgContext {
+  return finalizeInboundContextImpl(ctx, opts, false) as Omit<T, LegacyMediaContextKey> &
+    FinalizedRuntimeMsgContext;
+}
+
+/** Keeps the shipped Plugin SDK return type while internal callers use the stricter type above. */
+export function finalizeInboundContextForSdk<T extends Record<string, unknown>>(
+  ctx: T,
+  opts: FinalizeInboundContextOptions = {},
+): T & FinalizedMsgContext {
+  return finalizeInboundContextImpl(ctx, opts, true);
 }

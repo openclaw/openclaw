@@ -20,8 +20,10 @@ struct RootTabs: View {
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
-    @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
-    @State private var activeSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
+    @State private var selectedSettingsRoute: SettingsRoute? =
+        Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
+    @State private var activeSettingsRoute: SettingsRoute? =
+        Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
     // Embedded Settings rows push onto the sidebar stack; clear it before
@@ -57,7 +59,14 @@ struct RootTabs: View {
         initialDestination(arguments: ProcessInfo.processInfo.arguments)
     }
 
+    private static var initialSettingsRoute: SettingsRoute? {
+        requestedInitialSettingsRoute(arguments: ProcessInfo.processInfo.arguments)
+    }
+
     static func initialDestination(arguments: [String]) -> SidebarDestination {
+        if self.requestedInitialSettingsRoute(arguments: arguments) != nil {
+            return .settings
+        }
         if let requested = self.requestedInitialSidebarDestination(arguments: arguments) {
             return requested
         }
@@ -70,6 +79,18 @@ struct RootTabs: View {
         case "agent", "agents": .agents
         case "settings": .settings
         default: .chat
+        }
+    }
+
+    static func requestedInitialSettingsRoute(arguments: [String]) -> SettingsRoute? {
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-settings-route") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        return switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "openclaw", "system-agent": .systemAgent
+        default: nil
         }
     }
 
@@ -114,6 +135,25 @@ struct RootTabs: View {
                 self.rootOverlays(
                     self.sidebarSplitContent
                         .tint(OpenClawBrand.accent))))
+            .overlay(alignment: .topLeading) {
+                self.uiTestReadinessMarker
+            }
+    }
+
+    @ViewBuilder
+    private var uiTestReadinessMarker: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-ui-test-readiness") {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("RootTabs.Ready")
+                .accessibilityLabel(Text(verbatim: "OpenClaw test readiness"))
+                .accessibilityValue(
+                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)")
+        }
+        #endif
     }
 
     private var sidebarSplitContent: some View {
@@ -145,6 +185,10 @@ struct RootTabs: View {
                     guard !Task.isCancelled else { return }
                     await self.sidebarModel.refresh(appModel: self.appModel)
                 }
+            }
+            .task(id: "\(self.sidebarRefreshID):events") {
+                guard self.scenePhase == .active else { return }
+                await self.sidebarModel.observeSessionEvents(appModel: self.appModel)
             }
         }
     }

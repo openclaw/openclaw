@@ -28,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord as asRecord,
@@ -1468,9 +1468,8 @@ export default definePluginEntry({
         return undefined;
       }
       const agentId = normalizeAgentId(rawAgentId);
-      const overrides = resolveAgentConfig(runtimeConfig, agentId)?.memorySearch;
-      const enabled =
-        overrides?.enabled ?? runtimeConfig.agents?.defaults?.memorySearch?.enabled ?? true;
+      const overrides = resolveAgentConfig(runtimeConfig, agentId)?.memory?.search;
+      const enabled = overrides?.enabled ?? runtimeConfig.memory?.search?.enabled ?? true;
       return enabled ? agentId : undefined;
     };
     const resolveCliAgentId = (rawAgentId: unknown): string => {
@@ -1676,6 +1675,17 @@ export default definePluginEntry({
             category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
           }),
           async execute(_toolCallId, params) {
+            if (isIncognitoSessionKey(ctx.sessionKey)) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Memory was not stored because this is an incognito session.",
+                  },
+                ],
+                details: { action: "rejected", reason: "incognito_session" },
+              };
+            }
             const { text, category = "other" } = params as {
               text: string;
               category?: MemoryEntry["category"];
@@ -1999,7 +2009,7 @@ export default definePluginEntry({
     // Auto-capture: analyze and store important information after agent ends
     api.on("agent_end", async (event, ctx) => {
       const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoCapture) {
+      if (!currentCfg.autoCapture || isIncognitoSessionKey(ctx.sessionKey)) {
         return;
       }
       const agentId = resolveEnabledAgentId(ctx.agentId);

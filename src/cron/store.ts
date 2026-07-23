@@ -14,6 +14,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveConfigDir } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
 import {
   assertCronStoreCanPersist,
@@ -52,14 +53,24 @@ export function resolveCronQuarantinePath(storePath: string): string {
 
 /** Resolves the cron jobs store path, expanding home-relative user input. */
 export function resolveCronJobsStorePath(storePath?: string, env: NodeJS.ProcessEnv = process.env) {
-  if (storePath?.trim()) {
-    const raw = storePath.trim();
+  const selected = storePath?.trim() || readCronStoreStatePath(env);
+  if (selected) {
+    const raw = selected.trim();
     if (raw.startsWith("~")) {
       return path.resolve(expandHomePrefix(raw, { env }));
     }
     return path.resolve(raw);
   }
   return resolveDefaultCronStorePath(env);
+}
+
+/** Resolves the active cron partition from runtime config and environment. */
+export function resolveCronJobsStorePathFromConfig(
+  cfg: { cron?: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const store = (cfg.cron as { store?: unknown } | undefined)?.store;
+  return resolveCronJobsStorePath(typeof store === "string" ? store : undefined, env);
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */

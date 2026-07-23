@@ -45,6 +45,7 @@ export async function admitChatSend(params: {
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
   const {
     rawSessionKey,
+    sessionLoadKey,
     clientRunId,
     pendingChatSendKey,
     sessionLoadOptions,
@@ -177,7 +178,7 @@ export async function admitChatSend(params: {
       }
       return;
     }
-    const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+    const latestSession = loadSessionEntry(sessionLoadKey, sessionLoadOptions);
     if (sessionRoutingChanged(latestSession.cfg)) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }

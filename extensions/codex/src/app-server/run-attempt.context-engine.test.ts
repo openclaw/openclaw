@@ -6,6 +6,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
+  supportsModelTools,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -18,6 +19,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
@@ -51,6 +53,36 @@ function resetCodexAppServerClientFactoryForTest(): void {
   codexAppServerClientFactoryForTest = undefined;
 }
 
+/** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
+function withPersistentCodexTestToolPolicy(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams {
+  const modelCompat =
+    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
+  const model = {
+    ...params.model,
+    compat: { ...modelCompat, supportsTools: false },
+  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
+  return {
+    ...params,
+    disableTools: false,
+    model,
+    config: {
+      ...params.config,
+      tools: {
+        ...params.config?.tools,
+        web: {
+          ...params.config?.tools?.web,
+          search: {
+            ...params.config?.tools?.web?.search,
+            enabled: false,
+          },
+        },
+      },
+    },
+  };
+}
+
 function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
@@ -60,7 +92,7 @@ function runCodexAppServerAttempt(
     (codexAppServerClientFactoryForTest
       ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
       : undefined);
-  return runCodexAppServerAttemptImpl(params, {
+  return runCodexAppServerAttemptImpl(withPersistentCodexTestToolPolicy(params), {
     ...options,
     bindingStore: testCodexAppServerBindingStore,
     ...(clientFactory ? { clientFactory } : {}),
@@ -80,7 +112,6 @@ function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAtt
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
-    disableTools: true,
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -409,6 +440,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     resetGlobalHookRunner();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("keeps the fixture thread persistent while denying web search", () => {
+    const params = withPersistentCodexTestToolPolicy(
+      createParams(path.join(tempDir, "policy.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    expect(params.disableTools).toBe(false);
+    expect(supportsModelTools(params.model)).toBe(false);
+    expect(params.config?.tools?.web?.search?.enabled).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
   });
 
   it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {

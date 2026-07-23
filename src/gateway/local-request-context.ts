@@ -2,10 +2,7 @@ import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import {
-  loadPreparedModelCatalog,
-  loadPreparedModelCatalogSnapshot,
-} from "../agents/prepared-model-catalog.js";
+import { loadPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
@@ -54,6 +51,8 @@ const unavailableCron: GatewayCronServiceContract = {
   enqueueRun: async () => cronUnavailable(),
   getJob: () => undefined,
   readJob: async () => undefined,
+  readScratch: async (): Promise<never> => cronUnavailable(),
+  writeScratch: async () => cronUnavailable(),
   getDefaultAgentId: () => undefined,
   wake: () => ({ ok: false, reason: "unwakeable-session-key" }),
 };
@@ -67,7 +66,7 @@ function createLocalGatewayRequestContext(
     ...unavailableCron,
     removeAgentJobsTransactional: async (agentId, commit) => {
       const cfg = params.getRuntimeConfig();
-      const storePath = resolveCronJobsStorePath(cfg.cron?.store);
+      const storePath = resolveCronJobsStorePath();
       const service = new CronService({
         storePath,
         cronEnabled: cfg.cron?.enabled !== false,
@@ -116,6 +115,19 @@ function createLocalGatewayRequestContext(
       bufferedAgentEvents.delete(key);
     }
   };
+  const loadModelCatalogOwner = async ({
+    agentId,
+    agentDir,
+    readOnly,
+    workspaceDir,
+  }: NonNullable<Parameters<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>[0]> = {}) =>
+    loadPublishedPreparedModelCatalogOwnerSnapshot({
+      ...(agentId ? { agentId } : {}),
+      ...(agentDir ? { agentDir } : {}),
+      config: params.getRuntimeConfig(),
+      readOnly: readOnly !== false,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   return {
     deps: params.deps,
     cron,
@@ -124,22 +136,18 @@ function createLocalGatewayRequestContext(
     notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
-    loadGatewayModelCatalog: async ({ agentId, agentDir, readOnly, workspaceDir } = {}) =>
-      loadPreparedModelCatalog({
-        ...(agentId ? { agentId } : {}),
-        ...(agentDir ? { agentDir } : {}),
-        config: params.getRuntimeConfig(),
-        readOnly: readOnly !== false,
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }),
-    loadGatewayModelCatalogSnapshot: async ({ agentId, agentDir, readOnly, workspaceDir } = {}) =>
-      loadPreparedModelCatalogSnapshot({
-        ...(agentId ? { agentId } : {}),
-        ...(agentDir ? { agentDir } : {}),
-        config: params.getRuntimeConfig(),
-        readOnly: readOnly !== false,
-        ...(workspaceDir ? { workspaceDir } : {}),
-      }),
+    loadGatewayModelCatalog: async (loadParams) =>
+      (await loadModelCatalogOwner(loadParams)).modelCatalog.entries,
+    loadGatewayModelCatalogSnapshot: async (loadParams) => {
+      const owner = await loadModelCatalogOwner(loadParams);
+      return {
+        ...owner.modelCatalog,
+        ...(owner.agentId ? { agentId: owner.agentId } : {}),
+        agentDir: owner.agentDir,
+        ...(owner.workspaceDir ? { workspaceDir: owner.workspaceDir } : {}),
+        config: owner.config,
+      };
+    },
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
