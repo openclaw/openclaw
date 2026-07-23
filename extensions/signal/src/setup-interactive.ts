@@ -10,7 +10,11 @@ import {
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
-import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
+import {
+  listSignalAccountIds,
+  resolveSignalAccount,
+  type ResolvedSignalTransport,
+} from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
 import { normalizeSignalAccountInput } from "./setup-core.js";
 import {
@@ -150,11 +154,10 @@ async function promptSignalAccount(params: SignalFinalizeParams) {
   return account;
 }
 
-async function prepareManagedNativeSetup(params: SignalPrepareParams) {
-  const resolvedTransport = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).transport;
+async function prepareManagedNativeSetup(
+  params: SignalPrepareParams,
+  resolvedTransport: ResolvedSignalTransport,
+) {
   let cliPath =
     resolvedTransport.kind === "managed-native" ? resolvedTransport.cliPath : "signal-cli";
   const cliDetected = await detectBinary(cliPath);
@@ -295,11 +298,10 @@ async function promptExistingSignalTransport(
   }
 }
 
-async function prepareExistingServerSetup(params: SignalPrepareParams) {
-  const resolvedTransport = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).transport;
+async function prepareExistingServerSetup(
+  params: SignalPrepareParams,
+  resolvedTransport: ResolvedSignalTransport,
+) {
   const transport = await promptExistingSignalTransport({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -345,18 +347,19 @@ export async function prepareSignalInteractiveSetup(params: SignalPrepareParams)
   });
 
   if (mode === "local") {
-    return await prepareManagedNativeSetup(params);
+    return await prepareManagedNativeSetup(params, resolvedAccount.transport);
   }
-  return await prepareExistingServerSetup(params);
+  return await prepareExistingServerSetup(params, resolvedAccount.transport);
 }
 
 export async function finalizeSignalInteractiveSetup(params: SignalFinalizeParams) {
   const kind = params.credentialValues[SIGNAL_TRANSPORT_KIND_KEY];
   let cfg = params.cfg;
-  let account =
-    normalizeSignalAccountInput(
-      resolveSignalAccount({ cfg, accountId: params.accountId }).config.account,
-    ) ?? undefined;
+  const resolvedAccount = resolveSignalAccount({
+    cfg,
+    accountId: params.accountId,
+  });
+  let account = normalizeSignalAccountInput(resolvedAccount.config.account) ?? undefined;
   let transport: SignalTransportConfig | undefined =
     kind === "managed-native"
       ? prepareSignalManagedNativeTransport({
