@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.8a2fec00ed1d71b5",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "Tôi có thể kiểm tra trạng thái Gateway, sửa chữa cấu hình, thay đổi mô hình hoặc kết nối các kênh."
+    },
+    {
+      "id": "native.android.53ec61863e575d82",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "Tôi sẽ giữ cuộc trò chuyện này tách biệt với cuộc trò chuyện tác nhân thông thường."
+    },
+    {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
       "translated": "Bản dịch OpenClaw · $languageTag"
@@ -1222,6 +1232,26 @@
       "id": "native.android.a79d6ccab877c9ca",
       "source": "OpenClaw Active",
       "translated": "OpenClaw Hoạt động"
+    },
+    {
+      "id": "native.android.2aa3ad1a12683954",
+      "source": "Skip for now",
+      "translated": "Bỏ qua bây giờ"
+    },
+    {
+      "id": "native.android.9fa262fa4e057a3b",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.android.e1a8681198e91766",
+      "source": "OpenClaw request failed.",
+      "translated": "Yêu cầu OpenClaw thất bại."
+    },
+    {
+      "id": "native.android.a71a93ec69cee4d9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Kết nối Gateway đã thay đổi. Khởi động lại OpenClaw để kết nối lại."
     },
     {
       "id": "native.android.356609f717b92350",
@@ -5879,11 +5909,6 @@
       "translated": "Đang giám sát · $cronJobCount tác vụ đã lên lịch"
     },
     {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.b5ee8fce135f41e6",
       "source": "Connect before chat, voice, and live status.",
       "translated": "Kết nối trước khi trò chuyện, sử dụng giọng nói và xem trạng thái trực tiếp."
@@ -5947,6 +5972,16 @@
       "id": "native.android.7b1f86aeacad732c",
       "source": "Load from gateway",
       "translated": "Tải từ Gateway"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.4878165188c0310c",
+      "source": "Setup, status, and repair",
+      "translated": "Thiết lập, trạng thái và sửa chữa"
     },
     {
       "id": "native.android.c6997ee4400492f6",
@@ -6902,6 +6937,106 @@
       "id": "native.android.14d7845e9790eaab",
       "source": "Skill",
       "translated": "Kỹ năng"
+    },
+    {
+      "id": "native.android.9ee4764599e5979c",
+      "source": "Back",
+      "translated": "Quay lại"
+    },
+    {
+      "id": "native.android.4b2c29c94377f235",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7a7da7d8f8613d33",
+      "source": "Gateway Required",
+      "translated": "Yêu cầu Gateway"
+    },
+    {
+      "id": "native.android.aebc338b09b0a24d",
+      "source": "Full Access Required",
+      "translated": "Yêu cầu quyền truy cập đầy đủ"
+    },
+    {
+      "id": "native.android.69e0b2ce76a5ff7a",
+      "source": "Checking Gateway",
+      "translated": "Đang kiểm tra Gateway"
+    },
+    {
+      "id": "native.android.93c293872c6deb49",
+      "source": "Gateway Update Required",
+      "translated": "Yêu cầu cập nhật Gateway"
+    },
+    {
+      "id": "native.android.06e5bfbad4b42e3b",
+      "source": "Connect this phone to a Gateway before opening OpenClaw.",
+      "translated": "Kết nối điện thoại này với Gateway trước khi mở OpenClaw."
+    },
+    {
+      "id": "native.android.44cca3625b125c19",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "Kết nối lại với quyền operator.admin để xem lại và thay đổi cài đặt Gateway."
+    },
+    {
+      "id": "native.android.6089cc78ebd95573",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "Đang kiểm tra xem Gateway này có hỗ trợ trợ lý cài đặt OpenClaw hay không."
+    },
+    {
+      "id": "native.android.3c3a35369bc2f1f9",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "Cập nhật Gateway này để sử dụng trợ lý cài đặt OpenClaw."
+    },
+    {
+      "id": "native.android.41b7b9cd883e3e81",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw đang hoạt động…"
+    },
+    {
+      "id": "native.android.072481856dd25c89",
+      "source": "Restart",
+      "translated": "Khởi động lại"
+    },
+    {
+      "id": "native.android.25fcaa5f2ef2546e",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw đã sẵn sàng để tiếp tục trong cuộc trò chuyện thông thường của bạn."
+    },
+    {
+      "id": "native.android.88377fbc76395226",
+      "source": "Open Chat",
+      "translated": "Mở trò chuyện"
+    },
+    {
+      "id": "native.android.1e3b32696a4c4487",
+      "source": "${option.label} · ${nativeString(\"Recommended\")}",
+      "translated": "${option.label} · ${nativeString(\"Recommended\")}"
+    },
+    {
+      "id": "native.android.3ca44882cf461305",
+      "source": "Recommended",
+      "translated": "Được đề xuất"
+    },
+    {
+      "id": "native.android.56968d3bbeb687f9",
+      "source": "Skip for now",
+      "translated": "Bỏ qua ngay bây giờ"
+    },
+    {
+      "id": "native.android.6b255d7620170498",
+      "source": "Enter secret…",
+      "translated": "Nhập mã bí mật…"
+    },
+    {
+      "id": "native.android.4753194a1f8c6c6b",
+      "source": "Reply to OpenClaw…",
+      "translated": "Trả lời OpenClaw…"
+    },
+    {
+      "id": "native.android.07d2609a561a43b0",
+      "source": "Send",
+      "translated": "Gửi"
     },
     {
       "id": "native.android.efc938b5cc23e079",
@@ -9289,11 +9424,6 @@
       "translated": "PROXY ĐIỆN THOẠI"
     },
     {
-      "id": "native.apple.8f741d09cc1d5495",
-      "source": "OpenClaw Activity",
-      "translated": "Hoạt động OpenClaw"
-    },
-    {
       "id": "native.apple.093081590556db7f",
       "source": "OPENCLAW",
       "translated": "OPENCLAW"
@@ -9367,11 +9497,6 @@
       "id": "native.apple.18d4f8a4eea7f930",
       "source": "Disconnected",
       "translated": "Đã ngắt kết nối"
-    },
-    {
-      "id": "native.apple.9168fcd110c3019a",
-      "source": "OpenClaw Share",
-      "translated": "OpenClaw Share"
     },
     {
       "id": "native.apple.382fd936eaf238f7",
