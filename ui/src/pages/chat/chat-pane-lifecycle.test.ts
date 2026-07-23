@@ -86,7 +86,7 @@ describe("chat pane session suggestion lifecycle", () => {
     expect(state.chatError).toContain("Remove attachments");
   });
 
-  it("retries a list invalidated by an event without hiding existing suggestions", async () => {
+  it("coalesces overlapping refreshes and applies the event-invalidated follow-up", async () => {
     const firstList = createDeferred<SessionSuggestionsListResult>();
     const secondList = createDeferred<SessionSuggestionsListResult>();
     const request = vi
@@ -133,15 +133,19 @@ describe("chat pane session suggestion lifecycle", () => {
     };
 
     const pending = pane.refreshSessionSuggestions();
+    const overlapping = pane.refreshSessionSuggestions();
+    expect(request).toHaveBeenCalledTimes(1);
     pane.handleSessionSuggestionEvent({ action: "added", suggestion: eventSuggestion });
-    firstList.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
-    await pending;
+    firstList.resolve({ suggestions: [existingSuggestion], role: "viewer" });
+    await Promise.all([pending, overlapping]);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     secondList.resolve({ suggestions: [existingSuggestion, eventSuggestion], role: "viewer" });
     await vi.waitFor(() =>
       expect(pane.sessionSuggestions).toEqual([existingSuggestion, eventSuggestion]),
     );
     expect(pane.sessionSuggestionRole).toBe("viewer");
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("preserves an author's resolved event while its role is still loading", () => {
@@ -170,6 +174,53 @@ describe("chat pane session suggestion lifecycle", () => {
       suggestion: { ...pending, state: "accepted" },
     });
     expect(pane.sessionSuggestions).toEqual([{ ...pending, state: "accepted" }]);
+  });
+
+  it("keeps an owner's self-authored resolved suggestion through the following list", async () => {
+    const listed = createDeferred<SessionSuggestionsListResult>();
+    const request = vi.fn(() => listed.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    pane.presencePayload = {
+      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    };
+    pane.context.gateway.snapshot.selfUser = { id: "owner" } as never;
+    state.sessionsResult = {
+      count: 1,
+      path: "",
+      sessions: [
+        {
+          key: state.sessionKey,
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "suggest",
+          sharingRole: "owner",
+        },
+      ],
+    } as never;
+    const pending: SessionSuggestion = {
+      id: "owner-suggestion",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "owner", label: "Owner" },
+      text: "my resolved suggestion",
+      createdAt: 1,
+      state: "pending",
+    };
+    const resolved = { ...pending, state: "accepted" as const };
+    pane.sessionSuggestionRole = "owner";
+    pane.sessionSuggestions = [pending];
+
+    pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
+    expect(pane.sessionSuggestions).toEqual([resolved]);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    listed.resolve({ suggestions: [resolved], role: "owner" });
+    await vi.waitFor(() => expect(pane.sessionSuggestions).toEqual([resolved]));
+    expect(pane.sessionSuggestionRole).toBe("owner");
   });
 
   it("does not apply an edit failure after switching sessions", async () => {

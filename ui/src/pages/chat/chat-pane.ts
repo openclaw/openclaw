@@ -672,6 +672,9 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionSuggestionRole: SessionSharingRole | undefined;
   private readonly sessionSuggestionBusyIds = new Set<string>();
   private sessionSuggestionsRequestVersion = 0;
+  private sessionSuggestionsRefreshPromise: Promise<void> | undefined;
+  private sessionSuggestionsRefreshVersion: number | undefined;
+  private sessionSuggestionsRefreshQueued = false;
   private sessionSuggestionTargetSignature = "";
   private sessionSuggestionAddOperation: symbol | undefined;
   private sessionSuggestionEditOperation: symbol | undefined;
@@ -787,6 +790,7 @@ class ChatPane extends OpenClawLightDomElement {
 
   private resetSessionSuggestions(): void {
     this.sessionSuggestionsRequestVersion += 1;
+    this.sessionSuggestionsRefreshQueued = false;
     this.sessionSuggestions = [];
     this.sessionSuggestionRole = undefined;
     this.sessionSuggestionBusyIds.clear();
@@ -794,8 +798,32 @@ class ChatPane extends OpenClawLightDomElement {
     this.sessionSuggestionEditOperation = undefined;
   }
 
-  private async refreshSessionSuggestions(): Promise<void> {
+  private refreshSessionSuggestions(): Promise<void> {
+    if (this.sessionSuggestionsRefreshPromise) {
+      if (this.sessionSuggestionsRefreshVersion !== this.sessionSuggestionsRequestVersion) {
+        this.sessionSuggestionsRefreshQueued = true;
+      }
+      return this.sessionSuggestionsRefreshPromise;
+    }
     const requestVersion = ++this.sessionSuggestionsRequestVersion;
+    this.sessionSuggestionsRefreshVersion = requestVersion;
+    const refresh = this.loadSessionSuggestions(requestVersion);
+    const tracked = refresh.finally(() => {
+      if (this.sessionSuggestionsRefreshPromise !== tracked) {
+        return;
+      }
+      this.sessionSuggestionsRefreshPromise = undefined;
+      this.sessionSuggestionsRefreshVersion = undefined;
+      if (this.sessionSuggestionsRefreshQueued) {
+        this.sessionSuggestionsRefreshQueued = false;
+        void this.refreshSessionSuggestions();
+      }
+    });
+    this.sessionSuggestionsRefreshPromise = tracked;
+    return tracked;
+  }
+
+  private async loadSessionSuggestions(requestVersion: number): Promise<void> {
     const scope = this.captureConnectionScope();
     const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
@@ -825,11 +853,6 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       if (requestVersion !== this.sessionSuggestionsRequestVersion) {
-        if (this.sessionSuggestionRole === undefined) {
-          this.sessionSuggestionRole = result.role;
-          this.requestUpdate();
-        }
-        void this.refreshSessionSuggestions();
         return;
       }
       this.sessionSuggestions = result.suggestions;
@@ -844,6 +867,11 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
+  private invalidateSessionSuggestionsRefresh(): void {
+    this.sessionSuggestionsRequestVersion += 1;
+    void this.refreshSessionSuggestions();
+  }
+
   private handleSessionSuggestionEvent(event: SessionSuggestionEvent): void {
     if (
       !this.hasMultipleIdentities() ||
@@ -851,6 +879,9 @@ class ChatPane extends OpenClawLightDomElement {
     ) {
       return;
     }
+    const shouldRefresh =
+      this.sessionSuggestionsRefreshPromise !== undefined ||
+      this.sessionSuggestionRole !== undefined;
     this.sessionSuggestionsRequestVersion += 1;
     const selfId = this.context.gateway.snapshot.selfUser?.id;
     if (this.sessionSuggestionRole === "viewer" && event.suggestion.author.id !== selfId) {
@@ -863,12 +894,7 @@ class ChatPane extends OpenClawLightDomElement {
       ].toSorted(
         (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
       );
-    } else if (
-      event.suggestion.author.id === selfId &&
-      this.sessionSuggestionRole !== "owner" &&
-      this.sessionSuggestionRole !== "admin" &&
-      this.sessionSuggestionRole !== "member"
-    ) {
+    } else if (event.suggestion.author.id === selfId) {
       this.sessionSuggestions = this.sessionSuggestions.map((item) =>
         item.id === event.suggestion.id ? event.suggestion : item,
       );
@@ -879,6 +905,9 @@ class ChatPane extends OpenClawLightDomElement {
     }
     this.sessionSuggestionBusyIds.delete(event.suggestion.id);
     this.requestUpdate();
+    if (shouldRefresh) {
+      void this.refreshSessionSuggestions();
+    }
   }
 
   private async addCurrentSessionSuggestion(): Promise<void> {
@@ -3067,7 +3096,7 @@ class ChatPane extends OpenClawLightDomElement {
       : "";
     if (suggestionTargetSignature !== this.sessionSuggestionTargetSignature) {
       this.sessionSuggestionTargetSignature = suggestionTargetSignature;
-      void this.refreshSessionSuggestions();
+      this.invalidateSessionSuggestionsRefresh();
     }
     if (selectedSessionDeleted) {
       const agentId =
