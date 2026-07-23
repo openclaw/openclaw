@@ -56,6 +56,23 @@ const OPENAI_COMPLETIONS_COMPAT_MATRIX = {
       sessionAffinityFormat: "openrouter",
     },
   },
+  // Only first-party OpenAI and Azure OpenAI chat completions honor prompt_cache_key.
+  // Other OpenAI-compatible proxies may reject the field, so it stays off by default.
+  openaiPublic: {
+    priority: 20,
+    baseUrlIncludes: ["api.openai.com"],
+    compat: { supportsPromptCacheKey: true },
+  },
+  azureOpenAI: {
+    priority: 20,
+    providers: ["azure-openai"],
+    baseUrlIncludes: [
+      ".openai.azure.com",
+      ".services.ai.azure.com",
+      ".cognitiveservices.azure.com",
+    ],
+    compat: { supportsPromptCacheKey: true },
+  },
   cerebras: {
     priority: 20,
     providers: ["cerebras"],
@@ -205,13 +222,55 @@ const SORTED_OPENAI_COMPLETIONS_COMPAT_RULES = Object.entries(
   [OpenAICompletionsCompatProfile, OpenAICompletionsCompatRule]
 >;
 
+function normalizeBaseUrlHostname(baseUrl: string): string | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    try {
+      return new URL(`https://${trimmed}`).hostname.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+function hostnameMatchesBaseUrlFragment(hostname: string, fragment: string): boolean {
+  const normalizedFragment = fragment.trim().toLowerCase();
+  if (!normalizedFragment) {
+    return false;
+  }
+  // Leading-dot fragments are host suffixes (e.g. ".openai.azure.com").
+  if (normalizedFragment.startsWith(".")) {
+    return hostname === normalizedFragment.slice(1) || hostname.endsWith(normalizedFragment);
+  }
+  // Trailing-dot fragments are host prefixes (e.g. "api.moonshot." → api.moonshot.ai/.cn).
+  if (normalizedFragment.endsWith(".")) {
+    return hostname.startsWith(normalizedFragment);
+  }
+  // Bare hostnames match exactly or as a dot-delimited suffix (e.g. "deepseek.com").
+  return hostname === normalizedFragment || hostname.endsWith(`.${normalizedFragment}`);
+}
+
 function matchesCompatRule(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl">,
   rule: OpenAICompletionsCompatRule,
 ): boolean {
-  return (
-    rule.providers?.includes(model.provider) === true ||
-    rule.baseUrlIncludes?.some((fragment) => model.baseUrl.includes(fragment)) === true
+  if (rule.providers?.includes(model.provider) === true) {
+    return true;
+  }
+  if (!rule.baseUrlIncludes) {
+    return false;
+  }
+  const hostname = normalizeBaseUrlHostname(model.baseUrl);
+  if (hostname === undefined) {
+    return false;
+  }
+  return rule.baseUrlIncludes.some((fragment) =>
+    hostnameMatchesBaseUrlFragment(hostname, fragment),
   );
 }
 
