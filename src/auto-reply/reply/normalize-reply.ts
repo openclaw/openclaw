@@ -10,6 +10,7 @@ import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithNewlineSeparatedSilentToken,
   startsWithSilentToken,
   stripLeadingSilentToken,
   stripSilentToken,
@@ -63,6 +64,17 @@ export function normalizeReplyPayload(
       return null;
     }
     text = "";
+  }
+  // Strip newline-separated leading NO_REPLY preambles (e.g.
+  // "NO_REPLY\n\nWait — the user"). The model emits the sentinel as a
+  // standalone line before the real reply body; the shared leading-token
+  // stripper removes repeated occurrences. (#103735)
+  if (text && startsWithNewlineSeparatedSilentToken(text, silentToken)) {
+    text = stripLeadingSilentToken(text, silentToken);
+    if (!hasContent(text)) {
+      opts.onSkip?.("silent");
+      return null;
+    }
   }
   // Strip NO_REPLY from mixed-content messages (e.g. "😄 NO_REPLY") so the
   // token never leaks to end users.  If stripping leaves nothing, treat it as

@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
+  startsWithNewlineSeparatedSilentToken,
   startsWithSilentToken,
   stripLeadingSilentToken,
   stripSilentToken,
@@ -147,6 +148,13 @@ function isWakeContinuationRun(runId: string): boolean {
 function stripAndClassifyReply(text: string): string | null {
   let result = text;
   let didStrip = false;
+  // Strip newline-separated leading NO_REPLY preamble before checking
+  // for glued-attached tokens; the shared leading-token stripper removes
+  // repeated occurrences. (#103735)
+  if (startsWithNewlineSeparatedSilentToken(result, SILENT_REPLY_TOKEN)) {
+    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
+    didStrip = true;
+  }
   const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
   if (hasLeadingSilentToken) {
     result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
