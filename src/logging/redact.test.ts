@@ -809,10 +809,12 @@ describe("redactSensitiveText", () => {
     const input = [
       `password = ${dbPassword}`,
       ["password", " = ", quoted(dbPassword, '"')].join(""),
+      ["password", "= ", quoted(dbPassword, '"')].join(""),
       ["password", "= ", dbPassword].join(""),
       `db_password = ${dbPassword}`,
       `database_password: ${databasePassword}`,
       ["api_secret", ": ", quoted(apiSecret, "'")].join(""),
+      ["api_secret", "= ", quoted(apiSecret, "'")].join(""),
       `db_password=${dbPassword}`,
       `api_secret: ${apiSecret}`,
       `api_secret=${apiSecret}`,
@@ -837,10 +839,12 @@ describe("redactSensitiveText", () => {
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toContain("password = db-pas…7890");
     expect(output).toContain('password = "db-pas…7890"');
+    expect(output).toContain('password= "db-pas…7890"');
     expect(output).toContain("password= db-pas…7890");
     expect(output).toContain("db_password = db-pas…7890");
     expect(output).toContain("database_password: databa…7890");
     expect(output).toContain("api_secret: 'api-se…7890'");
+    expect(output).toContain("api_secret= 'api-se…7890'");
     expect(output).toContain("db_password=db-pas…7890");
     expect(output).toContain("api_secret: api-se…7890");
     expect(output).toContain("api_secret=api-se…7890");
