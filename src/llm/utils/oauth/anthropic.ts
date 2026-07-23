@@ -250,7 +250,7 @@ async function postJson(
   const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
     onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
   });
-  const responseBody = new TextDecoder().decode(buffer);
+  const responseBody = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 
   if (!response.ok) {
     throw new Error(

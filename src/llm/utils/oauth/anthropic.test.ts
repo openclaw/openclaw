@@ -85,6 +85,22 @@ describe("Anthropic OAuth token responses", () => {
     }
   });
 
+  it("rejects a token refresh response with invalid UTF-8 bytes", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"access_token":"sk-ant-'),
+      0xff,
+      ...new TextEncoder().encode('","refresh_token":"rt-ok","expires_in":3600}'),
+    ]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 200 })),
+    );
+
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow(
+      "Anthropic token refresh request failed.",
+    );
+  });
+
   it("rejects unsafe token lifetimes from refresh responses", async () => {
     vi.stubGlobal(
       "fetch",
