@@ -20,7 +20,10 @@ import {
 } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelAccountStatus } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelAccountSnapshotInput,
+  ChannelAccountStatus,
+} from "../../channels/plugins/types.public.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -221,7 +224,7 @@ function resolveRuntimeAccountSnapshot(params: {
   runtime: ChannelRuntimeSnapshot;
   channelId: ChannelId;
   accountId: string;
-}): ChannelAccountStatus | undefined {
+}): ChannelAccountSnapshotInput | undefined {
   const accounts = params.runtime.channelAccounts[params.channelId];
   const direct = accounts?.[params.accountId];
   if (direct) {
@@ -378,7 +381,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelId: ChannelId,
       accountId: string,
       defaultAccountId: string,
-    ): ChannelAccountStatus | undefined => {
+    ): ChannelAccountSnapshotInput | undefined => {
       const accounts = runtime.channelAccounts[channelId];
       const defaultRuntimeLocal = runtime.channels[channelId];
       const raw =

@@ -146,8 +146,6 @@ import {
   TalkSpeakResultSchema,
   TtsSpeakParamsSchema,
   TtsSpeakResultSchema,
-  type ChannelAccountSnapshot,
-  type ChannelUiMeta,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   CommandsListParamsSchema,
