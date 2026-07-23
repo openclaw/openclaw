@@ -1,5 +1,5 @@
 // Control UI tests cover chat responsive behavior.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
@@ -41,7 +41,9 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   : describe.skip;
 
 let sharedBrowser: Browser | null = null;
+let sharedStaticContext: BrowserContext | null = null;
 let realChatServer: ControlUiE2eServer | null = null;
+let cachedUiCss: string | null = null;
 
 type ControlRect = {
   x: number;
@@ -87,6 +89,9 @@ function expectControlRect(rect: ControlRect | null, label: string): ControlRect
 }
 
 function readUiCss(): string {
+  if (cachedUiCss !== null) {
+    return cachedUiCss;
+  }
   const files = [
     "ui/src/styles/base.css",
     "ui/src/styles/layout.css",
@@ -99,7 +104,8 @@ function readUiCss(): string {
     "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
   ];
-  return files.map((file) => readStyleSheet(file)).join("\n");
+  cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
+  return cachedUiCss;
 }
 
 function iconSvg() {
@@ -430,7 +436,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
 }
 
 async function openFixture(width: number, height: number, opts: ChatFixtureOptions = {}) {
-  const page = await openBrowserPage(width, height);
+  const page = await openStaticPage(width, height);
   try {
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts, width <= 1100)}</body></html>`,
@@ -448,6 +454,17 @@ async function openBrowserPage(width: number, height: number): Promise<Page> {
     headless: true,
   });
   return await sharedBrowser.newPage({ viewport: { width, height } });
+}
+
+async function openStaticPage(width: number, height: number): Promise<Page> {
+  if (!sharedStaticContext) {
+    throw new Error("Expected the static fixture browser context to be ready");
+  }
+  // Static setContent fixtures carry no storage. Share their context so each
+  // concurrent case keeps an isolated DOM without paying for a new context.
+  const page = await sharedStaticContext.newPage();
+  await page.setViewportSize({ width, height });
+  return page;
 }
 
 async function closeBrowserPage(page: Page): Promise<void> {
@@ -513,7 +530,7 @@ function rectsOverlap(
 }
 
 async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
-  const page = await openBrowserPage(width, height);
+  const page = await openStaticPage(width, height);
   try {
     await page.setContent(
       `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
@@ -541,12 +558,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       executablePath: chromiumExecutablePath,
       headless: true,
     });
+    sharedStaticContext = await sharedBrowser.newContext();
     realChatServer = await startControlUiE2eServer();
   });
 
   afterAll(async () => {
     await realChatServer?.close();
     realChatServer = null;
+    await sharedStaticContext?.close();
+    sharedStaticContext = null;
     await sharedBrowser?.close();
     sharedBrowser = null;
   });
@@ -613,7 +633,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [430, 720],
     [1366, 900],
   ] as const)("right-aligns activity rows with call bubbles at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
+    const page = await openStaticPage(width, height);
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
@@ -1325,7 +1345,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   ] as const)(
     "keeps short assistant footer actions below the bubble at %sx%s",
     async (width, height) => {
-      const page = await openBrowserPage(width, height);
+      const page = await openStaticPage(width, height);
       try {
         await page.setContent(
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -1365,7 +1385,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [320, 568],
     [1366, 900],
   ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
+    const page = await openStaticPage(width, height);
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -1485,7 +1505,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it("aligns the reasoning default action with the reasoning heading", async () => {
-    const page = await openBrowserPage(520, 600);
+    const page = await openStaticPage(520, 600);
     try {
       await page.setContent(`
         <!doctype html>
@@ -1805,7 +1825,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   );
 
   it("stacks the detail sidebar below the thread in a narrow pane", async () => {
-    const page = await openBrowserPage(900, 700);
+    const page = await openStaticPage(900, 700);
     try {
       // A 620px pane inside a wide viewport: chat-pane sets the stacked class
       // when the pane cannot fit chat + detail panel side by side.
@@ -1897,7 +1917,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it("docks the tasks rail as a full-width bottom strip in a narrow pane", async () => {
-    const page = await openBrowserPage(1200, 700);
+    const page = await openStaticPage(1200, 700);
     try {
       // chat-pane sets --tasks-dock-bottom instead of --tasks-open when the
       // pane is too narrow for a side column; the strip spans the pane and
@@ -1960,7 +1980,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it("keeps the bottom-docked rail path and summary rows unclipped", async () => {
-    const page = await openBrowserPage(760, 700);
+    const page = await openStaticPage(760, 700);
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
