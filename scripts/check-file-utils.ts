@@ -14,6 +14,9 @@ export const REPO_SCAN_SKIPPED_DIR_NAMES: ReadonlySet<string> = new Set([
   "node_modules",
   "vendor",
 ]);
+// Bounds the git ls-files subprocess so a stalled git process (e.g. on a
+// network-mounted filesystem or a corrupt index) cannot hang file scans.
+const GIT_LS_FILES_TIMEOUT_MS = 30_000;
 
 export function isCodeFile(filePath: string): boolean {
   if (filePath.endsWith(".d.ts")) {
@@ -89,6 +92,8 @@ export function listRepoFilesSync(
     return execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_LS_FILES_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     })
       .split(/\r?\n/u)
       .filter(Boolean)
