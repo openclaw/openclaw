@@ -22,10 +22,12 @@ const confirmationOwners = new Set<HTMLElement>();
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 describe("chat pane session suggestion lifecycle", () => {
@@ -152,6 +154,38 @@ describe("chat pane session suggestion lifecycle", () => {
       suggestion: { ...pending, state: "accepted" },
     });
     expect(pane.sessionSuggestions).toEqual([{ ...pending, state: "accepted" }]);
+  });
+
+  it("does not apply an edit failure after switching sessions", async () => {
+    const deferred = createDeferred<never>();
+    const client = {
+      request: vi.fn(() => deferred.promise),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: {} as SessionCapability,
+    });
+    const suggestion: SessionSuggestion = {
+      id: "edit",
+      sessionKey: state.sessionKey,
+      agentId: "main",
+      author: { type: "human", id: "alice", label: "Alice" },
+      text: "suggested text",
+      createdAt: 1,
+      state: "pending",
+    };
+    state.handleChatDraftChange = (next) => {
+      state.chatMessage = next;
+    };
+    state.chatMessage = "original";
+    const pending = pane.resolveCurrentSessionSuggestion(suggestion, "edit");
+    state.sessionKey = "agent:main:next";
+    state.chatMessage = "new session draft";
+    deferred.reject(new Error("old request failed"));
+
+    await pending;
+    expect(state.chatMessage).toBe("new session draft");
+    expect(state.chatError).not.toBe("old request failed");
   });
 });
 

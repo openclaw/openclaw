@@ -190,8 +190,12 @@ describe("session suggestion handlers", () => {
             }),
             client: expect.objectContaining({
               authenticatedUserProfile: expect.objectContaining({
-                profileId: "alice",
-                displayName: "Suggested by Alice",
+                profileId: "owner",
+                displayName: "Owner",
+              }),
+              internal: expect.objectContaining({
+                syntheticClient: true,
+                senderAttribution: { id: "alice", name: "Suggested by Alice" },
               }),
             }),
           }),
@@ -306,7 +310,7 @@ describe("session suggestion handlers", () => {
         client("alice", "Alice"),
         requestContext,
       );
-      expect(earlyRestart.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
+      expect(earlyRestart.responses[0]?.[1]).toEqual({ ok: true, broadcast: true });
 
       mocks.presence = [
         { user: { id: "owner" }, watchedSessions: [sessionKey] },

@@ -49,6 +49,10 @@ export type TestChatPane = HTMLElement & {
   sessionSuggestionsRequestVersion: number;
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   refreshSessionSuggestions: () => Promise<void>;
+  resolveCurrentSessionSuggestion: (
+    suggestion: SessionSuggestion,
+    resolution: "send" | "queue" | "edit" | "dismiss",
+  ) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;

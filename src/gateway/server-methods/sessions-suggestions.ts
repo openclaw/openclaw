@@ -133,16 +133,13 @@ function attributedSuggestionClient(
   const label = suggestion.authorLabel ?? suggestion.authorId;
   return {
     ...client,
-    authenticatedUserId: suggestion.authorId,
-    authenticatedUserProfile: {
-      profileId: suggestion.authorId,
-      displayName: `Suggested by ${label}`,
-      hasAvatar: false,
-      updatedAt: suggestion.createdAt,
-    },
-    connect: {
-      ...client.connect,
-      scopes: client.connect.scopes?.filter((scope) => scope !== "operator.admin"),
+    internal: {
+      ...client.internal,
+      syntheticClient: true,
+      senderAttribution: {
+        id: suggestion.authorId,
+        name: `Suggested by ${label}`,
+      },
     },
   };
 }
@@ -193,9 +190,9 @@ function liveViewerIdentities(sessionKeys: ReadonlySet<string>): Set<string> {
 
 function shouldBroadcastTyping(key: string, typing: boolean, now: number): boolean {
   const previous = typingBroadcastState.get(key);
-  if (!typing && previous?.typing) {
+  if (previous && previous.typing !== typing) {
     typingBroadcastState.delete(key);
-    typingBroadcastState.set(key, { at: now, typing: false });
+    typingBroadcastState.set(key, { at: now, typing });
     return true;
   }
   if (previous && now - previous.at < TYPING_THROTTLE_MS) {

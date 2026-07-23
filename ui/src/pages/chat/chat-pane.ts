@@ -966,7 +966,7 @@ class ChatPane extends OpenClawLightDomElement {
       }
       this.sessionSuggestions = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
     } catch (error) {
-      if (this.isConnectionScopeCurrent(scope)) {
+      if (this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
         if (
           resolution === "edit" &&
           previousEditDraft !== undefined &&
