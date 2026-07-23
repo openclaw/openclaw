@@ -66,11 +66,12 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
 describe("createPersistCronSessionEntry", () => {
   it("commits a pending reset boundary with the guarded session row", async () => {
     resetBoundaryMocks.clearBootstrap.mockClear();
-    const existingEntry = makeSessionEntry({ lifecycleRevision: "revision-1" });
+    const lifecycleRevision = "00000000-0000-4000-8000-000000000001";
+    const existingEntry = makeSessionEntry({ lifecycleRevision });
     const cronSession = {
       ...makeCronSession(existingEntry),
       initialSessionEntry: existingEntry,
-      lifecycleRevision: "revision-1",
+      lifecycleRevision,
       resetBoundaryPending: {
         reason: "cron-stale" as const,
         sessionFile: "sqlite:main:run-session-id:/tmp/sessions.json",
