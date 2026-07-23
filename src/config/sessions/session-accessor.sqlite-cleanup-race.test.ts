@@ -9,6 +9,7 @@ import {
 import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -161,5 +162,56 @@ describe("SQLite lifecycle cleanup races", () => {
         .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
         .get(sessionKey),
     ).toEqual({ current_session_id: "unplanned-historical-session", entry_json: "{}" });
+  });
+
+  it("rehomes a window retained through a surviving previousSessionId reference", async () => {
+    const retainedSessionId = "retained-previous-session";
+    const survivorKey = "agent:main:window-survivor";
+    const now = Date.now();
+    const retainedEvent = {
+      type: "session",
+      id: retainedSessionId,
+      content: "retained previous transcript",
+    } as const;
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:window-owner", storePath },
+      { sessionId: retainedSessionId, updatedAt: now },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: "agent:main:window-owner", sessionId: retainedSessionId, storePath },
+      [retainedEvent],
+    );
+    await replaceSessionEntry(
+      { sessionKey: survivorKey, storePath },
+      {
+        previousSessionId: retainedSessionId,
+        sessionId: "current-survivor-session",
+        updatedAt: now + 1,
+      },
+    );
+
+    const deleted = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:window-owner",
+        storeKeys: ["agent:main:window-owner"],
+      },
+    });
+
+    expect(deleted.deleted).toBe(true);
+    expect(deleted.archivedTranscripts).toEqual([]);
+    await expect(
+      loadTranscriptEvents({ sessionKey: survivorKey, sessionId: retainedSessionId, storePath }),
+    ).resolves.toEqual([retainedEvent]);
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    expect(
+      database.db
+        .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+        .get(retainedSessionId),
+    ).toEqual({ session_key: survivorKey });
   });
 });
