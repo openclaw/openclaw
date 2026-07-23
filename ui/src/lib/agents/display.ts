@@ -260,12 +260,12 @@ export function resolveToolProfileOptions(
   toolsCatalogResult: ToolsCatalogResult | null,
 ): readonly ToolCatalogProfile[] | ReadonlyArray<{ id: string; label: string }> {
   if (toolsCatalogResult?.profiles?.length) {
-    return toolsCatalogResult.profiles;
+    return toolsCatalogResult.profiles.map((profile) => {
+      const labelKey = PROFILE_OPTIONS.find((option) => option.id === profile.id)?.labelKey;
+      return labelKey ? { ...profile, label: t(labelKey) } : profile;
+    });
   }
-  return PROFILE_OPTIONS.map((profile) => ({
-    id: profile.id,
-    label: t(profile.labelKey),
-  }));
+  return PROFILE_OPTIONS.map((option) => ({ id: option.id, label: t(option.labelKey) }));
 }
 
 type ToolPolicy = {
