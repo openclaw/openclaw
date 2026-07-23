@@ -13,7 +13,8 @@ import {
   updateQueuedMessage,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
-import type { ChatHost, ChatSendAck } from "./chat-send-contract.ts";
+import type { ChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import {
   canSendVolatileQueueItem,
   reconnectSafeQueuedSendState,

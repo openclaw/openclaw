@@ -27,8 +27,9 @@ import {
   updateQueuedMessage,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import { sendChatMessageWithGeneratedRunId, steerSendDependencies } from "./chat-send-actions.ts";
-import { isTerminalFailureChatSendAck, type ChatHost } from "./chat-send-contract.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import {
   canSendVolatileQueueItem,
   enqueuePendingSendMessage,

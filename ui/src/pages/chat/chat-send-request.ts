@@ -7,7 +7,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import type { ChatState } from "./chat-history.ts";
-import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-contract.ts";
+import { normalizeChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 
 export async function requestChatSend(
   state: ChatState,

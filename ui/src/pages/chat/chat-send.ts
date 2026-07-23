@@ -30,7 +30,8 @@ import {
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
-import { type ChatHost, isTerminalFailureChatSendAck } from "./chat-send-contract.ts";
+import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import {
   enqueuePendingSendMessage,
   finishScopedChatSending,
