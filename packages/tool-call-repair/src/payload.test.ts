@@ -187,4 +187,51 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(stripPlainTextToolCallBlocks(tracked.text)).toBe(raw);
     expect(tracked.indexedReads).toBeLessThan(raw.length * 16);
   });
+
+  it("preserves JSON tool-call examples embedded in ordinary prose", () => {
+    const raw = [
+      "Here is the expected format:",
+      '{"name":"read","arguments":{"path":"/tmp"}}',
+      "Copy this template, replacing the path with your file.",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("strips a standalone JSON tool-call object", () => {
+    const raw = '{"name":"read","arguments":{"path":"/tmp"}}';
+
+    const result = stripPlainTextToolCallBlocks(raw);
+
+    expect(result.trim()).toBe("");
+  });
+
+  it("strips multiple adjacent standalone JSON tool-call objects", () => {
+    const raw = [
+      '{"name":"read","arguments":{"path":"/tmp"}}',
+      '{"name":"write","arguments":{"path":"/out","content":"hello"}}',
+    ].join("\n");
+
+    const result = stripPlainTextToolCallBlocks(raw);
+
+    expect(result.trim()).toBe("");
+  });
+
+  it("preserves a JSON object without tool-call shape in prose", () => {
+    // {"status":"ok"} has no name + arguments pair, so it is not a tool call.
+    const raw = 'Extraction complete: {"status":"ok","count":42}';
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves JSON examples even when one line is a standalone call", () => {
+    // The first line is a JSON tool-call object; the second line is prose.
+    // The mixed prose gate prevents JSON stripping for the entire block.
+    const raw = [
+      '{"name":"read","arguments":{"path":"/tmp"}}',
+      "Then the tool returns the file contents.",
+    ].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
 });

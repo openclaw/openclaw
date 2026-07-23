@@ -14,6 +14,13 @@ import {
   type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
+import {
+  DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
+  parseJsonToolCallBlocksAt,
+  parseJsonToolCallBlockEndAt,
+  scanJsonObject,
+  shouldStripJsonBlocks,
+} from "./json-tool-call.js";
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
 export type PlainTextToolCallBlock = {
@@ -42,7 +49,6 @@ type NormalizedPlainTextToolCallParseOptions = Omit<
   "allowedToolNames"
 > & { allowedToolNames?: ReadonlySet<string> };
 
-const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const MAX_PLAIN_TEXT_TOOL_NAME_CHARS = 120;
 const HARMONY_CHANNELS = ["commentary", "analysis", "final"] as const;
 
@@ -268,47 +274,6 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
     return { kind: "invalid", at: cursor, candidate: value };
   }
   return { kind: "complete", cursor, value };
-}
-
-function scanJsonObject(
-  text: string,
-  start: number,
-): {
-  end: number;
-  kind: "complete" | "prefix";
-  state: PlainTextJsonToolCallState;
-} {
-  let depth = 0;
-  let escaped = false;
-  let inString = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return {
-          kind: "complete",
-          end: index + 1,
-          state: { depth, escaped, inString },
-        };
-      }
-    }
-  }
-  return { kind: "prefix", end: text.length, state: { depth, escaped, inString } };
 }
 
 /** Uncapped structural scan shared by parsing, stripping, and stream buffering. */
@@ -665,6 +630,16 @@ export function parseStandalonePlainTextToolCallBlocks(
   const normalizedOptions = normalizeParseOptions(options);
   let cursor = skipWhitespace(text, 0);
   while (cursor < text.length) {
+    // Try JSON parser first — a single JSON object may produce multiple blocks
+    // for OpenAI-style tool_calls wrappers with more than one entry.
+    const jsonBlocks = parseJsonToolCallBlocksAt(text, cursor, options);
+    if (jsonBlocks) {
+      for (const block of jsonBlocks) {
+        blocks.push(block);
+      }
+      cursor = skipWhitespace(text, jsonBlocks[0]!.end);
+      continue;
+    }
     const block = parsePlainTextToolCallBlockAtAnySyntax(
       text,
       cursor,
@@ -688,10 +663,18 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(
         text,
       ) &&
-      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text))
+      !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text) &&
+      !/[{]/.test(text))
   ) {
     return text;
   }
+  // Pre-scan: only strip JSON tool-call objects when every non-blank line
+  // is a JSON tool-call block. When a line-start JSON object like
+  // {"name":"read","arguments":{"path":"/tmp"}} sits next to ordinary
+  // prose, it is a user-visible example and must be preserved.
+  // Bracket / XML / Harmony blocks are not gated because their syntax is
+  // unambiguous tool-call markup that users do not naturally type.
+  const stripJson = shouldStripJsonBlocks(text);
   let result = "";
   let cursor = 0;
   let index = 0;
@@ -702,6 +685,20 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       continue;
     }
     const blockStart = skipLineIndentation(text, index);
+    // Try standalone JSON first — validates tool-call shape so ordinary JSON
+    // prose like {"name":"read","status":"ok"} survives the strip.
+    // Gated by the pre-scan so JSON examples in ordinary prose are preserved.
+    const jsonBlockEnd = stripJson ? parseJsonToolCallBlockEndAt(text, blockStart) : null;
+    if (jsonBlockEnd !== null) {
+      result += text.slice(cursor, index);
+      cursor = jsonBlockEnd;
+      const afterBlockLineBreak = consumeLineBreak(text, cursor);
+      if (afterBlockLineBreak !== null) {
+        cursor = afterBlockLineBreak;
+      }
+      index = cursor;
+      continue;
+    }
     const scan = scanPlainTextToolCall(text, blockStart);
     if (scan.kind === "prefix" && scan.completeEnd === undefined) {
       return result + text.slice(cursor);

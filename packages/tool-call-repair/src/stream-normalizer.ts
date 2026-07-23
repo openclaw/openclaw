@@ -12,6 +12,11 @@ import {
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
 import {
+  createSyntheticTextDelta,
+  eventTemplate,
+  tryClassifyJsonBuffer,
+} from "./json-tool-call.js";
+import {
   scanPlainTextToolCall,
   type PlainTextToolCallNameMatcher,
   type PlainTextToolCallScan,
@@ -435,6 +440,9 @@ function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    if (text[start] === "{") {
+      return index;
+    } // Bare JSON: bracket/XML/Harmony don't match `{`
     const scan = scanPlainTextToolCall(text, start, {
       matcher,
       maxPayloadBytes: MAX_PAYLOAD_BYTES,
@@ -452,28 +460,6 @@ function nextAtLineStart(previous: boolean, text: string): boolean {
     return previous;
   }
   return text.endsWith("\n") || text.endsWith("\r");
-}
-
-function eventTemplate(event: Record<string, unknown>): Record<string, unknown> {
-  const template = { ...event };
-  delete template.content;
-  delete template.delta;
-  delete template.partial;
-  return template;
-}
-
-function createSyntheticTextDelta(
-  template: Record<string, unknown>,
-  text: string,
-  partial?: Record<string, unknown>,
-): Record<string, unknown> {
-  const event = eventTemplate(template);
-  return {
-    ...event,
-    type: "text_delta",
-    delta: text,
-    ...(partial ? { partial } : {}),
-  };
 }
 
 function cappedUtf8ByteLength(text: string): number {
@@ -760,6 +746,10 @@ function classifyPending(
 ): PendingClassification {
   const candidate = { text: pending.buffer, parts: pending.parts };
   const view = createCandidateScanView(candidate);
+  const jsonClass = tryClassifyJsonBuffer(view.text, pending.bufferBytes, MAX_PAYLOAD_BYTES); // Bare JSON
+  if (jsonClass) {
+    return jsonClass;
+  }
   const terminalScan = scanPlainTextToolCall(view.text, skipLineIndentation(view.text, 0), {
     matcher,
     maxPayloadBytes: MAX_PAYLOAD_BYTES,

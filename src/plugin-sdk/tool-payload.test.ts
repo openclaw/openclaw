@@ -515,4 +515,163 @@ describe("stripPlainTextToolCallBlocks", () => {
       "before\nafter",
     );
   });
+
+  describe("standalone JSON tool-call blocks", () => {
+    it("parses flat JSON with name + arguments", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"read","arguments":{"path":"/tmp"}}',
+      );
+      expect(blocks).toHaveLength(1);
+      expect(blocks![0]!.name).toBe("read");
+      expect(blocks![0]!.arguments).toEqual({ path: "/tmp" });
+    });
+
+    it("parses flat JSON with name + args", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"get_weather","args":{"city":"Beijing"}}',
+      );
+      expect(blocks).toHaveLength(1);
+      expect(blocks![0]!.name).toBe("get_weather");
+    });
+
+    it("parses flat JSON with name + input", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"search","input":{"query":"hello"}}',
+      );
+      expect(blocks).toHaveLength(1);
+    });
+
+    it("rejects name-only JSON without arguments — regression guard", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks('{"name":"read","status":"ok"}');
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects name-only JSON without tool-call type", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"search","description":"finding things"}',
+      );
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects plain JSON object without tool name", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks('{"city":"Beijing","temp":25}');
+      expect(blocks).toBeNull();
+    });
+
+    it("parses tool_calls wrapper with multiple entries", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"a"}}},{"function":{"name":"write","arguments":{"path":"b"}}}]}',
+      );
+      expect(blocks).toHaveLength(2);
+      expect(blocks![0]!.name).toBe("read");
+      expect(blocks![1]!.name).toBe("write");
+    });
+
+    it("parses toolCalls camelCase variant", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"toolCalls":[{"function":{"name":"read","arguments":{"path":"/tmp"}}}]}',
+      );
+      expect(blocks).toHaveLength(1);
+    });
+
+    it("parses function wrapper format", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"function":{"name":"read","arguments":{"path":"/tmp"}}}',
+      );
+      expect(blocks).toHaveLength(1);
+      expect(blocks![0]!.name).toBe("read");
+    });
+
+    it("parses JSON with explicit type: tool_call", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"read","type":"tool_call","arguments":{"path":"/tmp"}}',
+      );
+      expect(blocks).toHaveLength(1);
+    });
+
+    it("parses JSON with string-encoded arguments", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"read","arguments":"{\\"path\\":\\"/tmp\\"}"}',
+      );
+      expect(blocks).toHaveLength(1);
+      expect(blocks![0]!.arguments).toEqual({ path: "/tmp" });
+    });
+
+    it("strips standalone JSON tool-call blocks from visible text", () => {
+      // Pure standalone JSON (no prose on any line) — stripped.
+      const result = stripPlainTextToolCallBlocks('{"name":"read","arguments":{"path":"/tmp"}}');
+      expect(result.trim()).toBe("");
+    });
+
+    it("preserves JSON tool-call when mixed with visible prose", () => {
+      // When prose appears on another line, the pre-scan gate disables
+      // JSON stripping to avoid mangling user-visible examples.
+      const raw = '{"name":"read","arguments":{"path":"/tmp"}}\nafter';
+      const result = stripPlainTextToolCallBlocks(raw);
+      expect(result).toBe(raw);
+    });
+
+    it("preserves name-only JSON in visible text", () => {
+      const result = stripPlainTextToolCallBlocks('{"name":"read","status":"ok"}\nafter');
+      expect(result).toBe('{"name":"read","status":"ok"}\nafter');
+    });
+
+    // --- Atomic multi-call wrapper parsing ---
+    it("rejects tool_calls wrapper with a malformed entry (non-object)", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"a"}}},null]}',
+      );
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects tool_calls wrapper with an entry missing arguments", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"a"}}},{"function":{"name":"write"}}]}',
+      );
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects tool_calls wrapper where one entry has name but no args", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"a"}}},{"name":"write"}]}',
+      );
+      expect(blocks).toBeNull();
+    });
+
+    it("promotes tool_calls wrapper when all entries are valid", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"tool_calls":[{"function":{"name":"read","arguments":{"path":"a"}}},{"function":{"name":"write","arguments":{"path":"b"}}}]}',
+      );
+      expect(blocks).toHaveLength(2);
+      expect(blocks![0]!.name).toBe("read");
+      expect(blocks![1]!.name).toBe("write");
+    });
+
+    // --- Non-record argument rejection ---
+    it("rejects string-encoded non-object JSON arguments", () => {
+      // JSON array is not a record — must not be coerced into an executable argument object.
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"read","arguments":"[1,2,3]"}',
+      );
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects plain-string (non-JSON) arguments", () => {
+      // "not json" is not valid JSON — must not be coerced to { _value: "not json" }.
+      const blocks = parseStandalonePlainTextToolCallBlocks(
+        '{"name":"read","arguments":"not json"}',
+      );
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects array-typed arguments", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks('{"name":"read","arguments":[1,2,3]}');
+      expect(blocks).toBeNull();
+    });
+
+    it("rejects number-typed arguments", () => {
+      const blocks = parseStandalonePlainTextToolCallBlocks('{"name":"read","arguments":42}');
+      expect(blocks).toBeNull();
+    });
+  });
 });

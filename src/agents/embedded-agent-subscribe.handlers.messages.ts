@@ -43,6 +43,7 @@ import {
   promoteThinkingTagsToBlocks,
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
+import { extractStandaloneMessageToolText, isMessageToolEnvelope } from "./message-tool-helpers.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import {
   hasNonzeroUsage,
@@ -158,39 +159,6 @@ export function resetPendingAssistantUsage(
   }
   ctx.state.pendingAssistantUsage = undefined;
   ctx.state.assistantUsageCommitted = false;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function extractStandaloneMessageToolText(
-  text: string,
-  params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
-): string | undefined {
-  try {
-    const record = asRecord(JSON.parse(text.trim()) as unknown);
-    const args = asRecord(record?.arguments);
-    const hasRoute = Boolean(
-      normalizeOptionalString(args?.target) ||
-      normalizeOptionalString(args?.to) ||
-      normalizeOptionalString(args?.channel) ||
-      normalizeOptionalString(args?.accountId) ||
-      Array.isArray(args?.targets),
-    );
-    if (
-      normalizeOptionalString(record?.name) !== "message" ||
-      normalizeOptionalString(args?.action) !== "send" ||
-      (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
-    ) {
-      return undefined;
-    }
-    return normalizeOptionalString(args?.message);
-  } catch {
-    return undefined;
-  }
 }
 
 function resolveAssistantStreamItemId(params: {
@@ -1219,6 +1187,25 @@ export function handleMessageEnd(
   }
   promoteThinkingTagsToBlocks(assistantMessage);
 
+  // Raw content text extracted before tool-call stripping so message-tool
+  // JSON envelopes survive for standalone extraction. sanitizeUserFacingText
+  // would otherwise strip {"name":"message","arguments":{...}} as a JSON
+  // tool-call block before extractStandaloneMessageToolText can unwrap the
+  // visible reply text (#99251).
+  const rawContentText = Array.isArray(assistantMessage.content)
+    ? assistantMessage.content
+        .filter(
+          (b): b is { type: "text"; text: string } =>
+            typeof b === "object" &&
+            b !== null &&
+            (b as unknown as Record<string, unknown>).type === "text" &&
+            typeof (b as unknown as Record<string, unknown>).text === "string",
+        )
+        .map((b) => b.text)
+        .join("\n")
+        .trim()
+    : "";
+
   const rawText = coerceChatContentText(extractAssistantText(assistantMessage));
   const rawVisibleText = coerceChatContentText(extractAssistantVisibleText(assistantMessage));
   appendRawStream({
@@ -1231,12 +1218,18 @@ export function handleMessageEnd(
   });
   warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const visibleText =
-    extractStandaloneMessageToolText(rawVisibleText, {
+    extractStandaloneMessageToolText(rawContentText, {
       allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
       allowCurrentSourceReply:
         ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
         ctx.builtinToolNames?.has("message") === true,
-    }) ?? rawVisibleText;
+    }) ??
+    // When the raw content is a message-tool JSON envelope that should not
+    // be unwrapped (e.g. routed reply without allowRoutedReply), keep the
+    // raw envelope so handleMessageEnd delivers it. rawVisibleText is empty
+    // because sanitizeUserFacingText already stripped it as a tool-call block.
+    (isMessageToolEnvelope(rawContentText) ? rawContentText : undefined) ??
+    rawVisibleText;
   const finalVisibleText = ctx.params.enforceFinalTag
     ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
     : visibleText;
