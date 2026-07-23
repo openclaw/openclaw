@@ -86,6 +86,7 @@ import {
   type QmdRuntimeMultiCollectionProbeCacheContext,
 } from "./qmd-runtime-cache.js";
 import { QmdSessionExporter, resolveQmdSessionExporterConfig } from "./qmd-session-exporter.js";
+import { parseQmdSnippet, type ParsedQmdSnippet } from "./qmd-snippet.js";
 import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineControlOptions,
@@ -108,7 +109,6 @@ type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
 const log = createSubsystemLogger("memory");
 
-const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -915,8 +915,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!doc) {
         continue;
       }
-      const snippet = truncateUtf16Safe(entry.snippet ?? "", this.qmd.limits.maxSnippetChars);
-      const lines = this.resolveSnippetLines(entry, snippet);
+      const parsedSnippet = parseQmdSnippet(entry.snippet ?? "");
+      const lines = this.resolveSnippetLines(entry, parsedSnippet);
+      const snippet = truncateUtf16Safe(parsedSnippet.snippet, this.qmd.limits.maxSnippetChars);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
       if (score < minScore) {
@@ -1845,11 +1846,14 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private resolveSnippetLines(
     entry: QmdQueryResult,
-    snippet: string,
+    parsedSnippet: ParsedQmdSnippet,
   ): { startLine: number; endLine: number } {
     const explicitStart = this.normalizeSnippetLine(entry.startLine);
     const explicitEnd = this.normalizeSnippetLine(entry.endLine);
-    const headerLines = this.parseSnippetHeaderLines(snippet);
+    const headerLines =
+      parsedSnippet.startLine !== undefined && parsedSnippet.endLine !== undefined
+        ? { startLine: parsedSnippet.startLine, endLine: parsedSnippet.endLine }
+        : null;
     if (explicitStart !== undefined && explicitEnd !== undefined) {
       return explicitStart <= explicitEnd
         ? { startLine: explicitStart, endLine: explicitEnd }
@@ -1878,24 +1882,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (headerLines) {
       return headerLines;
     }
-    return { startLine: 1, endLine: snippet.split("\n").length };
+    return { startLine: 1, endLine: parsedSnippet.snippet.split("\n").length };
   }
 
   private normalizeSnippetLine(value: unknown): number | undefined {
     return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-  }
-
-  private parseSnippetHeaderLines(snippet: string): { startLine: number; endLine: number } | null {
-    const match = SNIPPET_HEADER_RE.exec(snippet);
-    if (!match) {
-      return null;
-    }
-    const start = Number(match[1]);
-    const count = Number(match[2]);
-    if (Number.isFinite(start) && Number.isFinite(count)) {
-      return { startLine: start, endLine: start + count - 1 };
-    }
-    return null;
   }
 
   private readCounts(): {
