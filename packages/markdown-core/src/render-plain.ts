@@ -12,7 +12,11 @@ export function renderMarkdownAsPlainText(
   options: PlainRenderOptions = {},
   profile?: FormatCapabilityProfile,
 ): string {
-  const projected = profile ? applyConstructFallbacks(ir, profile) : ir;
+  const effectiveProfile =
+    profile && options.linkStyle === "label"
+      ? { ...profile, constructs: { ...profile.constructs, linkLabel: "strip" as const } }
+      : profile;
+  const projected = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
   if ((options.linkStyle ?? "label-and-url") === "label" || projected.links.length === 0) {
     return projected.text;
   }

@@ -130,7 +130,11 @@ export function stripMarkdown(
   // Detect against the exact leading boundary transports receive. String.trim
   // removes Unicode whitespace that the transcript header grammar intentionally
   // does not treat as Markdown indentation.
-  const projectedIr = profile ? applyConstructFallbacks(ir, profile) : ir;
+  const effectiveProfile =
+    profile && options.linkStyle === "label"
+      ? { ...profile, constructs: { ...profile.constructs, linkLabel: "strip" as const } }
+      : profile;
+  const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
   const plainText = applyPlainTextInsertions(projectedIr.text, [
     ...collectLinkInsertions(projectedIr, options),
     ...collectParsedAssistantTranscriptRoleInsertions(projectedIr, options),

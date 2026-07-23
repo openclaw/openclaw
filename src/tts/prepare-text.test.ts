@@ -85,6 +85,12 @@ describe("TTS text preparation – stripMarkdown", () => {
     );
   });
 
+  it("keeps explicit label-only links above profile fallback", () => {
+    expect(
+      stripMarkdown("Read [docs](https://example.com)", { linkStyle: "label" }, PLAIN_PROFILE),
+    ).toBe("Read docs");
+  });
+
   it("handles a typical LLM reply with mixed markdown", () => {
     const input = `## Heading with **bold** and *italic*
 
