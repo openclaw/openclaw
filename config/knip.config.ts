@@ -338,6 +338,9 @@ const config = {
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
     "src/secrets/credential-matrix.ts",
+    // PR 112385 proves this private RFC slice before its hidden production
+    // caller lands in the next stacked PR.
+    "src/snapshot/recovery-point.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
