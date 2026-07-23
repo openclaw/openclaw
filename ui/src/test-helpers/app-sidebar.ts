@@ -331,6 +331,12 @@ export async function mountSidebar(
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
+  await (
+    sidebar as unknown as {
+      sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+    }
+  ).sidebarMenus.preloadMenuRenderer();
+  await sidebar.updateComplete;
   return { provider, sidebar, context };
 }
 

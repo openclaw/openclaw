@@ -1,16 +1,19 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { nothing, type ReactiveController, type ReactiveControllerHost } from "lit";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
+import { searchForSession } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
+import { isSidebarRouteActive, renderSidebarNavRoute } from "./app-sidebar-nav-menus.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionGroupMenuState,
@@ -23,16 +26,6 @@ import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
-import {
-  renderSidebarAgentMenuForController,
-  renderSidebarCustomizeMenuForController,
-  renderSidebarIdentityMenuForController,
-  renderSidebarMoreMenuForController,
-  renderSidebarRouteForController,
-  renderSidebarSessionGroupMenuForController,
-  renderSidebarSessionMenuForController,
-  renderSidebarSessionSortMenuForController,
-} from "./sidebar-menus-render.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -52,7 +45,17 @@ interface SidebarMenusControllerState {
   identityMenuPosition: { x: number; bottom: number } | null;
 }
 
-export interface SidebarMenusControllerHost
+type SidebarMenusRenderer = {
+  renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
+  renderSidebarCustomizeMenuForController(controller: SidebarMenusController): unknown;
+  renderSidebarIdentityMenuForController(controller: SidebarMenusController): unknown;
+  renderSidebarMoreMenuForController(controller: SidebarMenusController): unknown;
+  renderSidebarSessionGroupMenuForController(controller: SidebarMenusController): unknown;
+  renderSidebarSessionMenuForController(controller: SidebarMenusController): unknown;
+  renderSidebarSessionSortMenuForController(controller: SidebarMenusController): unknown;
+};
+
+interface SidebarMenusControllerHost
   extends ReactiveControllerHost, SessionOrganizerControllerHost {
   readonly activeRouteId?: NavigationRouteId;
   readonly activeWorkboardBoardId: string;
@@ -121,6 +124,16 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
+  private menuRenderer: SidebarMenusRenderer | null = null;
+  // Popup rendering pulls Web Awesome menu code out of startup JS. It preloads
+  // at idle and is requested immediately by the first menu interaction.
+  private readonly menuRendererImport = createIdleImport(
+    () => import("./sidebar-menus-render.ts"),
+    (renderer) => {
+      this.menuRenderer = renderer;
+      this.host.requestUpdate();
+    },
+  );
   readonly catalogMenu: SidebarCatalogMenuController;
 
   constructor(readonly host: SidebarMenusControllerHost) {
@@ -134,9 +147,12 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     });
   }
 
-  hostConnected(): void {}
+  hostConnected(): void {
+    this.menuRendererImport.schedule();
+  }
 
   hostDisconnected(): void {
+    this.menuRendererImport.dispose();
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
@@ -149,6 +165,14 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   ): void {
     Object.assign(this, { [key]: value });
     this.host.requestUpdate();
+  }
+
+  preloadMenuRenderer() {
+    return this.menuRendererImport.load();
+  }
+
+  private loadMenuRenderer() {
+    void this.preloadMenuRenderer().catch(() => undefined);
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -202,6 +226,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   openCustomizeMenu(x: number, y: number, trigger: HTMLElement | null = null) {
     const menuWidth = 240;
     const menuMaxHeight = 420;
+    this.loadMenuRenderer();
     this.dismissTransientMenus();
     this.customizeMenuTrigger = trigger;
     this.updateState("customizeMenuPosition", {
@@ -224,6 +249,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       this.closeMoreMenu();
       return;
     }
+    this.loadMenuRenderer();
     const menuWidth = 240;
     const menuMaxHeight = 420;
     const rect = trigger.getBoundingClientRect();
@@ -263,6 +289,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     y: number,
     trigger: HTMLElement | null = null,
   ) {
+    this.loadMenuRenderer();
     this.dismissTransientMenus();
     this.sessionMenuTrigger = trigger;
     this.updateState("sessionMenu", { session, x, y });
@@ -316,6 +343,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
     const menuWidth = 224;
     const menuMaxHeight = 160;
+    this.loadMenuRenderer();
     this.dismissTransientMenus();
     this.sessionGroupMenuTrigger = trigger;
     this.updateState("sessionGroupMenu", {
@@ -339,6 +367,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       this.closeSessionSortMenu();
       return;
     }
+    this.loadMenuRenderer();
     const menuWidth = 200;
     const menuMaxHeight = 280;
     const rect = trigger.getBoundingClientRect();
@@ -364,6 +393,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       this.closeAgentMenu();
       return;
     }
+    this.loadMenuRenderer();
     const menuWidth = 240;
     const rect = trigger.getBoundingClientRect();
     this.closeCustomizeMenu();
@@ -399,6 +429,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       this.closeIdentityMenu();
       return;
     }
+    this.loadMenuRenderer();
     const menuWidth = 240;
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
@@ -419,34 +450,65 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   renderCustomizeMenu() {
-    return renderSidebarCustomizeMenuForController(this);
+    return this.menuRenderer?.renderSidebarCustomizeMenuForController(this) ?? nothing;
   }
 
   renderAgentMenu() {
-    return renderSidebarAgentMenuForController(this);
+    return this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing;
   }
 
   renderIdentityMenu() {
-    return renderSidebarIdentityMenuForController(this);
+    return this.menuRenderer?.renderSidebarIdentityMenuForController(this) ?? nothing;
   }
 
   renderSessionMenu() {
-    return renderSidebarSessionMenuForController(this);
+    return this.menuRenderer?.renderSidebarSessionMenuForController(this) ?? nothing;
   }
 
   renderSessionGroupMenu() {
-    return renderSidebarSessionGroupMenuForController(this);
+    return this.menuRenderer?.renderSidebarSessionGroupMenuForController(this) ?? nothing;
   }
 
   renderSessionSortMenu() {
-    return renderSidebarSessionSortMenuForController(this);
+    return this.menuRenderer?.renderSidebarSessionSortMenuForController(this) ?? nothing;
   }
 
   renderRoute(routeId: NavigationRouteId) {
-    return renderSidebarRouteForController(this, routeId);
+    if (!this.isRouteEnabled(routeId)) {
+      return nothing;
+    }
+    const routeSessionKey = routeId === "chat" ? this.host.getRouteSessionKey() : "";
+    const chatSearch =
+      routeId === "chat" && routeSessionKey ? searchForSession(routeSessionKey) : "";
+    return renderSidebarNavRoute({
+      routeId,
+      href: chatSearch
+        ? `${pathForRoute("chat", this.host.basePath)}${chatSearch}`
+        : pathForRoute(routeId, this.host.basePath),
+      active:
+        isSidebarRouteActive(this.host.activeRouteId, routeId) &&
+        !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
+      onNavigate: () => {
+        this.host.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
+      },
+      onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
+      onCancelPreload: this.cancelPreload,
+    });
   }
 
   renderMoreMenu() {
-    return renderSidebarMoreMenuForController(this);
+    return this.menuRenderer?.renderSidebarMoreMenuForController(this) ?? nothing;
+  }
+
+  private activeWorkboardBoardIsPinned(): boolean {
+    return Boolean(
+      this.host.activeWorkboardBoardId &&
+      this.host
+        .reconciledSidebarZone()
+        .entries.some(
+          (entry) =>
+            entry.type === "workboard" && entry.boardId === this.host.activeWorkboardBoardId,
+        ),
+    );
   }
 }
