@@ -53,6 +53,10 @@ export type HeartbeatWakeRequest = {
   agentId?: string;
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
+  /** Persisted cron monitor cadence carried with a scheduled heartbeat tick. */
+  scheduledEveryMs?: number;
+  /** Persisted cron monitor phase anchor carried with a scheduled heartbeat tick. */
+  scheduledAnchorMs?: number;
 };
 
 export type HeartbeatWakeHandler = (opts: HeartbeatWakeRequest) => Promise<HeartbeatRunResult>;
@@ -77,6 +81,8 @@ type PendingWakeReason = {
   agentId?: string;
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
+  scheduledEveryMs?: number;
+  scheduledAnchorMs?: number;
 };
 
 let handler: HeartbeatWakeHandler | null = null;
@@ -141,6 +147,8 @@ function queuePendingWakeReason(params: {
   agentId?: string;
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
+  scheduledEveryMs?: number;
+  scheduledAnchorMs?: number;
 }) {
   const requestedAt = params.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params.reason);
@@ -163,6 +171,8 @@ function queuePendingWakeReason(params: {
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
     heartbeat: params.heartbeat,
+    scheduledEveryMs: params.scheduledEveryMs,
+    scheduledAnchorMs: params.scheduledAnchorMs,
   };
   const previous = pendingWakes.get(wakeTargetKey);
   if (!previous) {
@@ -231,6 +241,12 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
             ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
             ...(pendingWake.heartbeat ? { heartbeat: pendingWake.heartbeat } : {}),
+            ...(pendingWake.scheduledEveryMs !== undefined
+              ? { scheduledEveryMs: pendingWake.scheduledEveryMs }
+              : {}),
+            ...(pendingWake.scheduledAnchorMs !== undefined
+              ? { scheduledAnchorMs: pendingWake.scheduledAnchorMs }
+              : {}),
           };
           // Each wake is detached process work: admit the whole handler before
           // it can mutate sessions or commitments, and keep it visible until done.
@@ -246,6 +262,8 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
               agentId: pendingWake.agentId,
               sessionKey: pendingWake.sessionKey,
               heartbeat: pendingWake.heartbeat,
+              scheduledEveryMs: pendingWake.scheduledEveryMs,
+              scheduledAnchorMs: pendingWake.scheduledAnchorMs,
             });
             schedule(DEFAULT_RETRY_MS, "retry");
           }
@@ -260,6 +278,8 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
             heartbeat: pendingWake.heartbeat,
+            scheduledEveryMs: pendingWake.scheduledEveryMs,
+            scheduledAnchorMs: pendingWake.scheduledAnchorMs,
           });
         }
         schedule(DEFAULT_RETRY_MS, "retry");
@@ -324,6 +344,8 @@ export function requestHeartbeat(opts: {
   agentId?: string;
   sessionKey?: string;
   heartbeat?: HeartbeatWakeOverride;
+  scheduledEveryMs?: number;
+  scheduledAnchorMs?: number;
 }) {
   queuePendingWakeReason({
     source: opts.source,
@@ -332,6 +354,8 @@ export function requestHeartbeat(opts: {
     agentId: opts.agentId,
     sessionKey: opts.sessionKey,
     heartbeat: opts.heartbeat,
+    scheduledEveryMs: opts.scheduledEveryMs,
+    scheduledAnchorMs: opts.scheduledAnchorMs,
   });
   schedule(opts.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
 }

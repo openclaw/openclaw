@@ -1749,6 +1749,7 @@ async function resolvePromptImages(
     model: resolveImageCapabilityModel(params),
     existingImages: Array.isArray(params.images) ? params.images : undefined,
     imageOrder: Array.isArray(params.imageOrder) ? params.imageOrder : undefined,
+    media: Array.isArray(params.media) ? params.media : undefined,
     config: params.config,
     workspaceOnly: context.workspaceOnly,
     localRoots,

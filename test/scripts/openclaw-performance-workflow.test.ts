@@ -315,7 +315,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}",
     );
     expect(appToken.uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
     expect(appToken.with).toEqual({
       "client-id": "Iv23liOECG0slfuhz093",

@@ -908,6 +908,13 @@ describe("runCopilotAttempt", () => {
         makeParams({
           imageOrder: ["offloaded"],
           images: [],
+          media: [
+            {
+              url: `media://inbound/${mediaId}`,
+              contentType: "image/png",
+              kind: "image",
+            },
+          ],
           model: {
             api: "openai-responses",
             id: "gpt-4o",
