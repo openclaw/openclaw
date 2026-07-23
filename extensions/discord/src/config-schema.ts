@@ -48,9 +48,7 @@ const DiscordIdSchema = z
   .pipe(z.string());
 
 const DiscordIdListSchema = z.array(DiscordIdSchema);
-const DiscordSnowflakeStringSchema = z
-  .string()
-  .regex(/^\d+$/, "Discord user ID must be numeric");
+const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const DiscordDmSchema = z
   .object({
