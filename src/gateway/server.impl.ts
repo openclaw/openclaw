@@ -1387,11 +1387,29 @@ export async function startGatewayServer(
     }
     throw new Error("Readiness runtime changed while it was being evaluated.");
   };
-  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
-    evaluateCanonicalGatewayReadiness({
+  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> => {
+    const snapshot = readinessRuntimeSnapshot;
+    const profileSelection = resolveHostingProfileSelection({
+      config: snapshot.config,
+      env: process.env,
+      override: opts.hostingProfileOverride,
+    });
+    return evaluateCanonicalGatewayReadiness({
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
+      failureMetadata: profileSelection
+        ? {
+            profileContractVersion: 1,
+            profile: profileSelection.profile,
+            profileSource: profileSelection.source,
+            activation: {
+              ...getRuntimeActivationIdentity(),
+              profile: profileSelection.profile,
+            },
+          }
+        : undefined,
     });
+  };
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
   const watchNodeRequestHandler: {
@@ -2690,7 +2708,11 @@ export async function startGatewayServer(
       },
       commitTerminalConfig: (nextConfig) => {
         terminalLaunchPolicy.commitConfig();
-        readinessRuntimeSnapshot = { config: nextConfig, registry: pluginRegistry };
+        readinessRuntimeSnapshot = {
+          config: nextConfig,
+          registry: pluginRegistry,
+          auth: getResolvedAuth(),
+        };
         workerLiveEvents?.rebindAll(nextConfig);
       },
       acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
