@@ -2,7 +2,7 @@ import {
   type FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownWithAttributedRanges,
-} from "openclaw/plugin-sdk/text-chunking";
+} from "openclaw/plugin-sdk/markdown-render-runtime";
 
 type IMessageFormatStyle = "bold" | "italic" | "underline" | "strikethrough";
 

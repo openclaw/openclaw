@@ -155,6 +155,7 @@ async function seedDreamingSessionTranscript(params: {
   messages: Array<{
     role: "assistant" | "user";
     content: unknown;
+    provenance?: { kind: "internal_system"; sourceTool: "heartbeat" };
     timestamp: number | string;
   }>;
   sessionId: string;
@@ -193,6 +194,7 @@ async function seedDreamingSessionTranscript(params: {
       message: {
         role: message.role,
         content: message.content,
+        ...(message.provenance ? { provenance: message.provenance } : {}),
         timestamp: message.timestamp,
       },
     });
@@ -1724,6 +1726,7 @@ describe("memory-core dreaming phases", () => {
       messages: [
         {
           role: "user",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
           timestamp: "2026-04-16T18:04:00.000Z",
           content:
             "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",

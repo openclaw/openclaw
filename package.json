@@ -106,6 +106,7 @@
     "!dist/plugin-sdk/json-unsafe-integers.d.ts",
     "!dist/plugin-sdk/keyed-async-queue.d.ts",
     "!dist/plugin-sdk/llm.d.ts",
+    "!dist/plugin-sdk/markdown-render-runtime.d.ts",
     "!dist/plugin-sdk/markdown-table-runtime.d.ts",
     "!dist/plugin-sdk/media-generation-runtime.d.ts",
     "!dist/plugin-sdk/memory-core-host-embedding-registry.d.ts",
@@ -767,6 +768,9 @@
     },
     "./plugin-sdk/plugin-state-runtime": {
       "default": "./dist/plugin-sdk/plugin-state-runtime.js"
+    },
+    "./plugin-sdk/markdown-render-runtime": {
+      "default": "./dist/plugin-sdk/markdown-render-runtime.js"
     },
     "./plugin-sdk/markdown-table-runtime": {
       "default": "./dist/plugin-sdk/markdown-table-runtime.js"

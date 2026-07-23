@@ -60,6 +60,7 @@
   "json-unsafe-integers",
   "keyed-async-queue",
   "llm",
+  "markdown-render-runtime",
   "markdown-table-runtime",
   "media-generation-runtime",
   "memory-core-host-embedding-registry",
