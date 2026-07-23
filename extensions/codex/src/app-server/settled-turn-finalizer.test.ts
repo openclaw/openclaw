@@ -124,7 +124,9 @@ describe("runCodexSettledTurnFinalization", () => {
           assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
           messagesPresent: [
             attachCodexMirrorAttestation(
-              assistant,
+              Object.assign({}, assistant, {
+                idempotencyKey: "codex-settled-finalizer:run-1:assistant",
+              }),
               fingerprintCodexMirrorSourceMessage(assistant as never),
             ),
           ],
@@ -181,6 +183,7 @@ describe("runCodexSettledTurnFinalization", () => {
     );
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
       usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
       assistant: {
         role: "assistant",

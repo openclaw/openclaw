@@ -234,6 +234,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
     assistantTexts: [text],
     assistantTranscriptOwned: result.assistantTranscriptOwned,
+    assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
     lastAssistantTextMessageIndex: result.assistantMessageIndex,
     lastAssistant: result.assistant,
     currentAttemptAssistant: result.assistant,
