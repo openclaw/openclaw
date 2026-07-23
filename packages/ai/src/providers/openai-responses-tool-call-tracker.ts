@@ -133,6 +133,10 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
       unindexedCalls.delete(toolCall);
     },
 
+    listActive(): TState[] {
+      return [...new Set([...indexedCalls.values(), ...unindexedCalls])];
+    },
+
     markArgumentsUnreliable(): void {
       // An unrouteable argument event may belong to any active call. Only an
       // authoritative full argument snapshot can recover that call.

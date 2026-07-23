@@ -696,6 +696,7 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
     contentIndex: number;
+    responseOutputIndex?: number;
   };
   type TextBlockReference = {
     block: TextContent;
@@ -719,11 +720,15 @@ export async function processResponsesStream<TApi extends Api>(
       }
     | { type: "toolCall"; toolCall: StreamingToolCallState };
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
+  const finalizedToolCallOutputIndices = new Set<number>();
+  const finalizedToolCallItemIds = new Set<string>();
+  const finalizedToolCallCallIds = new Set<string>();
   const outputSlots = new Map<number, ResponsesOutputSlot>();
   const reasoningBlocksById = new Map<string, ThinkingContent>();
   let unindexedOutputSlot: ResponsesOutputSlot | undefined;
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
+  let finalizedAnonymousToolCall = false;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   const readOutputIndex = (event: object): number | undefined => {
@@ -809,6 +814,141 @@ export async function processResponsesStream<TApi extends Api>(
       throw new Error("Responses stream completed tool call without a function name");
     }
     return name;
+  };
+  const finalizeFunctionCall = (
+    event: object,
+    item: Extract<ResponseOutputItem, { type: "function_call" }>,
+    finalizeOptions?: { requireTracked?: boolean },
+  ): boolean => {
+    if (finalizeOptions?.requireTracked) {
+      if (
+        (item.status !== undefined && item.status !== "completed") ||
+        typeof item.arguments !== "string"
+      ) {
+        return false;
+      }
+      try {
+        const terminalArguments = JSON.parse(item.arguments) as unknown;
+        if (
+          terminalArguments === null ||
+          typeof terminalArguments !== "object" ||
+          Array.isArray(terminalArguments)
+        ) {
+          return false;
+        }
+      } catch {
+        return false;
+      }
+    }
+    const eventOutputIndex = readOutputIndex(event);
+    const identity = readResponsesToolCallItemIdentity(item);
+    const alreadyFinalized =
+      (eventOutputIndex !== undefined && finalizedToolCallOutputIndices.has(eventOutputIndex)) ||
+      Boolean(identity.itemId && finalizedToolCallItemIds.has(identity.itemId)) ||
+      Boolean(identity.callId && finalizedToolCallCallIds.has(identity.callId));
+    if (!finalizeOptions?.requireTracked && alreadyFinalized) {
+      return false;
+    }
+    const hasStableIdentity = Boolean(identity.itemId || identity.callId);
+    let streamingToolCall: StreamingToolCallState | undefined;
+    if (finalizeOptions?.requireTracked) {
+      if (eventOutputIndex !== undefined) {
+        const indexedMatches = streamingToolCalls
+          .listActive()
+          .filter((candidate) => candidate.responseOutputIndex === eventOutputIndex);
+        const indexedCandidate = indexedMatches.length === 1 ? indexedMatches[0] : undefined;
+        const identityConflict = Boolean(
+          indexedCandidate &&
+          ((indexedCandidate.itemId &&
+            identity.itemId &&
+            indexedCandidate.itemId !== identity.itemId) ||
+            (indexedCandidate.callId &&
+              identity.callId &&
+              indexedCandidate.callId !== identity.callId)),
+        );
+        streamingToolCall = identityConflict ? undefined : indexedCandidate;
+        if (!streamingToolCall && !identityConflict && hasStableIdentity) {
+          streamingToolCall = streamingToolCalls.resolve({}, identity);
+        }
+      } else if (hasStableIdentity) {
+        streamingToolCall = streamingToolCalls.resolve({}, identity);
+      }
+    } else if (
+      !(finalizedAnonymousToolCall && eventOutputIndex === undefined && !hasStableIdentity)
+    ) {
+      streamingToolCall = streamingToolCalls.resolve(event, identity);
+    }
+    // A terminal response may only reconcile calls that were already opened.
+    // Never synthesize a second public call while tracked state remains.
+    if (!streamingToolCall && (finalizeOptions?.requireTracked || streamingToolCalls.hasActive())) {
+      return false;
+    }
+    const completedName = resolveCompletedToolCallName(streamingToolCall, item.name);
+    const streamedArguments = streamingToolCall?.block.partialJson ?? "";
+    const completedArguments = typeof item.arguments === "string" ? item.arguments : undefined;
+    if (streamingToolCall && !streamingToolCall.argumentStreamReliable && !completedArguments) {
+      return false;
+    }
+    const finalArguments =
+      completedArguments !== undefined && (completedArguments.length > 0 || !streamedArguments)
+        ? completedArguments
+        : streamedArguments || "{}";
+    const args = parseStreamingJson(finalArguments);
+
+    let toolCall: ToolCall;
+    let contentIndex: number;
+    if (streamingToolCall) {
+      const block = streamingToolCall.block;
+      // The SDK permits the added item to omit its item id, then supplies
+      // the canonical id on completion. Upgrade the same public block so
+      // replay and its function_call_output retain both identities.
+      block.id = resolveResponsesToolCallId(item, block.id);
+      block.name = completedName;
+      // Finalize in-place and strip the scratch buffer so replay only
+      // carries parsed arguments.
+      block.arguments = args;
+      delete (block as { partialJson?: string }).partialJson;
+      toolCall = block;
+      contentIndex = streamingToolCall.contentIndex;
+    } else {
+      toolCall = {
+        type: "toolCall",
+        id: resolveResponsesToolCallId(item),
+        name: completedName,
+        arguments: args,
+      };
+      // Some compatible streams only send the completed item. Preserve
+      // the normal balanced lifecycle and persist the call for replay.
+      blocks.push(toolCall);
+      contentIndex = blockIndex();
+      stream.push({ type: "toolcall_start", contentIndex, partial: output });
+    }
+
+    if (streamingToolCall) {
+      streamingToolCalls.forget(streamingToolCall);
+      forgetToolCallOutputSlot(streamingToolCall);
+    }
+    const outputIndex = streamingToolCall?.responseOutputIndex ?? readOutputIndex(event);
+    if (outputIndex !== undefined) {
+      finalizedToolCallOutputIndices.add(outputIndex);
+    }
+    const completedIdentity = identity;
+    if (completedIdentity.itemId) {
+      finalizedToolCallItemIds.add(completedIdentity.itemId);
+    }
+    if (completedIdentity.callId) {
+      finalizedToolCallCallIds.add(completedIdentity.callId);
+    }
+    if (outputIndex === undefined && !completedIdentity.itemId && !completedIdentity.callId) {
+      finalizedAnonymousToolCall = true;
+    }
+    stream.push({
+      type: "toolcall_end",
+      contentIndex,
+      toolCall,
+      partial: output,
+    });
+    return true;
   };
   const createOutputSlot = (
     event: object,
@@ -1001,6 +1141,7 @@ export async function processResponsesStream<TApi extends Api>(
     if (event.type === "response.created") {
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {
+      const responseOutputIndex = readOutputIndex(event);
       materializeDeferredTextSlots();
       const item = event.item;
       if (item.type !== "message") {
@@ -1022,6 +1163,7 @@ export async function processResponsesStream<TApi extends Api>(
         const toolCallState: StreamingToolCallState = {
           block: toolCallBlock,
           contentIndex,
+          ...(responseOutputIndex !== undefined ? { responseOutputIndex } : {}),
           argumentStreamReliable: true,
           ...readResponsesToolCallItemIdentity(item),
         };
@@ -1168,6 +1310,7 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.function_call_arguments.delta") {
       const toolCall = streamingToolCalls.resolve(event);
       if (toolCall) {
+        toolCall.responseOutputIndex ??= readOutputIndex(event);
         toolCall.block.partialJson += event.delta;
         toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
         stream.push({
@@ -1182,6 +1325,7 @@ export async function processResponsesStream<TApi extends Api>(
     } else if (event.type === "response.function_call_arguments.done") {
       const toolCall = streamingToolCalls.resolve(event);
       if (toolCall) {
+        toolCall.responseOutputIndex ??= readOutputIndex(event);
         const previousPartialJson = toolCall.block.partialJson;
         const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
@@ -1305,68 +1449,27 @@ export async function processResponsesStream<TApi extends Api>(
         }
         forgetOutputSlot(event, outputSlot);
       } else if (item.type === "function_call") {
-        const streamingToolCall = streamingToolCalls.resolve(
-          event,
-          readResponsesToolCallItemIdentity(item),
-        );
-        // Do not turn an unresolved completion into a second public call while
-        // an indexed call is still open. Its identity or index must match.
-        if (!streamingToolCall && streamingToolCalls.hasActive()) {
-          continue;
-        }
-        const completedName = resolveCompletedToolCallName(streamingToolCall, item.name);
-        const streamedArguments = streamingToolCall?.block.partialJson ?? "";
-        const completedArguments = typeof item.arguments === "string" ? item.arguments : undefined;
-        if (streamingToolCall && !streamingToolCall.argumentStreamReliable && !completedArguments) {
-          continue;
-        }
-        const finalArguments =
-          completedArguments !== undefined && (completedArguments.length > 0 || !streamedArguments)
-            ? completedArguments
-            : streamedArguments || "{}";
-        const args = parseStreamingJson(finalArguments);
-
-        let toolCall: ToolCall;
-        let contentIndex: number;
-        if (streamingToolCall) {
-          const block = streamingToolCall.block;
-          // The SDK permits the added item to omit its item id, then supplies
-          // the canonical id on completion. Upgrade the same public block so
-          // replay and its function_call_output retain both identities.
-          block.id = resolveResponsesToolCallId(item, block.id);
-          block.name = completedName;
-          // Finalize in-place and strip the scratch buffer so replay only
-          // carries parsed arguments.
-          block.arguments = args;
-          delete (block as { partialJson?: string }).partialJson;
-          toolCall = block;
-          contentIndex = streamingToolCall.contentIndex;
-        } else {
-          toolCall = {
-            type: "toolCall",
-            id: resolveResponsesToolCallId(item),
-            name: completedName,
-            arguments: args,
-          };
-          // Some compatible streams only send the completed item. Preserve
-          // the normal balanced lifecycle and persist the call for replay.
-          blocks.push(toolCall);
-          contentIndex = blockIndex();
-          stream.push({ type: "toolcall_start", contentIndex, partial: output });
-        }
-
-        if (streamingToolCall) {
-          streamingToolCalls.forget(streamingToolCall);
-          forgetToolCallOutputSlot(streamingToolCall);
-        }
-        stream.push({
-          type: "toolcall_end",
-          contentIndex,
-          toolCall,
-          partial: output,
-        });
+        finalizeFunctionCall(event, item);
       }
     } else if (event.type === "response.completed" || event.type === "response.incomplete") {
+      // Some compatible providers omit output_item.done even though the
+      // terminal response contains authoritative completed function calls.
+      // Reuse the normal finalizer and keep unresolved calls fail-closed.
+      if (streamingToolCalls.hasActive()) {
+        for (const [outputIndex, item] of (event.response.output ?? []).entries()) {
+          if (item.type === "function_call") {
+            const identity = readResponsesToolCallItemIdentity(item);
+            if (
+              finalizedToolCallOutputIndices.has(outputIndex) ||
+              (identity.itemId && finalizedToolCallItemIds.has(identity.itemId)) ||
+              (identity.callId && finalizedToolCallCallIds.has(identity.callId))
+            ) {
+              continue;
+            }
+            finalizeFunctionCall({ output_index: outputIndex }, item, { requireTracked: true });
+          }
+        }
+      }
       if (streamingToolCalls.hasActive()) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }

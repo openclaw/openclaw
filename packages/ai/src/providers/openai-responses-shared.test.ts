@@ -1517,6 +1517,559 @@ describe("processResponsesStream", () => {
     ]);
   });
 
+  it("reconciles a tracked tool call from authoritative response.completed output", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_read",
+              call_id: "call_read",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: "fc_read",
+            delta: '{"path":"README.md"}',
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_sol",
+              status: "completed",
+              output: [
+                {
+                  type: "function_call",
+                  id: "fc_read",
+                  call_id: "call_read",
+                  name: "read",
+                  arguments: '{"path":"README.md","line":12}',
+                  status: "completed",
+                },
+              ],
+            },
+          },
+        ]),
+        output,
+        stream,
+        gpt56SolModel,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "README.md", line: 12 },
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+    ]);
+  });
+
+  it("reconciles a terminal function-call snapshot whose optional status is omitted", async () => {
+    const output = createAssistantOutput();
+    const { stream } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_read",
+            call_id: "call_read",
+            name: "read",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_status_omitted",
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                id: "fc_read",
+                call_id: "call_read",
+                name: "read",
+                arguments: '{"path":"README.md"}',
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_read|fc_read",
+        name: "read",
+        arguments: { path: "README.md" },
+      },
+    ]);
+  });
+
+  it("still throws when response.completed arrives with a genuinely incomplete tool call", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_partial",
+              call_id: "call_partial",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: "fc_partial",
+            delta: '{"path":"RE',
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_partial",
+              status: "completed",
+            },
+          },
+        ]),
+        output,
+        stream,
+        gpt56SolModel,
+      ),
+    ).rejects.toThrow(/Responses stream completed with unresolved tool calls/);
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
+  });
+
+  it("reconciles parallel tracked calls from terminal response output", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc_first",
+            call_id: "call_first",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.output_item.added",
+          output_index: 1,
+          item: {
+            type: "function_call",
+            id: "fc_second",
+            call_id: "call_second",
+            name: "computer",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_parallel_terminal",
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                id: "fc_first",
+                call_id: "call_first",
+                name: "computer",
+                arguments: '{"slot":1}',
+                status: "completed",
+              },
+              {
+                type: "function_call",
+                id: "fc_second",
+                call_id: "call_second",
+                name: "computer",
+                arguments: '{"slot":2}',
+                status: "completed",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_first|fc_first",
+        name: "computer",
+        arguments: { slot: 1 },
+      },
+      {
+        type: "toolCall",
+        id: "call_second|fc_second",
+        name: "computer",
+        arguments: { slot: 2 },
+      },
+    ]);
+    expect(
+      events
+        .filter((event) => event.type === "toolcall_end")
+        .map((event) => (event.type === "toolcall_end" ? event.contentIndex : undefined)),
+    ).toEqual([0, 1]);
+  });
+
+  it("rejects terminal response reconciliation when call ids change", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_read",
+              call_id: "call_read_a",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_mismatch",
+              status: "completed",
+              output: [
+                {
+                  type: "function_call",
+                  id: "fc_read",
+                  call_id: "call_read_b",
+                  name: "read",
+                  arguments: '{"path":"README.md"}',
+                  status: "completed",
+                },
+              ],
+            },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start"]);
+  });
+
+  it("rejects incomplete terminal function-call snapshots", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              id: "fc_partial_terminal",
+              call_id: "call_partial_terminal",
+              name: "read",
+              arguments: "",
+            },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_partial_terminal",
+              status: "completed",
+              output: [
+                {
+                  type: "function_call",
+                  id: "fc_partial_terminal",
+                  call_id: "call_partial_terminal",
+                  name: "read",
+                  arguments: '{"path":"README.md"',
+                  status: "incomplete",
+                },
+              ],
+            },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start"]);
+  });
+
+  it("ignores a duplicate identified done event without emitting a second tool call", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const completedItem = {
+      type: "function_call",
+      id: "fc_once",
+      call_id: "call_once",
+      name: "read",
+      arguments: '{"path":"ONCE.md"}',
+      status: "completed",
+    } as const;
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: { ...completedItem, arguments: "", status: "in_progress" },
+        },
+        { type: "response.output_item.done", item: completedItem },
+        { type: "response.output_item.done", item: completedItem },
+        { type: "response.completed", response: { id: "resp_duplicate_identified" } },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_once|fc_once",
+        name: "read",
+        arguments: { path: "ONCE.md" },
+      },
+    ]);
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_end"]);
+  });
+
+  it("does not reuse an already-finalized terminal item for a later idless call", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const finalizedItem = {
+      type: "function_call",
+      id: "fc_first",
+      call_id: "call_first",
+      name: "read",
+      arguments: '{"path":"FIRST.md"}',
+      status: "completed",
+    } as const;
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...finalizedItem, arguments: "", status: "in_progress" },
+        },
+        { type: "response.output_item.done", output_index: 0, item: finalizedItem },
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", name: "read", arguments: "" },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_mixed_terminal",
+            status: "completed",
+            output: [
+              finalizedItem,
+              {
+                type: "function_call",
+                id: "fc_second",
+                call_id: "call_second",
+                name: "read",
+                arguments: '{"path":"SECOND.md"}',
+                status: "completed",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_first|fc_first",
+        name: "read",
+        arguments: { path: "FIRST.md" },
+      },
+      {
+        type: "toolCall",
+        id: "call_second|fc_second",
+        name: "read",
+        arguments: { path: "SECOND.md" },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(2);
+  });
+
+  it("rejects a duplicate anonymous done event after a later anonymous call opens", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const firstItem = {
+      type: "function_call",
+      call_id: "",
+      name: "read",
+      arguments: '{"path":"FIRST.md"}',
+      status: "completed",
+    } as const;
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            item: { ...firstItem, arguments: "", status: "in_progress" },
+          },
+          { type: "response.output_item.done", item: firstItem },
+          {
+            type: "response.output_item.added",
+            item: { type: "function_call", call_id: "", name: "read", arguments: "" },
+          },
+          { type: "response.output_item.done", item: firstItem },
+          { type: "response.completed", response: { id: "resp_duplicate_anonymous" } },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+
+    expect(output.content).toEqual([
+      expect.objectContaining({ name: "read", arguments: { path: "FIRST.md" } }),
+      expect.objectContaining({ name: "read", partialJson: "" }),
+    ]);
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
+  });
+
+  it("reconciles an anonymous call after a later argument delta supplies its output index", async () => {
+    const output = createAssistantOutput();
+    const { stream } = createCapturedAssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", call_id: "", name: "read", arguments: "" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          delta: '{"path":"LATE.md"}',
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_late_index",
+            status: "completed",
+            output: [
+              {
+                type: "function_call",
+                call_id: "",
+                name: "read",
+                arguments: '{"path":"LATE.md"}',
+                status: "completed",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+
+    expect(output.content).toEqual([
+      expect.objectContaining({ name: "read", arguments: { path: "LATE.md" } }),
+    ]);
+  });
+
+  it("rejects parallel anonymous terminal calls without stable routing identity", async () => {
+    const output = createAssistantOutput();
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.output_item.added",
+            item: { type: "function_call", call_id: "", name: "read", arguments: "" },
+          },
+          {
+            type: "response.output_item.added",
+            item: { type: "function_call", call_id: "", name: "read", arguments: "" },
+          },
+          {
+            type: "response.completed",
+            response: {
+              id: "resp_parallel_anonymous",
+              status: "completed",
+              output: [
+                {
+                  type: "function_call",
+                  call_id: "",
+                  name: "read",
+                  arguments: '{"path":"SECOND.md"}',
+                  status: "completed",
+                },
+                {
+                  type: "function_call",
+                  call_id: "",
+                  name: "read",
+                  arguments: '{"path":"FIRST.md"}',
+                  status: "completed",
+                },
+              ],
+            },
+          },
+        ]),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
+    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+
+    expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(0);
+  });
+
   it("keeps idless tool-call ids stable within a response and unique across responses", async () => {
     const runOnce = async () => {
       const output = createAssistantOutput();
