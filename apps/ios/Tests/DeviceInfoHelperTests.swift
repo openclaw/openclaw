@@ -29,6 +29,26 @@ struct DeviceInfoHelperTests {
         #expect(name == "OpenClaw Mac App")
     }
 
+    @Test func `iOS app on Mac replaces persisted generic iPad device name`() {
+        let name = NodeDisplayName.resolve(
+            existing: "iPad",
+            deviceName: "iPad",
+            interfaceIdiom: .pad,
+            isIOSAppOnMac: true)
+
+        #expect(name == "OpenClaw Mac App")
+    }
+
+    @Test func `iOS app on Mac replaces persisted generic iPhone device name`() {
+        let name = NodeDisplayName.resolve(
+            existing: "iPhone",
+            deviceName: "iPhone",
+            interfaceIdiom: .phone,
+            isIOSAppOnMac: true)
+
+        #expect(name == "OpenClaw Mac App")
+    }
+
     @Test func `iOS app on Mac preserves a custom node name`() {
         let name = NodeDisplayName.resolve(
             existing: "Studio controller",
@@ -47,6 +67,16 @@ struct DeviceInfoHelperTests {
             isIOSAppOnMac: false)
 
         #expect(name == "Office iPad")
+    }
+
+    @Test func `physical iPad keeps its generic device name`() {
+        let name = NodeDisplayName.resolve(
+            existing: "iPad",
+            deviceName: "iPad",
+            interfaceIdiom: .pad,
+            isIOSAppOnMac: false)
+
+        #expect(name == "iPad")
     }
 
     @Test func `physical iPhone replaces stale Mac compatibility default`() {

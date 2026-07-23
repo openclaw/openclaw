@@ -4,7 +4,9 @@ import UIKit
 enum NodeDisplayName {
     private static let genericNames: Set<String> = [
         "iOS Node",
+        "iPhone",
         "iPhone Node",
+        "iPad",
         "iPad Node",
         "OpenClaw Mac App",
     ]
