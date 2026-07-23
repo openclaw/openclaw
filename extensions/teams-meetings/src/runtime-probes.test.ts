@@ -91,7 +91,11 @@ describe("Microsoft Teams meeting runtime probes", () => {
     vi.setSystemTime(0);
     const session = {
       agentId: "main",
-      chrome: { health: { inCall: true }, launched: true },
+      chrome: {
+        browserTab: { openedByPlugin: true, targetId: "teams-listen-tab-1" },
+        health: { inCall: true },
+        launched: true,
+      },
       id: "teams-listen-1",
       mode: "transcribe",
       transport: "chrome",
@@ -129,7 +133,11 @@ describe("Microsoft Teams meeting runtime probes", () => {
     vi.setSystemTime(0);
     const session = {
       agentId: "main",
-      chrome: { health: { inCall: true }, launched: true },
+      chrome: {
+        browserTab: { openedByPlugin: true, targetId: "teams-listen-tab-2" },
+        health: { inCall: true },
+        launched: true,
+      },
       id: "teams-listen-2",
       mode: "transcribe",
       transport: "chrome",
@@ -168,12 +176,59 @@ describe("Microsoft Teams meeting runtime probes", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("waits for captions in a reused browser tab", async () => {
+    const session = {
+      agentId: "main",
+      chrome: {
+        browserTab: { openedByPlugin: false, targetId: "reused-teams-tab" },
+        health: { inCall: true },
+        launched: false,
+      },
+      id: "teams-listen-reused-tab",
+      mode: "transcribe",
+      transport: "chrome",
+    } as TeamsMeetingsSession;
+    const refreshCaptionHealth = vi.fn(async () => {
+      session.chrome!.health = {
+        ...session.chrome!.health,
+        lastCaptionText: "Caption from reused tab",
+        transcriptLines: 1,
+      };
+    });
+    const context = {
+      config: resolveTeamsMeetingsConfig({ chrome: { joinTimeoutMs: 30_000 } }),
+      hasHealthHandle: () => true,
+      isReusable: () => false,
+      join: vi.fn(async () => ({ session, spoken: false })),
+      list: () => [],
+      refreshCaptionHealth,
+      refreshHealth: () => {},
+      resolveAgentId: () => "main",
+    } satisfies TeamsMeetingsProbeContext;
+
+    await expect(
+      testTeamsMeetingListening(context, {
+        mode: "transcribe",
+        timeoutMs: 100,
+        url: URL,
+      }),
+    ).resolves.toMatchObject({
+      listenTimedOut: false,
+      listenVerified: true,
+    });
+    expect(refreshCaptionHealth).toHaveBeenCalledOnce();
+  });
+
   it("does not accept caption progress that arrives after the listening deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const session = {
       agentId: "main",
-      chrome: { health: { inCall: true }, launched: true },
+      chrome: {
+        browserTab: { openedByPlugin: true, targetId: "teams-listen-tab-late" },
+        health: { inCall: true },
+        launched: true,
+      },
       id: "teams-listen-late",
       mode: "transcribe",
       transport: "chrome",

@@ -39,7 +39,6 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   defaultSpeechMessage: "Say exactly: Zoom speech test complete.",
   invalidRequest: zoomMeetingsInvalidRequest,
   resolveTimeoutMs: resolveZoomMeetingsProbeTimeoutMs,
-  shouldWaitForListening: (session) => Boolean(session.chrome?.browserTab?.targetId),
   talkBackMode: (mode) => mode === "agent" || mode === "bidi",
 });
 

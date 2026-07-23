@@ -35,14 +35,18 @@ const cases = [
   {
     name: "Teams",
     invalidRequestName: "Error",
-    session: { id: "teams", chrome: { launched: true } } satisfies Session,
-    shouldWaitForListening: (session: Session) => Boolean(session.chrome?.launched),
+    session: {
+      id: "teams",
+      chrome: { browserTab: { targetId: "teams-tab" }, launched: false },
+    } satisfies Session,
   },
   {
     name: "Zoom",
     invalidRequestName: "ZoomInvalidRequest",
-    session: { id: "zoom", chrome: { launched: true } } satisfies Session,
-    shouldWaitForListening: (session: Session) => Boolean(session.chrome?.browserTab?.targetId),
+    session: {
+      id: "zoom",
+      chrome: { browserTab: { targetId: "zoom-tab" }, launched: false },
+    } satisfies Session,
   },
 ] as const;
 
@@ -56,7 +60,6 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
         return error;
       },
       resolveTimeoutMs: () => 5,
-      shouldWaitForListening: testCase.shouldWaitForListening,
       talkBackMode: (mode) => mode === "agent" || mode === "bidi",
     });
 
@@ -82,7 +85,7 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
     });
   });
 
-  it("preserves the platform listening wait ownership", async () => {
+  it("waits for listening when the joined session has a browser target", async () => {
     const probes = createProbes();
     const refreshCaptionHealth = vi.fn(async () => undefined);
     const context = {
@@ -102,10 +105,32 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
       timeoutMs: 5,
     });
 
-    if (testCase.name === "Teams") {
-      expect(refreshCaptionHealth).toHaveBeenCalled();
-    } else {
-      expect(refreshCaptionHealth).not.toHaveBeenCalled();
-    }
+    expect(refreshCaptionHealth).toHaveBeenCalled();
+  });
+
+  it("returns immediately when the joined session has no browser target", async () => {
+    const probes = createProbes();
+    const refreshCaptionHealth = vi.fn(async () => undefined);
+    const context = {
+      config: { defaultMode: "agent" as const, chrome: { joinTimeoutMs: 5 }, chromeNode: {} },
+      resolveAgentId: () => "main",
+      list: () => [],
+      join: vi.fn(async () => ({
+        session: { id: `${testCase.name.toLowerCase()}-untracked`, chrome: { launched: true } },
+      })),
+      isReusable: () => false,
+      hasHealthHandle: () => false,
+      refreshHealth: vi.fn(),
+      refreshCaptionHealth,
+    };
+
+    await expect(
+      probes.testListening(context, {
+        url: "https://example.test/meeting",
+        mode: "transcribe",
+        timeoutMs: 5,
+      }),
+    ).resolves.toMatchObject({ listenTimedOut: false, listenVerified: false });
+    expect(refreshCaptionHealth).not.toHaveBeenCalled();
   });
 });

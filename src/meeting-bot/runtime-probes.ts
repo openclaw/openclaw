@@ -65,15 +65,10 @@ type MeetingProbeContext<
   refreshCaptionHealth(session: Session, timeoutMs: number): Promise<void>;
 };
 
-type MeetingRuntimeProbeOptions<
-  Mode extends string,
-  Health extends MeetingProbeHealth,
-  Session extends MeetingProbeSession<Health>,
-> = {
+type MeetingRuntimeProbeOptions<Mode extends string> = {
   defaultSpeechMessage: string;
   invalidRequest(message: string): Error;
   resolveTimeoutMs(input: number | undefined, fallback: number): number;
-  shouldWaitForListening(session: Session): boolean;
   talkBackMode(mode: Mode): boolean;
 };
 
@@ -84,7 +79,7 @@ export function createMeetingRuntimeProbes<
   Health extends MeetingProbeHealth,
   Session extends MeetingProbeSession<Health>,
   Request extends MeetingProbeRequest<Mode, Transport>,
->(options: MeetingRuntimeProbeOptions<Mode, Health, Session>) {
+>(options: MeetingRuntimeProbeOptions<Mode>) {
   type Context = MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>;
 
   const testSpeech = async (context: Context, request: Request) => {
@@ -188,8 +183,10 @@ export function createMeetingRuntimeProbes<
       (health?.transcriptLines ?? 0) > (existing?.id === result.session.id ? start.lines : 0) ||
       Boolean(health?.lastCaptionAt && health.lastCaptionAt !== start.at) ||
       Boolean(health?.lastCaptionText && health.lastCaptionText !== start.text);
+    // A tracked target, not Chrome launch ownership, is the caption-refresh boundary.
+    // launch:false sessions recover an existing tab and remain fully controllable.
     const shouldWait =
-      health?.manualActionRequired !== true && options.shouldWaitForListening(result.session);
+      health?.manualActionRequired !== true && Boolean(result.session.chrome?.browserTab?.targetId);
     let listenVerified = advanced();
     if (shouldWait && !listenVerified) {
       const deadline =
