@@ -1344,8 +1344,9 @@ describe("config cli", () => {
             {
               path: "agents.list.3.tools.profile",
               pathSegments: ["agents", "list", 3, "tools", "profile"],
-              message: 'Invalid input (allowed: "minimal", "coding", "messaging", "full")',
-              allowedValues: ["minimal", "coding", "messaging", "full"],
+              message:
+                'Invalid input (allowed: "minimal", "productivity", "coding", "messaging", "full")',
+              allowedValues: ["minimal", "productivity", "coding", "messaging", "full"],
             },
           ],
         }),
@@ -1354,7 +1355,7 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
 
       expectErrorIncludes(
-        'openclaw.json:7 — agents.list[3].tools.profile: Invalid input (allowed: "minimal", "coding", "messaging", "full"), got: "none"',
+        'openclaw.json:7 — agents.list[3].tools.profile: Invalid input (allowed: "minimal", "productivity", "coding", "messaging", "full"), got: "none"',
       );
     });
 
