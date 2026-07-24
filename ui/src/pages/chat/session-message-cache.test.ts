@@ -29,6 +29,21 @@ function cacheChatMessages(
 }
 
 describe("session message cache", () => {
+  it("keeps case-distinct Matrix rooms in separate cache entries", () => {
+    const host = createHost();
+    const cache: ChatMessageCache = new Map();
+    const mixed = "agent:ops:matrix:channel:!MixedRoomAbCdEf:example.org";
+    const lowered = "agent:ops:matrix:channel:!mixedroomabcdef:example.org";
+
+    cacheChatMessages(cache, host, { sessionKey: mixed }, ["mixed room"]);
+
+    // Same key, exact case: the snapshot is found.
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: mixed })).toEqual(["mixed room"]);
+    // Case-distinct room ID: must not see the other room's messages.
+    expect(readChatMessagesFromCache(cache, host, { sessionKey: lowered })).toEqual([]);
+    expect(readChatSessionSnapshot(cache, host, { sessionKey: lowered })).toBeNull();
+  });
+
   it("canonicalizes main aliases without crossing agent scopes", () => {
     const host = createHost();
     const cache: ChatMessageCache = new Map();
