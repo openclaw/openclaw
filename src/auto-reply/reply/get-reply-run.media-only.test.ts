@@ -11,7 +11,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
-import { resolveCanonicalInboundText } from "./inbound-context.js";
+import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 
@@ -253,11 +253,15 @@ function baseParams(
   };
   const ctx = overrides.ctx ?? defaults.ctx;
   const sessionCtx = overrides.sessionCtx ?? defaults.sessionCtx;
-  const sessionText = resolveCanonicalInboundText(sessionCtx);
+  const resolveTestCanonicalText = (value: Record<string, unknown>) => {
+    const { commandText, agentText, rawText } = finalizeInboundContextForSdk({ ...value });
+    return { commandText, agentText, rawText };
+  };
+  const sessionText = resolveTestCanonicalText(sessionCtx);
   return {
     ...defaults,
     ...overrides,
-    ctx: { ...ctx, ...resolveCanonicalInboundText(ctx) },
+    ctx: { ...ctx, ...resolveTestCanonicalText(ctx) },
     sessionCtx: {
       ...sessionCtx,
       ...sessionText,

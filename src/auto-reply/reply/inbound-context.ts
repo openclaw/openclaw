@@ -64,7 +64,7 @@ export function isFinalizedInboundContext<T extends Record<string, unknown>>(
   return (ctx as T & { [FINALIZED_INBOUND_CONTEXT]?: boolean })[FINALIZED_INBOUND_CONTEXT] === true;
 }
 
-export function resolveCanonicalInboundText(
+function resolveCanonicalInboundText(
   ctx: Record<string, unknown>,
   opts: Pick<FinalizeInboundContextOptions, "forceBodyForAgent" | "forceBodyForCommands"> = {},
 ): CanonicalInboundText {
