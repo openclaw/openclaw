@@ -2888,6 +2888,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
     isExistingPathTarget(arg, cwd) ||
+    (path.posix.extname(relative) === "" &&
+      /^(?:src|test|extensions|ui|packages|apps)\//u.test(relative)) ||
     Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
@@ -3146,6 +3148,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
+        ...(path.posix.extname(relative) === ""
+          ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
+          : {}),
       });
       continue;
     }
