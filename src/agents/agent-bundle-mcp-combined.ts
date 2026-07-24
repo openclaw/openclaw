@@ -88,13 +88,16 @@ export function createCombinedSessionMcpRuntime(params: {
     }
   };
 
+  const sourceCatalogsAreCurrent = (catalogs: readonly McpToolCatalog[]): boolean =>
+    parts.every((part, index) => part.peekCatalog() === catalogs[index]);
+
   // Parts invalidate their own catalogs on tools/list_changed by replacing or
   // clearing the cached object. Identity-compare against what was merged so the
   // facade re-merges instead of serving a stale combined catalog.
   const cachedCatalogIsCurrent = (): boolean =>
     cachedCatalog !== null &&
     mergedSourceCatalogs !== null &&
-    parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
+    sourceCatalogsAreCurrent(mergedSourceCatalogs);
 
   const startCatalogLoad = (): SessionMcpSharedTask<McpToolCatalog> => {
     const controller = new AbortController();
@@ -102,16 +105,23 @@ export function createCombinedSessionMcpRuntime(params: {
       // The combined generation is the real waiter on its parts. Propagating its
       // lifetime lets each part retain work needed by other callers without
       // keeping abandoned merged-catalog work alive.
-      const catalogs = await Promise.all(
-        parts.map((part) => part.getCatalog({ signal: controller.signal })),
-      );
-      serverOwner.clear();
-      for (let index = 0; index < parts.length; index += 1) {
-        rememberServerOwners(catalogs[index]!, parts[index]!);
+      while (true) {
+        const catalogs = await Promise.all(
+          parts.map((part) => part.getCatalog({ signal: controller.signal })),
+        );
+        // A part can replace its catalog while another part is still loading.
+        // Publish only a snapshot whose source identities are still current.
+        if (!sourceCatalogsAreCurrent(catalogs)) {
+          continue;
+        }
+        serverOwner.clear();
+        for (let index = 0; index < parts.length; index += 1) {
+          rememberServerOwners(catalogs[index]!, parts[index]!);
+        }
+        mergedSourceCatalogs = catalogs;
+        cachedCatalog = mergeMcpToolCatalogs(catalogs);
+        return cachedCatalog;
       }
-      mergedSourceCatalogs = catalogs;
-      cachedCatalog = mergeMcpToolCatalogs(catalogs);
-      return cachedCatalog;
     })();
     const refresh: SessionMcpSharedTask<McpToolCatalog> = {
       controller,
