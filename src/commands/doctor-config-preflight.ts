@@ -645,10 +645,18 @@ export async function runDoctorConfigPreflight(
             ? startupMigrationHeartbeatError
             : new Error("OpenClaw startup migration lease heartbeat failed.");
         }
-        if (startupMigrationWarnings.length > 0) {
+        // Filter out informational warnings that indicate migration already completed successfully
+        const realWarnings = startupMigrationWarnings.filter(
+          (w) =>
+            !w.includes("already existed in shared state") &&
+            !w.includes("already exists in shared state") &&
+            !w.includes("conflicting plugin install metadata") &&
+            !w.includes("State dir migration skipped"),
+        );
+        if (realWarnings.length > 0) {
           throwStartupMigrationRefusal(
             formatStartupMigrationFailure({
-              warnings: startupMigrationWarnings,
+              warnings: realWarnings,
               blockers: [],
             }),
           );
