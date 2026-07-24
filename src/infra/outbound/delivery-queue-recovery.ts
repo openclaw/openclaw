@@ -117,6 +117,7 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+
 const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function resolveMaxRetries(entry: QueuedDelivery): number {
@@ -958,6 +959,14 @@ async function drainQueuedEntry(opts: {
   }
 }
 
+export type ReconnectDrainResult = {
+  matched: number;
+  drained: number;
+  skippedInProgress: number;
+  /** IDs of entries that were skipped because another path holds an active claim. */
+  skippedEntryIds: string[];
+};
+
 export async function drainPendingDeliveries(opts: {
   drainKey: string;
   logLabel: string;
@@ -966,10 +975,16 @@ export async function drainPendingDeliveries(opts: {
   stateDir?: string;
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => PendingDeliveryDrainDecision;
-}): Promise<void> {
+}): Promise<ReconnectDrainResult> {
+  const emptyResult: ReconnectDrainResult = {
+    matched: 0,
+    drained: 0,
+    skippedInProgress: 0,
+    skippedEntryIds: [],
+  };
   if (drainInProgress.get(opts.drainKey)) {
     opts.log.info(`${opts.logLabel}: already in progress for ${opts.drainKey}, skipping`);
-    return;
+    return emptyResult;
   }
 
   drainInProgress.set(opts.drainKey, true);
@@ -981,13 +996,23 @@ export async function drainPendingDeliveries(opts: {
       .toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 
     if (matchingEntries.length === 0) {
-      return;
+      return emptyResult;
     }
+
+    const drainResult: ReconnectDrainResult = {
+      matched: matchingEntries.length,
+      drained: 0,
+      skippedInProgress: 0,
+      skippedEntryIds: [],
+    };
 
     for (const entry of matchingEntries) {
       if (!claimSharedRecoveryEntry(entriesInProgress, entry.id)) {
         // Poll-driven reconnect drains can repeat immediately while startup or a
         // live send owns this claim. Logging each skip can starve that owner.
+        // Still count the skip so callers can suppress futile re-entry (openclaw#89953).
+        drainResult.skippedInProgress += 1;
+        drainResult.skippedEntryIds.push(entry.id);
         continue;
       }
 
@@ -1054,7 +1079,7 @@ export async function drainPendingDeliveries(opts: {
 
         await recoveryReplayPacer.wait();
 
-        const result = await drainQueuedEntry({
+        const outcome = await drainQueuedEntry({
           entry: currentEntry,
           cfg: opts.cfg,
           deliver,
@@ -1070,7 +1095,8 @@ export async function drainPendingDeliveries(opts: {
             opts.log.warn(`${opts.logLabel}: retry failed for entry ${failedEntry.id}: ${errMsg}`);
           },
         });
-        if (result === "recovered") {
+        if (outcome === "recovered") {
+          drainResult.drained += 1;
           opts.log.info(
             `${opts.logLabel}: drained delivery ${currentEntry.id} on ${currentEntry.channel}`,
           );
@@ -1079,6 +1105,7 @@ export async function drainPendingDeliveries(opts: {
         releaseSharedRecoveryEntry(entriesInProgress, entry.id);
       }
     }
+    return drainResult;
   } finally {
     drainInProgress.delete(opts.drainKey);
   }

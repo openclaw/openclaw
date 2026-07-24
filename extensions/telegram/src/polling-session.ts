@@ -124,6 +124,8 @@ export class TelegramPollingSession {
   #stallThresholdMs: number;
   #spooledUpdateHandlerTimeoutMs: number;
   #deliveryDrainInFlight = false;
+  /** One-shot: skip the next drain if the previous found only in-progress entries. */
+  #deliveryDrainSuppressNext = false;
   #nextDeliveryDrainAt = 0;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
@@ -232,6 +234,15 @@ export class TelegramPollingSession {
     if (this.#deliveryDrainInFlight) {
       return;
     }
+    // One-shot suppression: if the previous drain found only in-progress
+    // entries (nothing new to drain), skip this cycle to reduce futile
+    // re-entry while a live send holds the recovery claim (openclaw#89953).
+    // Clear after one suppression so newly pending entries recover within
+    // at most one additional drain interval.
+    if (this.#deliveryDrainSuppressNext) {
+      this.#deliveryDrainSuppressNext = false;
+      return;
+    }
     if (!this.opts.config) {
       return;
     }
@@ -253,9 +264,16 @@ export class TelegramPollingSession {
         bypassBackoff: false,
       }),
     })
-      .catch((err: unknown) => {
-        this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
-      })
+      .then(
+        (drainResult) => {
+          if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) {
+            this.#deliveryDrainSuppressNext = true;
+          }
+        },
+        (err: unknown) => {
+          this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
+        },
+      )
       .finally(() => {
         this.#deliveryDrainInFlight = false;
       });

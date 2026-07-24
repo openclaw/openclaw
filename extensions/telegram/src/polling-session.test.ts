@@ -54,7 +54,14 @@ const computeBackoffMock = vi.hoisted(() =>
   vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
 );
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
-const drainPendingDeliveriesMock = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
+const drainPendingDeliveriesMock = vi.hoisted(() =>
+  vi.fn(async (_opts: unknown) => ({
+    matched: 0,
+    drained: 0,
+    skippedInProgress: 0,
+    skippedEntryIds: [] as string[],
+  })),
+);
 
 vi.mock("@grammyjs/runner", () => ({
   run: runMock,
@@ -847,7 +854,12 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
+    drainPendingDeliveriesMock.mockReset().mockResolvedValue({
+      matched: 0,
+      drained: 0,
+      skippedInProgress: 0,
+      skippedEntryIds: [],
+    });
     resetTelegramReplyFenceForTests();
     installTelegramIngressQueueRuntime(() =>
       path.join(os.tmpdir(), "openclaw-telegram-test-state"),
@@ -4126,6 +4138,180 @@ describe("TelegramPollingSession", () => {
     await waitForTelegramTestState(() =>
       expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2),
     );
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("suppresses reconnect drain re-entry when all entries are already being recovered", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    drainPendingDeliveriesMock.mockResolvedValue({
+      matched: 1,
+      drained: 0,
+      skippedInProgress: 1,
+      skippedEntryIds: ["entry-1"],
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+
+    // Force next interval window by re-arming via error, then a success that would
+    // otherwise drain. One-shot suppression must still skip that cycle.
+    await expect(
+      apiMiddleware(
+        vi.fn(async () => {
+          throw new Error("offline");
+        }),
+        "getUpdates",
+        { offset: 2 },
+      ),
+    ).rejects.toThrow("offline");
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 3 },
+    );
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+    expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("resumes drain after one-shot suppression clears", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    drainPendingDeliveriesMock
+      .mockResolvedValueOnce({
+        matched: 1,
+        drained: 0,
+        skippedInProgress: 1,
+        skippedEntryIds: ["entry-1"],
+      })
+      .mockResolvedValueOnce({ matched: 1, drained: 1, skippedInProgress: 0, skippedEntryIds: [] });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+
+    await expect(
+      apiMiddleware(
+        vi.fn(async () => {
+          throw new Error("offline");
+        }),
+        "getUpdates",
+        { offset: 2 },
+      ),
+    ).rejects.toThrow("offline");
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 3 },
+    );
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+    expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1);
+
+    await expect(
+      apiMiddleware(
+        vi.fn(async () => {
+          throw new Error("offline");
+        }),
+        "getUpdates",
+        { offset: 4 },
+      ),
+    ).rejects.toThrow("offline");
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 5 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("does not suppress drain when entries were actually drained", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    drainPendingDeliveriesMock.mockResolvedValue({
+      matched: 1,
+      drained: 1,
+      skippedInProgress: 0,
+      skippedEntryIds: [],
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+
+    await expect(
+      apiMiddleware(
+        vi.fn(async () => {
+          throw new Error("offline");
+        }),
+        "getUpdates",
+        { offset: 2 },
+      ),
+    ).rejects.toThrow("offline");
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 3 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
 
     abort.abort();
     resolveFirstTask();

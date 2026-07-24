@@ -601,4 +601,84 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
     expect(deliver).toHaveBeenCalledTimes(1);
   });
+
+  it("returns drain result with skippedInProgress count and entry IDs for in-flight entries", async () => {
+    // Regression for openclaw#89953: callers need matched/skipped counts to
+    // suppress futile re-entry while a live send holds the recovery claim.
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+
+    const id = await enqueueDelivery(
+      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
+      tmpDir,
+    );
+
+    const claimResult = await withActiveDeliveryClaim(id, async () => {
+      const result = await drainPendingDeliveries({
+        drainKey: "directchat:acct1",
+        logLabel: "DirectChat reconnect drain",
+        cfg: stubCfg,
+        log,
+        stateDir: tmpDir,
+        deliver,
+        selectEntry: (entry) => ({
+          match:
+            entry.channel === "directchat" &&
+            normalizeReconnectAccountIdForTest(entry.accountId) === "acct1",
+          bypassBackoff: false,
+        }),
+      });
+      expect(result.matched).toBe(1);
+      expect(result.skippedInProgress).toBe(1);
+      expect(result.drained).toBe(0);
+      expect(result.skippedEntryIds).toEqual([id]);
+    });
+    expect(claimResult.status).toBe("claimed");
+  });
+
+  it("returns drain result with drained count for recovered entries", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+
+    await enqueueDelivery(
+      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
+      tmpDir,
+    );
+
+    const result = await drainPendingDeliveries({
+      drainKey: "directchat:acct1",
+      logLabel: "DirectChat reconnect drain",
+      cfg: stubCfg,
+      log,
+      stateDir: tmpDir,
+      deliver,
+      selectEntry: (entry) => ({
+        match:
+          entry.channel === "directchat" &&
+          normalizeReconnectAccountIdForTest(entry.accountId) === "acct1",
+        bypassBackoff: false,
+      }),
+    });
+    expect(result.matched).toBe(1);
+    expect(result.drained).toBe(1);
+    expect(result.skippedInProgress).toBe(0);
+  });
+
+  it("returns empty drain result when no entries match", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+
+    const result = await drainPendingDeliveries({
+      drainKey: "directchat:acct1",
+      logLabel: "DirectChat reconnect drain",
+      cfg: stubCfg,
+      log,
+      stateDir: tmpDir,
+      deliver,
+      selectEntry: () => ({ match: true, bypassBackoff: false }),
+    });
+    expect(result.matched).toBe(0);
+    expect(result.drained).toBe(0);
+    expect(result.skippedInProgress).toBe(0);
+  });
 });
