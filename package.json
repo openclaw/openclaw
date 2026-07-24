@@ -1672,6 +1672,7 @@
     "test:changed": "node scripts/test-projects.mjs --changed origin/main",
     "test:changed:max": "node scripts/test-projects-max.mjs --changed origin/main",
     "test:channels": "node scripts/run-vitest.mjs run --config test/vitest/vitest.channels.config.ts",
+    "test:context-compaction-probes": "node scripts/context-compaction-quality-probes.mjs --min-pass-rate 1",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
     "test:contracts:channels": "node scripts/test-projects.mjs --maxWorkers=1 test/vitest/vitest.contracts-channel-surface.config.ts test/vitest/vitest.contracts-channel-config.config.ts test/vitest/vitest.contracts-channel-registry.config.ts test/vitest/vitest.contracts-channel-session.config.ts",
     "test:contracts:plugins": "node scripts/run-vitest.mjs run --config test/vitest/vitest.contracts-plugin.config.ts --maxWorkers=1",

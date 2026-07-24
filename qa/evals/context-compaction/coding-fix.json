@@ -1,0 +1,58 @@
+{
+  "id": "coding-fix",
+  "title": "Next.js route regression fix",
+  "transcript": [
+    "Task 6b829071: add heartbeat reports to Mission Control approvals inbox.",
+    "Touched src/lib/heartbeatReports.ts, src/app/api/approvals/route.ts, and src/app/approvals/page.tsx.",
+    "Rejected a duplicate /heartbeat page; the existing /approvals inbox is the right surface.",
+    "Verification passed: npm run test:heartbeat-reports, npx tsc --noEmit, npm run lint with pre-existing <img> warnings, npm run build.",
+    "Blocked: PR #196 cannot merge because required GitHub AI Code Review fails before review on Anthropic low-credit 400. Iris was notified."
+  ],
+  "summary": "Goal: finish Mission Control task 6b829071 by adding heartbeat reports to the approvals inbox, not a duplicate /heartbeat page. Changed src/lib/heartbeatReports.ts, src/app/api/approvals/route.ts, and src/app/approvals/page.tsx. Tests/checks run: npm run test:heartbeat-reports, npx tsc --noEmit, npm run lint, npm run build; lint/build only have pre-existing <img> warnings. Decision: render heartbeat cards inside /approvals. Blocker/next step: PR #196 is waiting on GitHub AI Code Review, currently failing before review due to Anthropic low-credit 400; Iris has been notified and merge/deploy must wait.",
+  "probes": [
+    {
+      "id": "goal",
+      "category": "Recall",
+      "question": "What task and product surface is the session trying to finish?",
+      "mustIncludeAny": [["6b829071"], ["approvals inbox", "/approvals"]]
+    },
+    {
+      "id": "files",
+      "category": "Artifact",
+      "question": "Which files changed?",
+      "mustIncludeAny": [
+        ["src/lib/heartbeatReports.ts"],
+        ["src/app/api/approvals/route.ts"],
+        ["src/app/approvals/page.tsx"]
+      ]
+    },
+    {
+      "id": "decision",
+      "category": "Decision",
+      "question": "What alternative was rejected?",
+      "mustIncludeAny": [["duplicate /heartbeat page", "not a duplicate"]]
+    },
+    {
+      "id": "checks",
+      "category": "Artifact",
+      "question": "Which verification commands passed?",
+      "mustIncludeAny": [
+        ["npm run test:heartbeat-reports"],
+        ["npx tsc --noEmit"],
+        ["npm run lint"],
+        ["npm run build"]
+      ]
+    },
+    {
+      "id": "blocker",
+      "category": "Continuation",
+      "question": "What blocks merge/deploy?",
+      "mustIncludeAny": [
+        ["PR #196"],
+        ["GitHub AI Code Review"],
+        ["Anthropic low-credit 400"],
+        ["Iris"]
+      ]
+    }
+  ]
+}
