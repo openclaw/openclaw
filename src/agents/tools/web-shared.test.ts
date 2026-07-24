@@ -349,4 +349,85 @@ describe("readResponseText", () => {
     });
     expect(text).toHaveBeenCalledTimes(1);
   });
+
+  it("returns empty when arrayBuffer provides malformed UTF-8 bytes", async () => {
+    const malformed = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f, 0xff, 0x21]);
+    const arrayBuffer = vi.fn(async () => malformed.buffer);
+    const response = {
+      headers: new Headers(),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("preserves legitimate U+FFFD when server intentionally sends it", async () => {
+    // U+FFFD encoded as valid UTF-8: 0xEF 0xBF 0xBD
+    const validUfffd = new Uint8Array([0x48, 0x69, 0xef, 0xbf, 0xbd, 0x21]);
+    const arrayBuffer = vi.fn(async () => validUfffd.buffer);
+    const response = {
+      headers: new Headers(),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toMatchObject({
+      text: expect.stringContaining("�") as unknown,
+      truncated: false,
+    });
+  });
+
+  it("returns empty when text() fallback rejects instead of swallowing the error", async () => {
+    const text = vi.fn(async () => {
+      throw new Error("network failure");
+    });
+    const response = {
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("falls back to text() when arrayBuffer fails", async () => {
+    const arrayBuffer = vi.fn(async () => {
+      throw new Error("not implemented");
+    });
+    const text = vi.fn(async () => "fallback text");
+    const response = {
+      headers: new Headers(),
+      arrayBuffer,
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toMatchObject({
+      text: "fallback text",
+      truncated: false,
+    });
+    expect(arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(text).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves legitimate U+FFFD in a UTF-16LE response", async () => {
+    // U+FFFD in UTF-16LE: 0xFD 0xFF (little-endian)
+    const encoder = new TextEncoder();
+    const validUtf8Ufffd = encoder.encode("Hi�I!");
+    const arrayBuffer = vi.fn(async () => validUtf8Ufffd.buffer);
+    const response = {
+      headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+      arrayBuffer,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toMatchObject({
+      text: expect.stringContaining("�") as unknown,
+      truncated: false,
+    });
+  });
 });

@@ -299,18 +299,35 @@ export async function readResponseText(
 
   const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
   if (typeof readBytes === "function") {
+    let rawBytes: Uint8Array;
     try {
-      const bytes = new Uint8Array(await readBytes.call(res));
-      return {
-        text: decodeResponseBytes(res, bytes),
-        truncated: false,
-        bytesRead: bytes.byteLength,
-      };
+      rawBytes = new Uint8Array(await readBytes.call(res));
     } catch {
-      // Fall back to text() for lightweight Response-like mocks that do not expose bytes.
+      // arrayBuffer failed — fall back to text() for compatibility
+    }
+    if (rawBytes!) {
+      const decoded = decodeResponseBytes(res, rawBytes);
+      // If decodeResponseBytes produced U+FFFD, validate with the same
+      // charset that decodeResponseBytes resolved rather than hard-coding
+      // UTF-8. This preserves legitimate U+FFFD in non-UTF-8 encodings.
+      if (decoded.includes("�")) {
+        // Use the same charset resolution as decodeResponseBytes so
+        // BOM-sniffed encodings (e.g. UTF-16LE) are validated correctly.
+        const contentType = responseContentType(res);
+        const charset =
+          readCharsetParam(contentType) ?? sniffCharset(contentType, rawBytes) ?? "utf-8";
+        try {
+          new TextDecoder(charset, { fatal: true }).decode(rawBytes);
+          // strict decode passed — the U+FFFD is legitimate
+        } catch {
+          return { text: "", truncated: false, bytesRead: 0 };
+        }
+      }
+      return { text: decoded, truncated: false, bytesRead: rawBytes.byteLength };
     }
   }
 
+  // No raw-byte access — text() is the only fallback for mock Response objects
   try {
     const text = await res.text();
     const bytes = new TextEncoder().encode(text);
