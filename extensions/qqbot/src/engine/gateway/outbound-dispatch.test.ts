@@ -350,6 +350,34 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("uploads quoted self-closing qqmedia file tags with spaces", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-scoped-media-space-"));
+    try {
+      const filePath = path.join(tmpRoot, "tagged report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+
+      const result = await sendText({
+        to: "qqbot:c2c:user-openid",
+        text: `<qqmedia file="${filePath}" />`,
+        accountId: "qq-main",
+        account,
+        mediaAccess: { localRoots: [tmpRoot] },
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("loads scoped media through host read callbacks", async () => {
     // realpath: macOS tmpdir is a /var -> /private/var symlink and root
     // containment checks compare against canonicalized roots.

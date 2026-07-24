@@ -18,6 +18,26 @@ describe("media-tags with HTML entities", () => {
     expect(normalizeMediaTags(input)).toBe("<qqmedia>https://example.com/c.zip</qqmedia>");
   });
 
+  it("extracts quoted file paths with spaces from self-closing tags", () => {
+    const input = '<qqmedia file="C:/tmp/foo bar.png" />';
+    expect(normalizeMediaTags(input)).toBe("<qqmedia>C:/tmp/foo bar.png</qqmedia>");
+  });
+
+  it("extracts single-quoted file paths with spaces from self-closing tags", () => {
+    const input = "<qqmedia file='C:/tmp/foo bar.png' />";
+    expect(normalizeMediaTags(input)).toBe("<qqmedia>C:/tmp/foo bar.png</qqmedia>");
+  });
+
+  it("keeps unquoted file attributes bounded by whitespace", () => {
+    const input = "<qqmedia file=C:/tmp/foo bar.png />";
+    expect(normalizeMediaTags(input)).toBe(input);
+  });
+
+  it("extracts quoted file paths with spaces after another quoted attribute", () => {
+    const input = '<qqmedia alt="upload proof" file="C:/tmp/foo bar.png" />';
+    expect(normalizeMediaTags(input)).toBe("<qqmedia>C:/tmp/foo bar.png</qqmedia>");
+  });
+
   it("does not match invalid input", () => {
     const input = "no tag here";
     expect(normalizeMediaTags(input)).toBe(input);

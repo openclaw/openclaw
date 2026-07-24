@@ -81,6 +81,10 @@ const TAG_NAME_PATTERN = ALL_TAG_NAMES.join("|");
 
 const LEFT_BRACKET = "(?:[<\uff1c\u003c]|&lt;)";
 const RIGHT_BRACKET = "(?:[>\uff1e\u003e]|&gt;)";
+const ATTR_VALUE_PATTERN =
+  "(?:\"[^\"\\uff1c<>\uff1e>]*\"|'[^'\\uff1c<>\uff1e>]*'|[^\"'\\s\\uff1c<>\uff1e>]+)";
+const MEDIA_ATTR_VALUE_PATTERN =
+  "(?:\"([^\"\\uff1c<>\uff1e>]*)\"|'([^'\\uff1c<>\uff1e>]*)'|([^\"'\\s\\uff1c<>\uff1e>]+))";
 
 /** Match self-closing media-tag syntax with file/src/path/url attributes. */
 const SELF_CLOSING_TAG_REGEX = new RegExp(
@@ -89,12 +93,14 @@ const SELF_CLOSING_TAG_REGEX = new RegExp(
     "\\s*(" +
     TAG_NAME_PATTERN +
     ")" +
-    "(?:\\s+(?!file|src|path|url)[a-z_-]+\\s*=\\s*[\"']?[^\"'\\s\uff1c<>\uff1e>]*?[\"']?)*" +
+    "(?:\\s+(?!(?:file|src|path|url)\\b)[a-z_-]+\\s*=\\s*" +
+    ATTR_VALUE_PATTERN +
+    ")*" +
     "\\s+(?:file|src|path|url)\\s*=\\s*" +
-    "[\"']?" +
-    "([^\"'\\s>\uff1e]+?)" +
-    "[\"']?" +
-    "(?:\\s+[a-z_-]+\\s*=\\s*[\"']?[^\"'\\s\uff1c<>\uff1e>]*?[\"']?)*" +
+    MEDIA_ATTR_VALUE_PATTERN +
+    "(?:\\s+[a-z_-]+\\s*=\\s*" +
+    ATTR_VALUE_PATTERN +
+    ")*" +
     "\\s*/?" +
     "\\s*" +
     RIGHT_BRACKET +
@@ -163,7 +169,16 @@ export function normalizeMediaTags(text: string): string {
     return `<${tag}>${expanded}</${tag}>`;
   };
 
-  let cleaned = text.replace(SELF_CLOSING_TAG_REGEX, normalizeWrappedTag);
+  let cleaned = text.replace(
+    SELF_CLOSING_TAG_REGEX,
+    (
+      _match: string,
+      rawTag: string,
+      doubleQuoted: string,
+      singleQuoted: string,
+      unquoted: string,
+    ) => normalizeWrappedTag(_match, rawTag, doubleQuoted ?? singleQuoted ?? unquoted ?? ""),
+  );
 
   cleaned = cleaned.replace(
     MULTILINE_TAG_CLEANUP,
