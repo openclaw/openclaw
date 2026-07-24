@@ -57,6 +57,19 @@ const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 const SUBAGENT_REPLY_HISTORY_LIMIT = 50;
 
 const steerRateLimit = new Map<string, number>();
+const STEER_RATE_LIMIT_MAX = 1024;
+const STEER_RATE_LIMIT_SWEEP_INTERVAL_MS = 60_000;
+
+function cleanSteerRateLimitStale(now: number): void {
+  const staleThreshold = now - STEER_RATE_LIMIT_MS * 10;
+  for (const [key, ts] of steerRateLimit) {
+    if (ts < staleThreshold) {
+      steerRateLimit.delete(key);
+    }
+  }
+}
+
+setInterval(() => cleanSteerRateLimitStale(Date.now()), STEER_RATE_LIMIT_SWEEP_INTERVAL_MS).unref();
 
 type GatewayCaller = typeof callGateway;
 type PatchSessionEntry = typeof patchSessionEntry;
@@ -714,6 +727,11 @@ export async function steerControlledSubagentRun(params: {
       };
     }
     steerRateLimit.set(rateKey, now);
+    while (steerRateLimit.size > STEER_RATE_LIMIT_MAX) {
+      const first = steerRateLimit.keys().next();
+      if (first.done) {break;}
+      steerRateLimit.delete(first.value);
+    }
   }
 
   markSubagentRunForSteerRestart(params.entry.runId);
