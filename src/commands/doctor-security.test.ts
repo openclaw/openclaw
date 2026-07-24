@@ -1,8 +1,11 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -255,6 +258,238 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const cfg = { gateway: {} } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
     expect(note).not.toHaveBeenCalled();
+  });
+
+  type TrustedProxyDoctorOptions = {
+    trustedProxies: string[];
+    trustedProxy?: GatewayTrustedProxyConfig | null;
+    token?: string;
+    localInterfaces?: string[];
+    interfaceLookupFails?: boolean;
+  };
+  const trustedProxyDoctorCases: Array<
+    [string, TrustedProxyDoctorOptions, expectedCritical?: string]
+  > = [
+    ["accepts an exact proxy address", { trustedProxies: ["192.0.2.10"] }],
+    ["accepts a host-scoped IPv4 CIDR", { trustedProxies: ["192.0.2.10/32"] }],
+    ["accepts a host-scoped IPv6 CIDR", { trustedProxies: ["2001:db8::10/128"] }],
+    ["accepts an IPv4-mapped host-scoped IPv6 CIDR", { trustedProxies: ["::ffff:192.0.2.10/128"] }],
+    [
+      "rejects an IPv4-mapped proxy subnet",
+      { trustedProxies: ["::ffff:192.0.2.0/24"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects missing trusted-proxy config",
+      { trustedProxies: ["192.0.2.10"], trustedProxy: null },
+      "no trustedProxy config was provided",
+    ],
+    ["rejects missing proxy sources", { trustedProxies: [] }, "trustedProxies is empty"],
+    ["rejects an invalid proxy source", { trustedProxies: ["not-an-ip"] }, "invalid or unusable"],
+    ["rejects the IPv4 unspecified address", { trustedProxies: ["0.0.0.0"] }, "usable unicast"],
+    ["rejects the IPv6 unspecified address", { trustedProxies: ["::"] }, "usable unicast"],
+    ["rejects an IPv4 multicast address", { trustedProxies: ["224.0.0.1"] }, "usable unicast"],
+    ["rejects an IPv6 multicast address", { trustedProxies: ["ff02::1"] }, "usable unicast"],
+    [
+      "rejects the IPv4 broadcast address",
+      { trustedProxies: ["255.255.255.255"] },
+      "usable unicast",
+    ],
+    [
+      "rejects a blank user header",
+      { trustedProxies: ["192.0.2.10"], trustedProxy: { userHeader: "  " } },
+      "trustedProxy.userHeader is empty",
+    ],
+    [
+      "rejects an invalid user header name",
+      { trustedProxies: ["192.0.2.10"], trustedProxy: { userHeader: "x forwarded user" } },
+      "not a valid HTTP header name",
+    ],
+    [
+      "rejects an invalid required header name",
+      {
+        trustedProxies: ["192.0.2.10"],
+        trustedProxy: { userHeader: "x-forwarded-user", requiredHeaders: [""] },
+      },
+      "not a valid HTTP header name",
+    ],
+    [
+      "rejects an undeliverable user header name",
+      { trustedProxies: ["192.0.2.10"], trustedProxy: { userHeader: "__proto__" } },
+      "not a deliverable HTTP header name",
+    ],
+    [
+      "rejects an undeliverable required header name",
+      {
+        trustedProxies: ["192.0.2.10"],
+        trustedProxy: { userHeader: "x-forwarded-user", requiredHeaders: ["__proto__"] },
+      },
+      "not a deliverable HTTP header name",
+    ],
+    [
+      "allows a usable identity after a malformed allowUsers entry",
+      {
+        trustedProxies: ["192.0.2.10"],
+        trustedProxy: { userHeader: "x-forwarded-user", allowUsers: [" alice ", "bob"] },
+      },
+    ],
+    [
+      "allows a usable identity after an undeliverable allowUsers entry",
+      {
+        trustedProxies: ["192.0.2.10"],
+        trustedProxy: { userHeader: "x-forwarded-user", allowUsers: ["alice\nbob", "carol"] },
+      },
+    ],
+    [
+      "rejects an allowUsers list with no usable identity",
+      {
+        trustedProxies: ["192.0.2.10"],
+        trustedProxy: { userHeader: "x-forwarded-user", allowUsers: [" alice ", "  "] },
+      },
+      "No configured proxy source can pass",
+    ],
+    [
+      "rejects an allowUsers list with no deliverable identity",
+      {
+        trustedProxies: ["192.0.2.10"],
+        trustedProxy: { userHeader: "x-forwarded-user", allowUsers: ["alice\u0000bob"] },
+      },
+      "No configured proxy source can pass",
+    ],
+    [
+      "rejects a disallowed loopback source",
+      { trustedProxies: ["127.0.0.1"] },
+      "No configured proxy source can pass",
+    ],
+    [
+      "allows an explicitly trusted loopback source",
+      {
+        trustedProxies: ["127.0.0.1"],
+        trustedProxy: { userHeader: "x-user", allowLoopback: true },
+      },
+    ],
+    [
+      "rejects a bounded IPv4 proxy subnet",
+      { trustedProxies: ["192.0.2.0/24"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects a bounded IPv6 proxy subnet",
+      { trustedProxies: ["2001:db8::/120"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects a single half-family IPv4 range",
+      { trustedProxies: ["0.0.0.0/1"] },
+      "non-host-scoped CIDR",
+    ],
+    ["rejects an invalid CIDR prefix", { trustedProxies: ["192.0.2.0/33"] }, "invalid or unusable"],
+    [
+      "rejects a default route mixed with an exact source",
+      { trustedProxies: ["192.0.2.10", "0.0.0.0/0"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects an IPv4-mapped default route",
+      { trustedProxies: ["::ffff:0.0.0.0/0"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects an IPv6 default route",
+      { trustedProxies: ["2001:db8::10", "::/0"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects split ranges covering all IPv4 sources",
+      { trustedProxies: ["0.0.0.0/1", "128.0.0.0/1"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects ranges covering every conventional IPv4 unicast source",
+      { trustedProxies: ["0.0.0.0/1", "128.0.0.0/2", "192.0.0.0/3"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects mixed mapped ranges covering all IPv4 sources",
+      { trustedProxies: ["::ffff:0.0.0.0/1", "128.0.0.0/1"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects split ranges covering all IPv6 sources",
+      { trustedProxies: ["::/1", "8000::/1"] },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects ranges covering every conventional IPv6 unicast source",
+      {
+        trustedProxies: [
+          "::/1",
+          "8000::/2",
+          "c000::/3",
+          "e000::/4",
+          "f000::/5",
+          "f800::/6",
+          "fc00::/7",
+          "fe00::/8",
+        ],
+      },
+      "non-host-scoped CIDR",
+    ],
+    [
+      "rejects a shared-token conflict",
+      { trustedProxies: ["192.0.2.10"], token: "test-token" },
+      "mutually exclusive",
+    ],
+  ];
+
+  it.each(trustedProxyDoctorCases)("%s", async (_name, options, expectedCritical) => {
+    const { trustedProxies, trustedProxy, token, localInterfaces, interfaceLookupFails } = options;
+    const networkInterfacesSpy = vi.spyOn(os, "networkInterfaces");
+    if (interfaceLookupFails) {
+      networkInterfacesSpy.mockImplementation(() => {
+        throw new Error("synthetic interface lookup failure");
+      });
+    } else {
+      networkInterfacesSpy.mockReturnValue(
+        makeNetworkInterfacesSnapshot({
+          lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+          ...(localInterfaces
+            ? {
+                eth0: localInterfaces.map((address) => ({
+                  address,
+                  family: address.includes(":") ? ("IPv6" as const) : ("IPv4" as const),
+                })),
+              }
+            : {}),
+        }),
+      );
+    }
+    try {
+      await noteSecurityWarnings({
+        gateway: {
+          bind: "lan",
+          trustedProxies,
+          controlUi: { allowedOrigins: ["https://control.example.test"] },
+          auth: {
+            mode: "trusted-proxy",
+            token,
+            trustedProxy:
+              trustedProxy === null
+                ? undefined
+                : (trustedProxy ?? { userHeader: "x-forwarded-user" }),
+          },
+        },
+      } as OpenClawConfig);
+    } finally {
+      networkInterfacesSpy.mockRestore();
+    }
+
+    const message = lastMessage();
+    expect(message.includes("CRITICAL")).toBe(expectedCritical !== undefined);
+    expect(message).toContain(expectedCritical ?? "trusted-proxy authentication configured");
+    expect(message).toContain("openclaw security audit --deep");
+    expect(message).not.toContain("without authentication");
+    expect(message).not.toContain("openclaw doctor --fix");
   });
 
   it("shows explicit dmScope config command for multi-user DMs", async () => {
