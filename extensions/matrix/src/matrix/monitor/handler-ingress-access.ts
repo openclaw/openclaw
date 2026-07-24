@@ -1,3 +1,4 @@
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAllowBotsMode } from "./handler-helpers.js";
@@ -315,4 +316,3 @@ export async function resolveMatrixIngressAccess(config: {
 export type MatrixIngressAccessResult = NonNullable<
   Awaited<ReturnType<typeof resolveMatrixIngressAccess>>
 >;
-import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
