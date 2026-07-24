@@ -854,6 +854,8 @@ class ChatPane extends OpenClawLightDomElement {
     const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
       areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
     );
+    // Solo dormancy intentionally hides persisted rows too; when a second identity
+    // returns, the presence transition below triggers a fresh authoritative list.
     if (
       !scope ||
       !row ||
