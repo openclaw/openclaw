@@ -11,14 +11,13 @@ import {
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
   readPositiveIntegerParam,
-  readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  resolveWebSearchProviderCredential,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderSetupContext,
@@ -48,7 +47,7 @@ const KIMI_WEB_SEARCH_TOOL = {
 } as const;
 
 type KimiConfig = {
-  apiKey?: string;
+  apiKey?: unknown;
   baseUrl?: string;
   model?: string;
 };
@@ -97,10 +96,11 @@ function resolveKimiConfig(searchConfig?: SearchConfigRecord): KimiConfig {
 }
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
-  return (
-    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
-    readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
-  );
+  return resolveWebSearchProviderCredential({
+    credentialValue: kimi?.apiKey,
+    path: "plugins.entries.moonshot.config.webSearch.apiKey",
+    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+  });
 }
 
 function resolveKimiModel(kimi?: KimiConfig): string {

@@ -1,30 +1,13 @@
 // Moonshot tests cover kimi web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
-
-function withEnv(overrides: Record<string, string>, run: () => void): void {
-  const previous = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(overrides)) {
-    previous.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-  try {
-    run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
+const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
+const kimiSecretRefApiKeyEnv = ["KIMI_WEB_SEARCH_REF", "KEY"].join("_");
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -33,9 +16,12 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-async function executeKimiSearch(query: string): Promise<Record<string, unknown>> {
+async function executeKimiSearch(
+  query: string,
+  config: OpenClawConfig = {},
+): Promise<Record<string, unknown>> {
   const provider = createKimiWebSearchProvider();
-  const tool = provider.createTool({ config: {}, searchConfig: {} });
+  const tool = provider.createTool({ config, searchConfig: {} });
   if (!tool) {
     throw new Error("Expected tool definition");
   }
@@ -70,6 +56,87 @@ describe("kimi web search provider", () => {
         "use web_fetch for a specific URL or the browser tool",
       );
     });
+  });
+
+  it("resolves configured env SecretRef apiKey", () => {
+    const configuredApiKey = {
+      source: "env",
+      provider: "default",
+      id: kimiSecretRefApiKeyEnv,
+    };
+
+    withEnv(
+      {
+        [kimiSecretRefApiKeyEnv]: "sample",
+        [kimiApiKeyEnv]: undefined,
+        [moonshotApiKeyEnv]: undefined,
+      },
+      () => {
+        expect(testing.resolveKimiApiKey({ apiKey: configuredApiKey })).toBe("sample");
+      },
+    );
+  });
+
+  it("does not use ambient env fallback when configured env SecretRef is missing", () => {
+    const configuredApiKey = {
+      source: "env",
+      provider: "default",
+      id: kimiSecretRefApiKeyEnv,
+    };
+
+    withEnv(
+      {
+        [kimiSecretRefApiKeyEnv]: undefined,
+        [kimiApiKeyEnv]: "dummy",
+        [moonshotApiKeyEnv]: "example",
+      },
+      () => {
+        expect(testing.resolveKimiApiKey({ apiKey: configuredApiKey })).toBeUndefined();
+      },
+    );
+  });
+
+  it("resolves configured env SecretRef apiKey through plugin config", async () => {
+    const configuredApiKey = {
+      source: "env",
+      provider: "default",
+      id: kimiSecretRefApiKeyEnv,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        search_results: [{ url: "https://example.test/kimi" }],
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { content: "Kimi configured ref answer." },
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync(
+      {
+        [kimiSecretRefApiKeyEnv]: "sample",
+        [kimiApiKeyEnv]: undefined,
+        [moonshotApiKeyEnv]: undefined,
+      },
+      async () => {
+        const result = await executeKimiSearch("kimi configured SecretRef search", {
+          plugins: {
+            entries: {
+              moonshot: {
+                config: { webSearch: { apiKey: configuredApiKey } },
+              },
+            },
+          },
+        });
+
+        const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+        expect(result).not.toHaveProperty("error");
+        expect(requestInit?.headers).toMatchObject({ Authorization: "Bearer sample" });
+      },
+    );
   });
 
   it("uses configured model and base url overrides with sane defaults", () => {
