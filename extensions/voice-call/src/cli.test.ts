@@ -1,12 +1,41 @@
 // Voice Call tests cover cli plugin behavior.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
+const sleepMock = vi.hoisted(() =>
+  vi.fn(
+    (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }),
+  ),
+);
+const tempDirs = new Set<string>();
+
+function makeTempDir(prefix: string) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.add(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  tempDirs.clear();
+});
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
   callGatewayFromCli: callGatewayFromCliMock,
+}));
+vi.mock("../api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api.js")>()),
+  sleep: sleepMock,
 }));
 
 import { registerVoiceCallCli } from "./cli.js";
@@ -26,6 +55,7 @@ function captureStdout() {
 describe("voice-call CLI status fallback", () => {
   afterEach(() => {
     callGatewayFromCliMock.mockReset();
+    sleepMock.mockClear();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -99,6 +129,45 @@ describe("voice-call CLI status fallback", () => {
     await expect(
       program.parseAsync(["voicecall", "tail", "--since", "0x10"], { from: "user" }),
     ).rejects.toThrow("Invalid numeric value for --since: 0x10");
+  });
+
+  it("drops a partial leading JSONL record from capped diagnostic reads", async () => {
+    const tempRoot = makeTempDir("openclaw-voice-call-cli-");
+    const file = path.join(tempRoot, "diagnostics.jsonl");
+    const completeRecords = [
+      JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 120 } } }),
+      JSON.stringify({ call: { metadata: { lastTurnLatencyMs: 240 } } }),
+    ];
+    const crossingRecord = JSON.stringify({ padding: "x".repeat(1_000_000) });
+    writeFileSync(file, [crossingRecord, ...completeRecords].join("\n") + "\n", "utf8");
+
+    const latencyProgram = buildProgram({});
+    const latencyOutput = captureStdout();
+    try {
+      await latencyProgram.parseAsync(["voicecall", "latency", "--file", file], {
+        from: "user",
+      });
+    } finally {
+      latencyOutput.restore();
+    }
+    expect(JSON.parse(latencyOutput.output())).toMatchObject({
+      recordsScanned: 2,
+      turnLatency: { count: 2 },
+    });
+
+    sleepMock.mockRejectedValueOnce(new Error("stop tail after initial output"));
+    const tailProgram = buildProgram({});
+    const tailOutput = captureStdout();
+    try {
+      await expect(
+        tailProgram.parseAsync(["voicecall", "tail", "--file", file, "--since", "10"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("stop tail after initial output");
+    } finally {
+      tailOutput.restore();
+    }
+    expect(tailOutput.output().trim().split("\n")).toEqual(completeRecords);
   });
 
   it("caps oversized operation timeouts through the start command", async () => {
