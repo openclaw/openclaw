@@ -1929,17 +1929,29 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/official-external-channel-catalog.json",
         [
           "src/plugins/official-external-plugin-catalog.test.ts",
+          "src/plugins/official-external-plugin-startup-metadata.test.ts",
+          "test/scripts/generate-official-external-plugin-startup-metadata.test.ts",
           "test/release-check.test.ts",
           "test/official-channel-catalog.test.ts",
         ],
       ],
       [
         "scripts/lib/official-external-plugin-catalog.json",
-        ["src/plugins/official-external-plugin-catalog.test.ts", "test/release-check.test.ts"],
+        [
+          "src/plugins/official-external-plugin-catalog.test.ts",
+          "src/plugins/official-external-plugin-startup-metadata.test.ts",
+          "test/scripts/generate-official-external-plugin-startup-metadata.test.ts",
+          "test/release-check.test.ts",
+        ],
       ],
       [
         "scripts/lib/official-external-provider-catalog.json",
-        ["src/plugins/official-external-plugin-catalog.test.ts", "test/release-check.test.ts"],
+        [
+          "src/plugins/official-external-plugin-catalog.test.ts",
+          "src/plugins/official-external-plugin-startup-metadata.test.ts",
+          "test/scripts/generate-official-external-plugin-startup-metadata.test.ts",
+          "test/release-check.test.ts",
+        ],
       ],
       [
         "scripts/lib/recommended-tool-installs.json",
@@ -3338,6 +3350,17 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toEqual([
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
       "src/plugins/contracts/tts.contract.test.ts",
+    ]);
+  });
+
+  it("routes compact startup projection edits through parity tests", () => {
+    expect(
+      resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
+        "src/plugins/official-external-plugin-startup-metadata.generated.ts",
+      ]),
+    ).toEqual([
+      "src/plugins/official-external-plugin-startup-metadata.test.ts",
+      "test/scripts/generate-official-external-plugin-startup-metadata.test.ts",
     ]);
   });
 

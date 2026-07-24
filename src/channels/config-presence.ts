@@ -15,7 +15,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
-import { listOfficialExternalChannelEnvVars } from "../plugins/official-external-plugin-catalog.js";
+import { listOfficialExternalChannelEnvVars } from "../plugins/official-external-plugin-startup-metadata.js";
 import { isRecord } from "../utils.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 

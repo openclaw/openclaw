@@ -422,6 +422,21 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
   [
+    "scripts/generate-official-external-plugin-startup-metadata.ts",
+    ["test/scripts/generate-official-external-plugin-startup-metadata.test.ts"],
+  ],
+  [
+    "src/plugins/official-external-plugin-startup-metadata.generated.ts",
+    [
+      "src/plugins/official-external-plugin-startup-metadata.test.ts",
+      "test/scripts/generate-official-external-plugin-startup-metadata.test.ts",
+    ],
+  ],
+  [
+    "src/plugins/official-external-plugin-startup-metadata.ts",
+    ["src/plugins/official-external-plugin-startup-metadata.test.ts"],
+  ],
+  [
     "src/plugins/contracts/tts-contract-suites.ts",
     [
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
@@ -450,6 +465,8 @@ const RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS = [
 ];
 const OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS = [
   "src/plugins/official-external-plugin-catalog.test.ts",
+  "src/plugins/official-external-plugin-startup-metadata.test.ts",
+  "test/scripts/generate-official-external-plugin-startup-metadata.test.ts",
   "test/release-check.test.ts",
 ];
 const RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS = [

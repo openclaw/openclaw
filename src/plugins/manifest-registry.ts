@@ -2,10 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeOptionalTrimmedStringList,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -62,11 +59,9 @@ import {
 import { checkMinHostVersion } from "./min-host-version.js";
 import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
-  getOfficialExternalPluginCatalogEntryForPackage,
-  getOfficialExternalPluginCatalogManifest,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
-} from "./official-external-plugin-catalog.js";
+  applyOfficialExternalPluginManifestCompatibility,
+  resolveOfficialExternalPluginPackageOwnership,
+} from "./official-external-plugin-startup-metadata.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -380,130 +375,6 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   return merged;
 }
 
-function mergeContractLists(
-  left: readonly string[] | undefined,
-  right: readonly string[] | undefined,
-): string[] | undefined {
-  const merged = uniqueStrings(
-    [...(left ?? []), ...(right ?? [])]
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
-  return merged.length > 0 ? merged : undefined;
-}
-
-function mergeManifestContracts(
-  manifestContracts: PluginManifestContracts | undefined,
-  catalogContracts: PluginManifestContracts | undefined,
-): PluginManifestContracts | undefined {
-  if (!catalogContracts) {
-    return manifestContracts;
-  }
-  const contracts: PluginManifestContracts = {};
-  for (const key of [
-    "embeddedExtensionFactories",
-    "agentToolResultMiddleware",
-    "trustedToolPolicies",
-    "externalAuthProviders",
-    "embeddingProviders",
-    "memoryEmbeddingProviders",
-    "speechProviders",
-    "realtimeTranscriptionProviders",
-    "realtimeVoiceProviders",
-    "mediaUnderstandingProviders",
-    "transcriptSourceProviders",
-    "documentExtractors",
-    "imageGenerationProviders",
-    "videoGenerationProviders",
-    "musicGenerationProviders",
-    "webContentExtractors",
-    "webFetchProviders",
-    "webSearchProviders",
-    "workerProviders",
-    "usageProviders",
-    "migrationProviders",
-    "gatewayMethodDispatch",
-    "tools",
-  ] as const) {
-    const merged = mergeContractLists(manifestContracts?.[key], catalogContracts[key]);
-    if (merged) {
-      contracts[key] = merged;
-    }
-  }
-  return Object.keys(contracts).length > 0 ? contracts : undefined;
-}
-
-function mergeCatalogChannelConfigs(params: {
-  manifestChannelConfigs?: Record<string, PluginManifestChannelConfig>;
-  catalogChannelConfigs?: Record<string, PluginManifestChannelConfig>;
-}): Record<string, PluginManifestChannelConfig> | undefined {
-  if (!params.catalogChannelConfigs) {
-    return params.manifestChannelConfigs;
-  }
-  const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
-  for (const [key, value] of Object.entries(params.catalogChannelConfigs)) {
-    if (!isBlockedObjectKey(key)) {
-      merged[key] = value;
-    }
-  }
-  for (const [key, value] of Object.entries(params.manifestChannelConfigs ?? {})) {
-    if (!isBlockedObjectKey(key)) {
-      const catalogValue = merged[key];
-      merged[key] = catalogValue
-        ? {
-            ...catalogValue,
-            ...value,
-            schema: value.schema ?? catalogValue.schema,
-            ...(catalogValue.uiHints || value.uiHints
-              ? {
-                  uiHints: {
-                    ...catalogValue.uiHints,
-                    ...value.uiHints,
-                  },
-                }
-              : {}),
-            ...((value.runtime ?? catalogValue.runtime)
-              ? { runtime: value.runtime ?? catalogValue.runtime }
-              : {}),
-            ...((value.label ?? catalogValue.label)
-              ? { label: value.label ?? catalogValue.label }
-              : {}),
-            ...((value.description ?? catalogValue.description)
-              ? { description: value.description ?? catalogValue.description }
-              : {}),
-            ...((value.preferOver ?? catalogValue.preferOver)
-              ? { preferOver: value.preferOver ?? catalogValue.preferOver }
-              : {}),
-            ...((value.commands ?? catalogValue.commands)
-              ? { commands: value.commands ?? catalogValue.commands }
-              : {}),
-          }
-        : value;
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
-function mergeManifestCatalog(
-  manifestCatalog: PluginManifestCatalog | undefined,
-  officialCatalog: PluginManifestCatalog | undefined,
-): PluginManifestCatalog | undefined {
-  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
-  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
-  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
-  const order =
-    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
-      ? orderCandidate
-      : undefined;
-  if (featured === undefined && order === undefined) {
-    return undefined;
-  }
-  return {
-    ...(featured !== undefined ? { featured } : {}),
-    ...(order !== undefined ? { order } : {}),
-  };
-}
-
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -530,17 +401,21 @@ function buildRecord(params: {
           packageManifest: params.candidate.packageManifest,
         })
       : params.manifest.channelConfigs;
-  const officialCatalogManifest =
-    params.candidate.origin !== "bundled"
-      ? getOfficialExternalPluginCatalogManifest(
-          getOfficialExternalPluginCatalogEntryForPackage(params.candidate.packageName) ?? {},
-        )
-      : undefined;
+  const officialCompatibility =
+    params.candidate.origin === "bundled"
+      ? {
+          catalog: params.manifest.catalog,
+          contracts: params.manifest.contracts,
+          channelConfigs: manifestChannelConfigs,
+        }
+      : applyOfficialExternalPluginManifestCompatibility({
+          packageName: params.candidate.packageName,
+          catalog: params.manifest.catalog,
+          contracts: params.manifest.contracts,
+          channelConfigs: manifestChannelConfigs,
+        });
   const channelConfigs = mergePackageChannelMetaIntoChannelConfigs({
-    channelConfigs: mergeCatalogChannelConfigs({
-      manifestChannelConfigs,
-      catalogChannelConfigs: officialCatalogManifest?.channelConfigs,
-    }),
+    channelConfigs: officialCompatibility.channelConfigs,
     packageChannel: params.candidate.packageManifest?.channel,
   });
   const packageChannelCommands = normalizeManifestChannelCommandDefaults(
@@ -551,7 +426,7 @@ function buildRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
-    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
+    catalog: officialCompatibility.catalog,
     icon: normalizeOptionalString(params.manifest.icon),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
@@ -616,10 +491,7 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
-    contracts: mergeManifestContracts(
-      params.manifest.contracts,
-      officialCatalogManifest?.contracts,
-    ),
+    contracts: officialCompatibility.contracts,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
@@ -843,11 +715,10 @@ function isTrustedOfficialPluginInstall(params: {
   if (!packageName) {
     return false;
   }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
+  const officialPackage = resolveOfficialExternalPluginPackageOwnership(packageName);
+  if (!officialPackage || officialPackage.pluginId !== params.pluginId) {
     return false;
   }
-  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
   const installRecord = params.installRecords[params.pluginId];
   if (!installRecord) {
     return false;
@@ -865,7 +736,7 @@ function isTrustedOfficialPluginInstall(params: {
     installRecord.source === "npm" &&
     installRecord.artifactKind === undefined &&
     installRecord.sourcePath === undefined &&
-    officialInstall?.npmSpec === packageName &&
+    officialPackage.npmSpec === packageName &&
     [
       installRecord.resolvedName,
       installRecord.spec,
