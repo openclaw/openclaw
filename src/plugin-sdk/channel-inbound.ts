@@ -5,7 +5,6 @@ import {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
@@ -105,8 +104,6 @@ export {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
-  resolveChannelInboundSupplementalContext,
 };
 export type {
   BuildChannelInboundEventContextAsyncParams,
@@ -191,6 +188,11 @@ export type {
   InboundReplyDispatchResult,
   InboundReplyRecordOptions,
 } from "../channels/message/inbound-reply-dispatch.js";
+export {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+  type ChannelPartialDeliveryError,
+} from "../channels/turn/delivery-result.js";
 
 export {
   toHistoryMediaEntries,

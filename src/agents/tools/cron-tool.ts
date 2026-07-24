@@ -557,8 +557,11 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action === "next_check" && params.jobId === undefined && params.id === undefined) {
-    return;
+  if (action === "next_check") {
+    const id = readCronJobIdParam(params);
+    if (!id || id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
   if (action === "get" || action === "remove" || action === "runs") {
     const id = readCronJobIdParam(params);
@@ -789,7 +792,14 @@ Restricted isolated runs may only self status/list, current get/runs/remove, and
       const callerScope = resolveCronToolCallerScope(opts, runtimeConfig);
       const callerIdentity =
         callerScope && opts?.agentSessionKey?.trim()
-          ? { agentId: callerScope.agentId, sessionKey: opts.agentSessionKey.trim() }
+          ? {
+              agentId: callerScope.agentId,
+              sessionKey: opts.agentSessionKey.trim(),
+              turnSourceAccountId: opts.agentAccountId,
+              ...(readCronSelfRemoveOnlyJobId(opts)
+                ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
+                : {}),
+            }
           : undefined;
 
       return await withGatewayToolCallerIdentity(callerIdentity, async () => {

@@ -35,6 +35,8 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
+  normalizeSqliteSchemaShapeSql,
+  replaceNamedUniqueIndexesWithOrdinaryIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
 type StateDbTestDatabase = Pick<
@@ -1227,6 +1229,32 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
   });
 
+  it("detects schema migrations committed in an uncheckpointed WAL", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const opened = openOpenClawStateDatabase(options);
+    const databasePath = opened.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        PRAGMA user_version = 2;
+        UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
+      `);
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "strict-tables-v3",
+        path: databasePath,
+      });
+    } finally {
+      writer.close();
+    }
+  });
+
   it("rejects a placement turn claim tuple without an owner", () => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },
@@ -1596,21 +1624,18 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).not.toThrow();
   });
 
-  it("repairs a same-name shared-state uniqueness index", () => {
+  it("repairs every canonical shared-state named unique index", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const created = openOpenClawStateDatabase({ env });
     const databasePath = created.path;
+    const canonicalShape = normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(created.db));
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     try {
-      drifted.exec(`
-        DROP INDEX idx_operator_approvals_resolution_ref;
-        CREATE UNIQUE INDEX idx_operator_approvals_resolution_ref
-          ON operator_approvals(approval_id);
-      `);
+      expect(replaceNamedUniqueIndexesWithOrdinaryIndexes(drifted)).toHaveLength(3);
       expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
       });
@@ -1619,15 +1644,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
 
     const reopened = openOpenClawStateDatabase({ env });
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_operator_approvals_resolution_ref'",
-        )
-        .get(),
-    ).toEqual({
-      sql: "CREATE UNIQUE INDEX idx_operator_approvals_resolution_ref ON operator_approvals(resolution_ref)",
-    });
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
+      canonicalShape,
+    );
   });
 
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
