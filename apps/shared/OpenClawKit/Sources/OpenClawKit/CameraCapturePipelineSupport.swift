@@ -219,14 +219,13 @@ public enum CameraCapturePipelineSupport {
         }
         let preferredWidth = preferredMaxWidth.flatMap { $0 > 0 ? $0 : nil }
         var bestIndex = 0
-        for index in candidates.indices.dropFirst() {
-            if Self.isPreferredCaptureFormat(
+        for index in candidates.indices.dropFirst()
+            where Self.isPreferredCaptureFormat(
                 candidates[index],
                 over: candidates[bestIndex],
                 preferredMaxWidth: preferredWidth)
-            {
-                bestIndex = index
-            }
+        {
+            bestIndex = index
         }
         return bestIndex
     }
