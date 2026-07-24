@@ -1222,18 +1222,21 @@ function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number)
     : desiredTimestamp;
 }
 
-function sortChatItemsByVisibleTime(
+// Insert live tool/stream items into an already-ordered list of stable chat rows
+// (history, queued sends, canvas previews, etc.) by visible timestamp. Stable
+// rows keep their relative order; only tool cards and stream segments are
+// repositioned. This avoids reordering optimistic user bubbles or final
+// assistant replies when their timestamps come from different clocks (#112943).
+function insertChatItemsByTimestamp(
   items: ChatItem[],
+  inserts: ChatItem[],
+  timestampsByKey: ReadonlyMap<string, number>,
   toolStreamPredecessors: ReadonlyMap<string, string>,
-): ChatItem[] {
-  const timestampsByKey = new Map<string, number>();
-  for (const item of items) {
-    const timestamp = chatItemTimestamp(item);
-    if (timestamp != null) {
-      timestampsByKey.set(item.key, timestamp);
-    }
-  }
-  return items
+): void {
+  // Sort inserts among themselves by timestamp, preserving the original index
+  // order for ties and honoring predecessor relationships so a stream segment
+  // stays before the tool card it introduced.
+  const sortedInserts = inserts
     .map((item, index) => {
       const timestamp = chatItemTimestamp(item);
       const predecessorKey = toolStreamPredecessors.get(item.key);
@@ -1270,6 +1273,36 @@ function sortChatItemsByVisibleTime(
       return a.index - b.index;
     })
     .map(({ item }) => item);
+
+  for (const item of sortedInserts) {
+    const timestamp = chatItemTimestamp(item);
+    const predecessorKey = toolStreamPredecessors.get(item.key);
+    const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+    const effectiveTimestamp =
+      timestamp != null && predecessorTimestamp != null
+        ? Math.max(timestamp, predecessorTimestamp)
+        : timestamp;
+
+    if (effectiveTimestamp == null) {
+      items.push(item);
+      continue;
+    }
+
+    const insertionIndex = items.findIndex((existing) => {
+      const existingTimestamp = chatItemTimestamp(existing);
+      // Timestamped inserts render before stable items that lack a timestamp.
+      if (existingTimestamp == null) {
+        return true;
+      }
+      return existingTimestamp > effectiveTimestamp;
+    });
+
+    if (insertionIndex === -1) {
+      items.push(item);
+    } else {
+      items.splice(insertionIndex, 0, item);
+    }
+  }
 }
 
 function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
@@ -1376,6 +1409,12 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
+  // Live tool cards and stream segments are collected separately and merged into
+  // the stable history + queued-send rows by timestamp below. We never reorder
+  // the stable rows themselves, so optimistic user bubbles stay after the
+  // preceding assistant reply even when client and Gateway clocks disagree.
+  const toolStreamItems: ChatItem[] = [];
+  const toolStreamTimestampsByKey = new Map<string, number>();
   const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
@@ -1427,6 +1466,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
         liftedCanvasSource.timestamp != null && boundaryTimestamp != null
           ? Math.min(liftedCanvasSource.timestamp, boundaryTimestamp)
           : liftedCanvasSource.timestamp;
+      // Canvas previews are positioned relative to the queued-send tail that
+      // existed when they were lifted, so they stay in the stable row order
+      // rather than being re-sorted with live stream/tool cards.
       items.splice(insertionIndex, 0, {
         kind: "message",
         key: `${
@@ -1489,13 +1531,15 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       }
       if (visibleText.length > 0) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
-        items.push({
+        const streamItem: ChatItem = {
           kind: "stream",
           key: streamKey,
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
-        });
+        };
+        toolStreamItems.push(streamItem);
+        toolStreamTimestampsByKey.set(streamItem.key, segment.ts);
         const toolCallId = segment.toolCallId?.trim();
         const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
         if (toolKey) {
@@ -1507,11 +1551,16 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     }
     const tool = toolItems[i];
     if (tool && props.showToolCalls) {
-      items.push({
+      const toolItem: ChatItem = {
         kind: "message",
         key: tool.key,
         message: tool.message,
-      });
+      };
+      toolStreamItems.push(toolItem);
+      const toolTimestamp = chatItemTimestamp(toolItem);
+      if (toolTimestamp != null) {
+        toolStreamTimestampsByKey.set(toolItem.key, toolTimestamp);
+      }
     }
   }
   for (const segment of keyedSegments) {
@@ -1526,22 +1575,19 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       startedAt: segment.ts,
       isStreaming: false,
     };
-    // Merge keyed commentary into the timestamp ordering path instead of
-    // appending it after every tool card. Insert before the first already-built
-    // item whose visible timestamp is strictly later, so a preamble that
-    // arrived before a later tool renders above that tool while the run is live
-    // (not only after final materialization). Tools that share the commentary's
-    // timestamp and are already visible stay above it.
-    const insertionIndex = items.findIndex((existing) => {
-      const existingTimestamp = chatItemTimestamp(existing);
-      return existingTimestamp != null && existingTimestamp > segment.ts;
-    });
-    if (insertionIndex === -1) {
-      items.push(commentaryItem);
-    } else {
-      items.splice(insertionIndex, 0, commentaryItem);
-    }
+    toolStreamItems.push(commentaryItem);
+    toolStreamTimestampsByKey.set(commentaryItem.key, segment.ts);
   }
+
+  // Merge collected live tool/stream rows into the stable transcript order.
+  // Stable rows keep their relative order; only tool cards and stream segments
+  // are repositioned by visible timestamp.
+  insertChatItemsByTimestamp(
+    items,
+    toolStreamItems,
+    toolStreamTimestampsByKey,
+    toolStreamPredecessors,
+  );
 
   // Working spark contract: whenever the agent works with nothing visibly
   // streaming (pre-first-token, or a queued send in flight), the thread shows
@@ -1636,11 +1682,7 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
   }
 
   return annotateToolTurnOutcome(
-    groupMessages(
-      collapseSequentialDuplicateMessages(
-        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items, toolStreamPredecessors)),
-      ),
-    ),
+    groupMessages(collapseSequentialDuplicateMessages(coalesceToolActivityMessages(items))),
   );
 }
 
