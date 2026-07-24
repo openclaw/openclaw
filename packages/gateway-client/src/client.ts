@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_MODES,
@@ -348,6 +349,7 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
+const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 
 type PendingStop = {
   ws: WebSocket;
@@ -374,6 +376,7 @@ export class GatewayClient {
   private pendingStop: PendingStop | null = null;
   private transportValidated = false;
   private suppressedTransientPreHelloCleanCloses = 0;
+  private maxPayloadBytes = DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES;
 
   constructor(opts: GatewayClientOptions) {
     // Defaults keep the package inert until device identity support is used.
@@ -402,6 +405,15 @@ export class GatewayClient {
       createRequestError: (error) => new GatewayClientRequestError(error),
       createRequestTimeoutError: (method) => new Error(`gateway request timeout for ${method}`),
       createRequestAbortError: createGatewayRequestAbortError,
+      validateRequestFrame: (frame, method) => {
+        const frameBytes = Buffer.byteLength(frame, "utf8");
+        if (frameBytes > this.maxPayloadBytes) {
+          throw new RangeError(
+            `gateway request ${method} exceeds negotiated max payload ` +
+              `(${frameBytes} > ${this.maxPayloadBytes} bytes)`,
+          );
+        }
+      },
       buildConnectPlan: ({ nonce }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
@@ -525,7 +537,7 @@ export class GatewayClient {
       configuredTimeoutMs: this.opts.preauthHandshakeTimeoutMs,
     });
     const wsOptions: FingerprintCheckingClientOptions = {
-      maxPayload: 25 * 1024 * 1024,
+      maxPayload: DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
       handshakeTimeout: handshakeTimeoutMs,
       ...(this.opts.origin ? { origin: this.opts.origin } : {}),
     };
@@ -829,6 +841,9 @@ export class GatewayClient {
     }
     this.tickIntervalMs =
       typeof helloOk.policy?.tickIntervalMs === "number" ? helloOk.policy.tickIntervalMs : 30_000;
+    // The Gateway installs this advertised limit on its WebSocket receiver after auth,
+    // so it bounds serialized client-to-Gateway request frames.
+    this.maxPayloadBytes = helloOk.policy.maxPayload;
     this.lastTick = Date.now();
     this.startTickWatch();
     void assembled;

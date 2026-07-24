@@ -1,6 +1,7 @@
 // Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
+import type { HelloOk } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient } from "./client.js";
@@ -476,6 +477,29 @@ describe("GatewayClient", () => {
     );
     expect(onSent).not.toHaveBeenCalled();
     expect(getPendingCount(client)).toBe(0);
+  });
+
+  test("rejects request frames above the negotiated payload before sending", async () => {
+    const { client, send } = createOpenGatewayClient(25);
+    const payloadHarness = client as unknown as {
+      handleConnectHello: (hello: Pick<HelloOk, "auth" | "policy">, assembled: unknown) => void;
+      maxPayloadBytes: number;
+    };
+    payloadHarness.handleConnectHello(
+      {
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload: 128, maxBufferedBytes: 256, tickIntervalMs: 30_000 },
+      },
+      {},
+    );
+
+    await expect(client.request("node.invoke", { jsonl: "x".repeat(128) })).rejects.toThrow(
+      "gateway request node.invoke exceeds negotiated max payload",
+    );
+    expect(payloadHarness.maxPayloadBytes).toBe(128);
+    expect(send).not.toHaveBeenCalled();
+    expect(getPendingCount(client)).toBe(0);
+    client.stop();
   });
 
   test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
