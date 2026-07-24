@@ -36,6 +36,7 @@ const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec 
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -126,6 +127,17 @@ function nativeHookRelayStateDbArgForTests(): string {
   return `--state-db ${resolveOpenClawStateSqlitePath()}`;
 }
 
+function deferredForNativeHookRelayTests(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function openDeferredNativeHookRelayBridgeRequest(
   record: Pick<NativeHookRelayBridgeRecord, "hostname" | "port" | "token">,
   payload: Record<string, unknown>,
@@ -201,6 +213,20 @@ type NativeHookRelaySharedStateForTests = {
   pendingPermissionApprovals: Map<string, unknown>;
   permissionApprovalWindows: Map<string, unknown[]>;
   permissionAllowAlwaysApprovals: Map<string, unknown>;
+  admissions: Map<
+    string,
+    {
+      snapshot: () => {
+        active: number;
+        queued: number;
+        accepted: number;
+        completed: number;
+        rejected: number;
+        peakActive: number;
+        peakQueued: number;
+      };
+    }
+  >;
 };
 
 function getNativeHookRelaySharedStateForTests(): NativeHookRelaySharedStateForTests {
@@ -768,6 +794,80 @@ describe("native hook relay registry", () => {
       relayId: relay.relayId,
       event: "pre_tool_use",
       runId: "run-1",
+    });
+  });
+
+  it("enforces four active and 32 queued bridge requests with deterministic overload", async () => {
+    const release = deferredForNativeHookRelayTests();
+    const beforeAgentFinalize = vi.fn(async () => {
+      await release.promise;
+      return { action: "continue" as const };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_agent_finalize", handler: beforeAgentFinalize },
+      ]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-bounded-bridge-admission",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["before_agent_finalize"],
+    });
+    const record = await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    const requests = Array.from({ length: 37 }, (_, index) =>
+      openDeferredNativeHookRelayBridgeRequest(record, {
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "before_agent_finalize",
+        rawPayload: {
+          hook_event_name: "Stop",
+          turn_id: `bounded-admission-${index}`,
+          stop_hook_active: false,
+        },
+      }),
+    );
+    try {
+      await Promise.all(requests.map((request) => request.connected));
+      for (const request of requests) {
+        request.sendBody();
+      }
+      await vi.waitFor(() => expect(beforeAgentFinalize).toHaveBeenCalledTimes(4));
+
+      const admission = getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId);
+      expect(admission?.snapshot()).toMatchObject({
+        active: 4,
+        queued: 32,
+        accepted: 36,
+        rejected: 1,
+        peakActive: 4,
+        peakQueued: 32,
+      });
+      await expect(requests[36]?.response).resolves.toMatchObject({
+        ok: false,
+        code: "overloaded",
+        error: "native hook relay overloaded",
+      });
+    } finally {
+      release.resolve();
+    }
+
+    const accepted = await Promise.all(requests.slice(0, 36).map((request) => request.response));
+    expect(accepted).toHaveLength(36);
+    expect(accepted.every((response) => response.ok === true)).toBe(true);
+    expect(beforeAgentFinalize).toHaveBeenCalledTimes(36);
+    expect(
+      getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+    ).toMatchObject({
+      active: 0,
+      queued: 0,
+      accepted: 36,
+      completed: 36,
+      rejected: 1,
+      peakActive: 4,
+      peakQueued: 32,
     });
   });
 
@@ -3130,6 +3230,171 @@ describe("native hook relay registry", () => {
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
   });
 
+  it("releases an active PermissionRequest admission when its hook process disconnects", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalStarted = deferredForNativeHookRelayTests();
+    const abortController = new AbortController();
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(
+      vi.fn(
+        (request) =>
+          new Promise<"allow">((_resolve, reject) => {
+            approvalStarted.resolve();
+            request.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("hook process disconnected")),
+              { once: true },
+            );
+          }),
+      ),
+    );
+    const pending = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      admissionSignal: abortController.signal,
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_use_id: "disconnected-call",
+        tool_input: { command: "git push" },
+      },
+    });
+
+    await approvalStarted.promise;
+    expect(
+      getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+    ).toMatchObject({ active: 1, queued: 0 });
+    abortController.abort();
+    await expect(pending).rejects.toThrow("native hook relay admission cancelled");
+    expect(
+      getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+    ).toMatchObject({ active: 0, queued: 0, completed: 1, cancelled: 1 });
+
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(
+      vi.fn(async () => "allow" as const),
+    );
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          tool_name: "Bash",
+          tool_use_id: "successor-call",
+          tool_input: { command: "git status" },
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    expect(
+      getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+    ).toMatchObject({ active: 0, completed: 2, rejected: 0 });
+  });
+
+  it("keeps a shared PermissionRequest approval alive for a connected duplicate", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalStarted = deferredForNativeHookRelayTests();
+    let resolveDecision: ((decision: "allow") => void) | undefined;
+    const approvalRequester = vi.fn(
+      (request: { signal?: AbortSignal }) =>
+        new Promise<"allow">((resolve, reject) => {
+          resolveDecision = resolve;
+          request.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("shared approval aborted")),
+            { once: true },
+          );
+          approvalStarted.resolve();
+        }),
+    );
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    const firstAbort = new AbortController();
+    const payload = {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_use_id: "shared-call",
+      tool_input: { command: "git push" },
+    };
+    const first = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      admissionSignal: firstAbort.signal,
+      rawPayload: payload,
+    });
+    const second = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: payload,
+    });
+
+    await approvalStarted.promise;
+    firstAbort.abort();
+    await expect(first).rejects.toThrow("native hook relay admission cancelled");
+    expect(approvalRequester).toHaveBeenCalledOnce();
+    expect(approvalRequester.mock.calls[0]?.[0].signal?.aborted).toBe(false);
+    resolveDecision?.("allow");
+    await expect(second).resolves.toMatchObject({ exitCode: 0 });
+    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(0);
+  });
+
+  it("removes queued and active admission work when the relay registration stops", async () => {
+    const registrationAbort = new AbortController();
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      signal: registrationAbort.signal,
+    });
+    const approvalRequester = vi.fn(
+      (request: { signal?: AbortSignal }) =>
+        new Promise<"allow">((_resolve, reject) => {
+          request.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("relay registration stopped")),
+            { once: true },
+          );
+        }),
+    );
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    const invocations = Array.from({ length: 5 }, (_, index) =>
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "permission_request",
+        rawPayload: {
+          hook_event_name: "PermissionRequest",
+          tool_name: "Bash",
+          tool_use_id: `registration-stop-${index}`,
+          tool_input: { command: `command-${index}` },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(
+        getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+      ).toMatchObject({ active: 4, queued: 1 });
+    });
+    registrationAbort.abort();
+    const settled = await Promise.allSettled(invocations);
+    expect(settled.every((result) => result.status === "rejected")).toBe(true);
+    await vi.waitFor(() => {
+      expect(
+        getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+      ).toMatchObject({ active: 0, queued: 0, completed: 4, cancelled: 5 });
+    });
+  });
+
   it("deduplicates pending PermissionRequest approvals by relay, run, and tool call", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -3166,21 +3431,36 @@ describe("native hook relay registry", () => {
     expect(approvalRequester).toHaveBeenCalledTimes(1);
     resolveDecision?.("allow");
     const responses = await Promise.all([first, second]);
+    const settledDuplicate = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: payload,
+    });
 
-    expect(responses.map((response) => JSON.parse(response.stdout))).toEqual([
-      {
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: { behavior: "allow" },
+    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    expect([...responses, settledDuplicate].map((response) => JSON.parse(response.stdout))).toEqual(
+      [
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: { behavior: "allow" },
+          },
         },
-      },
-      {
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: { behavior: "allow" },
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: { behavior: "allow" },
+          },
         },
-      },
-    ]);
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: { behavior: "allow" },
+          },
+        },
+      ],
+    );
   });
 
   it("keeps replacement pending PermissionRequest approvals when stale approvals settle", async () => {
@@ -3566,6 +3846,22 @@ describe("native hook relay command builder", () => {
         ? "openclaw hooks relay --provider codex --relay-id relay-1 --event post_tool_use --timeout 5000"
         : "exec nice -n 10 openclaw hooks relay --provider codex --relay-id relay-1 --event post_tool_use --timeout 5000",
     );
+  });
+
+  it("honors OPENCLAW_CLI_PATH instead of silently selecting the packaged fast entry", () => {
+    const cliPath = path.resolve("openclaw.mjs");
+    vi.stubEnv("OPENCLAW_CLI_PATH", cliPath);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    const command = relay.commandForEvent("post_tool_use");
+    expect(command).toContain(`${process.execPath} ${cliPath} hooks relay`);
+    expect(command).not.toContain("native-hook-relay-entry");
+    expect(command).not.toContain("--state-schema-version");
   });
 
   it("includes explicit unavailable noop mode only for PreToolUse", () => {
