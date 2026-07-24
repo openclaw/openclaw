@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -589,6 +589,56 @@ describe("microsoft-foundry plugin", () => {
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
     );
   });
+
+  it("bounds az subprocess lifetime with SIGKILL on exec timeout", () => {
+    execFileSyncMock.mockReturnValue("ok");
+    execAz(["version", "--output", "none"]);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "az",
+      ["version", "--output", "none"],
+      expect.objectContaining({
+        encoding: "utf-8",
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+      }),
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "terminates a SIGTERM-immune subprocess with SIGKILL on timeout (behavioral proof)",
+    async () => {
+      const real = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const start = Date.now();
+      expect(() => {
+        real.execFileSync(
+          process.execPath,
+          ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+          { encoding: "utf-8", timeout: 500, killSignal: "SIGKILL" },
+        );
+      }).toThrow();
+      // Terminated within timeout + reasonable overhead, not hung
+      expect(Date.now() - start).toBeLessThan(2000);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "execAzAsync terminates a SIGTERM-immune subprocess via runExec two-phase kill (behavioral proof)",
+    async () => {
+      const real = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
+        "openclaw/plugin-sdk/process-runtime",
+      );
+      const start = Date.now();
+      await expect(
+        real.runExec(
+          process.execPath,
+          ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+          { timeoutMs: 500, logOutput: false },
+        ),
+      ).rejects.toThrow();
+      // Two-phase kill: 500ms timeout + 300ms force kill grace, well under 2000ms
+      expect(Date.now() - start).toBeLessThan(2000);
+    },
+  );
 
   it("retries Entra token refresh after a failed attempt", async () => {
     const provider = registerProvider();
