@@ -782,6 +782,24 @@ export async function waitForEmbeddedAgentRunEnd(
   return true;
 }
 
+async function waitForEmbeddedAgentRunHandleEnd(
+  sessionId: string,
+  handle: EmbeddedAgentQueueHandle,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(remainingMs, 25));
+    });
+  }
+  return true;
+}
+
 export type AbortAndDrainEmbeddedAgentRunResult = {
   aborted: boolean;
   drained: boolean;
@@ -796,6 +814,9 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
   reason?: string;
 }): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
+  // Recovery must stay bound to one run generation; a replacement under the
+  // same session id owns its own abort, drain, and cleanup lifecycle.
+  const capturedHandle = ACTIVE_EMBEDDED_RUNS.get(params.sessionId);
   // Recovery is a staleness expiry: stamp run_stalled on the reply operation
   // BEFORE any handle abort, or the run loop's abort handler re-enters
   // abortByUser and misattributes the watchdog kill to the user.
@@ -811,11 +832,25 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     const drained = await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs);
     return { aborted: true, drained, forceCleared: false };
   }
-  const aborted = abortEmbeddedAgentRun(params.sessionId) || expiredReplyRun;
-  const drained = aborted ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs) : false;
+  const aborted =
+    (capturedHandle !== undefined &&
+      ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === capturedHandle &&
+      abortEmbeddedAgentRun(params.sessionId)) ||
+    expiredReplyRun;
+  const drained =
+    aborted && capturedHandle !== undefined
+      ? await waitForEmbeddedAgentRunHandleEnd(params.sessionId, capturedHandle, settleMs)
+      : aborted
+        ? await waitForEmbeddedAgentRunEnd(params.sessionId, settleMs)
+        : false;
   const forceCleared =
     params.forceClear === true && (!aborted || !drained)
-      ? forceClearEmbeddedAgentRun(params.sessionId, params.sessionKey, params.reason)
+      ? forceClearEmbeddedAgentRun(
+          params.sessionId,
+          capturedHandle,
+          params.sessionKey,
+          params.reason,
+        )
       : false;
   return { aborted, drained, forceCleared };
 }
@@ -948,12 +983,13 @@ export function clearActiveEmbeddedRun(
 
 function forceClearEmbeddedAgentRun(
   sessionId: string,
+  expectedHandle: EmbeddedAgentQueueHandle | undefined,
   sessionKey?: string,
   reason = "stuck_recovery",
 ): boolean {
   let cleared = false;
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (handle) {
+  if (handle && handle === expectedHandle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     clearEmbeddedRunAbortability(handle);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
@@ -963,6 +999,8 @@ function forceClearEmbeddedAgentRun(
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     notifyEmbeddedRunEnded(sessionId);
     cleared = true;
+  } else if (handle) {
+    diag.debug(`run force-clear skipped: sessionId=${sessionId} reason=handle_mismatch`);
   }
   const cause = new Error(`Embedded run force-cleared by ${reason}`);
   return forceClearReplyRunBySessionId(sessionId, cause) || cleared;
