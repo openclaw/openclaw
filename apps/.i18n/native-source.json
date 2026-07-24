@@ -24323,7 +24323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 159,
+      "line": 157,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "I’ll keep this conversation separate from ordinary agent chat.",
       "surface": "apple",
@@ -24331,7 +24331,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 160,
+      "line": 158,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
       "surface": "apple",
@@ -24339,7 +24339,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 167,
+      "line": 168,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "What should we look at first?",
       "surface": "apple",
@@ -24347,7 +24347,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 170,
+      "line": 171,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Check status",
       "surface": "apple",
@@ -24355,7 +24355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 171,
+      "line": 172,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Review the Gateway and active services.",
       "surface": "apple",
@@ -24363,7 +24363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 176,
+      "line": 177,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Review setup",
       "surface": "apple",
@@ -24371,7 +24371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 177,
+      "line": 178,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Inspect models, channels, and configuration.",
       "surface": "apple",
@@ -24379,7 +24379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 378,
+      "line": 379,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Gateway is not connected",
       "surface": "apple",
@@ -24387,7 +24387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 397,
+      "line": 398,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "<redacted secret>",
       "surface": "apple",
@@ -24395,7 +24395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 456,
+      "line": 457,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
       "surface": "apple",
@@ -24403,7 +24403,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 500,
+      "line": 501,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -24411,7 +24411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 561,
+      "line": 562,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "OpenClaw is working…",
       "surface": "apple",
@@ -24419,7 +24419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 619,
+      "line": 620,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Gateway Required",
       "surface": "apple",
@@ -24427,7 +24427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 620,
+      "line": 621,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Full Access Required",
       "surface": "apple",
@@ -24435,7 +24435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 621,
+      "line": 622,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Checking Gateway",
       "surface": "apple",
@@ -24443,7 +24443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 622,
+      "line": 623,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Gateway Update Required",
       "surface": "apple",
@@ -24451,7 +24451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 630,
+      "line": 631,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
       "surface": "apple",
@@ -24459,7 +24459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 632,
+      "line": 633,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Reconnect with operator.admin access to review and change Gateway settings.",
       "surface": "apple",
@@ -24467,7 +24467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 634,
+      "line": 635,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
       "surface": "apple",
@@ -24475,7 +24475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 636,
+      "line": 637,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Update this Gateway to use the OpenClaw settings assistant.",
       "surface": "apple",
@@ -24483,7 +24483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 654,
+      "line": 655,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Restart",
       "surface": "apple",
@@ -24491,7 +24491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 665,
+      "line": 666,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "OpenClaw is ready to continue in your ordinary chat.",
       "surface": "apple",
@@ -24499,7 +24499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 672,
+      "line": 673,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Open Chat",
       "surface": "apple",
@@ -24507,7 +24507,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 695,
+      "line": 696,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Enter secret",
       "surface": "apple",
@@ -24515,7 +24515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 697,
+      "line": 698,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Enter secret…",
       "surface": "apple",
@@ -24523,7 +24523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 706,
+      "line": 707,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Reply to OpenClaw…",
       "surface": "apple",
@@ -24531,7 +24531,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 728,
+      "line": 729,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Send reply",
       "surface": "apple",
@@ -24539,7 +24539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 861,
+      "line": 862,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Skip for now",
       "surface": "apple",
@@ -24547,7 +24547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 897,
+      "line": 898,
       "path": "apps/ios/Sources/Design/SettingsSystemAgentChat.swift",
       "source": "Recommended",
       "surface": "apple",
