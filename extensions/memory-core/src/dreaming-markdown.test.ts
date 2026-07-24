@@ -2,10 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MEMORY_DREAMING_MARKDOWN_MAX_BYTES } from "./dreaming-dreams-file.js";
 import { writeDailyDreamingPhaseBlock, writeDeepDreamingReport } from "./dreaming-markdown.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
+const MEMORY_DREAMING_MARKDOWN_MAX_BYTES = 16 * 1024 * 1024;
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 afterEach(() => {
