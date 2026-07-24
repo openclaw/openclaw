@@ -1,6 +1,5 @@
 // Slack plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createSlackWebClient } from "./client.js";
 import { formatSlackError } from "./errors.js";
 import { formatSlackBotTokenIdentityWarning } from "./token.js";
@@ -19,10 +18,21 @@ export async function probeSlack(
   timeoutMs = 2500,
   opts?: { accountId?: string | null; identity?: "bot" | "user" },
 ): Promise<SlackProbe> {
-  const client = createSlackWebClient(token);
+  // Enforce the timeout through the WebClient's own (Axios) request timeout so a
+  // slow Slack API aborts the underlying HTTP request and releases the socket,
+  // instead of a Promise-race timeout that leaves the request dangling. A single
+  // attempt (retries: 0) keeps the probe a fast pass/fail and avoids background
+  // retry sockets after the timeout fires. Rate-limit retries are rejected
+  // immediately so a 429 does not stall diagnostics through the WebClient's
+  // queue pause (issue #106565).
+  const client = createSlackWebClient(token, {
+    timeout: timeoutMs,
+    retryConfig: { retries: 0 },
+    rejectRateLimitedCalls: true,
+  });
   const start = Date.now();
   try {
-    const result = await withTimeout(client.auth.test(), timeoutMs);
+    const result = await client.auth.test();
     if (!result.ok) {
       return {
         ok: false,
