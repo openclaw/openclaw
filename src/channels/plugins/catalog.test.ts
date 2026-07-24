@@ -74,4 +74,58 @@ describe("channel plugin catalog", () => {
       })?.origin,
     ).toBe("bundled");
   });
+
+  it("preserves explicit empty selection docs prefixes from package channel metadata", () => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "workspace-chat",
+        origin: "workspace",
+        rootDir: "/tmp/workspace-chat",
+        packageName: "@workspace/chat",
+        channel: {
+          id: "custom-chat",
+          label: "Custom Chat",
+          selectionLabel: "Custom Chat",
+          docsPath: "/channels/custom-chat",
+          blurb: "workspace",
+          selectionDocsPrefix: "",
+          selectionDocsOmitLabel: true,
+        },
+        install: { localPath: "/tmp/workspace-chat" },
+      },
+    ] satisfies PluginChannelCatalogEntry[]);
+
+    const entry = getChannelPluginCatalogEntry("custom-chat", {
+      workspaceDir: "/tmp",
+    });
+
+    expect(entry?.meta.selectionDocsPrefix).toBe("");
+    expect(entry?.meta.selectionDocsOmitLabel).toBe(true);
+  });
+
+  it("does not trim non-empty selection docs prefixes from package channel metadata", () => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "workspace-chat",
+        origin: "workspace",
+        rootDir: "/tmp/workspace-chat",
+        packageName: "@workspace/chat",
+        channel: {
+          id: "custom-chat",
+          label: "Custom Chat",
+          selectionLabel: "Custom Chat",
+          docsPath: "/channels/custom-chat",
+          blurb: "workspace",
+          selectionDocsPrefix: "  See docs:  ",
+        },
+        install: { localPath: "/tmp/workspace-chat" },
+      },
+    ] satisfies PluginChannelCatalogEntry[]);
+
+    const entry = getChannelPluginCatalogEntry("custom-chat", {
+      workspaceDir: "/tmp",
+    });
+
+    expect(entry?.meta.selectionDocsPrefix).toBe("  See docs:  ");
+  });
 });

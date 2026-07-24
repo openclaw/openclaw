@@ -524,12 +524,14 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
     "docsLabel",
     "blurb",
     "systemImage",
-    "selectionDocsPrefix",
   ] as const) {
     const normalized = normalizeOptionalString(value[key]);
     if (normalized) {
       channel[key] = normalized;
     }
+  }
+  if (typeof value.selectionDocsPrefix === "string") {
+    channel.selectionDocsPrefix = value.selectionDocsPrefix;
   }
   if (typeof value.order === "number" && Number.isFinite(value.order)) {
     channel.order = value.order;

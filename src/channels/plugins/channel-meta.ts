@@ -28,10 +28,14 @@ export function buildManifestChannelMeta(params: {
 }): ChannelMeta {
   const hasArrayField = (value: readonly string[] | undefined) =>
     params.arrayFieldMode === "defined" ? value !== undefined : Boolean(value?.length);
+  const selectionDocsPrefix =
+    typeof params.channel.selectionDocsPrefix === "string"
+      ? params.channel.selectionDocsPrefix
+      : undefined;
   const hasSelectionDocsPrefix =
     params.selectionDocsPrefixMode === "defined"
-      ? params.channel.selectionDocsPrefix !== undefined
-      : Boolean(params.channel.selectionDocsPrefix);
+      ? selectionDocsPrefix !== undefined
+      : Boolean(selectionDocsPrefix);
 
   return {
     id: params.id,
@@ -42,7 +46,7 @@ export function buildManifestChannelMeta(params: {
     blurb: params.blurb,
     ...(hasArrayField(params.channel.aliases) ? { aliases: params.channel.aliases } : {}),
     ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
-    ...(hasSelectionDocsPrefix ? { selectionDocsPrefix: params.channel.selectionDocsPrefix } : {}),
+    ...(hasSelectionDocsPrefix ? { selectionDocsPrefix } : {}),
     ...(params.channel.selectionDocsOmitLabel !== undefined
       ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
       : {}),

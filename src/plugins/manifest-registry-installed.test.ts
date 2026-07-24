@@ -396,6 +396,69 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("preserves explicit empty package channel docs prefixes from package metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    fs.writeFileSync(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({
+        openclaw: {
+          channel: {
+            id: "installed",
+            label: "Installed",
+            selectionDocsPrefix: "",
+            selectionDocsOmitLabel: true,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsOmitLabel).toBe(true);
+  });
+
+  it("preserves explicit empty package channel docs prefixes from persisted index metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
+            packageChannel: {
+              id: "installed",
+              label: "Installed",
+              selectionDocsPrefix: "",
+              selectionDocsOmitLabel: true,
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsOmitLabel).toBe(true);
+  });
+
   it("reuses installed package json path validation across registry loads", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");

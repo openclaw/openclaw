@@ -133,6 +133,10 @@ function formatSetupOptionalDisplayText(value: string | undefined): string | und
   return safe || undefined;
 }
 
+function formatSetupDefinedDisplayText(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : sanitizeTerminalText(value).trim();
+}
+
 function formatSetupDisplayList(values: readonly string[] | undefined): string[] | undefined {
   const safe = (values ?? []).flatMap((value) => {
     const sanitized = formatSetupOptionalDisplayText(value);
@@ -144,7 +148,7 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
   const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
   const safeLabel = formatSetupDisplayText(meta.label, safeId);
-  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionDocsPrefix = formatSetupDefinedDisplayText(meta.selectionDocsPrefix);
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
   return {
     ...meta,
@@ -154,7 +158,9 @@ function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
     docsPath: formatSetupDisplayText(meta.docsPath, "/"),
     ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
-    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: safeSelectionDocsPrefix }
+      : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
   };
 }
