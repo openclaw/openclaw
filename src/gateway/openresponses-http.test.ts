@@ -1433,6 +1433,117 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(deltas).not.toContain("coordination draft");
   });
 
+  it("preserves accumulated text on media-only replace:true with empty text", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "Hello ", delta: "Hello " } });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "world", delta: "world" } });
+      // Media-only upstream response sends replace:true with empty text,
+      // carrying a mediaUrls signal. Must NOT erase already-accumulated "Hello world".
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "", delta: "", replace: true, mediaUrls: ["https://example.com/image.jpg"] },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "Hello world" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const deltas = events
+      .filter((event) => event.event === "response.output_text.delta")
+      .map((event) => {
+        const parsed = JSON.parse(event.data) as { delta?: string };
+        return parsed.delta ?? "";
+      })
+      .join("");
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    expect(deltas).toBe("Hello world");
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("Hello world");
+  });
+
+  it("clears accumulated text on empty replace with mediaUrls:[]", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "Hello ", delta: "Hello " } });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "world", delta: "world" } });
+      // Empty mediaUrls array is a placeholder, not actual media content.
+      // Must clear the buffer per existing non-media replacement semantics.
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "", delta: "", replace: true, mediaUrls: [] },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "Hello world" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    // Buffer was cleared, so finalization falls back to "No response from OpenClaw."
+    // due to empty string being falsy in the `||` fallback chain (line ~1110).
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("No response from OpenClaw.");
+  });
+
+  it('clears accumulated text on empty replace with mediaUrl:""', async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "Hello ", delta: "Hello " } });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "world", delta: "world" } });
+      // Empty mediaUrl string is a placeholder, not actual media content.
+      // Must clear the buffer per existing non-media replacement semantics.
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "", delta: "", replace: true, mediaUrl: "" },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "Hello world" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    // Buffer was cleared, so finalization falls back to "No response from OpenClaw."
+    // due to empty string being falsy in the `||` fallback chain (line ~1110).
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("No response from OpenClaw.");
+  });
+
   it("prefers final result text over buffered replaceable response drafts", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
