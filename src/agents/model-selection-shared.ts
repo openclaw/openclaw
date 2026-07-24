@@ -158,7 +158,15 @@ function findModelAliasCandidate(
   let match: ModelAliasCandidate | undefined;
   for (const candidate of listModelAliasCandidates(cfg)) {
     if (normalizeLowercaseStringOrEmpty(candidate.alias) === aliasKey) {
-      match = candidate;
+      if (match) {
+        // Duplicate alias — keep first match but warn so operators can find and fix.
+        const safe = sanitizeForLog(aliasKey);
+        getLog().warn(
+          `Duplicate model alias "${safe}" (targets "${sanitizeForLog(candidate.keyRaw)}" and "${sanitizeForLog(match.keyRaw)}"); using the first match.`,
+        );
+      } else {
+        match = candidate;
+      }
     }
   }
   return match;
