@@ -20,3 +20,9 @@ export function toRelayTabInfo(tab: {
   title?: string;
   active?: boolean;
 }): { tabId: number; url: string; title: string; active: boolean };
+
+export function relayStatusLabel(status: {
+  state: string;
+  relayHost?: string;
+  lastError?: { code?: number | null; reason?: string; wasOpen?: boolean } | null;
+}): string;
