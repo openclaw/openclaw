@@ -242,6 +242,7 @@ export function resolveGatewayScopedTools(params: {
     onYield: params.onYield,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
+    requesterSenderId: senderId,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
