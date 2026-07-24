@@ -4026,6 +4026,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: What the audit checks (high level)
   - H3: Priority order when triaging findings
   - H2: Hardened baseline in 60 seconds
+  - H2: WebSocket origin gate
   - H2: Trust boundary matrix
   - H2: Not vulnerabilities by design
   - H2: Gateway and node trust
@@ -4106,6 +4107,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Why it matters
   - H2: Generating and checking
   - H2: Inspecting a published package
+
+## gateway/security/websocket-origin-gate.md
+
+- Route: /gateway/security/websocket-origin-gate
+- Headings:
+  - H2: What it does
+  - H2: Why pre-handshake
+  - H2: CSRF / cross-site note
+  - H2: No new configuration
+  - H2: Troubleshooting
 
 ## gateway/tailscale.md
 

@@ -1634,5 +1634,9 @@
   {
     "source": "Gateway security",
     "target": "Gateway 安全"
+  },
+  {
+    "source": "WebSocket origin gate",
+    "target": "WebSocket 源站网关"
   }
 ]

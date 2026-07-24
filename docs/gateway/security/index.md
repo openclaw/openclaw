@@ -95,6 +95,10 @@ Keeps the Gateway local-only, isolates DMs, and disables control-plane/runtime t
 
 Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools regardless of config.
 
+## WebSocket origin gate
+
+The Gateway rejects WebSocket upgrades from disallowed browser Origins before the HTTP 101, reusing the existing `allowedOrigins` policy. No new setting to enable. See [WebSocket origin gate](/gateway/security/websocket-origin-gate).
+
 ## Trust boundary matrix
 
 Quick model for triaging risk reports:
