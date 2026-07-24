@@ -523,14 +523,6 @@ describe("signalSetupAdapter", () => {
     expect(
       await input.currentValue?.({ cfg, accountId: "default", credentialValues: {} }),
     ).toBeUndefined();
-    const wizardInput = signalSetupWizard.textInputs?.find((entry) => entry.inputKey === "cliPath");
-    expect(
-      await wizardInput?.shouldPrompt?.({
-        cfg,
-        accountId: "default",
-        credentialValues: {},
-      }),
-    ).toBe(false);
   });
 
   it("reports an external transport as configured without checking signal-cli", async () => {

@@ -37,14 +37,23 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
     ```bash
     openclaw channels add
     ```
-    The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures. It then prompts for the bot number and `signal-cli` path.
+    Signal uses a real Signal account/device, not a bot token. The wizard asks whether OpenClaw should manage a local `signal-cli` or connect to an existing Signal server.
+
+    - **Local `signal-cli`:** the wizard can install or reuse `signal-cli` and accepts an optional custom config directory. It discovers linked accounts automatically. If none exist, choose **Link a Signal account now**, then scan the QR code shown in the wizard from Signal **Settings > Linked devices**. The wizard adopts the linked phone number, starts a temporary daemon, validates it, stops it, and only then saves the transport.
+    - **Existing server:** enter the server URL. The wizard detects the native or container protocol, asks for a Signal phone number when the server requires one, and probes the concrete transport before saving it. An external native server may remain accountless only when the probe confirms the server is unambiguous.
+
+    If detection or validation fails, the wizard can retry, change the account or URL, or stop without persisting the candidate transport.
 
     For non-interactive setup, `openclaw channels add --channel signal` also accepts `--signal-number <e164>` for the bot phone number, plus `--http-host <host>` and `--http-port <port>` for the Signal daemon endpoint (default `127.0.0.1:8080`).
 
   </Step>
-  <Step title="Link or register the account">
+  <Step title="Or link or register manually">
+    You can prepare the local `signal-cli` account before running the wizard:
+
     - **QR link (fastest):** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
     - **SMS registration:** dedicated number with captcha + SMS verification. See [Path B](#setup-path-b-register-dedicated-bot-number-sms-linux).
+
+    Skip this step when the wizard links the account for you or when you connect to an existing Signal server that already owns the account.
 
   </Step>
   <Step title="Verify and pair">

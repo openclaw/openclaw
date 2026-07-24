@@ -4,7 +4,6 @@ import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
-  createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
@@ -41,6 +40,16 @@ import { normalizeSignalTransportHost, normalizeSignalTransportUrl } from "./tra
 const t = createSetupTranslator();
 
 const channel = "signal" as const;
+
+// Prepare emits this transient state before generic text inputs run; finalize consumes it
+// to rebuild and probe the account-owned transport before any transport write.
+export const signalSetupStateKeys = {
+  transportKind: "signalTransportKind",
+  cliPath: "signalCliPath",
+  cliConfigPath: "signalCliConfigPath",
+  installRequested: "signalInstallRequested",
+  serverUrl: "signalServerUrl",
+} as const;
 
 const signalSetupFields = {
   signalNumber: {
@@ -335,12 +344,31 @@ export const signalNumberTextInput: ChannelSetupWizardTextInput = {
   normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
 };
 
+export const signalNumberTextInputs: ChannelSetupWizardTextInput[] = [
+  {
+    ...signalNumberTextInput,
+    shouldPrompt: ({ credentialValues }) =>
+      credentialValues[signalSetupStateKeys.transportKind] === "container",
+  },
+  {
+    ...signalNumberTextInput,
+    message: "Signal phone number (optional)",
+    required: false,
+    shouldPrompt: ({ credentialValues }) =>
+      credentialValues[signalSetupStateKeys.transportKind] === "external-native",
+    validate: ({ value }) =>
+      normalizeOptionalString(value) && !normalizeSignalAccountInput(value)
+        ? INVALID_SIGNAL_ACCOUNT_ERROR
+        : undefined,
+  },
+];
+
 export const signalCompletionNote = {
   title: t("wizard.signal.nextStepsTitle"),
   lines: [
-    t("wizard.signal.nextLinkDevice"),
-    t("wizard.signal.nextScanQr"),
-    `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
+    "Signal setup is validated.",
+    "OpenClaw will use this Signal connection when the gateway runs.",
+    `Check it later: ${formatCliCommand("openclaw channels status --probe")}`,
     `Docs: ${formatDocsLink("/signal", "signal")}`,
   ],
 };
@@ -481,16 +509,9 @@ export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSe
       unconfiguredScore: 0,
     },
     delegatePrepare: true,
+    delegateFinalize: true,
     credentials: [],
-    textInputs: [
-      createSignalCliPathTextInput(
-        createDelegatedTextInputShouldPrompt({
-          loadWizard,
-          inputKey: "cliPath",
-        }),
-      ),
-      signalNumberTextInput,
-    ],
+    textInputs: signalNumberTextInputs,
     completionNote: signalCompletionNote,
     dmPolicy: signalDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
