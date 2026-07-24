@@ -811,16 +811,89 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).not.toContain("missing");
   });
 
-  it("suppresses mutating tool errors when assistant output explicitly acknowledges the failed action", () => {
-    const text = "I couldn't update the file, so no changes were applied.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "edit", error: "file missing" },
-    });
+  it.each([
+    {
+      toolName: "write",
+      text: "The write failed, so I couldn't save the file.",
+    },
+    {
+      toolName: "edit",
+      text: "I couldn't update the file, so no changes were applied.",
+    },
+    {
+      toolName: "message",
+      text: "The message send failed, so I couldn't reply.",
+    },
+    {
+      toolName: "file_write",
+      text: "The file write failed, so the artifact was not created.",
+    },
+  ])(
+    "suppresses $toolName warnings when assistant output acknowledges the same failed action",
+    ({ toolName, text }) => {
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+        lastToolError: { toolName, error: "operation failed", mutatingAction: true },
+      });
 
-    expectSinglePayloadSummary(payloads, { text });
-  });
+      expectSinglePayloadSummary(payloads, { text });
+    },
+  );
+
+  it.each([
+    {
+      toolName: "write",
+      title: "Write",
+      text: "The command failed on the first run; I corrected it and the check passed.",
+    },
+    {
+      toolName: "write",
+      title: "Write",
+      text: "I created a troubleshooting plan; the script failed on the first run, then passed.",
+    },
+    {
+      toolName: "edit",
+      title: "Edit",
+      text: "The script failed on the first run; I corrected it and the script passed.",
+    },
+    {
+      toolName: "edit",
+      title: "Edit",
+      text: "I updated the notes; the command failed on the first run, then passed.",
+    },
+    {
+      toolName: "message",
+      title: "Message",
+      text: "The command failed at first, then passed after I reran it.",
+    },
+    {
+      toolName: "message",
+      title: "Message",
+      text: "I sent the summary plan; the script failed on the first run, then passed.",
+    },
+    {
+      toolName: "file_write",
+      title: undefined,
+      text: "The file failed validation, so I fixed it and the check passed.",
+    },
+  ])(
+    "keeps $toolName warnings when assistant output only acknowledges an unrelated command failure",
+    ({ toolName, title, text }) => {
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+        lastToolError: { toolName, error: "operation failed", mutatingAction: true },
+      });
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.text).toBe(text);
+      expect(payloads[1]?.isError).toBe(true);
+      if (title) {
+        expect(payloads[1]?.text).toContain(title);
+      }
+    },
+  );
 
   it("suppresses exec warnings when assistant output explicitly acknowledges the command failure", () => {
     const text = "I couldn't run the command because python was not found.";
