@@ -141,7 +141,7 @@ import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./se
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
-import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import { setFallbackGatewayContextResolver } from "./server-plugin-fallback-context.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import {

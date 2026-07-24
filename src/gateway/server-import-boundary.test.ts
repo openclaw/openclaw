@@ -17,6 +17,9 @@ describe("gateway startup import boundaries", () => {
 
     expect(serverImpl).not.toContain('from "./server-cron.js"');
     expect(serverImpl).toContain('from "./server-cron-lazy.js"');
+    expect(serverImpl).not.toContain('from "./server-plugins.js"');
+    expect(serverImpl).toContain('from "./server-plugin-fallback-context.js"');
+    expect(serverImpl).toContain('import("./server-plugin-bootstrap.js")');
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
     expect(serverImpl).not.toMatch(
