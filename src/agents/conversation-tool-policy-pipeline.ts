@@ -6,7 +6,7 @@ import {
 } from "./tool-policy-pipeline.js";
 import { mergeAlsoAllowPolicy, type ToolPolicyLike } from "./tool-policy.js";
 
-export type ResolvedConversationToolPolicies = {
+type ResolvedConversationToolPolicies = {
   profilePolicy?: ToolPolicyLike;
   providerProfilePolicy?: ToolPolicyLike;
   globalPolicy?: ToolPolicyLike;

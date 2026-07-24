@@ -12963,6 +12963,7 @@ public struct CronJob: Codable, Sendable {
     public let declarationkey: String?
     public let displayname: String?
     public let owner: [String: AnyCodable]?
+    public let scheduledtoolpolicy: AnyCodable?
     public let agentid: String?
     public let sessionkey: String?
     public let name: String
@@ -12997,6 +12998,7 @@ public struct CronJob: Codable, Sendable {
         declarationkey: String? = nil,
         displayname: String? = nil,
         owner: [String: AnyCodable]? = nil,
+        scheduledtoolpolicy: AnyCodable? = nil,
         agentid: String? = nil,
         sessionkey: String? = nil,
         name: String,
@@ -13030,6 +13032,7 @@ public struct CronJob: Codable, Sendable {
         self.declarationkey = declarationkey
         self.displayname = displayname
         self.owner = owner
+        self.scheduledtoolpolicy = scheduledtoolpolicy
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.name = name
@@ -13065,6 +13068,7 @@ public struct CronJob: Codable, Sendable {
         case declarationkey = "declarationKey"
         case displayname = "displayName"
         case owner
+        case scheduledtoolpolicy = "scheduledToolPolicy"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case name

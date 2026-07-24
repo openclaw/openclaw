@@ -8,7 +8,7 @@ import { normalizeOptionalAccountId } from "../../../routing/account-id.js";
 import { normalizeAgentId, parseSessionDeliveryRoute } from "../../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../../sessions/session-key-utils.js";
 
-export type ScheduledToolPolicyMigrationResult = {
+type ScheduledToolPolicyMigrationResult = {
   mutated: boolean;
   status: "current" | "migrated" | "legacy" | "invalid" | "not-applicable";
 };
@@ -53,7 +53,7 @@ function usesToolRuntime(raw: Record<string, unknown>): boolean {
 }
 
 /** Recovers only account authority proven by immutable persisted owner identity. */
-export function migrateScheduledToolPolicy(
+function migrateScheduledToolPolicy(
   raw: Record<string, unknown>,
 ): ScheduledToolPolicyMigrationResult {
   if (!usesToolRuntime(raw)) {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { formatScheduledToolPolicyAdvisory } from "./repair-plan.js";
-import { migrateScheduledToolPolicy } from "./scheduled-tool-policy-migration.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
 
 function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -26,7 +25,8 @@ function job(overrides: Record<string, unknown> = {}): Record<string, unknown> {
 describe("migrateScheduledToolPolicy", () => {
   it("recovers an account from the persisted owner pair", () => {
     const raw = job();
-    expect(migrateScheduledToolPolicy(raw)).toEqual({ mutated: true, status: "migrated" });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(result.issues.migratedScheduledToolPolicy).toBe(1);
     expect(raw.scheduledToolPolicy).toEqual({
       version: 1,
       mode: "account",
@@ -42,7 +42,8 @@ describe("migrateScheduledToolPolicy", () => {
         sessionKey: "agent:main:discord:work:direct:user-1",
       },
     });
-    expect(migrateScheduledToolPolicy(raw)).toEqual({ mutated: true, status: "migrated" });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(result.issues.migratedScheduledToolPolicy).toBe(1);
     expect(raw.owner).toMatchObject({ accountId: "work" });
   });
 
@@ -69,21 +70,20 @@ describe("migrateScheduledToolPolicy", () => {
     },
   ])("does not guess authority for $label", ({ owner }) => {
     const raw = job({ owner });
-    expect(migrateScheduledToolPolicy(raw)).toEqual({ mutated: false, status: "legacy" });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
     expect(raw.scheduledToolPolicy).toBeUndefined();
   });
 
   it("keeps capless historical jobs on legacy sender policy", () => {
     const raw = job({ payload: { kind: "agentTurn", message: "run" } });
-    expect(migrateScheduledToolPolicy(raw)).toEqual({ mutated: false, status: "legacy" });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
   });
 
   it("rejects malformed and owner-inconsistent provenance", () => {
     const malformed = job({ scheduledToolPolicy: { version: 2, mode: "trusted" } });
-    expect(migrateScheduledToolPolicy(malformed)).toEqual({
-      mutated: false,
-      status: "invalid",
-    });
+    expect(normalizeStoredCronJobs([malformed]).invalidScheduledToolPolicyJobs).toEqual(["Legacy"]);
 
     const inconsistent = job({
       scheduledToolPolicy: {
@@ -93,15 +93,17 @@ describe("migrateScheduledToolPolicy", () => {
         ownerAccountId: "personal",
       },
     });
-    expect(migrateScheduledToolPolicy(inconsistent)).toEqual({
-      mutated: false,
-      status: "invalid",
-    });
+    expect(normalizeStoredCronJobs([inconsistent]).invalidScheduledToolPolicyJobs).toEqual([
+      "Legacy",
+    ]);
   });
 
   it("preserves valid trusted provenance", () => {
     const raw = job({ scheduledToolPolicy: { version: 1, mode: "trusted" } });
-    expect(migrateScheduledToolPolicy(raw)).toEqual({ mutated: false, status: "current" });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(result.legacyScheduledToolPolicyJobs).toEqual([]);
+    expect(result.invalidScheduledToolPolicyJobs).toEqual([]);
+    expect(raw.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
   });
 
   it("reports auto-recoverable and ambiguous jobs through the doctor result", () => {

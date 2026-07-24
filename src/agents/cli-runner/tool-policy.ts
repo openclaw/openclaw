@@ -2,7 +2,7 @@ import type { CliBackendToolAvailability } from "../../plugins/cli-backend.types
 import { normalizeToolName } from "../tool-policy.js";
 
 /** Transport prefix CLI harnesses use for loopback OpenClaw MCP tool names. */
-export const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 
 /** Strips the loopback MCP transport prefix so observers see gateway tool names. */
 export function stripOpenClawMcpToolPrefix(toolName: string): string {
