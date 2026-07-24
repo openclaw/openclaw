@@ -827,22 +827,59 @@ private struct ChatMediaImageAttachment: View {
             return
         }
         self.state = .loading
-        do {
-            guard let data = try await self.loadMedia(self.imagePath),
-                  !Task.isCancelled,
-                  let image = await Task.detached(priority: .userInitiated, operation: {
-                      ChatMediaImageDecoder.decode(data)
-                  }).value,
-                  !Task.isCancelled
-            else {
-                self.state = .unavailable
-                return
-            }
+        let outcome = await ChatMediaImageLoader.load(
+            self.imagePath,
+            loadMedia: self.loadMedia)
+        guard !Task.isCancelled else { return }
+        switch outcome {
+        case let .loaded(image):
             self.state = .loaded(image)
-        } catch is CancellationError {
-            return
-        } catch {
+        case .unavailable:
             self.state = .unavailable
+        case .cancelled:
+            return
+        }
+    }
+}
+
+enum ChatMediaImageLoadOutcome {
+    case loaded(CGImage)
+    case unavailable
+    case cancelled
+}
+
+@MainActor
+enum ChatMediaImageLoader {
+    static func load(
+        _ imagePath: String,
+        loadMedia: @MainActor @Sendable (String) async throws -> Data?) async -> ChatMediaImageLoadOutcome
+    {
+        await self.load(imagePath, loadMedia: loadMedia) { data in
+            await Task.detached(priority: .userInitiated) {
+                ChatMediaImageDecoder.decode(data)
+            }.value
+        }
+    }
+
+    static func load(
+        _ imagePath: String,
+        loadMedia: @MainActor @Sendable (String) async throws -> Data?,
+        decode: @escaping @Sendable (Data) async -> CGImage?) async -> ChatMediaImageLoadOutcome
+    {
+        do {
+            guard let data = try await loadMedia(imagePath) else {
+                return Task.isCancelled ? .cancelled : .unavailable
+            }
+            guard !Task.isCancelled else { return .cancelled }
+            guard let image = await decode(data) else {
+                return Task.isCancelled ? .cancelled : .unavailable
+            }
+            guard !Task.isCancelled else { return .cancelled }
+            return .loaded(image)
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return Task.isCancelled ? .cancelled : .unavailable
         }
     }
 }

@@ -412,11 +412,13 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
             (try? container.decode([String].self, forKey: .mediaTypes))
             ?? (try? container.decode(String.self, forKey: .mediaType)).map { [$0] }
             ?? []
-        var seenMediaPaths = Set(decodedContent.compactMap { content -> String? in
-            guard let mediaPath = content.mediaPath?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !mediaPath.isEmpty
-            else { return nil }
-            return mediaPath
+        var seenMediaPaths = Set(decodedContent.flatMap { content in
+            [content.mediaPath, content.url, content.openUrl].compactMap { candidate -> String? in
+                guard let path = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !path.isEmpty
+                else { return nil }
+                return path
+            }
         })
         let containsDecodedAudio = decodedContent.contains { content in
             content.mimeType?.lowercased().hasPrefix("audio/") == true

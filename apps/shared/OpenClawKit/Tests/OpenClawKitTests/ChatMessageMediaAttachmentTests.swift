@@ -3,6 +3,29 @@ import XCTest
 @testable import OpenClawChatUI
 
 final class ChatMessageMediaAttachmentTests: XCTestCase {
+    private actor DecodeBarrier {
+        private var entered = false
+        private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            self.entered = true
+            await withCheckedContinuation { continuation in
+                self.releaseContinuation = continuation
+            }
+        }
+
+        func waitUntilEntered() async {
+            while !self.entered {
+                await Task.yield()
+            }
+        }
+
+        func release() {
+            self.releaseContinuation?.resume()
+            self.releaseContinuation = nil
+        }
+    }
+
     private static let managedImagePath =
         "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000001/full"
 
@@ -68,6 +91,23 @@ final class ChatMessageMediaAttachmentTests: XCTestCase {
             "media/inbound/report.pdf",
         ])
         XCTAssertEqual(message.content.dropFirst().map(\.mimeType), ["image/png", "application/pdf"])
+    }
+
+    func testLegacyUserMediaPathsDoNotDuplicateURLBackedContent() throws {
+        let message = try decode(
+            """
+            {"role":"user","content":[
+               {"type":"image","url":"media/inbound/code.png","mimeType":"image/png"},
+               {"type":"file","openUrl":"media/inbound/report.pdf","mimeType":"application/pdf"}
+             ],
+             "MediaPaths":[" media/inbound/code.png ","media/inbound/report.pdf"],
+             "MediaTypes":["image/png","application/pdf"]}
+            """)
+
+        XCTAssertEqual(message.content.count, 2)
+        XCTAssertEqual(message.content.map(\.type), ["image", "file"])
+        XCTAssertEqual(message.content.map(\.url), ["media/inbound/code.png", nil])
+        XCTAssertEqual(message.content.map(\.openUrl), [nil, "media/inbound/report.pdf"])
     }
 
     func testTopLevelAudioMediaPathRemainsSupported() throws {
@@ -154,6 +194,32 @@ final class ChatMessageMediaAttachmentTests: XCTestCase {
         XCTAssertEqual(image.width, 1)
         XCTAssertEqual(image.height, 1)
         XCTAssertNil(ChatMediaImageDecoder.decode(Data("not an image".utf8)))
+    }
+
+    @MainActor func testCancelledImageDecodeDoesNotProduceAnUnavailableReplacementState() async throws {
+        let png = try XCTUnwrap(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
+        let barrier = DecodeBarrier()
+        let task = Task { @MainActor in
+            await ChatMediaImageLoader.load(
+                Self.managedImagePath,
+                loadMedia: { _ in png },
+                decode: { data in
+                    await barrier.wait()
+                    return ChatMediaImageDecoder.decode(data)
+                })
+        }
+
+        await barrier.waitUntilEntered()
+        task.cancel()
+        await barrier.release()
+
+        switch await task.value {
+        case .cancelled:
+            break
+        case .loaded, .unavailable:
+            XCTFail("A cancelled predecessor must not publish state over its replacement")
+        }
     }
 
     private func decode(_ json: String) throws -> OpenClawChatMessage {
