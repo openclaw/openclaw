@@ -172,6 +172,40 @@ describe("classifySessionAttention", () => {
         recoveryEligible: false,
       },
     },
+    {
+      // External-runtime streams (e.g. claude-cli) emit run.progress but do not
+      // register an embedded run handle, so activeWorkKind stays undefined.
+      // Fresh progress must still rule out stuck recovery, otherwise an actively
+      // streaming run is force-recovered while it is still healthy.
+      name: "fresh progress without active work kind is long_running, not stuck",
+      state: "processing" as const,
+      queueDepth: 1,
+      activity: {
+        lastProgressAgeMs: 0,
+        lastProgressReason: "cli_live:stream_progress",
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "queued_behind_untracked_active_progress",
+        classification: "long_running",
+        recoveryEligible: false,
+      },
+    },
+    {
+      name: "fresh progress without active work kind or queued work is long_running",
+      state: "processing" as const,
+      queueDepth: 0,
+      activity: {
+        lastProgressAgeMs: 0,
+        lastProgressReason: "cli_live:stream_progress",
+      },
+      expected: {
+        eventType: "session.long_running",
+        reason: "untracked_active_progress",
+        classification: "long_running",
+        recoveryEligible: false,
+      },
+    },
   ])("$name", ({ activity, expected, queueDepth, state }) => {
     expect(
       classifySessionAttention({
