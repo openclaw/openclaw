@@ -35,10 +35,7 @@ vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
 
-async function seedSession(
-  sessionKey: string,
-  context: DeliveryContext = {},
-): Promise<void> {
+async function seedSession(sessionKey: string, context: DeliveryContext = {}): Promise<void> {
   await replaceSessionEntry(
     { agentId: "main", sessionKey },
     {
