@@ -384,6 +384,7 @@ function createRelay(options?: {
     runId: "run-1",
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
+    isRegistered: () => true,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event, commandOptions) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${

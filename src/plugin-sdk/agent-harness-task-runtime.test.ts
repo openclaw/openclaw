@@ -7,6 +7,11 @@ import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import {
+  evaluateTaskExecutionGate,
+  listTaskExecutionReceipts,
+  recordTaskExecutionReceipt,
+} from "../tasks/task-execution-receipts.js";
+import {
   createAgentHarnessTaskRuntime,
   deliverAgentHarnessTaskCompletion,
   isDurableAgentHarnessCompletionDelivery,
@@ -30,6 +35,12 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 
 vi.mock("../tasks/runtime-internal.js", () => ({
   listTaskRecords: vi.fn(() => []),
+}));
+
+vi.mock("../tasks/task-execution-receipts.js", () => ({
+  recordTaskExecutionReceipt: vi.fn((params) => ({ sequence: 1, recordedAt: 1, ...params })),
+  listTaskExecutionReceipts: vi.fn(() => []),
+  evaluateTaskExecutionGate: vi.fn(() => ({ ok: true, missing: [] })),
 }));
 
 describe("agent-harness-task-runtime", () => {
@@ -158,6 +169,50 @@ describe("agent-harness-task-runtime", () => {
     });
 
     expect(runtime.listTaskRecords().map((task) => task.taskId)).toEqual(["task-1"]);
+  });
+
+  it("binds execution receipts and gates to the owned task row", () => {
+    vi.mocked(listTaskRecords).mockReturnValue([
+      {
+        taskId: "task-1",
+        runtime: "subagent",
+        taskKind: "example-harness",
+        requesterSessionKey: "agent:main:channel:C123",
+        ownerKey: "agent:main:channel:C123",
+        scopeKind: "session",
+        runId: "example:child-1",
+        task: "owned",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "done_only",
+        createdAt: 1,
+      },
+    ]);
+    const runtime = createAgentHarnessTaskRuntime({
+      runtime: "subagent",
+      taskKind: "example-harness",
+      scope: createScope(),
+      runIdPrefix: "example:",
+    });
+
+    runtime.recordExecutionReceipt({
+      runId: "example:child-1",
+      kind: "heartbeat",
+      status: "ok",
+    });
+    runtime.listExecutionReceipts("example:child-1");
+    runtime.evaluateExecutionGate({ runId: "example:child-1", gate: "healthy" });
+
+    expect(recordTaskExecutionReceipt).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-1", runId: "example:child-1" }),
+    );
+    expect(listTaskExecutionReceipts).toHaveBeenCalledWith("task-1");
+    expect(evaluateTaskExecutionGate).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-1", gate: "healthy" }),
+    );
+    expect(() => runtime.listExecutionReceipts("other:child-1")).toThrow(
+      /outside the configured scope/,
+    );
   });
 
   it("delivers a generic harness completion through subagent announcement delivery", async () => {

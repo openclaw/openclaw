@@ -3,6 +3,7 @@
  * runtime rows so parent sessions can observe child progress.
  */
 import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { projectCodexNativeExecutionReceipts } from "./native-subagent-execution-receipts.js";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -20,7 +21,10 @@ import { isJsonObject } from "./protocol.js";
 /** Minimal task-runtime surface needed to mirror native subagent lifecycle. */
 type TaskLifecycleRuntime = Pick<
   AgentHarnessTaskRuntime,
-  "tryCreateRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+  | "tryCreateRunningTaskRun"
+  | "recordTaskRunProgressByRunId"
+  | "finalizeTaskRunByRunId"
+  | "recordExecutionReceipt"
 >;
 
 /** Stable parent/session context used while mirroring native subagent tasks. */
@@ -28,7 +32,11 @@ type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
   agentId?: string;
+  endpoint?: string;
+  supervisionPeriodMs?: number;
   now?: () => number;
+  /** Reads the native hook-relay registration lifecycle, never connector traffic. */
+  isRelayHealthy?: () => boolean;
 };
 
 /** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
@@ -40,12 +48,25 @@ export class CodexNativeSubagentTaskMirror {
   private readonly authoritativeRunIds = new Set<string>();
   private readonly expectedAuthoritativeRunIds = new Set<string>();
   private readonly now: () => number;
+  private readonly supervisionPeriodMs: number;
+  private readonly supervisionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly params: CodexNativeSubagentTaskMirrorParams,
     private readonly runtime: TaskLifecycleRuntime,
   ) {
     this.now = params.now ?? Date.now;
+    this.supervisionPeriodMs = params.supervisionPeriodMs ?? 60_000;
+  }
+
+  dispose(): void {
+    for (const [runId, timer] of this.supervisionTimers) {
+      clearTimeout(timer);
+      if (!this.terminalRunIds.has(runId)) {
+        this.markStalled(runId, "Codex app-server connector closed before terminal evidence.");
+      }
+    }
+    this.supervisionTimers.clear();
   }
 
   markAuthoritativeCompletion(childThreadId: string): void {
@@ -54,6 +75,7 @@ export class CodexNativeSubagentTaskMirror {
     // finalizes and delivers this task, later mirror events must not rewrite it.
     this.authoritativeRunIds.add(runId);
     this.terminalRunIds.add(runId);
+    this.clearSupervision(runId);
   }
 
   markAuthoritativeCompletionExpected(childThreadId: string): void {
@@ -62,10 +84,59 @@ export class CodexNativeSubagentTaskMirror {
     this.expectedAuthoritativeRunIds.add(codexNativeSubagentRunId(childThreadId));
   }
 
+  markRecoveryHealthy(childThreadId: string, recordedAt = this.now()): void {
+    const runId = codexNativeSubagentRunId(childThreadId);
+    if (this.mirrorStateByThreadId.get(childThreadId) === "failed") {
+      return;
+    }
+    this.mirrorStateByThreadId.set(childThreadId, "mirrored");
+    this.recordHealthy(runId, recordedAt);
+  }
+
   handleNotification(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return;
+    }
+    const directThreadId = trimOptional(readString(params, "threadId"));
+    const recordsConnectorHealth =
+      notification.method === "turn/started" ||
+      notification.method === "turn/completed" ||
+      notification.method === "item/completed";
+    if (
+      recordsConnectorHealth &&
+      directThreadId &&
+      this.mirrorStateByThreadId.get(directThreadId) === "mirrored"
+    ) {
+      const runId = codexNativeSubagentRunId(directThreadId);
+      this.recordConnectorHeartbeat(runId, this.now());
+      if (notification.method === "item/completed") {
+        const item = isJsonObject(params.item) ? params.item : undefined;
+        const itemType = trimOptional(item ? readString(item, "type") : undefined);
+        const itemStatus = trimOptional(item ? readString(item, "status") : undefined);
+        const failed = itemStatus === "failed" || itemStatus === "declined";
+        if (itemType && itemType !== "agentMessage") {
+          this.runtime.recordExecutionReceipt({
+            runId,
+            kind: "tool_call",
+            status: failed ? "error" : "ok",
+            recordedAt: this.now(),
+            summary: failed
+              ? `Codex tool item failed: ${itemType}.`
+              : `Codex tool item completed: ${itemType}.`,
+            detail: { itemType },
+          });
+          if (item) {
+            for (const receipt of projectCodexNativeExecutionReceipts(item)) {
+              this.runtime.recordExecutionReceipt({
+                runId,
+                ...receipt,
+                recordedAt: this.now(),
+              });
+            }
+          }
+        }
+      }
     }
     if (notification.method === "thread/started") {
       this.handleThreadStarted(params);
@@ -149,6 +220,7 @@ export class CodexNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     if (statusType === "active") {
+      this.recordHealthy(runId, eventAt);
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -157,6 +229,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "idle") {
+      this.recordHealthy(runId, eventAt);
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -165,13 +238,9 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "systemError") {
+      this.markStalled(runId, "Codex app-server reported a system error.", eventAt);
       if (this.expectedAuthoritativeRunIds.has(runId)) {
         this.terminalRunIds.delete(runId);
-        this.runtime.recordTaskRunProgressByRunId({
-          runId,
-          lastEventAt: eventAt,
-          progressSummary: "Codex native subagent hit a system error; awaiting recovery.",
-        });
         return;
       }
       this.terminalRunIds.add(runId);
@@ -187,11 +256,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "notLoaded") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is not loaded.",
-      });
+      this.markStalled(runId, "Codex native thread is not loaded.", eventAt);
     }
   }
 
@@ -322,12 +387,22 @@ export class CodexNativeSubagentTaskMirror {
       runId,
       label: params.label,
       task: params.task,
-      notifyPolicy: "silent",
+      notifyPolicy: "done_only",
       deliveryStatus: "not_applicable",
       preferMetadata: true,
       startedAt: params.startedAt,
       lastEventAt: this.now(),
       progressSummary: params.progressSummary,
+      detail: {
+        executionBinding: {
+          version: 1,
+          runId,
+          requesterSessionKey: this.params.requesterSessionKey ?? "",
+          endpoint: this.params.endpoint ?? "codex-app-server:unknown",
+          nativeThreadId: threadId,
+          parentThreadId: this.params.parentThreadId,
+        },
+      },
     });
     if (!taskRecord) {
       this.mirrorStateByThreadId.set(threadId, "failed");
@@ -335,6 +410,7 @@ export class CodexNativeSubagentTaskMirror {
     }
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
+    this.recordHealthy(runId, params.startedAt);
     return true;
   }
 
@@ -359,6 +435,7 @@ export class CodexNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
+      this.recordHealthy(runId, eventAt);
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: eventAt,
@@ -371,6 +448,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (normalizedStatus === "completed") {
+      this.clearSupervision(runId);
       this.terminalRunIds.add(runId);
       const summary = trimOptional(message) ?? "Codex native subagent completed.";
       if (this.expectedAuthoritativeRunIds.has(runId)) {
@@ -394,6 +472,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (normalizedStatus === "blocked") {
+      this.clearSupervision(runId);
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
@@ -407,6 +486,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     this.terminalRunIds.add(runId);
+    this.clearSupervision(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
       status:
@@ -418,6 +498,81 @@ export class CodexNativeSubagentTaskMirror {
       error: trimOptional(message) ?? `Codex native subagent status: ${normalizedStatus}`,
       progressSummary: trimOptional(message) ?? `Codex native subagent ${normalizedStatus}.`,
       terminalSummary: trimOptional(message) ?? "Codex native subagent did not complete.",
+    });
+  }
+
+  private recordHealthy(runId: string, recordedAt: number): void {
+    this.recordConnectorHeartbeat(runId, recordedAt);
+  }
+
+  private recordConnectorHeartbeat(runId: string, recordedAt: number): void {
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "heartbeat",
+      status: "ok",
+      recordedAt,
+      summary: "Codex worker heartbeat observed.",
+    });
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "connector_health",
+      status: "ok",
+      recordedAt,
+      summary: "Codex app-server connector is healthy.",
+    });
+    const relayHealthKnown = this.params.isRelayHealthy !== undefined;
+    const relayHealthy = this.params.isRelayHealthy?.() ?? false;
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "relay_health",
+      status: relayHealthy ? "ok" : "error",
+      recordedAt,
+      summary: relayHealthy
+        ? "Native hook relay registration is healthy."
+        : "Native hook relay registration is unavailable.",
+    });
+    if (relayHealthKnown && !relayHealthy) {
+      this.runtime.recordTaskRunProgressByRunId({
+        runId,
+        lastEventAt: recordedAt,
+        progressSummary: "Stalled: native hook relay registration is unavailable.",
+      });
+    }
+    this.armSupervision(runId);
+  }
+
+  private armSupervision(runId: string): void {
+    this.clearSupervision(runId);
+    const timer = setTimeout(() => {
+      this.supervisionTimers.delete(runId);
+      if (!this.terminalRunIds.has(runId)) {
+        this.markStalled(runId, "No Codex heartbeat arrived within one supervision period.");
+      }
+    }, this.supervisionPeriodMs);
+    timer.unref?.();
+    this.supervisionTimers.set(runId, timer);
+  }
+
+  private clearSupervision(runId: string): void {
+    const timer = this.supervisionTimers.get(runId);
+    if (timer) {
+      clearTimeout(timer);
+      this.supervisionTimers.delete(runId);
+    }
+  }
+
+  private markStalled(runId: string, summary: string, recordedAt = this.now()): void {
+    this.runtime.recordExecutionReceipt({
+      runId,
+      kind: "relay_health",
+      status: "error",
+      recordedAt,
+      summary,
+    });
+    this.runtime.recordTaskRunProgressByRunId({
+      runId,
+      lastEventAt: recordedAt,
+      progressSummary: `Stalled: ${summary}`,
     });
   }
 }

@@ -29,6 +29,15 @@ import {
   setDetachedTaskDeliveryStatusByRunId,
 } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords, type TaskRecord } from "../tasks/runtime-internal.js";
+import {
+  evaluateTaskExecutionGate,
+  listTaskExecutionReceipts,
+  recordTaskExecutionReceipt,
+  type TaskExecutionGate,
+  type TaskExecutionReceipt,
+  type TaskExecutionReceiptKind,
+  type TaskExecutionReceiptStatus,
+} from "../tasks/task-execution-receipts.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 export type { TaskRecord as AgentHarnessTaskRecord };
@@ -84,6 +93,21 @@ export type AgentHarnessTaskRuntime = {
     params: AgentHarnessScopedSetDeliveryStatusParams,
   ): TaskRecord[];
   listTaskRecords(): TaskRecord[];
+  recordExecutionReceipt(params: {
+    runId: string;
+    kind: TaskExecutionReceiptKind;
+    status: TaskExecutionReceiptStatus;
+    recordedAt?: number;
+    summary?: string;
+    detail?: Record<string, unknown>;
+  }): TaskExecutionReceipt;
+  listExecutionReceipts(runId: string): TaskExecutionReceipt[];
+  evaluateExecutionGate(params: {
+    runId: string;
+    gate: TaskExecutionGate;
+    now?: number;
+    supervisionPeriodMs?: number;
+  }): { ok: boolean; missing: string[] };
 };
 
 /** Completion states a harness task can report to its requester. */
@@ -106,6 +130,21 @@ export function createAgentHarnessTaskRuntime(
   const taskKind = normalizeOptionalString(params.taskKind);
   const runIdPrefix = normalizeOptionalString(params.runIdPrefix);
   const assertRunId = (runId: string) => assertScopedRunId(runId, runIdPrefix);
+  const resolveTask = (runId: string): TaskRecord => {
+    assertRunId(runId);
+    const task = listTaskRecords().find(
+      (candidate) =>
+        candidate.runId === runId &&
+        candidate.runtime === runtime &&
+        (!taskKind || candidate.taskKind === taskKind) &&
+        candidate.scopeKind === "session" &&
+        candidate.ownerKey === requesterSessionKey,
+    );
+    if (!task) {
+      throw new Error(`Task run is outside the configured harness scope: ${runId}`);
+    }
+    return task;
+  };
   const tryCreateRunningTaskRun = (
     taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
   ): TaskRecord | null => {
@@ -161,6 +200,22 @@ export function createAgentHarnessTaskRuntime(
           task.ownerKey === requesterSessionKey &&
           (!runIdPrefix || task.runId?.startsWith(runIdPrefix)),
       );
+    },
+    recordExecutionReceipt(receiptParams) {
+      const task = resolveTask(receiptParams.runId);
+      return recordTaskExecutionReceipt({
+        ...receiptParams,
+        taskId: task.taskId,
+      });
+    },
+    listExecutionReceipts(runId) {
+      return listTaskExecutionReceipts(resolveTask(runId).taskId);
+    },
+    evaluateExecutionGate(gateParams) {
+      return evaluateTaskExecutionGate({
+        ...gateParams,
+        taskId: resolveTask(gateParams.runId).taskId,
+      });
     },
   };
 }
