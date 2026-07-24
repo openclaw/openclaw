@@ -9,17 +9,26 @@ type StreamableTransportOptions = {
 };
 
 const {
+  logDebugMock,
+  logWarnMock,
   lookupMock,
   runtimeFetchMock,
   oauthBearerMock,
   streamableTransportConstructorMock,
   sseTransportConstructorMock,
 } = vi.hoisted(() => ({
+  logDebugMock: vi.fn(),
+  logWarnMock: vi.fn(),
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
   oauthBearerMock: vi.fn((params: { fetchFn: unknown }) => params.fetchFn),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
+}));
+
+vi.mock("../logger.js", () => ({
+  logDebug: logDebugMock,
+  logWarn: logWarnMock,
 }));
 
 vi.mock("./mcp-oauth-fetch.js", () => ({
@@ -119,12 +128,109 @@ function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | unde
 
 describe("resolveMcpTransport", () => {
   beforeEach(() => {
+    logDebugMock.mockReset();
+    logWarnMock.mockReset();
     lookupMock.mockReset();
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
     oauthBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
+  });
+
+  it("preserves MCP stdio stderr across UTF-8 and line chunk boundaries", () => {
+    const resolved = resolveMcpTransport("unicode", {
+      command: process.execPath,
+    });
+    expect(resolved?.transportType).toBe("stdio");
+    if (!resolved) {
+      throw new Error("expected resolved stdio transport");
+    }
+
+    const stderr = (
+      resolved.transport as { stderr?: { write: (chunk: Buffer | string) => boolean } }
+    ).stderr;
+    expect(stderr).toBeDefined();
+    if (!stderr) {
+      throw new Error("expected stdio stderr stream");
+    }
+
+    const output = Buffer.from("alpha 你好 omega\r\nfinal tail");
+    const utf8Split = Buffer.byteLength("alpha ") + 1;
+    const carriageReturn = output.indexOf("\r");
+    stderr.write(output.subarray(0, utf8Split));
+    stderr.write(output.subarray(utf8Split, carriageReturn + 1));
+
+    expect(logDebugMock).not.toHaveBeenCalled();
+
+    stderr.write(output.subarray(carriageReturn + 1, carriageReturn + 8));
+    stderr.write(output.subarray(carriageReturn + 8));
+
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:unicode: alpha 你好 omega");
+
+    resolved?.detachStderr?.();
+
+    expect(logDebugMock).toHaveBeenCalledTimes(2);
+    expect(logDebugMock).toHaveBeenLastCalledWith("bundle-mcp:unicode: final tail");
+  });
+
+  it("flushes the final MCP stderr line when the stream ends", async () => {
+    const resolved = resolveMcpTransport("crash", {
+      command: process.execPath,
+    });
+    if (!resolved) {
+      throw new Error("expected resolved stdio transport");
+    }
+    const stderr = (
+      resolved.transport as {
+        stderr?: {
+          end: (chunk?: Buffer | string) => void;
+          once: (event: string, listener: () => void) => void;
+        };
+      }
+    ).stderr;
+    expect(stderr).toBeDefined();
+    if (!stderr) {
+      throw new Error("expected stdio stderr stream");
+    }
+
+    const ended = new Promise<void>((resolve) => {
+      stderr.once("end", resolve);
+    });
+    stderr.end("fatal tail");
+    await ended;
+
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    expect(logDebugMock).toHaveBeenCalledWith("bundle-mcp:crash: fatal tail");
+
+    resolved?.detachStderr?.();
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds newline-free MCP stderr while retaining its UTF-8-safe tail", () => {
+    const resolved = resolveMcpTransport("bounded", {
+      command: process.execPath,
+    });
+    if (!resolved) {
+      throw new Error("expected resolved stdio transport");
+    }
+    const stderr = (
+      resolved.transport as { stderr?: { write: (chunk: Buffer | string) => boolean } }
+    ).stderr;
+    expect(stderr).toBeDefined();
+    if (!stderr) {
+      throw new Error("expected stdio stderr stream");
+    }
+
+    const oversizedLine = `xx😀${"y".repeat(8189)}`;
+    stderr.write(oversizedLine.slice(0, 4 * 1024));
+    stderr.write(`${oversizedLine.slice(4 * 1024)}\n`);
+
+    expect(logDebugMock).toHaveBeenCalledTimes(1);
+    expect(logDebugMock).toHaveBeenCalledWith(
+      `bundle-mcp:bounded: [stderr line truncated] ${"y".repeat(8189)}`,
+    );
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {

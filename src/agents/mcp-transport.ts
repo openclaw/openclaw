@@ -10,9 +10,14 @@ import {
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
+import {
+  appendUtf8Lines,
+  createUtf8LineAccumulator,
+  DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+  flushUtf8Line,
+} from "../process/utf8-line-accumulator.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
@@ -33,31 +38,64 @@ type ResolvedMcpTransport = {
   detachStderr?: () => void;
 };
 
+// MCP servers may emit progress output without newlines. Keep the diagnostic tail
+// bounded so one noisy server cannot grow the gateway heap indefinitely.
+const MCP_STDERR_TRUNCATED_PREFIX = "[stderr line truncated] ";
+
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
   if (!stderr || typeof stderr.on !== "function") {
     return undefined;
   }
+  const lineAccumulator = createUtf8LineAccumulator();
+  let detached = false;
+  let finalized = false;
+  const logLine = (line: string, truncated = false) => {
+    const trimmed = `${truncated ? MCP_STDERR_TRUNCATED_PREFIX : ""}${line}`.trim();
+    if (trimmed) {
+      logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
+    }
+  };
   const onData = (chunk: Buffer | string) => {
-    const message =
-      normalizeOptionalString(typeof chunk === "string" ? chunk : String(chunk)) ?? "";
-    if (!message) {
+    for (const { line, truncated } of appendUtf8Lines({
+      accumulator: lineAccumulator,
+      chunk,
+      maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+      maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
+    })) {
+      logLine(line, truncated);
+    }
+  };
+  // Natural end covers MCP crashes; close is a fallback for abrupt stream teardown.
+  // Explicit detach shares the same finalizer and removes listeners first.
+  const finalize = () => {
+    if (finalized) {
       return;
     }
-    for (const line of message.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
-      }
+    finalized = true;
+    const trailing = flushUtf8Line(lineAccumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
+    if (trailing) {
+      logLine(trailing.line, trailing.truncated);
     }
   };
   stderr.on("data", onData);
+  stderr.on("end", finalize);
+  stderr.on("close", finalize);
   return () => {
+    if (detached) {
+      return;
+    }
+    detached = true;
     if (typeof stderr.off === "function") {
       stderr.off("data", onData);
+      stderr.off("end", finalize);
+      stderr.off("close", finalize);
     } else if (typeof stderr.removeListener === "function") {
       stderr.removeListener("data", onData);
+      stderr.removeListener("end", finalize);
+      stderr.removeListener("close", finalize);
     }
+    finalize();
   };
 }
 
