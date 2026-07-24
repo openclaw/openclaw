@@ -1,4 +1,4 @@
-import { mkdir, open as openFile, readFile } from "node:fs/promises";
+import { mkdir, open as openFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
@@ -219,7 +219,7 @@ export class FileReplayStore implements ReplayStore {
     if (this.#loaded) {
       return;
     }
-    for (const record of await readJsonl<ReplayLogRecord>(this.path)) {
+    for (const record of await readJsonl<ReplayLogRecord>(this.path, { failClosed: true })) {
       if (record.op === "claim") {
         const key = replayKey(record.peer, record.id);
         const existing = this.#bindings.get(key);
@@ -315,9 +315,61 @@ function validateCompletion(receipt: SignedReceipt, body: MessageBody | undefine
   }
 }
 
-async function readJsonl<T>(path: string): Promise<T[]> {
+// Bound audit/replay JSONL reads to prevent buffering an unbounded file
+// into memory. Normal stores stay well below this limit; a file past it
+// signals a runaway store, corruption, or an accidental large-file path.
+//
+// The read is bounded through streaming chunks (not stat()+readFile())
+// so that growth after the handle is opened cannot bypass the cap.
+//
+// failClosed: when false (audit history), the reader stops at the cap and
+// returns complete records up to that point with a warning — existing
+// oversized stores remain partially readable.
+// When true (replay ledger), the reader throws if the file exceeds the cap.
+// Auto-compaction is intentionally avoided because a bounded-prefix read
+// cannot preserve records beyond the cap, which would break the receipt-reuse
+// security invariant. Operators must compact or rotate the ledger manually.
+const MAX_JSONL_FILE_BYTES = 32 * 1024 * 1024;
+const JSONL_READ_CHUNK = 64 * 1024; // 64 KiB — balances syscall count and memory
+
+async function readJsonl<T>(path: string, opts?: { failClosed?: boolean }): Promise<T[]> {
+  const failClosed = opts?.failClosed ?? false;
   try {
-    const contents = await readFile(path, "utf8");
+    const handle = await openFile(path, "r");
+    let contents: string;
+    let overCap = false;
+    try {
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      let position = 0;
+      while (true) {
+        const buf = Buffer.alloc(JSONL_READ_CHUNK);
+        const { bytesRead } = await handle.read(buf, 0, JSONL_READ_CHUNK, position);
+        if (bytesRead === 0) {
+          break;
+        }
+        totalBytes += bytesRead;
+        if (totalBytes > MAX_JSONL_FILE_BYTES) {
+          // Best-effort: include bytes up to the cap, then stop.
+          const keep = bytesRead - (totalBytes - MAX_JSONL_FILE_BYTES);
+          chunks.push(buf.subarray(0, keep));
+          overCap = true;
+          break;
+        }
+        chunks.push(bytesRead < JSONL_READ_CHUNK ? buf.subarray(0, bytesRead) : buf);
+        position += bytesRead;
+      }
+      contents = Buffer.concat(chunks).toString("utf8");
+      if (overCap) {
+        // Find the last complete newline so we do not split a JSON line.
+        const lastNewline = contents.lastIndexOf("\n");
+        if (lastNewline !== -1) {
+          contents = contents.slice(0, lastNewline);
+        }
+      }
+    } finally {
+      await handle.close();
+    }
     const lines = contents.split("\n");
     let finalNonempty = -1;
     for (let index = lines.length - 1; index >= 0; index--) {
@@ -344,6 +396,18 @@ async function readJsonl<T>(path: string): Promise<T[]> {
         await truncateDurably(path, new TextEncoder().encode(contents.slice(0, lineStart)).length);
         break;
       }
+    }
+    if (overCap) {
+      if (failClosed) {
+        throw new Error(
+          `Replay ledger at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
+            `compact or rotate the ledger manually to restore operation.`,
+        );
+      }
+      console.warn(
+        `JSONL store file at ${path} exceeds ${MAX_JSONL_FILE_BYTES} bytes; ` +
+          `reading truncated prefix. Rotate or compact the store to restore full visibility.`,
+      );
     }
     return records;
   } catch (error) {

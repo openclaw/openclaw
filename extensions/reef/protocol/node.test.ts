@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -37,6 +37,70 @@ describe("Node stores", () => {
     expect(await recovered.entries()).toHaveLength(2);
     await recovered.appendEvent("three", { id: 3 }, 12);
     expect(await new JsonlAuditStore(path, auditKey).entries()).toHaveLength(3);
+  });
+
+  it("reads truncated prefix of an oversized audit store without buffering past the cap", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "reef-audit-oversized-"));
+    const path = join(directory, "audit.jsonl");
+    const store = new JsonlAuditStore(path, auditKey);
+    await store.appendEvent("one", { id: 1 }, 10);
+    // Extend the file past the streaming read cap. The bounded reader stops
+    // at the cap and returns complete records up to that point instead of
+    // throwing — existing oversized stores remain partially readable.
+    const limit = 33 * 1024 * 1024;
+    await truncate(path, limit + 1);
+    const entries = await new JsonlAuditStore(path, auditKey).entries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.event.payload).toEqual({ id: 1 });
+  });
+
+  it("rejects an oversized replay ledger to protect receipt-reuse invariant", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "reef-replay-oversized-"));
+    const path = join(directory, "replay.jsonl");
+    const identity = generateIdentity();
+    const receipt = signReceipt(
+      { id: receiptId, bodyHash: "a".repeat(64), auditHead: "b".repeat(64), status: "accepted" },
+      identity.signing.secretKey,
+    );
+    const body = { text: "test" };
+    const store = new FileReplayStore(path, replayBodyKey, () => new Uint8Array(12).fill(7));
+    await store.claim("alice", receiptId, "c".repeat(64));
+    await store.complete("alice", receiptId, receipt, body);
+    const limit = 33 * 1024 * 1024;
+    await truncate(path, limit + 1);
+    // Replay ledger fails closed on oversized files: auto-compaction is
+    // unsafe because a bounded-prefix read cannot preserve records beyond
+    // the cap, which would break the receipt-reuse security invariant.
+    const reopened = new FileReplayStore(path, replayBodyKey);
+    await expect(reopened.claim("alice", receiptId, "c".repeat(64))).rejects.toThrow(
+      "compact or rotate the ledger",
+    );
+  });
+
+  it("rejects oversized replay ledger even when receipt record is before the cap", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "reef-replay-receipt-before-cap-"));
+    const path = join(directory, "replay.jsonl");
+    const identity = generateIdentity();
+    const receipt = signReceipt(
+      { id: receiptId, bodyHash: "a".repeat(64), auditHead: "b".repeat(64), status: "accepted" },
+      identity.signing.secretKey,
+    );
+    // Write a completed receipt at the start, then pad the file past the cap.
+    const store = new FileReplayStore(path, replayBodyKey, () => new Uint8Array(12).fill(7));
+    await store.claim("alice", receiptId, "c".repeat(64));
+    await store.complete("alice", receiptId, receipt, { text: "test" });
+    const line = (await readFile(path, "utf8")).trimEnd();
+    const limit = 33 * 1024 * 1024;
+    const buf = Buffer.alloc(limit + 1, "\n".charCodeAt(0));
+    Buffer.from(line).copy(buf);
+    await writeFile(path, buf);
+    // Fail-closed: even when all records are well before the cap, an
+    // oversized ledger is rejected because the reader cannot distinguish
+    // intentional padding from data loss beyond the cap.
+    const reopened = new FileReplayStore(path, replayBodyKey);
+    await expect(reopened.claim("alice", receiptId, "c".repeat(64))).rejects.toThrow(
+      "compact or rotate the ledger",
+    );
   });
 
   it("rejects a corrupt middle JSONL record", async () => {
