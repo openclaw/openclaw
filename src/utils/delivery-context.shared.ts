@@ -144,7 +144,7 @@ function mergeExternalDeliveryContextOverInternalRoute(
   });
 }
 
-export type SessionDeliveryProjection = {
+type SessionDeliveryProjection = {
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   origin?: SessionOrigin;

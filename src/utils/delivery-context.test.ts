@@ -5,9 +5,11 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+} from "./delivery-context.js";
+import {
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
-} from "./delivery-context.js";
+} from "./delivery-context.shared.js";
 
 describe("delivery context helpers", () => {
   it("normalizes channel/to/accountId and drops empty contexts", () => {

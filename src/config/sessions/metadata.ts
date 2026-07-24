@@ -31,7 +31,7 @@ function isSystemEventProvider(provider?: string): boolean {
 }
 
 // Origin updates merge sparse channel metadata without deleting previously known fields.
-export const mergeSessionOrigin = (
+const mergeSessionOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
 ): SessionOrigin | undefined => {

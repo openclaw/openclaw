@@ -4,10 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
-import {
-  projectSessionDeliveryFields,
-  type SessionDeliveryProjection,
-} from "../../utils/delivery-context.shared.js";
+import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -59,7 +56,7 @@ type MockSessionStoreEntry = Partial<SessionEntry> & {
   lastAccountId?: string;
   lastThreadId?: string | number;
 };
-type ProjectedSessionEntry = SessionEntry & SessionDeliveryProjection;
+type ProjectedSessionEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
