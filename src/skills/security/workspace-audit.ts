@@ -5,6 +5,10 @@ import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import {
+  findContainingAllowedSkillSymlinkTarget,
+  resolveAllowedSkillSymlinkTargetRealPaths,
+} from "../loading/symlink-targets.js";
 
 type WorkspaceSkillScanLimits = {
   maxFiles?: number;
@@ -19,10 +23,13 @@ async function safeStat(targetPath: string): Promise<{
   isDir: boolean;
 }> {
   try {
-    const lst = await fs.lstat(targetPath);
+    // Follow the top-level skills root when it is a directory symlink / junction.
+    // lstat().isDirectory() is false for those entries, which previously made the
+    // security audit skip the whole tree and miss nested symlink escapes.
+    const st = await fs.stat(targetPath);
     return {
       ok: true,
-      isDir: lst.isDirectory(),
+      isDir: st.isDirectory(),
     };
   } catch {
     return {
@@ -54,12 +61,13 @@ function realpathWithTimeout(p: string, timeoutMs = 2000): Promise<string | null
 async function listWorkspaceSkillMarkdownFiles(
   workspaceDir: string,
   limits: WorkspaceSkillScanLimits = {},
-): Promise<{ skillFilePaths: string[]; truncated: boolean }> {
+): Promise<{ skillFilePaths: string[]; skillsRootRealPath: string | null; truncated: boolean }> {
   const skillsRoot = path.join(workspaceDir, "skills");
   const rootStat = await safeStat(skillsRoot);
   if (!rootStat.ok || !rootStat.isDir) {
-    return { skillFilePaths: [], truncated: false };
+    return { skillFilePaths: [], skillsRootRealPath: null, truncated: false };
   }
+  const skillsRootRealPath = (await realpathWithTimeout(skillsRoot)) ?? path.resolve(skillsRoot);
 
   const maxFiles = limits.maxFiles ?? MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE;
   const maxTotalDirVisits = limits.maxDirVisits ?? maxFiles * 20;
@@ -108,7 +116,7 @@ async function listWorkspaceSkillMarkdownFiles(
     }
   }
 
-  return { skillFilePaths: skillFiles, truncated: queue.length > 0 };
+  return { skillFilePaths: skillFiles, skillsRootRealPath, truncated: queue.length > 0 };
 }
 
 export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
@@ -121,17 +129,20 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
     return findings;
   }
 
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(params.cfg);
+
   const escapedSkillFiles: Array<{
     workspaceDir: string;
+    skillsRootRealPath: string;
     skillFilePath: string;
+    skillDirRealPath: string;
     skillRealPath: string;
   }> = [];
   const seenSkillPaths = new Set<string>();
 
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
-    const workspaceRealPath = (await realpathWithTimeout(workspacePath)) ?? workspacePath;
-    const { skillFilePaths, truncated } = await listWorkspaceSkillMarkdownFiles(
+    const { skillFilePaths, skillsRootRealPath, truncated } = await listWorkspaceSkillMarkdownFiles(
       workspacePath,
       params.skillScanLimits,
     );
@@ -158,21 +169,36 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       }
       seenSkillPaths.add(canonicalSkillPath);
 
-      const skillRealPath = await realpathWithTimeout(canonicalSkillPath);
-      if (!skillRealPath) {
+      const [skillDirRealPath, skillRealPath] = await Promise.all([
+        realpathWithTimeout(path.dirname(canonicalSkillPath)),
+        realpathWithTimeout(canonicalSkillPath),
+      ]);
+      if (!skillDirRealPath || !skillRealPath) {
         escapedSkillFiles.push({
           workspaceDir: workspacePath,
+          skillsRootRealPath: skillsRootRealPath ?? path.join(workspacePath, "skills"),
           skillFilePath: canonicalSkillPath,
-          skillRealPath: "(realpath timed out - symlink target unverifiable)",
+          skillDirRealPath:
+            skillDirRealPath ?? "(realpath timed out - skill directory unverifiable)",
+          skillRealPath: skillRealPath ?? "(realpath timed out - symlink target unverifiable)",
         });
         continue;
       }
-      if (isPathInside(workspaceRealPath, skillRealPath)) {
+      // Trust boundary matches the skill loader: resolved skills root, plus any
+      // operator-declared skills.load.allowSymlinkTargets. A nested skill dir must
+      // stay inside one of those roots, and SKILL.md must stay inside its skill dir.
+      const skillDirIsTrusted =
+        (skillsRootRealPath !== null && isPathInside(skillsRootRealPath, skillDirRealPath)) ||
+        findContainingAllowedSkillSymlinkTarget(allowedSymlinkTargetRealPaths, skillDirRealPath) !==
+          null;
+      if (skillDirIsTrusted && isPathInside(skillDirRealPath, skillRealPath)) {
         continue;
       }
       escapedSkillFiles.push({
         workspaceDir: workspacePath,
+        skillsRootRealPath: skillsRootRealPath ?? path.join(workspacePath, "skills"),
         skillFilePath: canonicalSkillPath,
+        skillDirRealPath,
         skillRealPath,
       });
     }
@@ -185,15 +211,19 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   findings.push({
     checkId: "skills.workspace.symlink_escape",
     severity: "warn",
-    title: "Workspace skill files resolve outside the workspace root",
+    title: "Workspace skill files resolve outside trusted skill roots",
     detail:
-      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes their workspace root:\n" +
+      "Detected workspace `skills/**/SKILL.md` paths whose skill directory escapes the resolved " +
+      "skills root and configured `skills.load.allowSymlinkTargets`, or whose file escapes its " +
+      "resolved skill directory:\n" +
       escapedSkillFiles
         .slice(0, MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS)
         .map(
           (entry) =>
             `- workspace=${entry.workspaceDir}\n` +
+            `  skillsRoot=${entry.skillsRootRealPath}\n` +
             `  skill=${entry.skillFilePath}\n` +
+            `  skillDirRealpath=${entry.skillDirRealPath}\n` +
             `  realpath=${entry.skillRealPath}`,
         )
         .join("\n") +
@@ -201,7 +231,9 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
         ? `\n- +${escapedSkillFiles.length - MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS} more`
         : ""),
     remediation:
-      "Keep workspace skills inside the workspace root (replace symlinked escapes with real in-workspace files), or move trusted shared skills to managed/bundled skill locations.",
+      "Keep each SKILL.md inside its resolved skill directory and the skill directory inside the " +
+      "resolved skills root, or explicitly trust intentional shared roots with " +
+      "skills.load.allowSymlinkTargets.",
   });
 
   return findings;
