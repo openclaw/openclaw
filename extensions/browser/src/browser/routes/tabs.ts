@@ -5,6 +5,7 @@
  * policy checks and profile reachability probes.
  */
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -100,10 +101,12 @@ async function ensureBrowserRunning(
   // A running browser can outlive one short CDP probe; retry once before
   // rejecting a tab mutation and leaving session-owned tabs behind.
   if (!isReachable && !signal?.aborted) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, TAB_REACHABILITY_RETRY_DELAY_MS);
-    });
-    // Keep false reserved for paths where jsonError already wrote a response.
+    // Keep the retry delay abortable so the caller can cancel promptly
+    // during the retry window, rather than waiting the full delay.
+    // Use sleepWithAbort for prompt cancellation, then rethrow with the
+    // caller's original abort reason so externally observed error bodies
+    // preserve the signal's reason rather than a generic "aborted" message.
+    await sleepWithAbort(TAB_REACHABILITY_RETRY_DELAY_MS, signal).catch(() => {});
     signal?.throwIfAborted();
     isReachable = await checkTabReachability(ctx, profileCtx, signal);
   }
