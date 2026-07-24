@@ -556,6 +556,7 @@ public protocol OpenClawChatTransport: Sendable {
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
     func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL?
+    func loadMediaAttachment(path: String) async throws -> Data?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -563,6 +564,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func loadMediaAttachment(path _: String) async throws -> Data? {
+        nil
+    }
+
     public func listQuestions() async throws -> [QuestionRecord] {
         []
     }

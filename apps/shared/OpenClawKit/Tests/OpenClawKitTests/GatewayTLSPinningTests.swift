@@ -3,6 +3,38 @@ import Security
 import Testing
 @testable import OpenClawKit
 
+private final class GatewayBoundedDataURLProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var data = Data()
+
+    override class func canInit(with _: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = self.request.url,
+              let response = HTTPURLResponse(
+                  url: url,
+                  statusCode: 200,
+                  httpVersion: nil,
+                  headerFields: ["Content-Type": "application/octet-stream"])
+        else {
+            self.client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        self.client?.urlProtocol(self, didLoad: Self.data)
+        self.client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {
+        // The response is delivered synchronously by this test protocol.
+    }
+}
+
 private final class GatewayTLSFakeKeychain: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [String: [String: Any]] = [:]
@@ -107,12 +139,45 @@ struct GatewayTLSPinningTests {
     }
 
     @Test func `TLS authority includes normalized host and effective port`() throws {
-        let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
-        let route = try #require(GatewayTLSAuthority(url: url))
+        let wssURL = try #require(URL(string: "wss://Gateway.Example.com/path"))
+        let httpsURL = try #require(URL(string: "https://Gateway.Example.com/path"))
+        let wsURL = try #require(URL(string: "ws://Gateway.Example.com/path"))
+        let httpURL = try #require(URL(string: "http://Gateway.Example.com/path"))
+        let customURL = try #require(URL(string: "https://Gateway.Example.com:8443/path"))
+        let wssRoute = try #require(GatewayTLSAuthority(url: wssURL))
+        let httpsRoute = try #require(GatewayTLSAuthority(url: httpsURL))
+        let wsRoute = try #require(GatewayTLSAuthority(url: wsURL))
+        let httpRoute = try #require(GatewayTLSAuthority(url: httpURL))
+        let customRoute = try #require(GatewayTLSAuthority(url: customURL))
 
-        #expect(route == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
-        #expect(route != GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(wssRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
+        #expect(httpsRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
+        #expect(wsRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 80))
+        #expect(httpRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 80))
+        #expect(customRoute == GatewayTLSAuthority(host: "gateway.example.com", port: 8443))
+        #expect(wssRoute != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
+    }
+
+    @Test func `bounded data request accepts exact limit and rejects next byte`() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GatewayBoundedDataURLProtocol.self]
+        let session = GatewayTLSPinningSession(
+            params: GatewayTLSParams(
+                required: false,
+                expectedFingerprint: nil,
+                allowTOFU: false,
+                storeKey: nil),
+            configuration: configuration)
+        let request = try URLRequest(url: #require(URL(string: "http://gateway.test/media")))
+
+        GatewayBoundedDataURLProtocol.data = Data(repeating: 1, count: 10)
+        let (accepted, _) = try await session.data(for: request, maximumBytes: 10)
+        #expect(accepted.count == 10)
+
+        GatewayBoundedDataURLProtocol.data = Data(repeating: 1, count: 11)
+        await #expect(throws: GatewayBoundedDataError.responseTooLarge(maximumBytes: 10)) {
+            try await session.data(for: request, maximumBytes: 10)
+        }
     }
 
     @Test func `matching explicit pin overrides system trust`() {

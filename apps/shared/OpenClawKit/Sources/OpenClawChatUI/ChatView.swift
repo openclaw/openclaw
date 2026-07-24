@@ -525,6 +525,10 @@ public struct OpenClawChatView: View {
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            },
+            mediaResolverReady: self.viewModel.healthOK,
+            mediaResolver: { [weak viewModel] path in
+                try await viewModel?.transport.loadMediaAttachment(path: path)
             })
             .frame(
                 maxWidth: .infinity,

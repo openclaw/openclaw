@@ -11,6 +11,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     private let globalAgentId: String?
     private let outboxGatewayID: String?
     private let sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)?
+    private let mediaLoader: IOSAssistantMediaLoader?
 
     var outboxRequiresSessionRoutingContract: Bool {
         true
@@ -21,7 +22,8 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         widgetGateway: GatewayNodeSession? = nil,
         globalAgentId: String? = nil,
         outboxGatewayID: String? = nil,
-        sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)? = nil)
+        sessionMutationRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)? = nil,
+        mediaLoader: IOSAssistantMediaLoader? = nil)
     {
         self.gateway = gateway
         self.widgetGateway = widgetGateway
@@ -30,6 +32,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let normalizedGatewayID = outboxGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.outboxGatewayID = normalizedGatewayID?.isEmpty == false ? normalizedGatewayID : nil
         self.sessionMutationRequest = sessionMutationRequest
+        self.mediaLoader = mediaLoader
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
@@ -517,6 +520,10 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         await self.resolveInlineWidgetResource(
             path: path,
             replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
+    }
+
+    func loadMediaAttachment(path: String) async throws -> Data? {
+        try await self.mediaLoader?.load(path: path)
     }
 
     func requestHistory(
