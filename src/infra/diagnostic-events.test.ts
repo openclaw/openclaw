@@ -10,6 +10,8 @@ import {
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   formatDiagnosticTraceparentForPropagation,
+  getInternalDiagnosticEventSequence,
+  hasPendingInternalDiagnosticOwnerEvent,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -653,6 +655,57 @@ describe("diagnostic-events", () => {
 
     expect(
       hasPendingInternalDiagnosticEvent((event) => event.type === "tool.execution.error"),
+    ).toBe(false);
+  });
+
+  it("queries indexed pending run and session owners through the dispatcher", async () => {
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-owner",
+      sessionId: "session-owner",
+      callId: "call-first",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const firstSequence = getInternalDiagnosticEventSequence();
+    emitDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-owner",
+      sessionId: "session-owner",
+      callId: "call-second",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const secondSequence = getInternalDiagnosticEventSequence();
+
+    expect(hasPendingInternalDiagnosticOwnerEvent("run-owner", firstSequence, "run")).toBe(true);
+    expect(hasPendingInternalDiagnosticOwnerEvent("session-owner", secondSequence, "run")).toBe(
+      false,
+    );
+    expect(
+      hasPendingInternalDiagnosticOwnerEvent("session-owner", firstSequence, "run-or-session"),
+    ).toBe(true);
+    expect(
+      hasPendingInternalDiagnosticOwnerEvent(
+        "session-owner",
+        secondSequence,
+        "run-or-session",
+        secondSequence,
+      ),
+    ).toBe(true);
+    expect(
+      hasPendingInternalDiagnosticOwnerEvent(
+        "session-owner",
+        firstSequence,
+        "run-or-session",
+        firstSequence,
+      ),
+    ).toBe(false);
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      hasPendingInternalDiagnosticOwnerEvent("session-owner", secondSequence, "run-or-session"),
     ).toBe(false);
   });
 

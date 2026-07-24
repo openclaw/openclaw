@@ -1,8 +1,10 @@
 // Tests active reply run registry add, lookup, and cleanup behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import { emitInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
@@ -134,6 +136,50 @@ describe("reply run registry", () => {
       activeWorkKind: undefined,
       lastProgressReason: "reply_operation:ended",
     });
+  });
+
+  it("retains active run-less reply operations through completed-session churn", () => {
+    const reply = {
+      sessionKey: "agent:main:telegram:direct:retained-reply",
+      sessionId: "retained-reply-session",
+    };
+    const operation = createReplyOperation({ ...reply, resetTriggered: false });
+
+    for (let index = 0; index <= 2_000; index += 1) {
+      const runId = `reply-retention-churn-run-${index}`;
+      const sessionId = `reply-retention-churn-session-${index}`;
+      const sessionKey = `agent:main:reply-retention-churn-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitInternalDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(reply).lastProgressReason).toBe(
+      "reply_operation:queued",
+    );
+
+    operation.complete();
+    for (let index = 0; index <= 2_000; index += 1) {
+      const runId = `post-reply-run-${index}`;
+      const sessionId = `post-reply-session-${index}`;
+      const sessionKey = `agent:main:post-reply-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitInternalDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+    expect(getDiagnosticSessionActivitySnapshot(reply)).toEqual({});
   });
 
   it("tracks deferred-maintenance wait as a reply-operation phase", () => {

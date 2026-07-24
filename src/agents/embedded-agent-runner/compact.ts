@@ -910,6 +910,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
 
     const runAbortController = new AbortController();
+    // Caller cancellation and the local safety timeout share one runtime signal;
+    // late provider chunks must see either abort before diagnostics can revive the run.
+    const runAbortSignal = params.abortSignal
+      ? AbortSignal.any([params.abortSignal, runAbortController.signal])
+      : runAbortController.signal;
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
         ? resolvedWorkspace
@@ -986,7 +991,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           workspaceDir: effectiveWorkspace,
           spawnWorkspaceDir,
           config: params.config,
-          abortSignal: runAbortController.signal,
+          abortSignal: runAbortSignal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           modelProvider: effectiveModel.provider,
           modelId,
@@ -1409,7 +1414,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
             providerStreamFn,
             sessionId: params.sessionId,
-            signal: runAbortController.signal,
+            signal: runAbortSignal,
             effectiveModel,
             resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
             authStorage,
@@ -1440,6 +1445,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
               runId: diagnosticCompactionRunId,
               ...(params.sessionKey && { sessionKey: params.sessionKey }),
               sessionId: params.sessionId,
+              abortSignal: runAbortSignal,
               provider,
               model: modelId,
               api: effectiveModel.api,
@@ -1578,6 +1584,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             {
               abortSignal: params.abortSignal,
               onCancel: () => {
+                runAbortController.abort(params.abortSignal?.reason);
                 activeSession.abortCompaction();
               },
             },

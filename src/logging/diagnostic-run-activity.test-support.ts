@@ -12,6 +12,7 @@ type DiagnosticRunProgressActivityEvent = Pick<
 >;
 
 type DiagnosticRunActivityTestApi = {
+  getRecoveredOwnerCutoffCountForTest(params: { sessionId?: string; sessionKey?: string }): number;
   markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void;
   markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void;
   markDiagnosticToolStartedForTest(params: {
@@ -33,6 +34,12 @@ export function markDiagnosticModelStartedForTest(
   params: DiagnosticModelStartedActivityEvent,
 ): void {
   getTestApi().markDiagnosticModelStartedForTest(params);
+}
+
+export function getRecoveredOwnerCutoffCountForTest(
+  params: Parameters<DiagnosticRunActivityTestApi["getRecoveredOwnerCutoffCountForTest"]>[0],
+): number {
+  return getTestApi().getRecoveredOwnerCutoffCountForTest(params);
 }
 
 export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {

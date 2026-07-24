@@ -5,6 +5,8 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
+  emitTrustedDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -15,7 +17,10 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
+  clearDiagnosticEmbeddedRunActivityForSession,
   getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
@@ -427,6 +432,66 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       await iterator.return?.();
       await waitForDiagnosticEventsDrained();
       stop();
+    }
+  });
+
+  it("does not restore an aborted run from late stream chunks", async () => {
+    const abortController = new AbortController();
+    async function* stream() {
+      yield { type: "text_delta", delta: "late" };
+    }
+    const session = {
+      sessionId: "recovered-stream-session",
+      sessionKey: "agent:main:recovered-stream",
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        ...session,
+        runId: "recovered-stream-run",
+        abortSignal: abortController.signal,
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-recovered-stream",
+      },
+    );
+    const returned = wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>;
+    const iterator = returned[Symbol.asyncIterator]();
+    await waitForDiagnosticEventsDrained();
+
+    abortController.abort(new Error("stuck recovery"));
+    clearDiagnosticEmbeddedRunActivityForSession({
+      ...session,
+      activeSessionId: session.sessionId,
+      recoveryStartedAfterDiagnosticEventSequence: getInternalDiagnosticEventSequence(),
+    });
+
+    try {
+      await iterator.next();
+      await waitForDiagnosticEventsDrained();
+
+      markDiagnosticRunProgress({
+        ...session,
+        runId: "replacement-stream-run",
+        reason: "proof:replacement",
+      });
+      markDiagnosticEmbeddedRunStarted(session);
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        ...session,
+        runId: "replacement-stream-run",
+        durationMs: 1,
+        outcome: "completed",
+      });
+      await waitForDiagnosticEventsDrained();
+
+      expect(getDiagnosticSessionActivitySnapshot(session)).not.toHaveProperty(
+        "hasActiveEmbeddedRun",
+      );
+    } finally {
+      await iterator.return?.();
+      await waitForDiagnosticEventsDrained();
     }
   });
 
