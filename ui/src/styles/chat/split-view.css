@@ -189,7 +189,8 @@ openclaw-chat-pane {
   }
 }
 
-.chat-pane__cloud {
+.chat-pane__cloud,
+.chat-pane__incognito {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -197,6 +198,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__cloud svg,
+.chat-pane__incognito svg,
 .chat-pane__workspace-chip svg {
   width: 14px;
   height: 14px;

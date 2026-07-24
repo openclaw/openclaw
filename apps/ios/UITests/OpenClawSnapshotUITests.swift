@@ -9,12 +9,22 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let name: String
     }
 
-    private static let screenshotTargets = [
-        ScreenshotTarget(initialTab: "control", initialDestination: "overview", name: "01-control-connected"),
-        ScreenshotTarget(initialTab: "chat", initialDestination: "chat", name: "02-chat-connected"),
-        ScreenshotTarget(initialTab: "agent", initialDestination: "agents", name: "03-agent-connected"),
-        ScreenshotTarget(initialTab: "settings", initialDestination: "settings", name: "04-settings-connected"),
-    ]
+    private static let controlScreenshotTarget = ScreenshotTarget(
+        initialTab: "control",
+        initialDestination: "overview",
+        name: "01-control-connected")
+    private static let chatScreenshotTarget = ScreenshotTarget(
+        initialTab: "chat",
+        initialDestination: "chat",
+        name: "02-chat-connected")
+    private static let agentScreenshotTarget = ScreenshotTarget(
+        initialTab: "agent",
+        initialDestination: "agents",
+        name: "03-agent-connected")
+    private static let settingsScreenshotTarget = ScreenshotTarget(
+        initialTab: "settings",
+        initialDestination: "settings",
+        name: "04-settings-connected")
     private static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
 
     private var app: XCUIApplication?
@@ -29,12 +39,31 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testConnectedGatewayTabs() {
-        for target in Self.screenshotTargets {
-            self.launchApp(for: target)
-            snapshot(target.name, timeWaitingForIdle: 5)
-            self.attachScreenshot(named: target.name)
-        }
+    func testReleaseControlScreenshot() {
+        self.captureReleaseScreenshot(Self.controlScreenshotTarget)
+    }
+
+    func testReleaseChatScreenshot() {
+        self.captureReleaseScreenshot(Self.chatScreenshotTarget)
+    }
+
+    func testReleaseAgentScreenshot() {
+        self.captureReleaseScreenshot(Self.agentScreenshotTarget)
+    }
+
+    func testReleaseSettingsScreenshot() {
+        self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
+    }
+
+    func testAgentsNavigateToSettingsThroughSidebar() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
+        self.launchApp(for: Self.agentScreenshotTarget)
+
+        XCTAssertTrue(self.app?.buttons["agent-status-filter-menu"].waitForExistence(timeout: 8) == true)
+        try self.selectSidebarDestination("Settings")
+        XCTAssertTrue(
+            self.app?.descendants(matching: .any)["settings-system-agent-row"]
+                .waitForExistence(timeout: 8) == true)
     }
 
     func testAutomationManagementScreenshot() {
@@ -919,6 +948,27 @@ final class OpenClawSnapshotUITests: XCTestCase {
     {
         self.terminateCurrentApp()
 
+        let app = self.configuredApp(
+            for: target,
+            appearance: appearance,
+            screenshotMode: screenshotMode,
+            additionalArguments: additionalArguments)
+        app.launch()
+        self.app = app
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        let readiness = app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
+        XCTAssertTrue(
+            readiness.waitForExistence(timeout: 8),
+            "OpenClaw root readiness marker did not appear")
+        self.waitForValue("ready:\(target.initialDestination)", of: readiness, timeout: 8)
+    }
+
+    private func configuredApp(
+        for target: ScreenshotTarget,
+        appearance: String?,
+        screenshotMode: Bool,
+        additionalArguments: [String]) -> XCUIApplication
+    {
         let app = XCUIApplication()
         setupSnapshot(app)
         app.launchArguments += [
@@ -937,14 +987,34 @@ final class OpenClawSnapshotUITests: XCTestCase {
         if let appearance {
             app.launchArguments += ["--openclaw-appearance", appearance]
         }
-        app.launch()
-        self.app = app
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        return app
+    }
+
+    private func captureReleaseScreenshot(_ target: ScreenshotTarget) {
+        self.launchApp(for: target)
+        self.waitForReleaseScreenshotTarget(target)
+        snapshot(target.name, timeWaitingForIdle: 5)
+        self.attachScreenshot(named: target.name)
+    }
+
+    private func waitForReleaseScreenshotTarget(_ target: ScreenshotTarget) {
+        guard let app = self.app else {
+            XCTFail("OpenClaw is not running for screenshot target \(target.name)")
+            return
+        }
         let readiness = app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
+        self.waitForValue("ready:\(target.initialDestination)", of: readiness, timeout: 8)
+
+        let anchor: XCUIElement = switch target.initialDestination {
+        case "overview": app.staticTexts["Agent session"]
+        case "chat": app.otherElements["chat-composer-surface"]
+        case "agents": app.buttons["agent-status-filter-menu"]
+        case "settings": app.descendants(matching: .any)["settings-system-agent-row"]
+        default: readiness
+        }
         XCTAssertTrue(
-            readiness.waitForExistence(timeout: 8),
-            "OpenClaw root readiness marker did not appear")
-        self.waitForValue("ready", of: readiness, timeout: 8)
+            anchor.waitForExistence(timeout: 8),
+            "Screenshot target \(target.name) did not render its readiness anchor")
     }
 
     private func terminateCurrentApp(
@@ -966,10 +1036,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
         of element: XCUIElement,
         timeout: TimeInterval = 3)
     {
+        XCTAssertTrue(self.element(element, hasValue: value, timeout: timeout))
+    }
+
+    private func element(_ element: XCUIElement, hasValue value: String, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", value),
             object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func waitForEnabled(_ element: XCUIElement) {

@@ -7,11 +7,12 @@ import {
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { attemptTerminal, type AttemptFailureSource } from "./attempt-terminal.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
@@ -59,6 +60,8 @@ import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 
+type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
+
 type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
@@ -98,7 +101,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
-  private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
@@ -210,10 +213,7 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  recordNativeToolApprovalFailure(
-    toolCallId: string,
-    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ): void {
+  recordNativeToolApprovalFailure(toolCallId: string, disposition: ApprovalFailure): void {
     this.nativeToolLifecycleProjector.recordApprovalFailureDisposition(toolCallId, disposition);
   }
 
@@ -405,14 +405,11 @@ export class CodexAppServerEventProjector {
       this.generatedMediaProjection.hasGeneratedMedia() ||
       this.toolProgressProjection.hasPotentialSideEffects;
     return {
-      aborted: this.aborted,
-      externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
-      promptError,
-      promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
+      terminal: attemptTerminal.normalize({
+        aborted: this.aborted,
+        promptError,
+        promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
+      }),
       sessionIdUsed: this.params.sessionId,
       ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,

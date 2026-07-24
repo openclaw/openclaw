@@ -48,7 +48,6 @@ import {
   resolveLobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
-import { renderSessionCreatorFilter } from "./session-owner-chip.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
@@ -328,14 +327,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
-      creatorFilter: renderSessionCreatorFilter({
-        creators: this.sessionOwnershipVisible ? this.sessionCreatorOptions : [],
-        selectedId: this.sessionCreatorFilterActive ? this.sessionCreatorFilterId : null,
-        onChange: (creatorId) => {
-          this.sessionCreatorFilterId = creatorId;
-          void this.context?.sessions.setCreatorFilter(creatorId);
-        },
-      }),
       catalogs: {
         catalogs: this.sessionData.sessionCatalogs,
         basePath: this.basePath,
@@ -422,9 +413,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           </div>
         </div>
         ${this.sidebarMenus.renderCustomizeMenu()} ${this.sidebarMenus.renderMoreMenu()}
-        ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderSessionMenu()}
-        ${this.sidebarMenus.catalogMenu.render()} ${this.sidebarMenus.renderSessionGroupMenu()}
-        ${this.sidebarMenus.renderSessionSortMenu()}
+        ${this.sidebarMenus.renderAgentMenu()} ${this.sidebarMenus.renderIdentityMenu()}
+        ${this.sidebarMenus.renderSessionMenu()} ${this.sidebarMenus.catalogMenu.render()}
+        ${this.sidebarMenus.renderSessionGroupMenu()} ${this.sidebarMenus.renderSessionSortMenu()}
       </aside>
     `;
   }

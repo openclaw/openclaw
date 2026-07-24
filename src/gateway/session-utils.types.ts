@@ -55,6 +55,7 @@ export type GatewaySessionRow = {
   visibility?: SessionVisibility;
   /** Caller-relative role used by Control UI participation controls. */
   sharingRole?: SessionSharingRole;
+  incognito?: true;
   spawnedBy?: string;
   /** Current runtime controller, falling back to the durable spawning session. */
   controlOwnerSessionKey?: string;
@@ -93,6 +94,7 @@ export type GatewaySessionRow = {
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
+  archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
   icon?: string;
@@ -134,6 +136,8 @@ export type GatewaySessionRow = {
   lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** Active transcript-branch leaf for history rendered from this row. */
+  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;

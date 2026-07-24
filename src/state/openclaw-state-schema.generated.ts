@@ -1333,6 +1333,25 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
   ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
   WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
+-- Scratch is separate from cron_jobs so scheduler state writes and downgraded
+-- full-row replacement preserve it. New builds prune rows explicitly on job removal.
+-- content NULL is a tombstone: it keeps the revision lineage monotonic across
+-- unset/recreate so stale compare-and-swap writes cannot resurrect old content.
+CREATE TABLE IF NOT EXISTS cron_job_scratch (
+  store_key TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  content TEXT,
+  revision INTEGER NOT NULL,
+  source_sha256 TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (store_key, job_id),
+  CHECK (revision >= 1),
+  CHECK (content IS NULL OR length(CAST(content AS BLOB)) <= 262144)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_cron_job_scratch_store_updated
+  ON cron_job_scratch(store_key, updated_at_ms DESC, job_id);
+
 CREATE TABLE IF NOT EXISTS command_log_entries (
   id TEXT NOT NULL PRIMARY KEY,
   timestamp_ms INTEGER NOT NULL,

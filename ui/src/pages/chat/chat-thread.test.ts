@@ -435,6 +435,42 @@ describe("collapseCompletedTurnWork", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
+  it("keeps an accepted initial send key across local-to-history replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: {
+              id: "persisted-user-message",
+              idempotencyKey: "initial-send:user",
+              seq: 1,
+            },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
     const initial = groupAt(

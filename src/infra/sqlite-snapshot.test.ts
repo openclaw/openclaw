@@ -72,6 +72,42 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
+  it.runIf(process.platform === "win32")(
+    "snapshots when its private staging path exceeds MAX_PATH",
+    async () => {
+      const tempDir = await createTempDir();
+      let targetDirectory = tempDir;
+      while (targetDirectory.length < 205) {
+        targetDirectory = path.join(targetDirectory, `segment-${"x".repeat(24)}`);
+      }
+      await fs.mkdir(targetDirectory, { recursive: true });
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(targetDirectory, "snapshot.sqlite");
+      const longestStagingPath = path.join(
+        targetDirectory,
+        `.sqlite-publish-${"0".repeat(36)}-${"0".repeat(36)}`,
+        "database.sqlite",
+      );
+      expect(targetPath.length).toBeLessThan(260);
+      expect(longestStagingPath.length).toBeGreaterThan(260);
+      const sqlite = requireNodeSqlite();
+      const source = new sqlite.DatabaseSync(sourcePath);
+      source.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+      source.close();
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
+      } finally {
+        snapshot.close();
+      }
+    },
+  );
+
   it("captures committed WAL state and removes deleted page contents", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");

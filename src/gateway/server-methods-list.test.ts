@@ -62,7 +62,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-25)).toEqual([
+    expect(listGatewayMethods().slice(-29)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -81,6 +81,10 @@ describe("listGatewayMethods", () => {
       "session.members.list",
       "session.members.add",
       "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
       "subagents.allowLease.acquire",
       "subagents.allowLease.status",
       "subagents.allowLease.release",
@@ -148,7 +152,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-32)).toEqual([
+    expect(coreMethods.slice(-36)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -174,6 +178,10 @@ describe("listGatewayMethods", () => {
       "session.members.list",
       "session.members.add",
       "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
       "subagents.allowLease.acquire",
       "subagents.allowLease.status",
       "subagents.allowLease.release",
