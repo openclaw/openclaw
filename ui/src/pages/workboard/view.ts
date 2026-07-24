@@ -29,6 +29,7 @@ import {
   stopWorkboardCard,
   summarizeWorkboardHealth,
   workboardCardMatchesHealthKey,
+  workboardProofTotal,
   workboardHasActiveWrites,
   workboardMutationsReady,
   WORKBOARD_PRIORITIES,
@@ -324,10 +325,9 @@ function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
       >`,
     );
   }
-  if (metadata?.proof?.length) {
-    badges.push(
-      html`<span>${t("workboard.badgeProof", { count: String(metadata.proof.length) })}</span>`,
-    );
+  const proofTotal = workboardProofTotal(card);
+  if (proofTotal) {
+    badges.push(html`<span>${t("workboard.badgeProof", { count: String(proofTotal) })}</span>`);
   }
   if (metadata?.claim) {
     badges.push(
@@ -1441,6 +1441,40 @@ function renderDetailList(
   `;
 }
 
+function renderProofDetails(card: WorkboardCard) {
+  const proof = card.metadata?.proof ?? [];
+  const proofTotal = workboardProofTotal(card);
+  const hasMore = card.proofPage?.hasMore === true;
+  if (proof.length === 0 && !hasMore) {
+    return nothing;
+  }
+  const title = hasMore
+    ? t("workboard.detailProofLatest", {
+        loaded: String(proof.length),
+        total: String(proofTotal),
+      })
+    : t("workboard.detailProof");
+  return html`
+    <section class="workboard-detail__section">
+      <h3>${title}</h3>
+      ${proof.length
+        ? html`
+            <ol class="workboard-detail__list">
+              ${proof.map(
+                (entry) =>
+                  html`<li>
+                    ${[entry.status, entry.label, entry.command, entry.url, entry.note]
+                      .filter(Boolean)
+                      .join(" - ")}
+                  </li>`,
+              )}
+            </ol>
+          `
+        : nothing}
+    </section>
+  `;
+}
+
 function renderCardDetailsPanel(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const card = getVisibleDetailCard(state);
@@ -1459,7 +1493,6 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const comments = card.metadata?.comments ?? [];
   const attempts = card.metadata?.attempts ?? [];
   const links = card.metadata?.links ?? [];
-  const proof = card.metadata?.proof ?? [];
   const artifacts = card.metadata?.artifacts ?? [];
   const attachments = card.metadata?.attachments ?? [];
   const diagnostics = card.metadata?.diagnostics ?? [];
@@ -1564,14 +1597,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
               [entry.type, entry.title, entry.targetCardId, entry.url].filter(Boolean).join(" - "),
             ),
           )}
-          ${renderDetailList(
-            t("workboard.detailProof"),
-            proof.map((entry) =>
-              [entry.status, entry.label, entry.command, entry.url, entry.note]
-                .filter(Boolean)
-                .join(" - "),
-            ),
-          )}
+          ${renderProofDetails(card)}
           ${renderDetailList(
             t("workboard.badgeArtifacts", { count: String(artifacts.length) }),
             artifacts.map((entry) =>
@@ -2126,7 +2152,8 @@ export function renderWorkboard(props: WorkboardProps) {
             <input
               class="input"
               type="search"
-              title=${t("workboard.searchPlaceholder")}
+              aria-describedby="workboard-search-proof-scope"
+              title=${t("workboard.searchProofScopeHint")}
               placeholder=${t("workboard.searchPlaceholder")}
               .value=${state.query}
               @input=${(event: InputEvent) => {
@@ -2134,6 +2161,9 @@ export function renderWorkboard(props: WorkboardProps) {
                 props.onRequestUpdate?.();
               }}
             />
+            <span id="workboard-search-proof-scope" class="workboard-sr-only">
+              ${t("workboard.searchProofScopeHint")}
+            </span>
             ${renderWorkboardSelect({
               value: state.viewPreset,
               options: viewOptions,
