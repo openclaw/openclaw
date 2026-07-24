@@ -160,6 +160,124 @@ function createExternalFeishuSchemaWithRootOnlyShadowRegistry(): PluginManifestR
   };
 }
 
+function createSlackReplacementSchemaRegistry(order: "replacement-first" | "bundled-first") {
+  const bundledSlack = createPluginManifestRecord({
+    id: "slack",
+    origin: "bundled",
+    channels: ["slack"],
+    channelConfigs: {
+      slack: {
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            botToken: { type: "object" },
+            appToken: { type: "object" },
+            signingSecret: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        uiHints: {},
+      },
+    },
+  });
+  const replacementSlack = createPluginManifestRecord({
+    id: "slack",
+    origin: "bundled",
+    channels: ["slack"],
+    channelConfigs: {
+      slack: {
+        preferOver: ["slack", "@openclaw/slack"],
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            botToken: { type: "object" },
+            appToken: { type: "object" },
+            signingSecret: { type: "object" },
+            threadGuard: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+                allowedChannelIds: {
+                  type: "array",
+                  items: { type: "string", minLength: 1 },
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        uiHints: {},
+      },
+    },
+  });
+
+  return {
+    diagnostics: [],
+    plugins:
+      order === "replacement-first"
+        ? [replacementSlack, bundledSlack]
+        : [bundledSlack, replacementSlack],
+  };
+}
+
+function createCompetingSlackReplacementSchemaRegistry() {
+  const replacementSlack = createPluginManifestRecord({
+    id: "@openclaw/slack-thread-guard",
+    origin: "bundled",
+    channels: ["slack"],
+    channelConfigs: {
+      slack: {
+        preferOver: ["slack"],
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            threadGuard: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean" },
+              },
+              additionalProperties: false,
+            },
+          },
+          additionalProperties: false,
+        },
+        uiHints: {},
+      },
+    },
+  });
+  const laterSlackReplacement = createPluginManifestRecord({
+    id: "@openclaw/slack-rooms",
+    origin: "bundled",
+    channels: ["slack"],
+    channelConfigs: {
+      slack: {
+        preferOver: ["slack"],
+        schema: {
+          type: "object",
+          properties: {
+            mode: { type: "string" },
+            roomIds: {
+              type: "array",
+              items: { type: "string" },
+            },
+          },
+          additionalProperties: false,
+        },
+        uiHints: {},
+      },
+    },
+  });
+
+  return {
+    diagnostics: [],
+    plugins: [replacementSlack, laterSlackReplacement],
+  };
+}
+
 function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -708,6 +826,46 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
         }),
       );
     }
+  });
+
+  for (const order of ["bundled-first", "replacement-first"] as const) {
+    it(`keeps replacement channel schema active for same-origin Slack metadata when ${order}`, () => {
+      mockLoadPluginManifestRegistry.mockReturnValue(createSlackReplacementSchemaRegistry(order));
+
+      const result = validateConfigObjectRawWithPlugins({
+        channels: {
+          slack: {
+            mode: "socket",
+            botToken: { source: "env", provider: "env", id: "SLACK_BOT_TOKEN" },
+            appToken: { source: "env", provider: "env", id: "SLACK_APP_TOKEN" },
+            signingSecret: { source: "env", provider: "env", id: "SLACK_SIGNING_SECRET" },
+            threadGuard: {
+              enabled: true,
+              allowedChannelIds: ["CEXAMPLE1", "CEXAMPLE2"],
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+  }
+
+  it("does not let a later same-origin Slack replacement steal schema ownership by naming only the channel", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createCompetingSlackReplacementSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        slack: {
+          mode: "socket",
+          threadGuard: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("keeps raw channel validation diagnostics plugin-agnostic", () => {
