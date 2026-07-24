@@ -285,6 +285,15 @@ describe("board gateway methods", () => {
     expect(mcpApp.resolveActiveView).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: "agent:main:main", viewId: "mcp-app-source" }),
     );
+    expect(mcpApp.withActiveView).toHaveBeenCalledWith(
+      expect.any(Object),
+      "read",
+      expect.any(Function),
+    );
+    expect(mcpApp.resolveAllowedToolNames).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(AbortSignal),
+    );
     expect(store.readWidgetMcpApp("agent:main:main", "server-app")).toMatchObject({
       descriptor: {
         serverName: "server",

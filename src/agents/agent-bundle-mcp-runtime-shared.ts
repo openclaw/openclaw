@@ -27,6 +27,49 @@ export type CreateSessionMcpRuntime = (params: {
   configFingerprint?: string;
 }) => SessionMcpRuntime;
 
+export type SessionMcpSharedTask<T> = {
+  controller: AbortController;
+  promise: Promise<T>;
+};
+
+function toMcpRequestError(reason: unknown, fallbackMessage: string): Error {
+  return reason instanceof Error ? reason : new Error(fallbackMessage, { cause: reason });
+}
+
+async function waitForSessionMcpRequest<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(toMcpRequestError(signal.reason, "MCP request aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toMcpRequestError(error, "MCP request failed"));
+      },
+    );
+  });
+}
+
+export async function waitForSessionMcpSharedTask<T>(params: {
+  task: SessionMcpSharedTask<T>;
+  signal?: AbortSignal;
+}): Promise<T> {
+  params.signal?.throwIfAborted();
+  const waitSignal = params.signal
+    ? AbortSignal.any([params.signal, params.task.controller.signal])
+    : params.task.controller.signal;
+  return await waitForSessionMcpRequest(params.task.promise, waitSignal);
+}
+
 export function resolveSessionMcpRuntimeIdleTtlMs(): number {
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }

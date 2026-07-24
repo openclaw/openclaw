@@ -12,8 +12,27 @@ import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
+const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
 
-function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
+function runtime(
+  readResource: SessionMcpRuntime["readResource"],
+  options: { requestTimeoutMs?: number } = { requestTimeoutMs: 60_000 },
+): SessionMcpRuntime {
+  const catalog = {
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      demo: {
+        serverName: "demo",
+        launchSummary: "demo",
+        toolCount: 0,
+        ...(options.requestTimeoutMs === undefined
+          ? {}
+          : { requestTimeoutMs: options.requestTimeoutMs }),
+      },
+    },
+    tools: [],
+  };
   return {
     sessionId: "session-1",
     sessionKey: "agent:main:main",
@@ -25,8 +44,8 @@ function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRun
     activeLeases: 0,
     acquireLease: vi.fn(() => vi.fn()),
     markUsed: () => {},
-    getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
-    peekCatalog: () => null,
+    getCatalog: async () => catalog,
+    peekCatalog: () => catalog,
     callTool: vi.fn(),
     readResource,
     dispose: async () => {},
@@ -87,6 +106,97 @@ describe("MCP App UI resources", () => {
       runtime: sessionRuntime,
     });
     expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:other:main")).toBeUndefined();
+  });
+
+  it("snapshots the connected server timeout into the view operation deadline", async () => {
+    const requestTimeoutMs = MCP_APP_VIEW_TTL_MS + 90_000;
+    const sessionRuntime = runtime(
+      async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            text: "<html>demo</html>",
+          },
+        ],
+      }),
+      { requestTimeoutMs },
+    );
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.operationTimeoutMs).toBe(
+      requestTimeoutMs,
+    );
+  });
+
+  it("retains the timeout snapshot when resource reading invalidates the catalog", async () => {
+    const requestTimeoutMs = 15 * 60_000;
+    let sessionRuntime: SessionMcpRuntime;
+    sessionRuntime = runtime(
+      async () => {
+        sessionRuntime.peekCatalog = () => null;
+        return {
+          contents: [
+            {
+              uri: "ui://demo/app",
+              mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+              text: "<html>demo</html>",
+            },
+          ],
+        };
+      },
+      { requestTimeoutMs },
+    );
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.operationTimeoutMs).toBe(
+      requestTimeoutMs,
+    );
+  });
+
+  it("keeps materialized Apps when the server timeout snapshot is unavailable", async () => {
+    const sessionRuntime = runtime(
+      async () => ({
+        contents: [
+          {
+            uri: "ui://demo/app",
+            mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+            text: "<html>demo</html>",
+          },
+        ],
+      }),
+      {},
+    );
+
+    const result = await fetchMcpAppView({
+      runtime: sessionRuntime,
+      serverName: "demo",
+      toolName: "show",
+      uiResourceUri: "ui://demo/app",
+      toolInput: {},
+      toolResult: { content: [] },
+    });
+
+    expect(result?.viewId).toMatch(/^mcp-app-/u);
+    expect(getMcpAppViewLease(result?.viewId ?? "", sessionRuntime)?.operationTimeoutMs).toBe(
+      MCP_APP_VIEW_TTL_MS,
+    );
   });
 
   it("keeps valid Apps when optional listing metadata fails", async () => {
