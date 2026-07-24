@@ -112,6 +112,109 @@ describe("Discord gateway metadata", () => {
   });
 });
 
+describe("fetchDiscordGatewayInfoWithTimeout bounded reads", () => {
+  const validPayload = JSON.stringify({
+    url: "wss://gateway.discord.gg/",
+    shards: 1,
+    session_start_limit: {
+      total: 1000,
+      remaining: 999,
+      reset_after: 3600000,
+      max_concurrency: 1,
+    },
+  });
+
+  function bodyLessMock(text: string) {
+    return {
+      ok: true as const,
+      status: 200,
+      body: null,
+      text: async () => text,
+    };
+  }
+
+  it("returns parsed gateway info when response body is within the 4 MiB cap", async () => {
+    const info = await fetchDiscordGatewayInfoWithTimeout({
+      token: "test",
+      fetchImpl: async () => bodyLessMock(validPayload),
+    });
+
+    expect(info.url).toBe("wss://gateway.discord.gg/");
+    expect(info.shards).toBe(1);
+    expect(info.session_start_limit.total).toBe(1000);
+  });
+
+  it("falls back on oversized loopback HTTP responses after streaming rejection", async () => {
+    const oversizedPayloadBytes = 32 * 1024 * 1024;
+    let streamedBytes = 0;
+    let responseClosed = false;
+    const server = createServer((_request, res) => {
+      const chunk = Buffer.alloc(64 * 1024, 0x78);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.once("close", () => {
+        responseClosed = true;
+      });
+      const writeMore = () => {
+        while (streamedBytes < oversizedPayloadBytes) {
+          if (res.destroyed) {
+            return;
+          }
+          streamedBytes += chunk.byteLength;
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        res.end();
+      };
+      writeMore();
+    });
+    const port = await listenLoopbackServer(server);
+    try {
+      const rawResponse = await fetch(`http://127.0.0.1:${port}`);
+      const error = await fetchDiscordGatewayInfoWithTimeout({
+        token: "test",
+        fetchImpl: async () => rawResponse,
+      }).catch((cause: unknown) => cause);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      const resolved = resolveGatewayInfoWithFallback({ runtime, error });
+
+      expect(resolved).toMatchObject({
+        usedFallback: true,
+        info: { url: "wss://gateway.discord.gg/" },
+      });
+      expect(String(runtime.log.mock.calls[0]?.[0])).toMatch(
+        new RegExp(
+          `Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
+        ),
+      );
+      await vi.waitFor(() => expect(responseClosed).toBe(true));
+      expect(streamedBytes).toBeGreaterThan(DISCORD_GATEWAY_METADATA_MAX_BYTES);
+      expect(streamedBytes).toBeLessThan(oversizedPayloadBytes);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("falls back on oversized body-less responses after the post-hoc guard", async () => {
+    const body = "x".repeat(DISCORD_GATEWAY_METADATA_MAX_BYTES + 1024);
+    const error = await fetchDiscordGatewayInfoWithTimeout({
+      token: "test",
+      fetchImpl: async () => bodyLessMock(body),
+    }).catch((cause: unknown) => cause);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    expect(resolveGatewayInfoWithFallback({ runtime, error })).toMatchObject({
+      usedFallback: true,
+      info: { url: "wss://gateway.discord.gg/" },
+    });
+    expect(String(runtime.log.mock.calls[0]?.[0])).toContain(
+      `Discord gateway metadata response body too large: ${Buffer.byteLength(body)} bytes (limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes)`,
+    );
+  });
+});
+
 describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
   beforeEach(() => {
     vi.useRealTimers();
