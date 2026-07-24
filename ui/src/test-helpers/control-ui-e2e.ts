@@ -176,7 +176,20 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
   if (!existsSync(chromiumExecutablePath)) {
     return false;
   }
-  return spawnSync(chromiumExecutablePath, ["--version"], { stdio: "ignore" }).status === 0;
+  // Some Chrome-for-Testing builds on Windows treat `chrome.exe --version` as a
+  // full launch that never exits, which would deadlock this synchronous probe and
+  // even pop a visible window. Run it headless with a hard timeout: a clean exit 0
+  // confirms the binary runs, and a timeout falls back to the on-disk existence
+  // check (the binary is present; Playwright's own launch will surface any real
+  // failure) instead of blocking forever.
+  const probe = spawnSync(chromiumExecutablePath, ["--headless=new", "--version"], {
+    stdio: "ignore",
+    timeout: 5000,
+  });
+  if (probe.status === 0) {
+    return true;
+  }
+  return (probe.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
 }
 
 export async function startControlUiE2eServer(
