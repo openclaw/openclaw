@@ -698,6 +698,8 @@ export function createUserTurnTranscriptRecorder(
     waitForRuntimePersistence,
     ...(params.logicalTurnAdmission
       ? {
+          logicalTurnId: params.logicalTurnAdmission.logicalTurnId,
+          getLogicalTurnClaimedAttempt: params.logicalTurnAdmission.getClaimedAttempt,
           claimLogicalTurnAttempt: params.logicalTurnAdmission.claimAttempt,
           finishLogicalTurnAttempt: params.logicalTurnAdmission.finishAttempt,
         }

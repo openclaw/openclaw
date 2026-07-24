@@ -152,6 +152,13 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Durable logical-turn owner resolved after ingress admission and attempt claim. */
+  logicalTurnEffectScope?: () =>
+    | {
+        logicalTurnId: string;
+        attemptEpoch: number;
+      }
+    | undefined;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;

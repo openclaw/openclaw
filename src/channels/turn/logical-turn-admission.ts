@@ -49,6 +49,8 @@ export function createLogicalTurnAdmission(params: {
   };
 
   return {
+    logicalTurnId,
+    getClaimedAttempt: () => claimed,
     acceptInTranscriptTransaction: (context) => {
       const persistedKey = readIdempotencyKey(context.message);
       if (persistedKey !== ingressKey) {

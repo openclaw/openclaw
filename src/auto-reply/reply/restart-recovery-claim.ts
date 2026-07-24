@@ -23,7 +23,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
-  ) => Promise<"admitted" | "duplicate-source">;
+  ) => Promise<"admitted" | "duplicate-source" | "effect-unknown">;
   beginBeforeAgentReply: () => Promise<boolean>;
   checkpointBeforeAgentReply: (params: {
     state: Exclude<RestartRecoveryBeforeAgentReplyState, "admitted" | "pending">;
@@ -169,13 +169,13 @@ export function createReplyRestartRecoveryClaimController(params: {
 
   const claimLogicalTurn = (
     recorder: UserTurnTranscriptRecorder | undefined,
-  ): "admitted" | "duplicate-source" => {
+  ): "admitted" | "duplicate-source" | "effect-unknown" => {
     if (!recorder?.claimLogicalTurnAttempt) {
       return "admitted";
     }
     const claim = recorder.claimLogicalTurnAttempt(recoveryRunId);
     if (!claim.claimed) {
-      return "duplicate-source";
+      return claim.reason === "effect-unknown" ? "effect-unknown" : "duplicate-source";
     }
     logicalTurnRecorder = recorder;
     return "admitted";

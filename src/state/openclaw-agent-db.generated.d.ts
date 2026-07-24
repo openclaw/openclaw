@@ -136,19 +136,34 @@ export interface LogicalTurnAttempts {
 }
 
 export interface LogicalTurnEffects {
+  assistant_checkpoint_id: string | null;
   attempt_epoch: number;
   committed_at: number | null;
+  coordinator_id: string | null;
   created_at: number;
+  dispatched_at: number | null;
+  downstream_idempotency_key: string | null;
   effect_id: string;
   effect_kind: string;
+  effect_state: Generated<string>;
   idempotency_key: string;
   logical_turn_id: string;
+  reconciled_at: number | null;
+  reconciled_by: string | null;
+  reconciliation_generation: Generated<number>;
+  reconciliation_outcome: string | null;
+  replay_class: string | null;
+  result_hash: string | null;
+  result_json: string | null;
   state: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
 }
 
 export interface LogicalTurns {
   created_at: number;
   current_attempt_epoch: Generated<number>;
+  delivery_ref: string | null;
   ingress_key: string;
   ingress_kind: string;
   logical_turn_id: string;

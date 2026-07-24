@@ -22,8 +22,12 @@ vi.mock("../message/send.js", async (importOriginal) => {
   };
 });
 
+import { setChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { deliverInboundReplyWithMessageSendContext } from "./durable-delivery.js";
+import {
+  buildLogicalTurnFinalDeliveryIntentId,
+  deliverInboundReplyWithMessageSendContext,
+} from "./durable-delivery.js";
 
 type SendDurableMessageBatchRequest = {
   cfg?: unknown;
@@ -32,6 +36,8 @@ type SendDurableMessageBatchRequest = {
   threadId?: string | number | null;
   durability?: string;
   requireUnknownSendReconciliation?: boolean;
+  deliveryIntentId?: string;
+  completionRetention?: string;
   gatewayClientScopes?: readonly string[];
 };
 
@@ -155,6 +161,28 @@ describe("durable inbound reply delivery", () => {
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("required");
     expect(latestSendDurableMessageBatchRequest().requireUnknownSendReconciliation).toBe(true);
+  });
+
+  it("reuses one permanent Telegram delivery intent for the same logical turn", async () => {
+    const context = ctxPayload({ OriginatingTo: "chat-1" });
+    setChannelSourceTurnId(context, "channel-user:v1:source-1");
+
+    await deliverInboundReplyWithMessageSendContext({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      payload: { text: "final" },
+      ctxPayload: context,
+    });
+
+    expect(latestSendDurableMessageBatchRequest()).toMatchObject({
+      deliveryIntentId: buildLogicalTurnFinalDeliveryIntentId({
+        channel: "telegram",
+        sourceTurnId: "channel-user:v1:source-1",
+      }),
+      completionRetention: "permanent",
+    });
   });
 
   it("reports durable partial send failures as failed delivery", async () => {

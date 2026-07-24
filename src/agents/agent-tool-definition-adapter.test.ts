@@ -3,12 +3,33 @@
  * Exercises result coercion, error wrapping, client delegation, and conflict
  * detection at the ToolDefinition boundary.
  */
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const logicalEffectMocks = vi.hoisted(() => ({
+  commit: vi.fn(),
+  dispatch: vi.fn(),
+  markUnknown: vi.fn(),
+  plan: vi.fn(),
+  resetReplaySafe: vi.fn(),
+}));
+
+vi.mock("./logical-turn-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./logical-turn-store.js")>();
+  return {
+    ...actual,
+    commitLogicalTurnToolEffect: logicalEffectMocks.commit,
+    dispatchLogicalTurnToolEffect: logicalEffectMocks.dispatch,
+    markLogicalTurnToolEffectUnknown: logicalEffectMocks.markUnknown,
+    planLogicalTurnToolEffect: logicalEffectMocks.plan,
+    resetLogicalTurnReplaySafeToolEffect: logicalEffectMocks.resetReplaySafe,
+  };
+});
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
@@ -53,6 +74,14 @@ async function executeTool(tool: AgentTool, callId: string) {
 }
 
 describe("agent tool definition adapter", () => {
+  beforeEach(() => {
+    logicalEffectMocks.commit.mockReset();
+    logicalEffectMocks.dispatch.mockReset();
+    logicalEffectMocks.markUnknown.mockReset();
+    logicalEffectMocks.plan.mockReset();
+    logicalEffectMocks.resetReplaySafe.mockReset();
+  });
+
   it("preserves argument preparation and execution mode contracts", () => {
     const prepareArguments = vi.fn((args: unknown) => args as Record<string, never>);
     const tool = {
@@ -346,6 +375,181 @@ describe("agent tool definition adapter", () => {
 
     expect(prepareBeforeToolCallParams).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("returns the exact committed tool result without executing the tool twice", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "stable result" }],
+      details: { nested: { value: 7 } },
+    }));
+    const tool = {
+      name: "read",
+      label: "Read",
+      description: "read once",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+    const resultJson = JSON.stringify(await execute());
+    execute.mockClear();
+    const baseEffect = {
+      effectId: "effect-1",
+      logicalTurnId: "telegram:source-1",
+      attemptEpoch: 1,
+      assistantCheckpointId: "call-effect-1",
+      toolCallId: "call-effect-1",
+      toolName: "read",
+      replayClass: "replay_safe" as const,
+    };
+    logicalEffectMocks.plan
+      .mockReturnValueOnce({ ...baseEffect, state: "planned" })
+      .mockReturnValueOnce({
+        ...baseEffect,
+        state: "committed",
+        resultJson,
+        resultHash: createHash("sha256").update(resultJson).digest("hex"),
+      });
+    logicalEffectMocks.dispatch.mockReturnValue({
+      claimed: true,
+      effect: { ...baseEffect, state: "dispatched" },
+    });
+    logicalEffectMocks.commit.mockReturnValue(true);
+    const [definition] = toToolDefinitions([tool], {
+      agentId: "main",
+      logicalTurnEffectScope: () => ({
+        logicalTurnId: "telegram:source-1",
+        attemptEpoch: 1,
+      }),
+    });
+    const executable = expectDefined(definition, "effect definition");
+
+    const first = await executable.execute(
+      "call-effect-1",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    const replay = await executable.execute(
+      "call-effect-1",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(replay).toEqual(first);
+    expect(JSON.stringify(replay)).toBe(resultJson);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(logicalEffectMocks.commit).toHaveBeenCalledOnce();
+  });
+
+  it("marks an external thrown dispatch unknown and rethrows past tool-error conversion", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("ambiguous downstream failure");
+    });
+    const effect = {
+      effectId: "effect-unknown-1",
+      logicalTurnId: "telegram:source-2",
+      attemptEpoch: 1,
+      assistantCheckpointId: "call-effect-2",
+      toolCallId: "call-effect-2",
+      toolName: "message",
+      replayClass: "external" as const,
+      state: "planned" as const,
+    };
+    logicalEffectMocks.plan.mockReturnValue(effect);
+    logicalEffectMocks.dispatch.mockReturnValue({
+      claimed: true,
+      effect: { ...effect, state: "dispatched" },
+    });
+    logicalEffectMocks.markUnknown.mockReturnValue(true);
+    const [definition] = toToolDefinitions(
+      [
+        {
+          name: "message",
+          label: "Message",
+          description: "external send",
+          parameters: Type.Object({}),
+          execute,
+        } satisfies AgentTool,
+      ],
+      {
+        agentId: "main",
+        logicalTurnEffectScope: () => ({
+          logicalTurnId: "telegram:source-2",
+          attemptEpoch: 1,
+        }),
+      },
+    );
+
+    await expect(
+      expectDefined(definition, "external effect definition").execute(
+        "call-effect-2",
+        {},
+        undefined,
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toThrow("effect outcome is unknown");
+    expect(logicalEffectMocks.markUnknown).toHaveBeenCalledWith(
+      { agentId: "main" },
+      { effectId: "effect-unknown-1" },
+    );
+    expect(logicalEffectMocks.commit).not.toHaveBeenCalled();
+  });
+
+  it("resets an audited replay-safe thrown dispatch before returning a tool error", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("safe read failed");
+    });
+    const effect = {
+      effectId: "effect-safe-1",
+      logicalTurnId: "telegram:source-3",
+      attemptEpoch: 1,
+      assistantCheckpointId: "call-effect-3",
+      toolCallId: "call-effect-3",
+      toolName: "read",
+      replayClass: "replay_safe" as const,
+      state: "planned" as const,
+    };
+    logicalEffectMocks.plan.mockReturnValue(effect);
+    logicalEffectMocks.dispatch.mockReturnValue({
+      claimed: true,
+      effect: { ...effect, state: "dispatched" },
+    });
+    logicalEffectMocks.resetReplaySafe.mockReturnValue(true);
+    const [definition] = toToolDefinitions(
+      [
+        {
+          name: "read",
+          label: "Read",
+          description: "safe read",
+          parameters: Type.Object({}),
+          execute,
+        } satisfies AgentTool,
+      ],
+      {
+        agentId: "main",
+        logicalTurnEffectScope: () => ({
+          logicalTurnId: "telegram:source-3",
+          attemptEpoch: 1,
+        }),
+      },
+    );
+
+    const result = await expectDefined(definition, "safe effect definition").execute(
+      "call-effect-3",
+      {},
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    expect(result.details).toMatchObject({ status: "error", error: "safe read failed" });
+    expect(logicalEffectMocks.resetReplaySafe).toHaveBeenCalledWith(
+      { agentId: "main" },
+      { effectId: "effect-safe-1" },
+    );
+    expect(logicalEffectMocks.markUnknown).not.toHaveBeenCalled();
   });
 });
 

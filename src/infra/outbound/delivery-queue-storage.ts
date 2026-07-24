@@ -11,6 +11,7 @@ import {
   commitStagedDeliveryQueueEntryOnce,
   deleteDeliveryQueueEntry,
   failPendingDeliveryQueueEntry,
+  getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
@@ -188,7 +189,7 @@ export async function enqueueDeliveryOnce(
   id: string,
   stateDir?: string,
   mediaStageId?: string,
-): Promise<{ id: string; created: boolean }> {
+): Promise<{ id: string; created: boolean; existingStatus?: "pending" | "failed" | "completed" }> {
   const normalizedId = id.trim();
   if (!normalizedId) {
     throw new Error("Stable delivery queue id is required");
@@ -217,7 +218,19 @@ export async function enqueueDeliveryOnce(
         stateDir,
         insertOnly: true,
       });
-  return { id: normalizedId, created };
+  return {
+    id: normalizedId,
+    created,
+    ...(!created
+      ? {
+          existingStatus: getDeliveryQueueEntryStatus(
+            OUTBOUND_DELIVERY_QUEUE_NAME,
+            normalizedId,
+            stateDir,
+          ),
+        }
+      : {}),
+  };
 }
 
 /** Spool artifacts a pending row still references; empty once it is gone or unreadable. */

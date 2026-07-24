@@ -290,6 +290,12 @@ export async function executePreparedReplyAgentRun(
   if (userTurnAdmission === "duplicate-source") {
     return returnWithQueuedFollowupDrain(undefined);
   }
+  if (userTurnAdmission === "effect-unknown") {
+    // Preserve the original transcript and logical-turn ownership. Authenticated
+    // reconciliation will make this same source claimable again; never append a
+    // replacement user request or execute the ambiguous tool automatically.
+    return returnWithQueuedFollowupDrain(undefined);
+  }
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
   // Suppressed delivery persists only the user transcript; crashed suppressed runs die
   // silently. Deliverable turns atomically persist transcript plus recovery ownership.

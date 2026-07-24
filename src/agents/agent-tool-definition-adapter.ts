@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import { isPlainObject } from "../utils.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -16,6 +17,7 @@ import {
   recordStructuredReplayTrustForToolCall,
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
@@ -23,12 +25,30 @@ import {
 } from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import {
+  commitLogicalTurnToolEffect,
+  dispatchLogicalTurnToolEffect,
+  markLogicalTurnToolEffectUnknown,
+  planLogicalTurnToolEffect,
+  resetLogicalTurnReplaySafeToolEffect,
+} from "./logical-turn-store.js";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
+class LogicalTurnEffectUnknownError extends Error {
+  constructor(
+    readonly effectId: string,
+    cause: unknown,
+  ) {
+    super(`logical turn tool effect outcome is unknown: ${effectId}`, { cause });
+    this.name = "LogicalTurnEffectUnknownError";
+  }
+}
+
 type BeforeToolCallPreparingTool = AnyAgentTool & {
   prepareBeforeToolCallParams?: (
     params: unknown,
@@ -424,13 +444,99 @@ export function toToolDefinitions(
             });
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
-          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const effectScope = hookContext?.logicalTurnEffectScope?.();
+          const effect =
+            effectScope && hookContext?.agentId && toolCallId
+              ? planLogicalTurnToolEffect(
+                  { agentId: hookContext.agentId },
+                  {
+                    ...effectScope,
+                    // The session runtime invokes execute from the persisted assistant
+                    // tool-call block; its stable call id is the checkpoint identity.
+                    assistantCheckpointId: toolCallId,
+                    toolCallId,
+                    toolName: normalizedName,
+                    replayClass: isAgentToolReplaySafe(tool, {
+                      declaredReplaySafe: (candidate) => {
+                        const pluginMeta = getPluginToolMeta(
+                          candidate as Parameters<typeof getPluginToolMeta>[0],
+                        );
+                        if (pluginMeta) {
+                          return pluginMeta.replaySafe === true;
+                        }
+                        return getChannelAgentToolMeta(candidate as never) ? false : undefined;
+                      },
+                    })
+                      ? "replay_safe"
+                      : "external",
+                  },
+                )
+              : undefined;
+          if (effect) {
+            if (effect.state === "committed" || effect.state === "reconciled") {
+              if (!effect.resultJson || !effect.resultHash) {
+                throw new Error(
+                  `logical turn tool effect has no reusable result: ${effect.effectId}`,
+                );
+              }
+              const replayHash = createHash("sha256").update(effect.resultJson).digest("hex");
+              if (replayHash !== effect.resultHash) {
+                throw new Error(
+                  `logical turn tool effect result integrity failed: ${effect.effectId}`,
+                );
+              }
+              return JSON.parse(effect.resultJson) as AgentToolResult<unknown>;
+            }
+            const dispatch = dispatchLogicalTurnToolEffect(
+              { agentId: hookContext!.agentId! },
+              { effectId: effect.effectId },
+            );
+            if (!dispatch.claimed || dispatch.effect.state !== "dispatched") {
+              throw new Error(
+                `logical turn tool effect cannot dispatch from ${dispatch.effect.state}: ${dispatch.effect.effectId}`,
+              );
+            }
+          }
+          let rawResult: unknown;
+          try {
+            rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          } catch (err) {
+            if (effect && effect.replayClass !== "replay_safe") {
+              markLogicalTurnToolEffectUnknown(
+                { agentId: hookContext!.agentId! },
+                { effectId: effect.effectId },
+              );
+              throw new LogicalTurnEffectUnknownError(effect.effectId, err);
+            }
+            if (effect?.replayClass === "replay_safe") {
+              resetLogicalTurnReplaySafeToolEffect(
+                { agentId: hookContext!.agentId! },
+                { effectId: effect.effectId },
+              );
+            }
+            throw err;
+          }
           const result = normalizeToolExecutionResult({
             toolName: normalizedName,
             result: rawResult,
           });
+          if (effect) {
+            const resultJson = JSON.stringify(result);
+            const resultHash = createHash("sha256").update(resultJson).digest("hex");
+            if (
+              !commitLogicalTurnToolEffect(
+                { agentId: hookContext!.agentId! },
+                { effectId: effect.effectId, resultJson, resultHash },
+              )
+            ) {
+              throw new Error(`logical turn tool effect commit lost ownership: ${effect.effectId}`);
+            }
+          }
           return result;
         } catch (err) {
+          if (err instanceof LogicalTurnEffectUnknownError) {
+            throw err;
+          }
           if (signal?.aborted) {
             throw err;
           }

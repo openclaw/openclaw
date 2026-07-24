@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -8,9 +9,14 @@ import {
 } from "../state/openclaw-agent-db.js";
 import {
   acceptLogicalTurnInTransaction,
+  commitLogicalTurnToolEffect,
   claimLogicalTurnAttempt,
+  dispatchLogicalTurnToolEffect,
   finishLogicalTurnAttempt,
+  markLogicalTurnToolEffectUnknown,
+  planLogicalTurnToolEffect,
   readLogicalTurn,
+  reconcileLogicalTurnToolEffect,
 } from "./logical-turn-store.js";
 
 const tempDirs: string[] = [];
@@ -194,5 +200,191 @@ describe("logical turn store", () => {
         now: 306,
       }),
     ).toEqual({ claimed: false, reason: "terminal-turn" });
+  });
+
+  it("keeps one effect identity and pauses replay after an ambiguous dispatch", () => {
+    const options = createDatabaseOptions();
+    const identity = { sessionId: "session-4", sessionKey: "agent:main:main", eventId: "event-4" };
+    seedTranscriptIdentity(options, identity);
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        acceptLogicalTurnInTransaction(database, {
+          logicalTurnId: "telegram:source-4",
+          ingressKind: "telegram",
+          ingressKey: "source-4",
+          userEventId: identity.eventId,
+          sessionId: identity.sessionId,
+          sessionKey: identity.sessionKey,
+          now: 400,
+        }),
+      options,
+    );
+    expect(
+      claimLogicalTurnAttempt(options, {
+        logicalTurnId: "telegram:source-4",
+        ownerId: "worker-a",
+        leaseDurationMs: 10,
+        now: 401,
+      }),
+    ).toMatchObject({ claimed: true, attemptEpoch: 1 });
+
+    const planned = planLogicalTurnToolEffect(options, {
+      logicalTurnId: "telegram:source-4",
+      attemptEpoch: 1,
+      assistantCheckpointId: "tool-call-1",
+      toolCallId: "tool-call-1",
+      toolName: "message",
+      replayClass: "external",
+      now: 402,
+    });
+    expect(
+      planLogicalTurnToolEffect(options, {
+        logicalTurnId: "telegram:source-4",
+        attemptEpoch: 1,
+        assistantCheckpointId: "tool-call-1",
+        toolCallId: "tool-call-1",
+        toolName: "message",
+        replayClass: "external",
+        now: 403,
+      }).effectId,
+    ).toBe(planned.effectId);
+    expect(
+      dispatchLogicalTurnToolEffect(options, { effectId: planned.effectId, now: 404 }),
+    ).toMatchObject({ claimed: true, effect: { state: "dispatched" } });
+    expect(markLogicalTurnToolEffectUnknown(options, { effectId: planned.effectId })).toBe(true);
+    expect(
+      finishLogicalTurnAttempt(options, {
+        logicalTurnId: "telegram:source-4",
+        attemptEpoch: 1,
+        ownerId: "worker-a",
+        outcome: "failed",
+        terminal: true,
+        now: 405,
+      }),
+    ).toBe(false);
+
+    expect(
+      claimLogicalTurnAttempt(options, {
+        logicalTurnId: "telegram:source-4",
+        ownerId: "worker-b",
+        leaseDurationMs: 10,
+        now: 412,
+      }),
+    ).toEqual({ claimed: false, reason: "effect-unknown" });
+
+    expect(() =>
+      reconcileLogicalTurnToolEffect(options, {
+        effectId: planned.effectId,
+        expectedGeneration: 0,
+        outcome: "not_occurred",
+        operatorAuthorized: false,
+        auditIdentity: "operator-1",
+        coordinatorId: "coordinator-1",
+        now: 413,
+      }),
+    ).toThrow("authenticated operator");
+    expect(
+      reconcileLogicalTurnToolEffect(options, {
+        effectId: planned.effectId,
+        expectedGeneration: 0,
+        outcome: "not_occurred",
+        operatorAuthorized: true,
+        auditIdentity: "operator-1",
+        coordinatorId: "coordinator-1",
+        now: 414,
+      }),
+    ).toEqual({ reconciled: true, nextGeneration: 1 });
+    expect(
+      reconcileLogicalTurnToolEffect(options, {
+        effectId: planned.effectId,
+        expectedGeneration: 0,
+        outcome: "not_occurred",
+        operatorAuthorized: true,
+        auditIdentity: "operator-1",
+        coordinatorId: "coordinator-1",
+        now: 415,
+      }),
+    ).toEqual({ reconciled: false, reason: "stale" });
+    expect(
+      claimLogicalTurnAttempt(options, {
+        logicalTurnId: "telegram:source-4",
+        ownerId: "worker-b",
+        leaseDurationMs: 10,
+        now: 416,
+      }),
+    ).toMatchObject({ claimed: true, attemptEpoch: 2 });
+    expect(
+      planLogicalTurnToolEffect(options, {
+        logicalTurnId: "telegram:source-4",
+        attemptEpoch: 2,
+        assistantCheckpointId: "tool-call-1",
+        toolCallId: "tool-call-1",
+        toolName: "message",
+        replayClass: "external",
+        now: 417,
+      }).effectId,
+    ).toBe(planned.effectId);
+    expect(
+      dispatchLogicalTurnToolEffect(options, { effectId: planned.effectId, now: 418 }),
+    ).toMatchObject({ claimed: true, effect: { state: "dispatched" } });
+  });
+
+  it("commits one tool effect and refuses a second dispatch", () => {
+    const options = createDatabaseOptions();
+    const identity = { sessionId: "session-5", sessionKey: "agent:main:main", eventId: "event-5" };
+    seedTranscriptIdentity(options, identity);
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        acceptLogicalTurnInTransaction(database, {
+          logicalTurnId: "telegram:source-5",
+          ingressKind: "telegram",
+          ingressKey: "source-5",
+          userEventId: identity.eventId,
+          sessionId: identity.sessionId,
+          sessionKey: identity.sessionKey,
+          now: 500,
+        }),
+      options,
+    );
+    claimLogicalTurnAttempt(options, {
+      logicalTurnId: "telegram:source-5",
+      ownerId: "worker-a",
+      leaseDurationMs: 10_000,
+      now: 501,
+    });
+    const effect = planLogicalTurnToolEffect(options, {
+      logicalTurnId: "telegram:source-5",
+      attemptEpoch: 1,
+      assistantCheckpointId: "tool-call-2",
+      toolCallId: "tool-call-2",
+      toolName: "read",
+      replayClass: "replay_safe",
+      now: 502,
+    });
+    expect(
+      dispatchLogicalTurnToolEffect(options, { effectId: effect.effectId, now: 503 }).claimed,
+    ).toBe(true);
+    let toolExecutions = 0;
+    const originalResult = (() => {
+      toolExecutions += 1;
+      return { content: [{ type: "text", text: "same" }], details: { value: 7 } };
+    })();
+    const resultJson = JSON.stringify(originalResult);
+    const resultHash = createHash("sha256").update(resultJson).digest("hex");
+    expect(
+      commitLogicalTurnToolEffect(options, {
+        effectId: effect.effectId,
+        resultJson,
+        resultHash,
+        now: 504,
+      }),
+    ).toBe(true);
+    const replay = dispatchLogicalTurnToolEffect(options, { effectId: effect.effectId, now: 505 });
+    expect(replay).toMatchObject({
+      claimed: false,
+      effect: { state: "committed", resultJson, resultHash },
+    });
+    expect(JSON.parse(replay.effect.resultJson!)).toEqual(originalResult);
+    expect(toolExecutions).toBe(1);
   });
 });

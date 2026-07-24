@@ -138,7 +138,11 @@ export async function runOutboundDeliveryInternal(
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
 
-  const stageAndEnqueueDelivery = async (): Promise<{ id: string; created: boolean } | null> => {
+  const stageAndEnqueueDelivery = async (): Promise<{
+    id: string;
+    created: boolean;
+    existingStatus?: "pending" | "failed" | "completed";
+  } | null> => {
     // Legacy `MEDIA:` text directives carry local media that only materializes
     // into structured fields at send time, so the spool (which reads structured
     // media) would skip it and a retry would read the vanished producer path.
@@ -281,6 +285,9 @@ export async function runOutboundDeliveryInternal(
   // A prior producer already owns this stable intent. Recovery or the original
   // live sender will finish it; a replay must not cross platform I/O again.
   if (queued && !queued.created) {
+    if (queued.existingStatus === "completed") {
+      return [];
+    }
     throw new Error(`Stable delivery intent is already queued: ${queued.id}`);
   }
 

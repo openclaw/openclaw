@@ -357,6 +357,7 @@ CREATE TABLE IF NOT EXISTS logical_turns (
   user_event_id TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('accepted', 'running', 'terminal')),
   current_attempt_epoch INTEGER NOT NULL DEFAULT 0 CHECK (current_attempt_epoch >= 0),
+  delivery_ref TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE (ingress_kind, ingress_key),
@@ -393,11 +394,38 @@ CREATE TABLE IF NOT EXISTS logical_turn_effects (
   effect_kind TEXT NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE,
   state TEXT NOT NULL CHECK (state IN ('planned', 'committed')),
+  assistant_checkpoint_id TEXT,
+  tool_call_id TEXT,
+  tool_name TEXT,
+  replay_class TEXT CHECK (
+    replay_class IS NULL OR replay_class IN ('replay_safe', 'idempotent', 'external')
+  ),
+  downstream_idempotency_key TEXT,
+  effect_state TEXT NOT NULL DEFAULT 'planned' CHECK (
+    effect_state IN ('planned', 'dispatched', 'committed', 'unknown', 'reconciled')
+  ),
   created_at INTEGER NOT NULL,
+  dispatched_at INTEGER,
   committed_at INTEGER,
+  reconciled_at INTEGER,
+  reconciliation_generation INTEGER NOT NULL DEFAULT 0,
+  reconciliation_outcome TEXT CHECK (
+    reconciliation_outcome IS NULL OR reconciliation_outcome IN ('occurred', 'not_occurred')
+  ),
+  reconciled_by TEXT,
+  coordinator_id TEXT,
+  result_json TEXT,
+  result_hash TEXT,
   FOREIGN KEY (logical_turn_id, attempt_epoch)
     REFERENCES logical_turn_attempts(logical_turn_id, attempt_epoch) ON DELETE CASCADE
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_logical_turn_tool_effect
+  ON logical_turn_effects(logical_turn_id, assistant_checkpoint_id, tool_call_id)
+  WHERE assistant_checkpoint_id IS NOT NULL AND tool_call_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_logical_turn_effect_state
+  ON logical_turn_effects(logical_turn_id, effect_state, created_at, effect_id);
 
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,

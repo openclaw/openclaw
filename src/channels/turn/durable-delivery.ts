@@ -1,6 +1,9 @@
 // Durable final-reply delivery for inbound channel turns.
+import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { recordLogicalTurnDeliveryRef } from "../../agents/logical-turn-store.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { readChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
@@ -98,6 +101,16 @@ function toDeliveryIntent(intent: OutboundDeliveryIntent): ChannelDeliveryResult
   };
 }
 
+export function buildLogicalTurnFinalDeliveryIntentId(params: {
+  channel: string;
+  sourceTurnId: string;
+}): string {
+  return `turn-delivery:v1:${createHash("sha256")
+    .update(`${params.channel}:${params.sourceTurnId}`)
+    .update("\0final")
+    .digest("hex")}`;
+}
+
 /** Narrows durable delivery results that handled the payload without caller fallback. */
 export function isDurableInboundReplyDeliveryHandled(
   result: DurableInboundReplyDeliveryResult,
@@ -160,6 +173,11 @@ export async function deliverInboundReplyWithMessageSendContext(
     });
   const durability =
     requiredCapabilities.reconcileUnknownSend === true ? "required" : "best_effort";
+  const sourceTurnId =
+    channel === "telegram" ? readChannelSourceTurnId(params.ctxPayload) : undefined;
+  const deliveryIntentId = sourceTurnId
+    ? buildLogicalTurnFinalDeliveryIntentId({ channel, sourceTurnId })
+    : undefined;
 
   let support: Awaited<ReturnType<typeof resolveOutboundDurableFinalDeliverySupport>>;
   try {
@@ -208,9 +226,36 @@ export async function deliverInboundReplyWithMessageSendContext(
     silent: params.silent,
     durability,
     ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
+    ...(deliveryIntentId
+      ? {
+          deliveryIntentId,
+          // The logical turn can be replayed after ordinary queue retention;
+          // retain a content-free acknowledgement tombstone indefinitely.
+          completionRetention: "permanent" as const,
+        }
+      : {}),
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
+  const durableIntent = "deliveryIntent" in send ? send.deliveryIntent : undefined;
+  if (sourceTurnId && durableIntent) {
+    const recorded = recordLogicalTurnDeliveryRef(
+      { agentId: params.agentId },
+      {
+        logicalTurnId: `telegram:${sourceTurnId}`,
+        deliveryRef: durableIntent.id,
+      },
+    );
+    if (!recorded) {
+      return {
+        status: "failed",
+        error: new Error("durable Telegram delivery lost logical-turn ownership"),
+        ...(send.status === "sent" || send.status === "partial_failed"
+          ? { sentBeforeError: true as const }
+          : {}),
+      };
+    }
+  }
   if (send.status === "failed") {
     return { status: "failed" as const, error: send.error };
   }

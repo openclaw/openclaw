@@ -26,6 +26,8 @@ export type PersistedUserTurnMediaInput = Pick<
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 
 export type UserTurnLogicalAdmission = {
+  readonly logicalTurnId: string;
+  getClaimedAttempt: () => { attemptEpoch: number; ownerId: string } | undefined;
   acceptInTranscriptTransaction: (context: {
     database: OpenClawAgentDatabase;
     appended: boolean;
@@ -160,6 +162,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
+  readonly logicalTurnId?: string;
+  getLogicalTurnClaimedAttempt?: UserTurnLogicalAdmission["getClaimedAttempt"];
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   markSentToProvider?: () => void;

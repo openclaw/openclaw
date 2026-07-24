@@ -72,6 +72,19 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     sessionKey: input.sandboxSessionKey,
     sessionId: attempt.sessionId,
     runId: attempt.runId,
+    ...(attempt.userTurnTranscriptRecorder?.logicalTurnId
+      ? {
+          logicalTurnEffectScope: () => {
+            const claim = attempt.userTurnTranscriptRecorder?.getLogicalTurnClaimedAttempt?.();
+            return claim && attempt.userTurnTranscriptRecorder?.logicalTurnId
+              ? {
+                  logicalTurnId: attempt.userTurnTranscriptRecorder.logicalTurnId,
+                  attemptEpoch: claim.attemptEpoch,
+                }
+              : undefined;
+          },
+        }
+      : {}),
     approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
     channelId: attempt.currentChannelId,
     trace: input.runTrace,
