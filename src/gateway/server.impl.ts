@@ -1595,7 +1595,6 @@ export async function startGatewayServer(
         await monitor?.waitForIdle();
       },
       stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
-      clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
   };
@@ -1632,6 +1631,7 @@ export async function startGatewayServer(
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       releasePluginRouteRegistry,
+      clearSecretsRuntimeSnapshot,
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,

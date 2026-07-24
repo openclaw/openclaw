@@ -614,7 +614,6 @@ export async function runGatewayClosePrelude(params: {
   stopModelPricingRefresh?: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
-  clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
@@ -625,7 +624,6 @@ export async function runGatewayClosePrelude(params: {
   params.stopModelPricingRefresh?.();
   await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
-  params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
 }
 
@@ -670,6 +668,7 @@ export function createGatewayCloseHandler(
     bonjourStop: (() => Promise<void>) | null;
     tailscaleCleanup: (() => Promise<void>) | null;
     releasePluginRouteRegistry?: (() => void) | null;
+    clearSecretsRuntimeSnapshot?: (() => void) | null;
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
@@ -1030,6 +1029,15 @@ export function createGatewayCloseHandler(
     } finally {
       try {
         params.releasePluginRouteRegistry?.();
+      } catch {
+        /* ignore */
+      }
+      // Channel/plugin teardown still reads the resolved runtime config (e.g.
+      // resolveAccount for stopAccount hooks). Clearing secrets before those
+      // steps re-pins the raw config and strict SecretRef reads fail the stop,
+      // so the scrub must stay after every step that can touch credentials.
+      try {
+        params.clearSecretsRuntimeSnapshot?.();
       } catch {
         /* ignore */
       }
