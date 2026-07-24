@@ -133,6 +133,36 @@ describe("cdp.helpers internal", () => {
       expect(release).toHaveBeenCalledTimes(1);
     });
 
+    it("still releases the guarded fetch when unread body cancellation fails", async () => {
+      const cancel = vi.fn(async () => {
+        throw new Error("cancel failed");
+      });
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          bodyUsed: false,
+          body: { cancel },
+        } as unknown as Response,
+        release,
+      });
+
+      const { release: guardedRelease } = await fetchCdpChecked(
+        "http://127.0.0.1:9222/json/version",
+        250,
+        undefined,
+        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      );
+      await expect(guardedRelease()).resolves.toBeUndefined();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(cancel.mock.invocationCallOrder[0]!).toBeLessThan(
+        release.mock.invocationCallOrder[0]!,
+      );
+    });
+
     it("registers a managed-proxy bypass for the exact sanitized fetch URL", async () => {
       const release = vi.fn();
       registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);

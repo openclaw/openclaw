@@ -607,6 +607,7 @@ export async function fetchCdpChecked(
   const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
   const signal = init?.signal ? AbortSignal.any([ctrl.signal, init.signal]) : ctrl.signal;
   let guardedRelease: (() => Promise<void>) | undefined;
+  let response: Response | undefined;
   let released = false;
   const release = async () => {
     if (released) {
@@ -614,6 +615,12 @@ export async function fetchCdpChecked(
     }
     released = true;
     clearTimeout(t);
+    // fetchOk and !ok paths only need status; cancel unread bodies so undici
+    // releases the socket. fetchJson consumes the body first (bodyUsed), so
+    // cancel is a no-op there. release() alone does not cancel streams.
+    if (response && !response.bodyUsed) {
+      await response.body?.cancel().catch(() => undefined);
+    }
     await guardedRelease?.();
   };
   try {
@@ -638,6 +645,7 @@ export async function fetchCdpChecked(
         return guarded.response;
       }),
     );
+    response = res;
     if (!res.ok) {
       if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
