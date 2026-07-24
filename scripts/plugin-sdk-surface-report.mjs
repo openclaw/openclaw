@@ -162,7 +162,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: typed channel partial-delivery error, creator, and structural guard.
       // +1: closed attempt-terminal merge, normalization, and projection helper.
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
-      4704,
+      // +1: canonical unknown-value to Error coercion.
+      4705,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -181,7 +182,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +2: channel partial-delivery error creator and structural guard.
       // +1: harness-native MCP App preview helper.
-      2848,
+      // +1: canonical unknown-value to Error coercion.
+      2849,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
