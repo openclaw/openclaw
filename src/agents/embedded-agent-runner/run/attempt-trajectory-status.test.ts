@@ -240,7 +240,7 @@ describe("attempt trajectory status", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
-          aborted: true,
+          interrupted: false,
           toolMetas: [{ toolName: "web_search" }],
           lastAssistantStopReason: "toolUse",
         }),
