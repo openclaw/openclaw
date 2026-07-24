@@ -606,6 +606,69 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("does not report divergence for histories without a merge base", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-unrelated-" }, async (base) => {
+      const localRoot = path.join(base, "local");
+      const remoteRoot = path.join(base, "remote");
+      await fs.mkdir(localRoot, { recursive: true });
+      await fs.mkdir(remoteRoot, { recursive: true });
+
+      const git = async (cwd: string, ...args: string[]) => {
+        const result = await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 5000 });
+        if (result.code !== 0) {
+          throw new Error(result.stderr || `git ${args.join(" ")} failed`);
+        }
+        return result;
+      };
+
+      await git(localRoot, "init", "-b", "main");
+      await git(localRoot, "config", "user.name", "OpenClaw Test");
+      await git(localRoot, "config", "user.email", "test@openclaw.invalid");
+      await fs.writeFile(
+        path.join(localRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(localRoot, "local.txt"), "local\n", "utf8");
+      await git(localRoot, "add", "package.json", "local.txt");
+      await git(localRoot, "commit", "-m", "local history");
+
+      await git(remoteRoot, "init", "-b", "main");
+      await git(remoteRoot, "config", "user.name", "OpenClaw Test");
+      await git(remoteRoot, "config", "user.email", "test@openclaw.invalid");
+      await fs.writeFile(path.join(remoteRoot, "remote.txt"), "remote\n", "utf8");
+      await git(remoteRoot, "add", "remote.txt");
+      await git(remoteRoot, "commit", "-m", "remote history");
+
+      await git(localRoot, "remote", "add", "origin", remoteRoot);
+      await git(localRoot, "fetch", "origin", "main");
+      await git(localRoot, "config", "branch.main.remote", "origin");
+      await git(localRoot, "config", "branch.main.merge", "refs/heads/main");
+
+      const rawCounts = await git(
+        localRoot,
+        "rev-list",
+        "--left-right",
+        "--count",
+        "HEAD...origin/main",
+      );
+      expect(rawCounts.stdout.trim().split(/\s+/)).toEqual(["1", "1"]);
+
+      const status = await checkUpdateStatus({
+        root: localRoot,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 5000,
+      });
+
+      expect(status.git).toMatchObject({
+        upstream: "origin/main",
+        ahead: null,
+        behind: null,
+      });
+    });
+  });
+
   it("returns unknown install status when root is missing", async () => {
     await expect(
       checkUpdateStatus({ root: null, includeRegistry: false, timeoutMs: 1000 }),
