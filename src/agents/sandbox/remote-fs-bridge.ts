@@ -146,25 +146,30 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     });
   }
 
-  async writeFile(params: {
-    filePath: string;
-    cwd?: string;
-    data: Buffer | string;
-    encoding?: BufferEncoding;
-    mkdir?: boolean;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async writeFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
+    await this.writeOrAppendFile("write", params);
+  }
+
+  async appendFile(params: Parameters<SandboxFsBridge["writeFile"]>[0]): Promise<void> {
+    await this.writeOrAppendFile("append", params);
+  }
+
+  private async writeOrAppendFile(
+    operation: "write" | "append",
+    params: Parameters<SandboxFsBridge["writeFile"]>[0],
+  ): Promise<void> {
+    const action = operation === "write" ? "write files" : "append to files";
     const target = this.resolveTarget(params);
-    await this.ensureRemoteWritable(target, "write files", params.signal);
+    await this.ensureRemoteWritable(target, action, params.signal);
     const pinned = await this.resolvePinnedParent({
       containerPath: target.containerPath,
-      action: "write files",
+      action,
       requireWritable: true,
       signal: params.signal,
     });
     await this.assertNoHardlinkedFile({
       containerPath: target.containerPath,
-      action: "write files",
+      action,
       signal: params.signal,
     });
     const buffer = Buffer.isBuffer(params.data)
@@ -172,7 +177,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       : Buffer.from(params.data, params.encoding ?? "utf8");
     await this.runMutation({
       args: [
-        "write",
+        operation,
         pinned.mountRootPath,
         pinned.relativeParentPath,
         pinned.basename,

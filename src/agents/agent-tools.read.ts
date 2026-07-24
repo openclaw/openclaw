@@ -33,6 +33,7 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { createUncertainAppendOutcomeError } from "./append-outcome.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -670,6 +671,25 @@ async function appendMemoryFlushContent(params: {
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
   if (params.sandbox) {
+    const appendFile = params.sandbox.bridge.appendFile?.bind(params.sandbox.bridge);
+    if (appendFile) {
+      if (params.signal?.aborted) {
+        throw new Error("Operation aborted");
+      }
+      try {
+        await appendFile({
+          filePath: params.relativePath,
+          cwd: params.sandbox.root,
+          data: `${separator}${params.content}`,
+          mkdir: true,
+          signal: params.signal,
+        });
+      } catch (error) {
+        throw createUncertainAppendOutcomeError(error);
+      }
+      return;
+    }
+    // Legacy bridges without native append retain the previous mirror rewrite behavior.
     const parent = path.posix.dirname(params.relativePath);
     if (parent && parent !== ".") {
       await params.sandbox.bridge.mkdirp({
@@ -1036,6 +1056,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {
+  const appendFile = params.bridge.appendFile?.bind(params.bridge);
   return {
     mkdir: async (dir: string) => {
       await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
@@ -1043,6 +1064,18 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
     writeFile: async (absolutePath: string, content: string) => {
       await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
     },
+    ...(appendFile
+      ? {
+          appendFile: async (absolutePath: string, content: string) => {
+            await appendFile({
+              filePath: absolutePath,
+              cwd: params.root,
+              data: content,
+              mkdir: true,
+            });
+          },
+        }
+      : {}),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     statFile: (absolutePath: string) =>
@@ -1080,6 +1113,12 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+}
+
+async function appendHostFile(absolutePath: string, content: string) {
+  const resolved = resolveHostPath(absolutePath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.appendFile(resolved, content, "utf-8");
 }
 
 async function statHostFile(absolutePath: string) {
@@ -1128,6 +1167,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
+      appendFile: appendHostFile,
       readFile: async (absolutePath: string) =>
         fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
       statFile: (absolutePath: string) =>
@@ -1150,6 +1190,10 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     },
     writeFile: (absolutePath: string, content: string) =>
       writeWorkspaceFile(root, getRoot, absolutePath, content),
+    appendFile: async (absolutePath: string, content: string) => {
+      const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+      await (await getRoot()).append(relative, content, { mkdir: true });
+    },
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
       return (await (await getRoot()).read(relative)).buffer;

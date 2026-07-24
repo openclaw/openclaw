@@ -91,6 +91,16 @@ describe("sandbox fs bridge anchored ops", () => {
       forbiddenArgs: ["/workspace/nested/file.txt"],
     },
     {
+      name: "append pins canonical parent + basename",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.appendFile!({
+          filePath: "nested/file.txt",
+          data: Buffer.from([0xff, 0xfe, 0xfd]),
+        }),
+      expectedArgs: ["append", "/workspace", "nested", "file.txt", "1"],
+      forbiddenArgs: ["/workspace/nested/file.txt"],
+    },
+    {
       name: "mkdirp pins mount root + relative path",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.mkdirp({ filePath: "nested/leaf" }),

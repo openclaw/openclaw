@@ -101,6 +101,31 @@ function createWorkspaceReadBridge(workspaceDir: string) {
 
 describe("remote sandbox fs bridge", () => {
   it.runIf(process.platform !== "win32")(
+    "appends bytes with the pinned mutation helper",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-append-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const filePath = path.join(workspaceDir, "bytes.bin");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(filePath, Buffer.from([0xff, 0x00]));
+        const { calls, runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: workspaceDir,
+          remoteAgentWorkspaceDir: workspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          runtime,
+        });
+
+        await bridge.appendFile!({ filePath: "bytes.bin", data: Buffer.from([0x80, 0x0a]) });
+
+        await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from([0xff, 0x00, 0x80, 0x0a]));
+        expect(calls.at(-1)?.args?.[0]).toBe("append");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "reads files with the pinned mutation helper",
     async () => {
       await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {

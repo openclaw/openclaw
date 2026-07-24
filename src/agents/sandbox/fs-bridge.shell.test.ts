@@ -7,6 +7,7 @@ import {
   createSandbox,
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
+  getDockerArg,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -158,6 +159,24 @@ describe("sandbox fs bridge shell compatibility", () => {
     expectNoScriptsContaining(scripts, 'cat >"$1"');
     expectNoScriptsContaining(scripts, 'cat >"$tmp"');
     expectSomeScriptContaining(scripts, "os.replace(");
+  });
+
+  it("routes append through the pinned O_APPEND helper operation", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.appendFile!({ filePath: "nested/binary.bin", data: Buffer.from([0xff, 0x00]) });
+
+    const call = mockedExecDockerRaw.mock.calls.find(
+      ([args]) => getDockerArg(args, 1) === "append",
+    );
+    expect(call).toBeDefined();
+    expect(getDockerArg(call![0], 2)).toBe("/workspace");
+    expect(getDockerArg(call![0], 3)).toBe("nested");
+    expect(getDockerArg(call![0], 4)).toBe("binary.bin");
+    expect(getDockerArg(call![0], 5)).toBe("1");
+    const scripts = getScriptsFromCalls();
+    expectSomeScriptContaining(scripts, "APPEND_FLAGS = os.O_WRONLY | os.O_CREAT | os.O_APPEND");
+    expectSomeScriptContaining(scripts, "write_all(file_fd, payload)");
   });
 
   it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
