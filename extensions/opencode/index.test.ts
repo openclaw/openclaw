@@ -120,6 +120,37 @@ describe("opencode provider plugin", () => {
     ).toBeUndefined();
   });
 
+  it("keeps public auth scoped to the Zen endpoint and configured input cost", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const context = {
+      provider: "opencode",
+      modelId: "deepseek-v4-flash-free",
+    };
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        ...context,
+        providerConfig: {
+          baseUrl: "http://127.0.0.1:43119/v1",
+          models: [],
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider.resolveSyntheticAuth?.({
+        ...context,
+        providerConfig: {
+          models: [
+            {
+              id: context.modelId,
+              cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("keeps OpenCode Zen catalog coverage aligned with the curated seed", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     expect(provider.catalog).toBeDefined();

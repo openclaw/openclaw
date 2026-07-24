@@ -10,7 +10,7 @@ const opencodeProviderDiscovery: ProviderPlugin = {
   label: "OpenCode Zen",
   docsPath: "/providers/models",
   auth: [],
-  resolveSyntheticAuth: ({ modelId }) => resolveOpencodeZenSyntheticAuth(modelId),
+  resolveSyntheticAuth: (ctx) => resolveOpencodeZenSyntheticAuth(ctx),
   staticCatalog: {
     order: "simple",
     run: async () => ({

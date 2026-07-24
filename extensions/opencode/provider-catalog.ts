@@ -188,9 +188,33 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "qwen3.6-plus": { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0.625 },
 };
 
-export function resolveOpencodeZenSyntheticAuth(modelId: string | undefined) {
-  const normalizedModelId = modelId?.trim().toLowerCase();
-  const cost = normalizedModelId ? MODEL_COSTS[normalizedModelId] : undefined;
+function normalizeOpencodeModelId(modelId: string | undefined): string | undefined {
+  const normalized = modelId?.trim().toLowerCase();
+  return normalized?.startsWith(`${PROVIDER_ID}/`)
+    ? normalized.slice(PROVIDER_ID.length + 1)
+    : normalized;
+}
+
+export function resolveOpencodeZenSyntheticAuth(params: {
+  modelId: string | undefined;
+  providerConfig?: ModelProviderConfig;
+}) {
+  const normalizedModelId = normalizeOpencodeModelId(params.modelId);
+  const configuredModel = params.providerConfig?.models?.find(
+    (model) => normalizeOpencodeModelId(model.id) === normalizedModelId,
+  );
+  const configuredBaseUrl = configuredModel?.baseUrl ?? params.providerConfig?.baseUrl;
+  if (
+    configuredBaseUrl &&
+    !normalizeOpencodeZenBaseUrl({
+      api: configuredModel?.api ?? params.providerConfig?.api,
+      baseUrl: configuredBaseUrl,
+    })
+  ) {
+    return undefined;
+  }
+  const cost =
+    configuredModel?.cost ?? (normalizedModelId ? MODEL_COSTS[normalizedModelId] : undefined);
   const hasPaidInputTier = cost?.tieredPricing?.some((tier) => tier.input > 0) ?? false;
   if (!cost || cost.input > 0 || hasPaidInputTier) {
     return undefined;

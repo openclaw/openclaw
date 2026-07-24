@@ -150,7 +150,7 @@ export default definePluginEntry({
         },
       },
       augmentModelCatalog: () => listOpencodeZenModelCatalogEntries(),
-      resolveSyntheticAuth: ({ modelId }) => resolveOpencodeZenSyntheticAuth(modelId),
+      resolveSyntheticAuth: (ctx) => resolveOpencodeZenSyntheticAuth(ctx),
       ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
       resolveThinkingProfile: resolveOpencodeThinkingProfile,
