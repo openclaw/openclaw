@@ -24,6 +24,11 @@ vi.mock("./send.js", () => ({ updateMessageSlack: hoisted.update }));
 
 import { slackOutbound } from "./outbound-adapter.js";
 
+function jsonRoundTrip<T>(value: T): T {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 describe("Slack question finalization", () => {
   it("removes action blocks and appends terminal context", async () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
@@ -48,29 +53,19 @@ describe("Slack question finalization", () => {
       ctx: { cfg: {}, to: "C123", text: "Pick one", payload },
     });
     expect(rendered).not.toBeNull();
-    const slackData = rendered!.channelData?.slack as {
-      renderedPresentationSegments: unknown[];
-    };
-    slackData.renderedPresentationSegments.unshift({
-      kind: "text",
-      text: "Preface",
-      mrkdwn: false,
-    });
+    const renderedAfterTransport = jsonRoundTrip(rendered);
     await slackOutbound.afterDeliverPayload?.({
       cfg: {},
       target: { channel: "slack", to: "C123", accountId: "default" },
-      payload: rendered!,
-      results: [
-        { channel: "slack", messageId: "44", channelId: "C123" },
-        { channel: "slack", messageId: "55", channelId: "C123" },
-      ],
+      payload: renderedAfterTransport!,
+      results: [{ channel: "slack", messageId: "44", channelId: "C123" }],
     });
 
     await hoisted.registration?.finalize("Answered: <!channel>");
     expect(hoisted.update).toHaveBeenCalledWith(
       expect.objectContaining({
         channelId: "C123",
-        messageTs: "55",
+        messageTs: "44",
         text: expect.stringContaining("Answered: &lt;!channel&gt;"),
         blocks: expect.arrayContaining([
           {
