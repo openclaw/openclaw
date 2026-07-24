@@ -101,6 +101,28 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
   return { text: next, strippedTrailingSilentToken };
 }
 
+const CRON_AUTO_DELIVERY_SELF_NARRATION_MAX_CHARS = 320;
+const CRON_AUTO_DELIVERY_SELF_NARRATION_ACTION_RE =
+  /^(?:all\s+set[.!:,;\-\s]+)?(?:i\s+)?(?:sent|asked|told|notified|messaged|shared|reminded)\s+/i;
+const CRON_AUTO_DELIVERY_SELF_NARRATION_RECIPIENT_RE =
+  /^(?:[A-Z][a-z]+|you|him|her|them|the\s+user)\b/;
+
+/** Returns true for meta summaries that describe delivery instead of being the delivery text. */
+function isLikelyCronAutoDeliverySelfNarrationText(text: string | undefined): boolean {
+  const clean = normalizeOptionalString(text);
+  if (!clean || clean.length > CRON_AUTO_DELIVERY_SELF_NARRATION_MAX_CHARS) {
+    return false;
+  }
+  if (clean.includes("\n")) {
+    return false;
+  }
+  const action = clean.match(CRON_AUTO_DELIVERY_SELF_NARRATION_ACTION_RE);
+  if (!action) {
+    return false;
+  }
+  return CRON_AUTO_DELIVERY_SELF_NARRATION_RECIPIENT_RE.test(clean.slice(action[0].length));
+}
+
 /** Returns whether cron delivery should tolerate per-payload send failures. */
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return job.delivery?.bestEffort === true;
@@ -1185,6 +1207,30 @@ export async function dispatchCronDelivery(
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
+      const deliveryEligiblePayloads = normalizedPayloads.filter(
+        (payload) =>
+          hasReplyPayloadContent({ ...payload, text: undefined }, { trimText: true }) ||
+          !isLikelyCronAutoDeliverySelfNarrationText(payload.text),
+      );
+      const droppedSelfNarrationPayloadCount =
+        normalizedPayloads.length - deliveryEligiblePayloads.length;
+      if (droppedSelfNarrationPayloadCount > 0) {
+        await logCronDeliveryWarn(
+          `[cron:${params.job.id}] blocked ${droppedSelfNarrationPayloadCount} auto-announce self-narration payload(s) from direct delivery`,
+        );
+      }
+      if (deliveryEligiblePayloads.length === 0) {
+        deliveryAttempted = true;
+        await cleanupDirectCronSessionIfNeeded();
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          delivered: false,
+          deliveryAttempted: true,
+          ...params.telemetry,
+        });
+      }
       if (params.isAborted()) {
         return params.withRunSession({
           status: "error",
@@ -1225,7 +1271,7 @@ export async function dispatchCronDelivery(
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
           cfg: params.cfgWithAgentDefaults,
-          payloads: normalizedPayloads,
+          payloads: deliveryEligiblePayloads,
           delivery,
           agentId: params.agentId,
           ttsAuto: params.ttsAuto,

@@ -3034,5 +3034,48 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [{ text: "Working on it..." }],
     });
   });
+
+  it("drops only compact self-narrating text in a multi-payload direct delivery", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloads = [
+      {
+        text: "Sent Alex a short weekly planning menu and asked them to pick what they want.",
+      },
+      { text: "Here are your lunch options for next week. Reply with the ones you want." },
+    ];
+    params.summary = "Here are your lunch options for next week.";
+    params.outputText = "Here are your lunch options for next week.";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [
+        { text: "Here are your lunch options for next week. Reply with the ones you want." },
+      ],
+    });
+  });
+
+  it("delivers substantive menu-style text that starts with a recipient", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.deliveryPayloads = [
+      {
+        text: "Sent Alex:\n- Turkey burger\n- Tuna salad",
+      },
+    ];
+    params.summary = "Sent Alex:\n- Turkey burger\n- Tuna salad";
+    params.outputText = "Sent Alex:\n- Turkey burger\n- Tuna salad";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Sent Alex:\n- Turkey burger\n- Tuna salad" }],
+    });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

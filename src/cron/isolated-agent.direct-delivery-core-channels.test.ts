@@ -562,4 +562,28 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
       },
     });
   });
+
+  it("blocks compact self-narrating automatic announce text instead of sending it", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([
+        {
+          text: "Sent Alex a short weekly planning menu and asked them to pick what they want so the grocery list can be built afterward.",
+        },
+      ]);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(res.deliveryAttempted).toBe(true);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
 });
