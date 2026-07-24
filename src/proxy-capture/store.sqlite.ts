@@ -484,7 +484,7 @@ class DebugProxyCaptureStoreImpl {
         // debugging why cloud-provider labels are absent.
         if (
           host === "127.0.0.1:11434" ||
-          host.startsWith("127.0.0.1:") ||
+          host.startsWith("127.") ||
           host.startsWith("localhost:")
         ) {
           localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
