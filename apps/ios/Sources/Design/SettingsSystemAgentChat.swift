@@ -153,11 +153,12 @@ final class IOSSystemAgentChatModel {
 
     nonisolated static func screenshotFixtureReply(params: [String: AnyCodable]) throws -> Data {
         let hasMessage = params["message"]?.value is String
+        let reply = hasMessage
+            ? String(localized: "I’ll keep this conversation separate from ordinary agent chat.")
+            : String(localized: "I can check Gateway status, repair configuration, change models, or connect channels.")
         var result: [String: Any] = [
             "sessionId": "ios-screenshot-openclaw",
-            "reply": hasMessage
-                ? String(localized: "I’ll keep this conversation separate from ordinary agent chat.")
-                : String(localized: "I can check Gateway status, repair configuration, change models, or connect channels."),
+            "reply": reply,
             "action": "none",
         ]
         if !hasMessage {
