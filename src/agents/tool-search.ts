@@ -1786,10 +1786,12 @@ function readSearchArgs(args: unknown, config: ToolSearchConfig): { query: strin
 function readCallArgs(args: unknown): { id: string; input: unknown } {
   const params = asToolParamsRecord(args);
   const id = readId(params);
-  return {
-    id,
-    input: params.args ?? params.input ?? {},
-  };
+  const input = params.args ?? params.input;
+  if (input !== undefined) {
+    return { id, input };
+  }
+  const { id: _id, toolId: _toolId, name: _name, ...rest } = params;
+  return { id, input: rest };
 }
 
 function getTelemetry(catalog: ToolSearchCatalogSession) {

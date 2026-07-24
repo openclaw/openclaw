@@ -1704,6 +1704,64 @@ describe("Tool Search", () => {
     expect(secondExecuteInput.input).toEqual({ value: "structured" });
     expect(secondExecuteInput.signal).toBe(abortController.signal);
     expect(secondExecuteInput.onUpdate).toBe(onUpdate);
+
+    // Flattened args fallback: local models emit target-tool args at the top level
+    await runtimeCallTool.execute(
+      "call-lifecycle-flattened",
+      {
+        id: "fake_lifecycle",
+        command: "ls -la",
+        timeout_ms: 5000,
+      },
+      abortController.signal,
+      onUpdate,
+    );
+
+    const thirdExecuteInput = mockCall(executeTool, 2)[0] as {
+      tool?: { name?: string };
+      toolName?: string;
+      input?: unknown;
+    };
+    expect(thirdExecuteInput.tool?.name).toBe("fake_lifecycle");
+    expect(thirdExecuteInput.input).toEqual({ command: "ls -la", timeout_ms: 5000 });
+
+    // Explicit args wrapper still takes precedence over flattened keys
+    await runtimeCallTool.execute(
+      "call-lifecycle-explicit-args",
+      {
+        id: "fake_lifecycle",
+        args: { value: "explicit" },
+        command: "should-be-ignored",
+      },
+      abortController.signal,
+      onUpdate,
+    );
+
+    const fourthExecuteInput = mockCall(executeTool, 3)[0] as {
+      tool?: { name?: string };
+      toolName?: string;
+      input?: unknown;
+    };
+    expect(fourthExecuteInput.tool?.name).toBe("fake_lifecycle");
+    expect(fourthExecuteInput.input).toEqual({ value: "explicit" });
+
+    // Bare id with no args produces empty input
+    await runtimeCallTool.execute(
+      "call-lifecycle-bare",
+      {
+        id: "fake_lifecycle",
+      },
+      abortController.signal,
+      onUpdate,
+    );
+
+    const fifthExecuteInput = mockCall(executeTool, 4)[0] as {
+      tool?: { name?: string };
+      toolName?: string;
+      input?: unknown;
+    };
+    expect(fifthExecuteInput.tool?.name).toBe("fake_lifecycle");
+    expect(fifthExecuteInput.input).toEqual({});
   });
 
   it("projects target tool calls after their Tool Search wrapper result", () => {
