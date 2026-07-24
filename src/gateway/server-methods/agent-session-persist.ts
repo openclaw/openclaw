@@ -25,6 +25,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { formatForLog } from "../ws-log.js";
 import {
   assertExpectedExistingSession,
@@ -322,7 +323,7 @@ export async function persistAgentSessionPhase(params: {
                 cfg: params.cfg,
                 entry: merged,
                 sessionKey: params.canonicalSessionKey,
-                channel: merged.channel,
+                channel: sessionDeliveryChannel(merged),
                 chatType: merged.chatType,
               }) === "deny"
             ) {
@@ -483,7 +484,7 @@ export async function persistAgentSessionPhase(params: {
       cfg: params.cfg,
       entry: sessionEntry,
       sessionKey: params.canonicalSessionKey,
-      channel: sessionEntry?.channel,
+      channel: sessionDeliveryChannel(sessionEntry),
       chatType: sessionEntry?.chatType,
     }) === "deny"
   ) {

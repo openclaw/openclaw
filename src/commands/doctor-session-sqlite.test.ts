@@ -26,6 +26,7 @@ import {
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import {
   assertSafeSessionSqliteMigrationMove,
   createSessionSqliteMigrationFailureIssue,
@@ -425,7 +426,7 @@ describe("runDoctorSessionSqlite", () => {
       storePath: store.storePath,
     });
     // The SQLite runtime does no read repair, so import must store canonical shapes.
-    expect(typeof imported?.entry.route).not.toBe("string");
+    expect(typeof sessionDeliveryRoute(imported?.entry)).not.toBe("string");
     const events = loadSqliteTranscriptEventsSync({
       agentId: "main",
       sessionId: "session-1",

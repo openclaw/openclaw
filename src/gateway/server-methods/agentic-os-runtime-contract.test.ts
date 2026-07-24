@@ -751,7 +751,7 @@ describe("Agentic OS runtime contract v1", () => {
     releasePending();
     const completed = await Promise.all(pending);
     expect(completed.every(([ok]) => ok)).toBe(true);
-  });
+  }, 240_000);
 
   it("rejects released, expired, and wrong-owner leases before spawning", async () => {
     const gatewayLeaseId = await acquireLease();

@@ -147,7 +147,6 @@ extensions/matrix/src/matrix/actions/verification.test.ts
 extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
 extensions/matrix/src/matrix/monitor/handler.test.ts
-extensions/matrix/src/matrix/monitor/handler.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/sdk.ts
 extensions/matrix/src/matrix/sdk/verification-manager.ts
@@ -179,7 +178,6 @@ extensions/memory-core/src/memory/search-manager.test.ts
 extensions/memory-core/src/memory/search-manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
-extensions/memory-core/src/short-term-promotion.ts
 extensions/memory-core/src/tools.test.ts
 extensions/memory-core/src/tools.ts
 extensions/memory-lancedb/index.test.ts
@@ -619,7 +617,6 @@ src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
 src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
-src/cli/config-cli.ts
 src/cli/cron-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/daemon-cli/status.gather.ts

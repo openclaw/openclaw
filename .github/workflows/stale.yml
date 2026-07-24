@@ -259,6 +259,7 @@ jobs:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-issues: write
+          permission-metadata: read
           permission-pull-requests: write
       - name: Backfill stale closures
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -509,6 +510,7 @@ jobs:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           permission-issues: write
+          permission-metadata: read
       - name: Lock closed issues after 48h of no activity
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
