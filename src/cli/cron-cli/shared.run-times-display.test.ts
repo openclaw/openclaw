@@ -19,6 +19,36 @@ function captureCronJson(value: unknown): unknown {
 }
 
 describe("printCronJson readable run times", () => {
+  it("redacts command env values in list and nested serializer output", () => {
+    const marker = "cron-cli-secret-marker";
+    const written = captureCronJson({
+      jobs: [
+        {
+          payload: {
+            kind: "command",
+            argv: ["deploy"],
+            env: { DEPLOY_TOKEN: marker },
+          },
+        },
+      ],
+      alternate: {
+        result: {
+          payload: {
+            kind: "command",
+            argv: ["notify"],
+            env: { WEBHOOK_TOKEN: marker },
+          },
+        },
+      },
+    });
+
+    expect(written).toMatchObject({
+      jobs: [{ payload: { env: { DEPLOY_TOKEN: "[redacted]" } } }],
+      alternate: { result: { payload: { env: { WEBHOOK_TOKEN: "[redacted]" } } } },
+    });
+    expect(JSON.stringify(written)).not.toContain(marker);
+  });
+
   it("adds local-offset ISO mirrors for finished run entries without changing raw fields", () => {
     const written = captureCronJson({
       entries: [

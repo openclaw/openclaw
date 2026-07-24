@@ -40,6 +40,21 @@ function isProcessRunning(pid: number): boolean {
 }
 
 describe("runCronCommandJob", () => {
+  it("passes the original stored env value to the command process", async () => {
+    const marker = "cron-runner-original-env-marker";
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [process.execPath, "-e", "process.stdout.write(process.env.CRON_MARKER ?? '')"],
+        env: { CRON_MARKER: marker },
+        timeoutSeconds: 5,
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toBe(marker);
+  });
+
   it("runs command argv and returns stdout as the deliverable summary", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({

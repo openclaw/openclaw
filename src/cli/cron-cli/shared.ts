@@ -9,6 +9,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
+import { redactCronJsonReadback } from "../../cron/public-job.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
@@ -131,7 +132,7 @@ function enrichCronRunEntriesForDisplay(value: unknown): unknown {
 }
 
 export function printCronJson(value: unknown) {
-  defaultRuntime.writeJson(enrichCronRunEntriesForDisplay(value));
+  defaultRuntime.writeJson(redactCronJsonReadback(enrichCronRunEntriesForDisplay(value)));
 }
 
 /**
