@@ -5,7 +5,6 @@ struct VoiceWakeWordsSettingsView: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
     @FocusState private var focusedTriggerIndex: Int?
-    @State private var syncTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -60,6 +59,8 @@ struct VoiceWakeWordsSettingsView: View {
             if self.triggerWords.isEmpty {
                 self.triggerWords = VoiceWakePreferences.defaultTriggerWords
                 self.commitTriggerWords()
+            } else {
+                self.appModel.scheduleGlobalWakeWordsSync(self.triggerWords)
             }
         }
         .onChange(of: self.focusedTriggerIndex) { oldValue, newValue in
@@ -101,12 +102,6 @@ struct VoiceWakeWordsSettingsView: View {
 
     private func commitTriggerWords() {
         VoiceWakePreferences.saveTriggerWords(self.triggerWords)
-
-        let snapshot = VoiceWakePreferences.sanitizeTriggerWords(self.triggerWords)
-        self.syncTask?.cancel()
-        self.syncTask = Task { [snapshot, weak appModel = self.appModel] in
-            guard await CancellableDelay.wait(for: .milliseconds(650)) else { return }
-            await appModel?.setGlobalWakeWords(snapshot)
-        }
+        self.appModel.scheduleGlobalWakeWordsSync(self.triggerWords)
     }
 }
