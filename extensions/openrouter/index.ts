@@ -18,6 +18,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { listOpenRouterModelCatalog } from "./model-catalog.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
@@ -326,6 +327,7 @@ export default definePluginEntry({
           };
         },
       },
+      augmentModelCatalog: () => listOpenRouterModelCatalog(),
       staticCatalog: {
         order: "simple",
         run: async () => ({
