@@ -27,6 +27,7 @@ import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  parseLaunchdPlistLabel,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
@@ -55,6 +56,7 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
+const LAUNCH_DAEMON_SYSTEM_DIR = "/Library/LaunchDaemons";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 const OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN =
@@ -163,6 +165,48 @@ function resolveLaunchAgentPlistPathForLabel(
 ): string {
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
+function resolveSystemLaunchDaemonPlistPathForLabel(label: string): string {
+  return path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, `${label}.plist`);
+}
+
+async function findSystemLaunchDaemonPlistPathForLabel(label: string): Promise<string | null> {
+  // Canonical-path errors fail closed below. The fallback scan skips unreadable
+  // noncanonical vendor plists so unrelated permissions do not block installs.
+  const canonicalPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
+  try {
+    await fs.access(canonicalPath);
+    return canonicalPath;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(LAUNCH_DAEMON_SYSTEM_DIR);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+  const candidates = entries.filter((entry) => entry.endsWith(".plist"));
+  const matches = await Promise.all(
+    candidates.map(async (entry) => {
+      const plistPath = path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, entry);
+      // launchd keys jobs by the plist Label, not its filename. Loaded jobs are
+      // already caught above, so unreadable unrelated fallback files are skipped.
+      const contents = await fs.readFile(plistPath, "utf8").catch(() => null);
+      if (contents === null) {
+        return null;
+      }
+      return parseLaunchdPlistLabel(contents) === label ? plistPath : null;
+    }),
+  );
+  return matches.find((plistPath): plistPath is string => plistPath !== null) ?? null;
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
@@ -398,6 +442,84 @@ function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
     throw new Error("launchctl print did not report a running pid");
   }
   return pid;
+}
+
+type SystemLaunchDaemonConflict =
+  | {
+      detectedBy: "launchctl";
+      serviceTarget: string;
+    }
+  | {
+      detectedBy: "plist";
+      serviceTarget: string;
+      plistPath: string;
+    };
+
+async function resolveSystemLaunchDaemonConflict(
+  label: string,
+  options: { scanInstalledPlists?: boolean } = {},
+): Promise<SystemLaunchDaemonConflict | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const serviceTarget = `system/${label}`;
+  const printed = await execLaunchctl(["print", serviceTarget]);
+  if (printed.code === 0) {
+    return { detectedBy: "launchctl", serviceTarget };
+  }
+  if (!isLaunchctlNotLoaded(printed)) {
+    const detail = formatLaunchctlResultDetail(printed) || `exit code ${printed.code}`;
+    throw new Error(
+      `Could not verify whether system LaunchDaemon ${serviceTarget} is loaded: ${detail}`,
+    );
+  }
+  if (options.scanInstalledPlists === false) {
+    return null;
+  }
+  let plistPath: string | null;
+  try {
+    plistPath = await findSystemLaunchDaemonPlistPathForLabel(label);
+  } catch (err) {
+    const rawDetail = err instanceof Error ? err.message : String(err);
+    const detail = truncateUtf16Safe(sanitizeForLog(rawDetail), 500);
+    throw new Error(
+      `Could not verify whether system LaunchDaemon ${serviceTarget} has an installed plist: ${detail}`,
+      { cause: err },
+    );
+  }
+  if (!plistPath) {
+    return null;
+  }
+  return { detectedBy: "plist", serviceTarget, plistPath };
+}
+
+function formatSystemLaunchDaemonConflict(conflict: SystemLaunchDaemonConflict): string {
+  const detection =
+    conflict.detectedBy === "launchctl"
+      ? `Existing system LaunchDaemon ${conflict.serviceTarget} detected by launchctl.`
+      : `Existing system LaunchDaemon plist detected at ${conflict.plistPath}.`;
+  const recovery =
+    conflict.detectedBy === "launchctl"
+      ? `Keep the system LaunchDaemon, or unload it with \`sudo launchctl bootout ${conflict.serviceTarget}\` and remove its actual plist before retrying.`
+      : `Keep the system LaunchDaemon, or remove its unloaded plist with \`sudo rm ${conflict.plistPath}\`, then retry.`;
+  return [
+    detection,
+    "Refusing to create or activate a gui-domain LaunchAgent for the same gateway label because duplicate launchd managers can restart-loop the gateway.",
+    recovery,
+  ].join("\n");
+}
+
+async function assertNoSystemLaunchDaemonConflict(
+  label: string,
+  options?: { scanInstalledPlists?: boolean },
+): Promise<void> {
+  const conflict = await resolveSystemLaunchDaemonConflict(label, options);
+  if (!conflict) {
+    return;
+  }
+  // A system-domain job owns this label across users; adding a gui LaunchAgent
+  // would create dueling KeepAlive managers for the same gateway port.
+  throw new Error(formatSystemLaunchDaemonConflict(conflict));
 }
 
 export function parseLaunchctlListOpenClawUpdateJobs(
@@ -786,6 +908,11 @@ type LaunchAgentBootstrapRepairResult =
       status: "bootstrap-failed" | "kickstart-failed";
       detail?: string;
     }
+  | {
+      ok: false;
+      status: "system-launchdaemon-conflict" | "system-launchdaemon-unverifiable";
+      detail: string;
+    }
   | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
 
 function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
@@ -802,8 +929,25 @@ export async function repairLaunchAgentBootstrap(args: {
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceTarget = `${domain}/${label}`;
-  // Rewrite first so legacy inline environment secrets move into the private
-  // env file before the plist becomes world-readable for launchd.
+  let conflict: SystemLaunchDaemonConflict | null;
+  try {
+    conflict = await resolveSystemLaunchDaemonConflict(label);
+  } catch (err) {
+    return {
+      ok: false,
+      status: "system-launchdaemon-unverifiable",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (conflict) {
+    return {
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail: formatSystemLaunchDaemonConflict(conflict),
+    };
+  }
+  // Once system ownership is ruled out, rewrite before activation so legacy
+  // inline secrets move into the private env file before launchd reads it.
   const warn =
     args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
   await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
@@ -1104,11 +1248,13 @@ async function writeLaunchAgentPlist({
   stdout,
   warn,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string; stdoutPath: string }> {
+  const label = resolveLaunchAgentLabel({ env });
+  await assertNoSystemLaunchDaemonConflict(label);
+
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
   for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
@@ -1328,6 +1474,9 @@ export async function restartLaunchAgent({
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
+  // Restart only needs to reject a live competing manager. Install, stage, and
+  // bootstrap repair retain the full scan for latent on-disk conflicts.
+  await assertNoSystemLaunchDaemonConflict(label, { scanInstalledPlists: false });
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
   // Restart requests issued from inside the managed gateway process tree need a

@@ -47,6 +47,12 @@ export async function recoverInstalledLaunchAgent<
         }),
       );
     }
+    if (
+      repaired.status === "system-launchdaemon-conflict" ||
+      repaired.status === "system-launchdaemon-unverifiable"
+    ) {
+      throw new Error(repaired.detail);
+    }
     return null;
   }
   return {

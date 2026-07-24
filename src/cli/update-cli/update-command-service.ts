@@ -147,9 +147,16 @@ async function recoverInstalledLaunchAgentAfterUpdate(params: {
     return { attempted: false, recovered: false };
   }
 
-  const recovered = await recover({ result: "restarted", env: state?.env ?? params.env }).catch(
-    () => null,
-  );
+  let recovered: Awaited<ReturnType<typeof recover>> | null;
+  try {
+    recovered = await recover({ result: "restarted", env: state?.env ?? params.env });
+  } catch (err) {
+    return {
+      attempted: true,
+      recovered: false,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
   if (!recovered) {
     return {
       attempted: true,

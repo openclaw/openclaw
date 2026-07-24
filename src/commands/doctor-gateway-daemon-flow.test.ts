@@ -575,6 +575,27 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["stopped", "running"] as const)(
+    "reports a %s service restart failure without aborting doctor",
+    async (status) => {
+      setPlatform("darwin");
+      service.readRuntime.mockResolvedValue({ status });
+      service.restart.mockRejectedValue(
+        new Error("Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl."),
+      );
+
+      await expect(runAutoRepair()).resolves.toBeDefined();
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Gateway service restart failed: Error: Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+        ),
+        "Gateway",
+      );
+      expect(healthCommand).not.toHaveBeenCalled();
+    },
+  );
+
   it("skips gateway service install when service repair policy is external", async () => {
     setPlatform("linux");
     service.isLoaded.mockResolvedValue(false);
@@ -728,6 +749,55 @@ describe("maybeRepairGatewayDaemon", () => {
       "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
       "Gateway",
     );
+  });
+
+  it("reports system LaunchDaemon conflicts without installing or restarting a user service", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({
+      status: "unknown",
+      missingSupervision: true,
+    });
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail: "Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+    });
+
+    const runtime = await runAutoRepair();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway LaunchAgent bootstrap failed: Existing system LaunchDaemon system/ai.openclaw.gateway detected by launchctl.",
+    );
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("reports unverifiable system LaunchDaemon state without crashing or installing", async () => {
+    setPlatform("darwin");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({
+      status: "unknown",
+      missingSupervision: true,
+    });
+    vi.mocked(launchd.isLaunchAgentLoaded).mockResolvedValue(false);
+    vi.mocked(launchd.launchAgentPlistExists).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(launchd.repairLaunchAgentBootstrap).mockResolvedValueOnce({
+      ok: false,
+      status: "system-launchdaemon-unverifiable",
+      detail:
+        "Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: permission denied",
+    });
+
+    const runtime = await runAutoRepair();
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway LaunchAgent bootstrap failed: Could not verify whether system LaunchDaemon system/ai.openclaw.gateway is loaded: permission denied",
+    );
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("skips restart prompt when gateway is healthy after recent restart handoff in normal doctor flow", async () => {

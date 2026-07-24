@@ -207,6 +207,17 @@ export async function maybeRepairGatewayDaemon(params: {
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
   const service = resolveGatewayService();
+  const restartGatewayService = async () => {
+    try {
+      return await service.restart({
+        env: process.env,
+        stdout: process.stdout,
+      });
+    } catch (err) {
+      note(`Gateway service restart failed: ${String(err)}`, "Gateway");
+      return null;
+    }
+  };
   const isLocalDarwinGateway =
     process.platform === "darwin" && params.cfg.gateway?.mode !== "remote";
   // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
@@ -416,10 +427,10 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (start) {
-      const restartResult = await service.restart({
-        env: process.env,
-        stdout: process.stdout,
-      });
+      const restartResult = await restartGatewayService();
+      if (!restartResult) {
+        return;
+      }
       const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
       if (!restartStatus.scheduled) {
         await sleep(1500);
@@ -473,10 +484,10 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (restart) {
-      const restartResult = await service.restart({
-        env: process.env,
-        stdout: process.stdout,
-      });
+      const restartResult = await restartGatewayService();
+      if (!restartResult) {
+        return;
+      }
       const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
       if (restartStatus.scheduled) {
         note(restartStatus.message, "Gateway");
