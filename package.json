@@ -1881,7 +1881,9 @@
     "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import tsx scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "agents:eval": "node scripts/agent-role-eval.mjs",
+    "agents:eval:contracts": "node scripts/agent-role-eval.mjs --contracts-only"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
