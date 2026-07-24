@@ -15,7 +15,7 @@ try {
   let trendData = "";
   if (user_query.toLowerCase().includes("trend") || user_query.toLowerCase().includes("analysis")) {
     trendData = execSync(
-      `python3 /Users/tiffany/idx-exchange-openclaw/src/tools/trend_analysis.py`,
+      `python3 /Users/tiffany/idx-exchange-openclaw/src/tools/trend_analysis.py '${result.city}'`,
     ).toString();
   }
 

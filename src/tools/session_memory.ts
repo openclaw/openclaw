@@ -6,6 +6,7 @@ interface UserSession {
   type?: string;
   pool?: string;
   lastResults?: ListingRow[];
+  marketSummary?: MarketSummary[];
   conversationStep: number;
 }
 const sessions = new Map<string, UserSession>();
