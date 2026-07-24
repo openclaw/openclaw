@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -29,11 +30,25 @@ type CliOptions = {
 };
 
 type SessionListOptions = {
+  creators?: readonly SessionCreatorFixture[];
   hasMore: boolean;
   nextOffset: number | null;
   offset?: number;
   totalCount: number;
 };
+
+type SessionCreatorFixture = { type: "human" | "agent"; id: string; label: string };
+
+// Two creator identities so the sidebar's collaborative ownership chrome
+// (owner avatars + People filter) renders in the mock harness.
+const MOCK_SESSION_CREATORS: readonly SessionCreatorFixture[] = [
+  { type: "human", id: "profile-peter", label: "Peter" },
+  { type: "human", id: "profile-mira", label: "Mira" },
+];
+const [MOCK_CREATOR_PETER, MOCK_CREATOR_MIRA] = MOCK_SESSION_CREATORS as [
+  SessionCreatorFixture,
+  SessionCreatorFixture,
+];
 
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
@@ -41,6 +56,8 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 const ATTENTION_FIXTURE_EXPIRES_AT = Date.parse("2099-01-01T00:00:00.000Z");
 const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
 const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
+const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
+const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -50,16 +67,35 @@ const boardFixtureHtml = `<!doctype html>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>OpenClaw Board Fixture</title>
+    <script>
+      // This standalone fixture bypasses app bootstrap, so mirror its root theme contract.
+      const mediaQuery = matchMedia("(prefers-color-scheme: light)");
+      const applyTheme = () => {
+        const mode = mediaQuery.matches ? "light" : "dark";
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.classList.toggle("wa-light", mode === "light");
+        document.documentElement.classList.toggle("wa-dark", mode === "dark");
+        document.documentElement.style.colorScheme = mode;
+      };
+      applyTheme();
+      if (typeof mediaQuery.addEventListener === "function") {
+        mediaQuery.addEventListener("change", applyTheme);
+      } else {
+        mediaQuery.addListener(applyTheme);
+      }
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
     <style>
-      body { margin: 0; min-width: 320px; min-height: 100vh; background: #0f1115; }
+      body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
       .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
       .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
-      .board-fixture-header span { color: #747e8d; font: 10px ui-monospace, monospace; letter-spacing: .15em; }
-      .board-fixture-header h1 { color: #e5e7eb; font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
-      .board-fixture-status { color: #8892a0; font: 11px ui-monospace, monospace; }
-      .board-fixture-status i { background: #4ec9a8; border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+      .board-fixture-header span { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .15em; }
+      .board-fixture-header h1 { color: var(--text-strong); font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
+      .board-fixture-status { color: var(--muted); font: 11px ui-monospace, monospace; }
+      .board-fixture-status i { background: var(--accent-2); border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
       @media (max-width: 700px) { .board-fixture-shell { padding: 18px; } }
     </style>
   </head>
@@ -153,6 +189,7 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
     hasMore: options.hasMore,
     limitApplied: 50,
     nextOffset: options.nextOffset,
+    ...(options.creators ? { creators: options.creators } : {}),
     offset: options.offset ?? 0,
     path: "",
     sessions,
@@ -161,11 +198,16 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
-function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+function pagedSessionsListResponse(
+  sessions: unknown[],
+  offset: number,
+  creators?: readonly SessionCreatorFixture[],
+) {
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
   return sessionsListResponse(page, {
+    creators,
     hasMore: nextOffset < sessions.length,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
     offset: normalizedOffset,
@@ -196,17 +238,18 @@ function buildSessionRows(params: {
 function buildSessionListCases(
   sessions: unknown[],
   matchBase: Record<string, unknown> = {},
+  creators?: readonly SessionCreatorFixture[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
   for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
     cases.push({
       match: { ...matchBase, offset },
-      response: pagedSessionsListResponse(sessions, offset),
+      response: pagedSessionsListResponse(sessions, offset, creators),
     });
   }
   cases.push({
     match: matchBase,
-    response: pagedSessionsListResponse(sessions, 0),
+    response: pagedSessionsListResponse(sessions, 0, creators),
   });
   return cases;
 }
@@ -779,6 +822,16 @@ function searchPrefixes(term: string): string[] {
 
 async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const selfProfile: UserProfile = {
+    id: "presence-riley",
+    displayName: "Riley",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: baseTime,
+    updatedAt: baseTime,
+    emails: ["riley@example.com"],
+    hasAvatar: false,
+  };
   const devicePairSetupCode = Buffer.from(
     JSON.stringify({
       url: "wss://gateway.example.test",
@@ -1033,7 +1086,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
       childSessions: ["agent:main:lisbon-trip"],
     }),
+    sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
+      activeRunIds: [OBSERVER_DEMO_RUN_ID],
+      hasActiveRun: true,
+      lastReadAt: baseTime + 2_000,
+      observerDigest: {
+        headline: "Opening the focused observer tests",
+        health: "on-track",
+        revision: 1,
+        runId: OBSERVER_DEMO_RUN_ID,
+        updatedAt: baseTime - 2_000,
+      },
+      startedAt: baseTime - 4_000,
+      status: "running",
+    }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
       status: "running",
@@ -1046,6 +1114,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       icon: "name:spark",
     }),
     sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      createdActor: MOCK_CREATOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
@@ -1054,7 +1123,17 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      createdActor: MOCK_CREATOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
+      lastReadAt: baseTime - 120_000,
+      observerDigest: {
+        headline: "Done: fixed the flaky retry-window test",
+        health: "done",
+        revision: 1,
+        runId: "mock-idle-final-run",
+        updatedAt: baseTime - 40_000,
+      },
+      unread: true,
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
@@ -1089,6 +1168,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const archivedSessions = [
     sessionRow("agent:main:archived-launch-notes", "Archived launch notes", baseTime - 86_400_000, {
       archived: true,
+      archivedBy: MOCK_CREATOR_MIRA,
+      createdActor: MOCK_CREATOR_PETER,
       totalTokens: 42_000,
     }),
     sessionRow(
@@ -1140,12 +1221,18 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
     presenceUsers: [
-      { self: true, id: "presence-riley", name: "Riley", email: "riley@example.com" },
+      {
+        self: true,
+        id: selfProfile.id,
+        name: selfProfile.displayName ?? undefined,
+        email: selfProfile.emails[0],
+      },
       { id: "presence-colin", name: "Colin", email: "colin@example.com" },
       { id: "presence-patricia", email: "patricia.erichsen@example.com" },
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      "users.self": { profile: selfProfile },
       "system.info": {
         machineName: "Peters-Mac-Studio",
         hostname: "peters-mac-studio.local",
@@ -1159,6 +1246,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         cpuCount: 16,
         memoryTotalBytes: 68_719_476_736,
         memoryFreeBytes: 34_359_738_368,
+        defaultAgentUtilityModel: {
+          status: "auto",
+          model: "anthropic/claude-haiku-4-5",
+        },
       },
       "fs.listDir": {
         cases: [
@@ -1615,6 +1706,17 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
+      "sessions.observer.ask": {
+        cases: [
+          {
+            match: { sessionKey: OBSERVER_DEMO_SESSION_KEY },
+            response: {
+              answer: "It is rerunning the focused test to check whether the latest fix is stable.",
+              digestRevision: 4,
+            },
+          },
+        ],
+      },
       "sessions.list": {
         cases: [
           // Child fetches must precede the catch-all page case (subset match).
@@ -1632,7 +1734,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
-          ...buildSessionListCases([...sessions, ...archivedSessions]),
+          ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
         ],
       },
     },
@@ -1640,6 +1742,44 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     repeatingSessionEvents: {
       intervalMs: 3_000,
       events: [
+        {
+          event: "session.observer",
+          payload: {
+            headline: "Reading the failing test and its board caller",
+            health: "on-track",
+            revision: 2,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 1_000,
+          },
+        },
+        {
+          event: "session.observer",
+          payload: {
+            assessment:
+              "The first fix was incomplete, so the agent is narrowing the assertion path.",
+            headline: "Third run of the same vitest file - two assertions still failing",
+            health: "grinding",
+            planProgress: { completed: 2, total: 4 },
+            revision: 3,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 4_000,
+          },
+        },
+        {
+          event: "session.observer",
+          payload: {
+            assessment: "Repeated identical failures suggest the current approach needs a reset.",
+            headline: "Same failure five runs in a row - it may be circling",
+            health: "stuck",
+            planProgress: { completed: 2, total: 4 },
+            revision: 4,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 7_000,
+          },
+        },
         {
           event: "agent",
           payload: {

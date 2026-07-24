@@ -2,9 +2,11 @@
 import { randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
-  loadSessionEntry,
-  upsertSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -219,11 +221,19 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
 }): Promise<void> {
-  const existing = loadSessionEntry(params);
-  if (existing?.sessionId) {
-    return;
-  }
-  const created = await upsertSessionEntry(params, {});
+  const created = await patchSessionEntry(
+    params,
+    (_entry, context) => {
+      if (context.existingEntry?.sessionId) {
+        return null;
+      }
+      if (context.existingEntry) {
+        return { sessionId: randomUUID() };
+      }
+      return buildSessionCreationStamp({ via: "talk", actor: { type: "human" } });
+    },
+    { fallbackEntry: mergeSessionEntry(undefined, {}) },
+  );
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);
   }
@@ -401,7 +411,7 @@ async function appendVoiceTranscript(params: {
     if (record.origin !== params.origin) {
       throw new Error("voice session origin does not allow this transcript source");
     }
-    const sessionEntry = loadSessionEntry({
+    const sessionEntry = loadSessionEntryReadOnly({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     });
@@ -531,7 +541,10 @@ async function deliverMutationDigestOnce(
   if (!text) {
     return;
   }
-  const entry = loadSessionEntry({ agentId: record.agentId, sessionKey: record.sessionKey });
+  const entry = loadSessionEntryReadOnly({
+    agentId: record.agentId,
+    sessionKey: record.sessionKey,
+  });
   const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
   if (!target.channel || target.channel === "webchat" || !target.to) {
     return;

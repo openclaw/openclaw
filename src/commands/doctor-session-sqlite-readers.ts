@@ -133,14 +133,23 @@ export function readOnlySqliteSessionEntries(
   let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
   try {
     database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    const table = database
+    const nodeTable = database
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("session_entries");
-    if (!table) {
+      .get("session_nodes");
+    const legacyEntryTable = nodeTable
+      ? undefined
+      : database
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get("session_entries");
+    if (!nodeTable && !legacyEntryTable) {
       return { exists: true, ok: true, summaries: [] };
     }
     const rows = database
-      .prepare("SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC")
+      .prepare(
+        nodeTable
+          ? "SELECT session_key, entry_json FROM session_nodes ORDER BY session_key ASC"
+          : "SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC",
+      )
       .all() as Array<{ entry_json?: unknown; session_key?: unknown }>;
     return {
       exists: true,
@@ -293,7 +302,9 @@ export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
 function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   try {
     const parsed = JSON.parse(entryJson) as unknown;
-    return isRecord(parsed) ? (parsed as SessionEntry) : undefined;
+    return isRecord(parsed) && typeof parsed.sessionId === "string"
+      ? (parsed as SessionEntry)
+      : undefined;
   } catch {
     return undefined;
   }

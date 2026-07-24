@@ -14,8 +14,8 @@ import { isLoopbackHost } from "../gateway/net.js";
 import {
   SsrFBlockedError,
   isPrivateNetworkAllowedByPolicy,
-  resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
+  resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -28,7 +28,10 @@ import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-
 import type { BrowserTabOwnership } from "./client.types.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
-import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+import {
+  allowsDiscoveredCdpAuthorityChange,
+  withExactHostnamePolicy,
+} from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
@@ -111,9 +114,8 @@ function assertDiscoveredCdpEndpointMatchesConfigured(
   ssrfPolicy?: SsrFPolicy,
 ): void {
   if (
-    !ssrfPolicy ||
-    isPrivateNetworkAllowedByPolicy(ssrfPolicy) ||
-    cdpEndpointAuthority(discoveredUrl) === cdpEndpointAuthority(configuredUrl)
+    cdpEndpointAuthority(discoveredUrl) === cdpEndpointAuthority(configuredUrl) ||
+    allowsDiscoveredCdpAuthorityChange(ssrfPolicy)
   ) {
     return;
   }

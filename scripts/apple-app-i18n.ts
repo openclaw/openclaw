@@ -41,9 +41,10 @@ const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xc
 const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
+const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
 const IOS_SOURCE_PREFIXES = [
   "apps/ios/",
-  "apps/shared/OpenClawKit/Sources/OpenClawChatUI/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
 const APPLE_CATALOG_KINDS = new Set([
@@ -61,7 +62,10 @@ const IOS_CATALOG_EXCLUSIONS = new Set([
   "OpenClaw",
   "z",
 ]);
-const MACOS_SOURCE_PREFIX = "apps/macos/Sources/OpenClaw/";
+const MACOS_SOURCE_PREFIXES = [
+  "apps/macos/Sources/OpenClaw/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
+] as const;
 const MACOS_CATALOG_EXCLUSIONS = new Set([
   // Product names are intentionally verbatim.
   "OpenClaw",
@@ -235,6 +239,18 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "private func nodeListCard(title: OpenClawTextValue, values: [String])",
     "private func detailMetric(label: OpenClawTextValue, value: String)",
     "title: OpenClawTextValue,\n        detail: OpenClawTextValue",
+  ],
+  "apps/ios/Sources/Design/AgentProDreamingDestination.swift": [
+    "private func detailMetric(label: OpenClawTextValue, value: String)",
+    "label.text",
+    "Text(verbatim: value)",
+  ],
+  "apps/ios/Sources/Design/AgentProTab+DetailComponents.swift": [
+    "func detailMetric(label: OpenClawTextValue, value: String)",
+    "Text(verbatim: value)",
+    "func emptyDetailRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue)",
+    "title.text",
+    "detail.text",
   ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(verbatim: self.item.title)",
@@ -477,9 +493,7 @@ function parseInfoPlistStrings(source: string): Array<{ key: string; source: str
       key: decodeXml(match[1] ?? ""),
       source: decodeXml(match[2] ?? ""),
     }))
-    .filter(
-      (entry) => entry.key === "CFBundleDisplayName" || entry.key.endsWith("UsageDescription"),
-    );
+    .filter((entry) => entry.key.endsWith("UsageDescription"));
 }
 
 type InfoPlistTranslation = {
@@ -550,7 +564,7 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
 function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    entry.path.startsWith(MACOS_SOURCE_PREFIX) &&
+    MACOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
     APPLE_CATALOG_KINDS.has(entry.kind) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
@@ -851,9 +865,6 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
       const existing = parseStringsFile(existingSource ?? "");
       const artifact = translations.find((candidate) => candidate.locale === locale);
       const lines = sourceEntries.map(({ key, source }) => {
-        if (key === "CFBundleDisplayName") {
-          return `${stringsLiteral(key)} = ${stringsLiteral(source)};`;
-        }
         const sourceId = sourceIds.get([target.sourcePath, source].join("\u0000"));
         if (!sourceId) {
           throw new Error(`missing native InfoPlist source id for ${target.sourcePath}:${key}`);

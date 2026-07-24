@@ -132,7 +132,7 @@ export type PluginManifestProviderEndpoint = {
   googleVertexRegionHostSuffix?: string;
 };
 
-type PluginManifestProviderRequestProvider = {
+export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
   openAICompletions?: {
@@ -266,6 +266,8 @@ export type PluginManifestDashboard = {
   actionVerbs?: PluginManifestDashboardActionVerb[];
 };
 
+export type PluginManifestMcpServer = Record<string, unknown>;
+
 type PluginManifestConfigLiteral = string | number | boolean | null;
 
 type PluginManifestDangerousConfigFlag = {
@@ -397,6 +399,8 @@ export type PluginManifest = {
   qaRunners?: PluginManifestQaRunner[];
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
+  /** Static MCP servers contributed while this plugin is enabled. */
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
   name?: string;
   description?: string;
@@ -604,6 +608,23 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
       continue;
     }
     normalized[key] = valueLocal;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestMcpServers(
+  value: unknown,
+): Record<string, PluginManifestMcpServer> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestMcpServer> = Object.create(null);
+  for (const [rawName, rawServer] of Object.entries(value)) {
+    const name = normalizeOptionalString(rawName) ?? "";
+    if (!name || isBlockedObjectKey(name) || !isRecord(rawServer)) {
+      continue;
+    }
+    normalized[name] = { ...rawServer };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -1729,6 +1750,24 @@ function normalizeProviderAuthChoices(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeConfigUiHints(value: unknown): Record<string, PluginConfigUiHint> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginConfigUiHint> = Object.create(null);
+  for (const [hintPath, rawHint] of Object.entries(value)) {
+    if (!isRecord(rawHint)) {
+      continue;
+    }
+    const hint = { ...rawHint } as Record<string, unknown>;
+    if ("presentation" in hint && hint.presentation !== "phone-number") {
+      delete hint.presentation;
+    }
+    normalized[hintPath] = hint as PluginConfigUiHint;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizeChannelConfigs(
   value: unknown,
 ): Record<string, PluginManifestChannelConfig> | undefined {
@@ -1745,9 +1784,7 @@ function normalizeChannelConfigs(
     if (!schema) {
       continue;
     }
-    const uiHints = isRecord(rawEntry.uiHints)
-      ? (rawEntry.uiHints as Record<string, PluginConfigUiHint>)
-      : undefined;
+    const uiHints = normalizeConfigUiHints(rawEntry.uiHints);
     const runtime =
       isRecord(rawEntry.runtime) && typeof rawEntry.runtime.safeParse === "function"
         ? (rawEntry.runtime as ChannelConfigRuntimeSchema)
@@ -1987,6 +2024,7 @@ export function loadPluginManifest(
     });
   }
   const dashboard = dashboardResult.dashboard;
+  const mcpServers = normalizeManifestMcpServers(raw.mcpServers);
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
@@ -2005,10 +2043,7 @@ export function loadPluginManifest(
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
-  let uiHints: Record<string, PluginConfigUiHint> | undefined;
-  if (isRecord(raw.uiHints)) {
-    uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
-  }
+  const uiHints = normalizeConfigUiHints(raw.uiHints);
 
   return cacheResult({
     ok: true,
@@ -2044,6 +2079,7 @@ export function loadPluginManifest(
       setup,
       qaRunners,
       dashboard,
+      mcpServers,
       skills,
       name,
       description,
@@ -2065,6 +2101,8 @@ export function loadPluginManifest(
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)
+import type { ChannelSetupMetadata } from "../channels/plugins/setup-contract.js";
+
 type PluginPackageChannelApprovalFlag = "native";
 
 export type PluginPackageChannel = {
@@ -2107,6 +2145,9 @@ export type PluginPackageChannel = {
     exportName?: string;
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  /** Typed, serializable setup fields available before plugin runtime load. */
+  setup?: ChannelSetupMetadata;
+  /** @deprecated Use setup.fields. */
   cliAddOptions?: readonly PluginPackageChannelCliOption[];
 };
 
@@ -2119,6 +2160,7 @@ export type PluginPackageChannelDoctorCapabilities = {
 
 export type PluginPackageChannelCliOption = {
   flags: string;
+  negatedFlags?: string;
   description: string;
   defaultValue?: boolean | string;
   valueType?: "int" | "list";
@@ -2151,10 +2193,13 @@ type OpenClawPackageSetupFeatures = {
 
 type OpenClawPackageCompat = {
   pluginApi?: string;
+  minGatewayVersion?: string;
 };
 
 export type OpenClawPackageBuild = {
   bundledDist?: boolean;
+  openclawVersion?: string;
+  pluginSdkVersion?: string;
 };
 
 export type OpenClawPackageManifest = {

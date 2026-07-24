@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - whatsapp.group-allowlists
   objective: Verify groupPolicy open accepts a mentioned group message.
   gatewayConfigPatch:
     channels:

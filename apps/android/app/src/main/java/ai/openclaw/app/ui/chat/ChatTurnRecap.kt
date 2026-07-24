@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -246,11 +247,17 @@ internal fun turnRecapTokenFormat(count: Long): TurnRecapTokenFormat = TurnRecap
 
 internal fun formatCompactTokenCount(count: Long): String {
   fun decimal(value: Double): String = String.format(Locale.US, "%.1f", value).removeSuffix(".0")
+
+  fun millions(): String {
+    val value = decimal(count / 1_000_000.0)
+    return nativeString("\${decimal(count / 1_000_000.0)}M", value)
+  }
+
   return when {
-    count >= 1_000_000L -> "${decimal(count / 1_000_000.0)}M"
+    count >= 1_000_000L -> millions()
     count >= 1_000L -> {
       val thousands = decimal(count / 1_000.0)
-      if (thousands == "1000") "${decimal(count / 1_000_000.0)}M" else "${thousands}k"
+      if (thousands == "1000") millions() else nativeString("\${thousands}k", thousands)
     }
     else -> count.toString()
   }
