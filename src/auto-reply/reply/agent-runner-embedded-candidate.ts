@@ -217,6 +217,14 @@ export async function runEmbeddedFallbackCandidate(params: {
         extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
         sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
         forceMessageTool: turn.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
+        // Heartbeat turns inject ambient From/To (real delivery target or the
+        // non-deliverable "heartbeat" sentinel). Implicit message-tool target
+        // inference would treat that ambient route as a recipient and leak
+        // HEARTBEAT_OK into the source DM or resolve @heartbeat. Require an
+        // explicit target so only intentional heartbeat notifications send.
+        // Only set when true so subagent runs keep their default
+        // (isSubagentSessionKey) when this flag is omitted.
+        ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
         silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
         suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
         onUserMessagePersisted: params.notifyUserMessagePersisted,

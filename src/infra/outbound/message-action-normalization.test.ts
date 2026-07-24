@@ -302,6 +302,46 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/requires a target/);
   });
 
+  it("does not inject heartbeat sender sentinel as inferred target", () => {
+    // Isolated heartbeat turns put the non-deliverable "heartbeat" sentinel in
+    // From/To → tool context. Inferring it as target produces @heartbeat errors.
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentChannelId: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("does not inject heartbeat sentinel from currentMessagingTarget", () => {
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args: {},
+        toolContext: {
+          currentMessagingTarget: "heartbeat",
+          currentChannelProvider: "telegram",
+        },
+      }),
+    ).toThrow(/requires a target/);
+  });
+
+  it("still infers a real ambient route when not the heartbeat sentinel", () => {
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {},
+      toolContext: {
+        currentChannelId: "telegram:12345",
+        currentChannelProvider: "telegram",
+      },
+    });
+    expect(normalized.target).toBe("telegram:12345");
+  });
+
   it.each([
     { name: "a nonempty targets array", targets: ["C_TARGET"] },
     { name: "an empty targets array", targets: [] },

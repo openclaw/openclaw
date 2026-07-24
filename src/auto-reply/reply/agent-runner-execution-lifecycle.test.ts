@@ -13,6 +13,7 @@ import {
   createMockReplyOperation,
   requireRecord,
   expectMockCallArgFields,
+  requireMockCall,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -532,7 +533,58 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       trigger: "heartbeat",
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "commitment-only",
+      requireExplicitMessageTarget: true,
     });
+  });
+
+  it("requires explicit message targets on heartbeat embedded runs", async () => {
+    // Heartbeat ambient From/To must not become implicit message-tool recipients.
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const params = createMinimalRunAgentTurnParams({
+      opts: { isHeartbeat: true },
+    });
+    params.isHeartbeat = true;
+
+    await runAgentTurnWithFallback(params);
+
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "heartbeat embedded run params", {
+      trigger: "heartbeat",
+      requireExplicitMessageTarget: true,
+    });
+  });
+
+  it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    const embeddedParams = requireMockCall(
+      state.runEmbeddedAgentMock,
+      0,
+      "ordinary embedded run params",
+    )[0] as Record<string, unknown>;
+    expect(embeddedParams).not.toHaveProperty("requireExplicitMessageTarget");
   });
 
   it("registers run ownership before asynchronous image preflight", async () => {

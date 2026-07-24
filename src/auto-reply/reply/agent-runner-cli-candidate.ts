@@ -270,6 +270,9 @@ export async function runCliFallbackCandidate(params: {
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
+            // Same heartbeat invariant as the embedded path: do not infer
+            // message targets from ambient From/To (see #103519).
+            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
             allowEmptyAssistantReplyAsSilent: turn.followupRun.run.allowEmptyAssistantReplyAsSilent,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,

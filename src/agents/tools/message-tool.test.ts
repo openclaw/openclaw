@@ -1873,6 +1873,53 @@ describe("message tool agent routing", () => {
 });
 
 describe("message tool explicit target guard", () => {
+  it("requires an explicit target for send when configured (heartbeat-style)", async () => {
+    // Heartbeat runs set requireExplicitMessageTarget so ambient delivery.to /
+    // "heartbeat" sentinel never become implicit recipients of no-target sends.
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:dm-user-1",
+    });
+
+    await expect(
+      tool.execute("1", {
+        action: "send",
+        message: "HEARTBEAT_OK",
+      }),
+    ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit-target send when requireExplicitTarget is set", async () => {
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "telegram",
+      action: "send",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "telegram", action: "send" },
+      dryRun: true,
+    });
+
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "telegram",
+      currentChannelId: "telegram:dm-user-1",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:alert-channel",
+      message: "heartbeat alert",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.params?.target).toBe("telegram:alert-channel");
+  });
+
   it("requires an explicit target for upload-file when configured", async () => {
     const tool = createMessageTool({
       runMessageAction: mocks.runMessageAction as never,

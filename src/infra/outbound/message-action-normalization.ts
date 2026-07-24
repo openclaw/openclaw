@@ -17,6 +17,12 @@ import {
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
+import { HEARTBEAT_SENDER_SENTINEL } from "./targets.js";
+
+/** True when a tool-context value is the non-deliverable heartbeat sender sentinel. */
+function isHeartbeatSenderSentinel(value: string | undefined): boolean {
+  return value === HEARTBEAT_SENDER_SENTINEL;
+}
 
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
@@ -79,7 +85,10 @@ export function normalizeMessageActionInput(params: {
     const inferredTarget =
       normalizeOptionalString(toolContext?.currentChannelId) ??
       normalizeOptionalString(toolContext?.currentMessagingTarget);
-    if (inferredTarget) {
+    // Defense in depth for isolated heartbeat turns: the runner may still
+    // surface the non-deliverable "heartbeat" sentinel in tool context even
+    // when the owning run forgot requireExplicitMessageTarget.
+    if (inferredTarget && !isHeartbeatSenderSentinel(inferredTarget)) {
       normalizedArgs.target = inferredTarget;
     }
   }
