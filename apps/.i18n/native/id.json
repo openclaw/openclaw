@@ -8386,7 +8386,7 @@
     {
       "id": "native.android.6d5683b5537bdbaf",
       "source": "${seconds}s",
-      "translated": "${seconds}d"
+      "translated": "${seconds} dtk"
     },
     {
       "id": "native.android.e2f387a31240c8a3",
@@ -9016,7 +9016,7 @@
     {
       "id": "native.android.dae7cd6ba0f54d14",
       "source": "Observing in ${remaining}s — switch to the target app",
-      "translated": "Mengamati dalam ${remaining}d — beralih ke aplikasi target"
+      "translated": "Mengamati dalam ${remaining} dtk — beralih ke aplikasi target"
     },
     {
       "id": "native.android.a57da8b7813642c5",
@@ -9051,7 +9051,7 @@
     {
       "id": "native.android.060ac865b282278b",
       "source": "Observe in 3s",
-      "translated": "Amati dalam 3d"
+      "translated": "Amati dalam 3 dtk"
     },
     {
       "id": "native.android.e2d3ac19479204af",
