@@ -165,6 +165,14 @@ This is plain user text`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
+  it("preserves a bare Context: block whose body only mentions Source:", () => {
+    // Regression: only the external-content envelope marker qualifies a trailing
+    // `Context:` block for stripping. A bare `Context:` a user typed, followed by
+    // prose that merely contains `Source: <url>`, must survive intact.
+    const input = `Context:\nHere is the situation I need help with.\nSource: https://example.com/incident\nPlease summarize the root cause.`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
   it("strips a leading active-memory prompt prefix block from visible user text", () => {
     const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
     expect(stripInboundMetadata(input)).toBe("What should I grab on the way?");

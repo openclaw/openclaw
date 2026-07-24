@@ -96,7 +96,7 @@ struct ChatMarkdownPreprocessorTests {
             "Conversation info:",
             "Sender:",
             "Thread starter:",
-            "Replied message:",
+            "Reply target of current user message:",
             "Forwarded message context:",
             "Chat history since last reply:",
         ]

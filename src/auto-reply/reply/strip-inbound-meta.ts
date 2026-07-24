@@ -155,8 +155,21 @@ function shouldStripTrailingContextBlock(lines: string[], index: number): boolea
   if (lines[index]?.trim() !== CONTEXT_HEADER) {
     return false;
   }
-  const probe = lines.slice(index + 1, Math.min(lines.length, index + 8)).join("\n");
-  return /<<<EXTERNAL_UNTRUSTED_CONTENT|Channel metadata \(|Source:\s+/.test(probe);
+  // Only OpenClaw-injected channel context qualifies. Its sole producer wraps
+  // every entry with `wrapExternalContent`, whose opening marker carries a
+  // per-call random id and cannot be forged by inbound text; `Source:`/`Channel
+  // metadata (` only ever appear *inside* that envelope. Match the marker as the
+  // first non-empty line, never those weaker cues, so a bare `Context:` a user
+  // typed — even one followed by `Source: <url>` prose — cannot truncate their
+  // own message.
+  for (let probe = index + 1; probe < Math.min(lines.length, index + 8); probe += 1) {
+    const trimmed = lines[probe]?.trim() ?? "";
+    if (trimmed === "") {
+      continue;
+    }
+    return trimmed.startsWith("<<<EXTERNAL_UNTRUSTED_CONTENT");
+  }
+  return false;
 }
 
 function stripTrailingContextBlockSuffix(lines: string[]): string[] {
