@@ -74,6 +74,7 @@ const waitForActiveGatewayRootWork = vi.fn(async (_timeoutMs?: number) => ({
   drained: true,
   active: 0,
 }));
+const getActiveGatewayRootWorkCount = vi.fn<() => number>(() => 0);
 const resetAllLanes = vi.fn();
 const advanceCronActiveJobGeneration = vi.fn();
 const resetCronActiveJobs = vi.fn();
@@ -194,6 +195,7 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../process/gateway-work-admission.js", () => ({
   waitForActiveGatewayRootWork: (timeoutMs?: number) => waitForActiveGatewayRootWork(timeoutMs),
+  getActiveGatewayRootWorkCount: () => getActiveGatewayRootWorkCount(),
 }));
 
 vi.mock("../../cron/active-jobs.js", () => ({
@@ -486,6 +488,45 @@ describe("runGatewayLoop", () => {
         startupStartedAt: expect.any(Number),
         requestHotReloadRecovery: requestGatewayRestartWithSignalAdmission,
       });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("drains root work continuations before direct stop exit (#105697)", async () => {
+    vi.clearAllMocks();
+    waitForActiveGatewayRootWork.mockResolvedValue({ drained: true, active: 0 });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(2_000);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("warns and still exits when root work drain times out on direct stop", async () => {
+    vi.clearAllMocks();
+    waitForActiveGatewayRootWork.mockResolvedValue({ drained: false, active: 2 });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(waitForActiveGatewayRootWork).toHaveBeenCalledWith(2_000);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "stop drain timed out with 2 root work continuation(s) still pending",
+      );
       expect(runtime.exit).toHaveBeenCalledWith(0);
     });
   });
