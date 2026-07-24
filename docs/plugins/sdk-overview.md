@@ -524,6 +524,21 @@ If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
 registrar.
 
+Descriptors may also provide advisory inventory metadata:
+
+- `effectProfile.effectMode`: `read`, `mutating`, or `mixed`.
+- `effectProfile.confirmationRequired`: whether callers should obtain explicit
+  user confirmation before execution. The catalog reports this fact but does
+  not enforce it.
+- `effectProfile.risk`: optional `low`, `medium`, or `high` operator guidance.
+- `commandExposure.tier`: `public` or `internal`; omitted descriptors default
+  to public inventory.
+- `hidden`: omit the command from public inventory while preserving ownership,
+  routing, and lazy registration. The default is `false`.
+
+These fields describe the command; they do not grant permission, enforce
+policy, or change execution behavior.
+
 ```typescript
 api.registerCli(
   async ({ program }) => {
@@ -536,6 +551,12 @@ api.registerCli(
         name: "matrix",
         description: "Manage Matrix accounts, verification, devices, and profile state",
         hasSubcommands: true,
+        effectProfile: {
+          effectMode: "mixed",
+          confirmationRequired: true,
+          risk: "medium",
+        },
+        commandExposure: { tier: "public" },
       },
     ],
   },
