@@ -5,13 +5,17 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 // Submit/poll transport is mocked locally so each test can inject the BytePlus task JSON
 // bodies, while readProviderJsonResponse is kept REAL (via importActual) so the byte-bounded
 // reader actually streams and cancels oversized bodies under test instead of a stub.
-const { postJsonRequestMock, fetchWithTimeoutMock, resolveApiKeyForProviderMock } = vi.hoisted(
-  () => ({
-    postJsonRequestMock: vi.fn(),
-    fetchWithTimeoutMock: vi.fn(),
-    resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
-  }),
-);
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  guardedDownloadParamsMock,
+  resolveApiKeyForProviderMock,
+} = vi.hoisted(() => ({
+  postJsonRequestMock: vi.fn(),
+  fetchWithTimeoutMock: vi.fn(),
+  guardedDownloadParamsMock: vi.fn(),
+  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
+}));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
@@ -53,19 +57,24 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       }
       throw new Error(params.timeoutMessage);
     },
-    fetchProviderDownloadResponse: async (params: {
+    fetchGuardedProviderDownloadResponse: async (params: {
       url: string;
       init?: RequestInit;
       deadline: { deadlineAtMs?: number; timeoutMs?: number };
       fetchFn: typeof fetch;
-    }) =>
-      fetchWithTimeoutMock(
+      allowPrivateNetwork?: boolean;
+      dispatcherPolicy?: unknown;
+    }) => {
+      guardedDownloadParamsMock(params);
+      const response = await fetchWithTimeoutMock(
         params.url,
         params.init ?? {},
         params.deadline.deadlineAtMs === undefined
           ? (params.deadline.timeoutMs ?? 60_000)
           : Math.max(1, params.deadline.deadlineAtMs - Date.now()),
-      ),
+      );
+      return { response, release: async () => {} };
+    },
     assertOkOrThrowHttpError: async () => {},
     createProviderOperationDeadline: ({
       label,
@@ -102,14 +111,17 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       },
     resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
+    sanitizeConfiguredModelProviderRequest: (request: unknown) => request,
     resolveProviderHttpRequestConfig: (params: {
       baseUrl?: string;
       defaultBaseUrl: string;
       allowPrivateNetwork?: boolean;
       defaultHeaders?: Record<string, string>;
+      request?: { allowPrivateNetwork?: boolean };
     }) => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: params.allowPrivateNetwork === true,
+      allowPrivateNetwork:
+        (params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork) === true,
       headers: new Headers(params.defaultHeaders),
       dispatcherPolicy: undefined,
     }),
@@ -125,6 +137,7 @@ beforeAll(async () => {
 afterEach(() => {
   postJsonRequestMock.mockReset();
   fetchWithTimeoutMock.mockReset();
+  guardedDownloadParamsMock.mockReset();
   resolveApiKeyForProviderMock.mockClear();
   vi.useRealTimers();
 });
@@ -267,6 +280,47 @@ describe("byteplus video generation provider", () => {
     expect(video.fileName).toBe("video-1.webm");
     const metadata = result.metadata as Record<string, unknown>;
     expect(metadata.taskId).toBe("task_123");
+  });
+
+  it("routes the generated video download through the SSRF-guarded fetch", async () => {
+    mockSuccessfulBytePlusTask();
+
+    await buildBytePlusVideoGenerationProvider().generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "A lantern floats upward into the night sky",
+      cfg: {},
+    });
+
+    expect(guardedDownloadParamsMock).toHaveBeenCalledTimes(1);
+    const params = guardedDownloadParamsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(params).toMatchObject({ provider: "byteplus", allowPrivateNetwork: false });
+    expect(params).toHaveProperty("dispatcherPolicy");
+  });
+
+  it("threads the configured allowPrivateNetwork opt-in into the guarded download", async () => {
+    mockSuccessfulBytePlusTask();
+
+    await buildBytePlusVideoGenerationProvider().generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      prompt: "A lantern floats upward into the night sky",
+      cfg: {
+        models: {
+          providers: {
+            byteplus: {
+              baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+              models: [],
+              request: { allowPrivateNetwork: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(guardedDownloadParamsMock).toHaveBeenCalledTimes(1);
+    const params = guardedDownloadParamsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(params).toMatchObject({ provider: "byteplus", allowPrivateNetwork: true });
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
