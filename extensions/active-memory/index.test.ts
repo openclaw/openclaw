@@ -2111,6 +2111,44 @@ describe("active-memory plugin", () => {
     expect(prompt).toContain("What is my favorite food? prompt-append-check");
   });
 
+  it("dispatches the recall sub-run as a raw prompt-build-hook-free run without starving its own prompt", async () => {
+    // The recall sub-run must not re-enter before_prompt_build (including this
+    // plugin's own hook), or every plugin registered on that hook pays its cost
+    // again on every recall. Confirm the opt-out is set while the extension's
+    // own prompt (instructions + promptAppend + query), which is built locally
+    // and never depends on before_prompt_build, still reaches the sub-run.
+    api.pluginConfig = {
+      agents: ["main"],
+      promptAppend: "Prefer stable long-term preferences over one-off events.",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What is my favorite food? raw-recall-subrun-check",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    // The core-side opt-out is stack-scoped (see
+    // runWithPromptBuildHookDispatch/shouldSkipPromptBuildHooks in
+    // attempt.prompt-helpers.ts), not a param this mock captures, so this
+    // test only proves the extension's own prompt still reaches the sub-run
+    // when dispatched from within its before_prompt_build handler.
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain("You are a memory search agent.");
+    expect(prompt).toContain("Additional operator instructions:");
+    expect(prompt).toContain("Prefer stable long-term preferences over one-off events.");
+    expect(prompt).toContain("Conversation context:");
+    expect(prompt).toContain("What is my favorite food? raw-recall-subrun-check");
+  });
+
   it("allows replacing the base prompt while still appending conversation context", async () => {
     registerPluginConfig({
       promptOverride: "Custom memory prompt. Return NONE or one user fact.",

@@ -34,6 +34,8 @@ import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
+  runWithPromptBuildHookDispatch,
+  shouldSkipPromptBuildHooks,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt.prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
@@ -121,16 +123,18 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
   const hookResult =
-    input.isRawModelRun || isSettledTurnFinalization
+    shouldSkipPromptBuildHooks({ isRawModelRun: input.isRawModelRun }) || isSettledTurnFinalization
       ? undefined
-      : await resolvePromptBuildHookResult({
+      : await runWithPromptBuildHookDispatch(() =>
+        resolvePromptBuildHookResult({
           config: attempt.config ?? getRuntimeConfig(),
           prompt: attempt.prompt,
           messages: promptBuildMessages,
           hookCtx,
           hookRunner: input.hookRunner,
           bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-        });
+        }),
+      );
   const promptBeforePromptBuildHooks = effectivePrompt;
   const promptBuildPrependContext = hookResult?.prependContext;
   const promptBuildAppendContext = hookResult?.appendContext;

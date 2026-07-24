@@ -42,7 +42,9 @@ import {
   mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
+  runWithPromptBuildHookDispatch,
   shouldInjectHeartbeatPrompt,
+  shouldSkipPromptBuildHooks,
 } from "./attempt.prompt-helpers.js";
 
 function hasLoneSurrogate(value: string): boolean {
@@ -385,5 +387,40 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("shouldSkipPromptBuildHooks", () => {
+  it("skips for raw model runs", () => {
+    expect(shouldSkipPromptBuildHooks({ isRawModelRun: true })).toBe(true);
+  });
+
+  it("runs hooks for a normal, non-nested attempt", () => {
+    expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(false);
+  });
+
+  it("skips for a non-raw run nested inside an in-flight prompt-build-hook dispatch", async () => {
+    await runWithPromptBuildHookDispatch(async () => {
+      expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(true);
+    });
+  });
+
+  it("stops skipping once the prompt-build-hook dispatch it was nested in completes", async () => {
+    await runWithPromptBuildHookDispatch(async () => {
+      expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(true);
+    });
+    expect(shouldSkipPromptBuildHooks({ isRawModelRun: false })).toBe(false);
+  });
+
+  it("does not honor a caller-supplied skipPromptBuildHooks-shaped field", () => {
+    // The plugin-runtime boundary (api.runtime.agent.runEmbeddedAgent) has no
+    // way to communicate "skip hooks" to this function anymore: the decision
+    // is stack-scoped, not param-scoped. Simulate a caller (bundled or
+    // external) that still tries to pass the old field name and confirm it is
+    // simply ignored, since shouldSkipPromptBuildHooks no longer reads it.
+    const spoofedParams = { isRawModelRun: false, skipPromptBuildHooks: true } as unknown as {
+      isRawModelRun: boolean;
+    };
+    expect(shouldSkipPromptBuildHooks(spoofedParams)).toBe(false);
   });
 });
