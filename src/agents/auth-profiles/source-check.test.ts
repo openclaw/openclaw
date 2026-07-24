@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
 
+const TEST_MAX_AUTH_PROFILE_SOURCE_JSON_BYTES = 1024 * 1024;
+
 describe("hasAuthProfileStoreSourceForProvider", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -120,6 +122,39 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
       },
     });
 
+    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
+  });
+
+  it("treats oversized auth-profiles.json as no usable provider source", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-source-"));
+    const stateDir = path.join(root, "state");
+    const agentDir = path.join(root, "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const storePath = path.join(agentDir, "auth-profiles.json");
+    const usablePrefix =
+      '{"version":1,"profiles":{"openai:default":{"type":"api_key","provider":"openai","key":"sk-test"},"pad":"';
+    const handle = await fs.open(storePath, "w");
+    try {
+      await handle.writeFile(usablePrefix);
+      const remaining =
+        TEST_MAX_AUTH_PROFILE_SOURCE_JSON_BYTES + 1 - Buffer.byteLength(usablePrefix, "utf8");
+      const chunk = Buffer.alloc(64 * 1024, 0x61);
+      let written = 0;
+      while (written < remaining) {
+        const next = chunk.subarray(0, Math.min(chunk.length, remaining - written));
+        await handle.write(next);
+        written += next.length;
+      }
+      await handle.writeFile('"}}');
+    } finally {
+      await handle.close();
+    }
+
+    const stat = await fs.stat(storePath);
+    expect(stat.size).toBeGreaterThan(TEST_MAX_AUTH_PROFILE_SOURCE_JSON_BYTES);
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
   });
 });
