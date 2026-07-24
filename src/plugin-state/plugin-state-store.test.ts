@@ -15,6 +15,7 @@ import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  isPluginStateDatabaseOpen,
   pluginStateEntriesInKeyRange,
   registerPluginStateSyncSequencedJournalEntry,
   resetPluginStateStoreForTests,
@@ -823,6 +824,22 @@ describe("plugin state keyed store", () => {
       closePluginStateDatabase();
       expect(() => database.db.exec("SELECT 1")).toThrow();
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
+    });
+  });
+
+  it("keeps plugin-state reads outside the writable database lifecycle", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore("discord", {
+        namespace: "read-only",
+        maxEntries: 10,
+      });
+      await store.register("k", { ok: true });
+      resetPluginStateStoreForTests();
+
+      expect(isPluginStateDatabaseOpen()).toBe(false);
+      await expect(store.lookup("k")).resolves.toEqual({ ok: true });
+      await expect(store.entries()).resolves.toMatchObject([{ key: "k", value: { ok: true } }]);
+      expect(isPluginStateDatabaseOpen()).toBe(false);
     });
   });
 

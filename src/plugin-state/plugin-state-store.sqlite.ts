@@ -1,4 +1,5 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
+import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { Insertable, Selectable } from "kysely";
@@ -9,6 +10,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -396,6 +398,18 @@ function openPluginStateDatabase(
       pathname,
     );
   }
+}
+
+/** Read plugin state without joining the shared writable database lifecycle. */
+function withPluginStateDatabaseReadOnly<T>(
+  operation: (store: PluginStateDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const pathname = resolveOpenClawStateSqlitePath(options.env ?? process.env);
+  if (!existsSync(pathname)) {
+    return undefined;
+  }
+  return withOpenClawStateDatabaseReadOnly(({ db, path }) => operation({ db, path }), options);
 }
 
 function countRow(row: CountRow | undefined): number {
@@ -908,14 +922,15 @@ export function pluginStateLookup(params: {
   env?: NodeJS.ProcessEnv;
 }): unknown {
   try {
-    const { db } = openPluginStateDatabase("lookup", envOptions(params.env));
-    const row = selectPluginStateEntry(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      now: Date.now(),
-    });
-    return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+    return withPluginStateDatabaseReadOnly(({ db }) => {
+      const row = selectPluginStateEntry(db, {
+        pluginId: params.pluginId,
+        namespace: params.namespace,
+        key: params.key,
+        now: Date.now(),
+      });
+      return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+    }, envOptions(params.env));
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -1024,13 +1039,16 @@ export function pluginStateEntries(params: {
   env?: NodeJS.ProcessEnv;
 }): PluginStateEntry<unknown>[] {
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
-    const rows = selectPluginStateEntries(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      now: Date.now(),
-    });
-    return rows.map((row) => rowToEntry(row, "entries"));
+    return (
+      withPluginStateDatabaseReadOnly(({ db }) => {
+        const rows = selectPluginStateEntries(db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          now: Date.now(),
+        });
+        return rows.map((row) => rowToEntry(row, "entries"));
+      }, envOptions(params.env)) ?? []
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -1066,16 +1084,21 @@ export function pluginStateEntriesInKeyRange(params: {
     });
   }
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
-    return selectPluginStateEntriesInKeyRange(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      keyStartInclusive: params.keyStartInclusive,
-      keyEndExclusive: params.keyEndExclusive,
-      limit: params.limit,
-      order: params.order ?? "asc",
-      now: Date.now(),
-    }).map((row) => rowToEntry(row, "entries"));
+    return (
+      withPluginStateDatabaseReadOnly(
+        ({ db }) =>
+          selectPluginStateEntriesInKeyRange(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            keyStartInclusive: params.keyStartInclusive,
+            keyEndExclusive: params.keyEndExclusive,
+            limit: params.limit,
+            order: params.order ?? "asc",
+            now: Date.now(),
+          }).map((row) => rowToEntry(row, "entries")),
+        envOptions(params.env),
+      ) ?? []
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -1148,8 +1171,12 @@ function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
 
 export function countPluginStateLiveEntries(pluginId: string, env?: NodeJS.ProcessEnv): number {
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(env));
-    return countLivePluginStateEntries(db, { pluginId, now: Date.now() });
+    return (
+      withPluginStateDatabaseReadOnly(
+        ({ db }) => countLivePluginStateEntries(db, { pluginId, now: Date.now() }),
+        envOptions(env),
+      ) ?? 0
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
