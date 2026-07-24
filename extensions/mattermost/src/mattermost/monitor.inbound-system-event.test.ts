@@ -1,5 +1,6 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
@@ -1327,6 +1328,104 @@ describe("mattermost inbound user posts", () => {
     const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(false);
     expect(replyOptions?.preserveProgressCallbackStartOrder).toBeUndefined();
+  });
+
+  it("holds a fallback-only tool warning when a real final follows", async () => {
+    const warningConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          ...testConfig.channels?.mattermost,
+          streaming: "off",
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(warningConfig);
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver(
+        setReplyPayloadMetadata(
+          { text: "tool failed", isError: true },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      await dispatcherOptions?.deliver({ text: "real answer" }, { kind: "final" });
+      await dispatcherOptions?.onFreshSettledDelivery?.();
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: warningConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-warning-before-final",
+      message: "run a tool",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.sendMessageMattermost.mock.calls.map((call) => call[1])).toEqual([
+      "real answer",
+    ]);
+  });
+
+  it("delivers a fallback-only tool warning when no real final follows", async () => {
+    const warningConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          ...testConfig.channels?.mattermost,
+          streaming: "off",
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(warningConfig);
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    let sentBeforeSettled = -1;
+    mockState.dispatchInboundMessage.mockImplementation(async () => {
+      const dispatcherOptions =
+        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+      await dispatcherOptions?.deliver(
+        setReplyPayloadMetadata(
+          { text: "tool failed", isError: true },
+          { nonTerminalToolErrorWarning: true },
+        ),
+        { kind: "final" },
+      );
+      sentBeforeSettled = mockState.sendMessageMattermost.mock.calls.length;
+      await dispatcherOptions?.onFreshSettledDelivery?.();
+      abortController.abort();
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: warningConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    await emitMattermostChannelPost(socket, {
+      id: "post-warning-only",
+      message: "run a tool",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(sentBeforeSettled).toBe(0);
+    expect(mockState.sendMessageMattermost.mock.calls.map((call) => call[1])).toEqual([
+      "tool failed",
+    ]);
   });
 
   it("preserves text-tool-text boundaries while grouping interleaved tool updates", async () => {
