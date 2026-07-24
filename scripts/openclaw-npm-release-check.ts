@@ -61,6 +61,8 @@ const REQUIRED_PACKED_PATHS = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const CONTROL_UI_JS_ASSET_RE = /^dist\/control-ui\/assets\/.*\.js$/u;
+const PROTOCOL_VERSION_SOURCE_PATH = "src/gateway/protocol/version.ts";
 const FORBIDDEN_PACKED_PATH_RULES = [
   ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
     prefix,
@@ -667,6 +669,7 @@ function collectPackedTarballErrors(): string[] {
     ...collectControlUiPackErrors(packedPaths),
     ...collectForbiddenPackedPathErrors(packedPaths),
     ...collectForbiddenPackedContentErrors(packedPaths),
+    ...collectControlUiProtocolPackErrors(packedPaths),
     ...collectPackedTestCargoErrors(packedPaths),
   ];
 }
@@ -732,6 +735,83 @@ export function collectForbiddenPackedContentErrors(
       `npm package must not include private QA lab marker "${matchedMarker}" in "${packedPath}".`,
     );
   }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+type GatewayProtocolLevels = {
+  min: number;
+  max: number;
+};
+
+function parseProtocolConstant(source: string, name: string): number | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(
+    `export\\s+const\\s+${escapedName}\\s*=\\s*(\\d+)\\s+as\\s+const`,
+    "u",
+  ).exec(source);
+  return match ? Number(match[1]) : null;
+}
+
+function readGatewayProtocolLevels(rootDir: string): GatewayProtocolLevels | null {
+  let source: string;
+  try {
+    source = readFileSync(pathToFileURL(join(rootDir, PROTOCOL_VERSION_SOURCE_PATH)), "utf8");
+  } catch {
+    return null;
+  }
+
+  const min = parseProtocolConstant(source, "MIN_CLIENT_PROTOCOL_VERSION");
+  const max = parseProtocolConstant(source, "PROTOCOL_VERSION");
+  if (min === null || max === null) {
+    return null;
+  }
+  return { min, max };
+}
+
+function collectControlUiConnectProtocolLevels(content: string): GatewayProtocolLevels[] {
+  const levels: GatewayProtocolLevels[] = [];
+  const pairPattern = /minProtocol\s*:\s*(\d+)\s*,\s*maxProtocol\s*:\s*(\d+)/gu;
+  for (const match of content.matchAll(pairPattern)) {
+    levels.push({ min: Number(match[1]), max: Number(match[2]) });
+  }
+  return levels;
+}
+
+export function collectControlUiProtocolPackErrors(
+  paths: Iterable<string>,
+  rootDir = process.cwd(),
+): string[] {
+  const expected = readGatewayProtocolLevels(rootDir);
+  if (!expected) {
+    return [
+      `Could not read Gateway protocol levels from "${PROTOCOL_VERSION_SOURCE_PATH}" while validating packed Control UI assets.`,
+    ];
+  }
+
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (!CONTROL_UI_JS_ASSET_RE.test(packedPath)) {
+      continue;
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(pathToFileURL(join(rootDir, packedPath)), "utf8");
+    } catch {
+      continue;
+    }
+
+    const advertisedLevels = collectControlUiConnectProtocolLevels(content);
+    for (const actual of advertisedLevels) {
+      if (actual.min === expected.min && actual.max === expected.max) {
+        continue;
+      }
+      errors.push(
+        `Packed Control UI asset "${packedPath}" advertises Gateway protocol min=${actual.min} max=${actual.max}, but "${PROTOCOL_VERSION_SOURCE_PATH}" expects min=${expected.min} max=${expected.max}. Rebuild Control UI assets before publishing.`,
+      );
+    }
+  }
+
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
 

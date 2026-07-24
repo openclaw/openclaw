@@ -14,6 +14,7 @@ import {
   collectControlUiPackErrors,
   collectForbiddenPackedContentErrors,
   collectForbiddenPackedPathErrors,
+  collectControlUiProtocolPackErrors,
   collectPackedTestCargoErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
@@ -655,6 +656,70 @@ describe("collectForbiddenPackedPathErrors", () => {
       ).toEqual([
         'npm package must not include private QA lab marker "qa-lab/runtime-api.js" in "dist/postinstall-inventory.json".',
       ]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectControlUiProtocolPackErrors", () => {
+  it("rejects stale Control UI bundles that advertise an old gateway protocol", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-ui-protocol-"));
+
+    try {
+      mkdirSync(join(rootDir, "src/gateway/protocol"), { recursive: true });
+      mkdirSync(join(rootDir, "dist/control-ui/assets"), { recursive: true });
+      writeFileSync(
+        join(rootDir, "src/gateway/protocol/version.ts"),
+        [
+          "export const PROTOCOL_VERSION = 5 as const;",
+          "export const MIN_CLIENT_PROTOCOL_VERSION = 5 as const;",
+          "export const MIN_PROBE_PROTOCOL_VERSION = 5 as const;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      writeFileSync(
+        join(rootDir, "dist/control-ui/assets/index-stale.js"),
+        "const params={minProtocol:4,maxProtocol:4};\n",
+        "utf8",
+      );
+
+      expect(
+        collectControlUiProtocolPackErrors(["dist/control-ui/assets/index-stale.js"], rootDir),
+      ).toEqual([
+        'Packed Control UI asset "dist/control-ui/assets/index-stale.js" advertises Gateway protocol min=4 max=4, but "src/gateway/protocol/version.ts" expects min=5 max=5. Rebuild Control UI assets before publishing.',
+      ]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts Control UI bundles that advertise the current gateway protocol", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-ui-protocol-"));
+
+    try {
+      mkdirSync(join(rootDir, "src/gateway/protocol"), { recursive: true });
+      mkdirSync(join(rootDir, "dist/control-ui/assets"), { recursive: true });
+      writeFileSync(
+        join(rootDir, "src/gateway/protocol/version.ts"),
+        [
+          "export const PROTOCOL_VERSION = 5 as const;",
+          "export const MIN_CLIENT_PROTOCOL_VERSION = 5 as const;",
+          "export const MIN_PROBE_PROTOCOL_VERSION = 5 as const;",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      writeFileSync(
+        join(rootDir, "dist/control-ui/assets/index-current.js"),
+        "const params={minProtocol:5,maxProtocol:5};\n",
+        "utf8",
+      );
+
+      expect(
+        collectControlUiProtocolPackErrors(["dist/control-ui/assets/index-current.js"], rootDir),
+      ).toStrictEqual([]);
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
     }
