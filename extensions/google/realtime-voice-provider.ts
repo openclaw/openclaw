@@ -50,6 +50,7 @@ import {
   asFiniteNumber,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { decodeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
 import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
 
@@ -260,8 +261,6 @@ function resolveEnvApiKey(): string | undefined {
   return trimToUndefined(process.env.GEMINI_API_KEY) ?? trimToUndefined(process.env.GOOGLE_API_KEY);
 }
 
-// Gemini 3.1 Live replaces client-content text and async tools with realtime text
-// and sequential function responses; explicit older models keep their prior contract.
 function isGemini31LiveModel(model: string): boolean {
   const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
@@ -336,8 +335,6 @@ function buildFunctionDeclarations(
         omitted += 1;
         continue;
       }
-      // Live preview models honor the OpenAPI `parameters` field; the SDK normalizes
-      // our lowercase JSON Schema types before sending the mutually exclusive field.
       const declaration: FunctionDeclaration = {
         name,
         description: tool.description,
@@ -483,8 +480,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const canResumeSession =
       this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
     if (this.hasConnectedSession && !canResumeSession) {
-      // An unfinished recognition hypothesis cannot cross into a fresh server session.
-      // Dropping it avoids treating a transport break as a completed user utterance.
       this.resetPendingTranscripts();
     }
     this.intentionallyClosed = false;
@@ -542,8 +537,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
           if (this.scheduleReconnect(closeDetails)) {
             return;
           }
-          // Transport failure is not an utterance boundary. Preserve transcript
-          // fragments across reconnects and finalize only when recovery is exhausted.
           this.flushPendingTranscripts();
           this.config.onError?.(
             new Error(`Google Live session closed after reconnect attempts: ${closeDetails}`),
@@ -781,14 +774,24 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
 
     if (content.outputTranscription) {
-      // outputAudioTranscription is requested in the session config. Keep that
-      // official stream canonical; modelTurn text has no transcript turn identity.
       this.appendTranscript("assistant", content.outputTranscription);
     }
 
     for (const part of content.modelTurn?.parts ?? []) {
       if (part.inlineData?.data) {
-        const pcm = Buffer.from(part.inlineData.data, "base64");
+        let pcm: Buffer;
+        try {
+          pcm = decodeGoogleProviderBase64(part.inlineData.data, {
+            malformedMessage: "Google Live audio response returned malformed audio base64",
+          });
+        } catch (error) {
+          this.config.onError?.(
+            error instanceof Error
+              ? error
+              : new Error("Google Live audio response returned malformed audio base64"),
+          );
+          continue;
+        }
         const sampleRate = parsePcmSampleRate(part.inlineData.mimeType);
         const audio = this.toOutputAudio(pcm, sampleRate);
         if (audio.length > 0) {
@@ -806,8 +809,6 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.pendingTranscripts[role] += text;
       this.emitTranscript(role, text, false);
     }
-    // turnComplete belongs to model generation and is unordered with transcription.
-    // Finalize only on the protocol terminal or when the bridge permanently closes.
     if (transcript.finished) {
       this.flushPendingTranscript(role);
     }
@@ -829,9 +830,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.config.onError?.(
           error instanceof Error ? error : new Error("Google Live transcript callback failed"),
         );
-      } catch {
-        // Consumer callback failures must not abort provider cleanup.
-      }
+      } catch {}
     }
   }
 

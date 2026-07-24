@@ -15,6 +15,7 @@ import type {
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { parseGeminiAuth, resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { decodeGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -44,12 +45,6 @@ function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
     return Math.floor(configured * 1024 * 1024);
   }
   return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
-}
-
-function assertGeneratedVideoBufferWithinLimit(buffer: Buffer, maxBytes: number): void {
-  if (buffer.length > maxBytes) {
-    throw new Error(`Google generated video download exceeds ${maxBytes} bytes`);
-  }
 }
 
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
@@ -572,8 +567,12 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             | { videoBytes?: string; uri?: string; mimeType?: string }
             | undefined;
           if (inline?.videoBytes) {
-            const buffer = Buffer.from(inline.videoBytes, "base64");
-            assertGeneratedVideoBufferWithinLimit(buffer, maxVideoBytes);
+            const buffer = decodeGoogleProviderBase64(inline.videoBytes, {
+              malformedMessage: "Google generated video response returned malformed video base64",
+              maxBytes: maxVideoBytes,
+              overflowMessage: (maxBytes) =>
+                `Google generated video download exceeds ${maxBytes} bytes`,
+            });
             return {
               buffer,
               mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",
