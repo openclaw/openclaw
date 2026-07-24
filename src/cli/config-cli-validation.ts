@@ -64,7 +64,7 @@ export async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
 
 export { formatInvalidConfigRepairHint };
 
-export function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
+function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
   const refs: SecretRef[] = [];
   const visit = (candidate: unknown) => {
     const ref = coerceSecretRef(candidate);

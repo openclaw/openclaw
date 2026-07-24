@@ -527,7 +527,7 @@ export function assertNonDestructiveReplacement(params: {
   }
 }
 
-export type UnsetAtPathResult =
+type UnsetAtPathResult =
   | { removed: true; leafContainer: "array" | "object" }
   | { removed: false };
 
