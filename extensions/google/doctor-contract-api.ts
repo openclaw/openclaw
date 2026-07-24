@@ -1,6 +1,8 @@
 // Google API module exposes the plugin public contract.
 import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
 
+export { legacyConfigRules, normalizeCompatibilityConfig } from "./src/config-compat.js";
+
 export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
   {
     id: "google",
