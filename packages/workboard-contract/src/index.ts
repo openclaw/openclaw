@@ -156,6 +156,16 @@ export type WorkboardProof = {
   note?: string;
 };
 
+export type WorkboardProofPageInfo = {
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
+};
+
+export type WorkboardProofPage = WorkboardProofPageInfo & {
+  proof: WorkboardProof[];
+};
+
 export type WorkboardArtifact = {
   id: string;
   createdAt: number;
@@ -358,9 +368,15 @@ export type WorkboardCard = {
   completedAt?: number;
   events?: WorkboardEvent[];
   metadata?: WorkboardMetadata;
+  /** Output projections use this field, so they cannot be persisted as canonical cards. */
+  proofPage?: never;
+};
+
+export type WorkboardCardView = Omit<WorkboardCard, "proofPage"> & {
+  proofPage: WorkboardProofPageInfo;
 };
 
 export type WorkboardListResult = {
-  cards: WorkboardCard[];
+  cards: WorkboardCardView[];
   statuses: readonly WorkboardStatus[];
 };

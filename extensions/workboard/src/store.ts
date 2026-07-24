@@ -1,10 +1,12 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import { assertNotProjectedWorkboardCard } from "./card-output.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -37,7 +39,7 @@ import {
   metadataIsEmpty,
   normalizeBoardId,
   normalizeTimestamp,
-  trimMetadataToBudget,
+  removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
@@ -167,6 +169,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async bulkUpdate(input: WorkboardBulkInput): Promise<{ cards: WorkboardCard[] }> {
+    assertNotProjectedWorkboardCard(input);
     const ids = Array.isArray(input.ids)
       ? input.ids.filter((id): id is string => typeof id === "string" && id.trim() !== "")
       : [];
@@ -177,6 +180,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
         ? (input.patch as WorkboardCardPatch)
         : {};
+    assertNotProjectedWorkboardCard(patch);
     const cards: WorkboardCard[] = [];
     for (const id of ids) {
       const updated =
@@ -234,12 +238,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
           continue;
         }
-        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
+        const metadata = removeUndefinedMetadataFields({ ...latest.metadata, diagnostics });
         const next = removeUndefinedCardFields({
           ...latest,
           metadata: metadataIsEmpty(metadata) ? undefined : metadata,
         });
-        await this.store.register(next.id, { version: 1, card: next });
+        await this.persistCard(next, latest);
         if (diagnostics.length > 0) {
           rows.push({ card: next, diagnostics });
         }
@@ -269,7 +273,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       openKeyedStore({
         namespace: "workboard.cards",
         maxEntries: MAX_CARDS,
-      }) as WorkboardKeyedStore,
+      }) as WorkboardCardStore,
       {
         boards: openKeyedStore({
           namespace: "workboard.boards",
