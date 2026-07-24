@@ -3774,6 +3774,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/opentelemetry
 - Headings:
   - H2: Quick start
+  - H2: Continue an upstream HTTP trace
   - H2: Signals exported
   - H2: Configuration reference
   - H3: Environment variables

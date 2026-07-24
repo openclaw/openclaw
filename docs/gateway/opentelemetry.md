@@ -62,6 +62,36 @@ Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
 `protocol` supports `http/protobuf` only. Since `traces` and `metrics` default to enabled, any other value (including `grpc`) aborts the entire diagnostics-otel subscription with an `unsupported protocol` warning - this also stops stdout log export. Explicitly set `traces: false` and `metrics: false` if you only want `logsExporter: "stdout"` with a non-OTLP protocol value.
 </Note>
 
+## Continue an upstream HTTP trace
+
+Gateway HTTP requests can continue a W3C `traceparent` supplied by a trusted
+reverse proxy or local orchestration runner. Add the direct proxy address or
+CIDR to `gateway.trustedProxies`:
+
+```json5
+{
+  gateway: {
+    trustedProxies: ["127.0.0.1"],
+  },
+}
+```
+
+When a valid `traceparent` arrives from a configured trusted proxy, OpenClaw
+preserves the upstream trace ID and sampling flags, then creates a new request
+span beneath the upstream parent. Logs, diagnostic events, agent runs, and
+model-call spans created during the request remain on that trace.
+
+OpenClaw checks the request's direct TCP peer for this decision. It does not
+trust `X-Forwarded-For` or similar forwarding headers as proof that trace
+context is safe. The trusted proxy must remove any client-supplied
+`traceparent` before injecting its own value. Requests from untrusted peers,
+malformed headers, and requests without the header keep the existing
+fresh-trace behavior.
+
+Inbound propagation currently applies only to HTTP requests. WebSocket
+upgrades and messages create fresh internal trace scopes, and OpenClaw does not
+propagate inbound `tracestate` or `baggage`.
+
 ## Signals exported
 
 | Signal      | What goes in it                                                                                                                                                                                              |
