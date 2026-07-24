@@ -590,7 +590,14 @@ export function applyAuthorizationHeaderForUrl(params: {
 }
 
 export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
-  return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
+  const policy = buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
+  if (!policy?.hostnameAllowlist?.length) {
+    return policy;
+  }
+  return {
+    ...policy,
+    allowRfc2544BenchmarkRange: true,
+  };
 }
 
 /**
