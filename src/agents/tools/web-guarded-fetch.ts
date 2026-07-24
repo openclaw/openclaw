@@ -11,6 +11,7 @@ import {
   withStrictGuardedFetchMode,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../../infra/net/fetch-guard.js";
+import { matchesNoProxy } from "../../infra/net/proxy-env.js";
 import {
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type SsrFPolicy,
@@ -59,8 +60,11 @@ export async function fetchWithWebToolsNetworkGuard(
     ...rest,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
   };
+  // When useEnvProxy is enabled, still respect NO_PROXY: skip the proxy for
+  // matching hosts so local/internal addresses are accessed directly (#93807).
+  const useProxy = useEnvProxy && !matchesNoProxy(params.url);
   return fetchWithSsrFGuard(
-    useEnvProxy
+    useProxy
       ? withTrustedEnvProxyGuardedFetchMode(resolved)
       : withStrictGuardedFetchMode(resolved),
   );
