@@ -59,8 +59,6 @@ struct VoiceWakeWordsSettingsView: View {
             if self.triggerWords.isEmpty {
                 self.triggerWords = VoiceWakePreferences.defaultTriggerWords
                 self.commitTriggerWords()
-            } else {
-                self.appModel.scheduleGlobalWakeWordsSync(self.triggerWords)
             }
         }
         .onChange(of: self.focusedTriggerIndex) { oldValue, newValue in

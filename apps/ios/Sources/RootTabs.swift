@@ -639,6 +639,7 @@ struct RootTabs: View {
             }
             .onDisappear {
                 UIApplication.shared.isIdleTimerDisabled = false
+                self.voiceWakeToastText = nil
                 self.toastDismissGate.cancel()
             }
     }
@@ -1167,6 +1168,7 @@ private struct RootCameraFlashOverlay: View {
             .allowsHitTesting(false)
             .onChange(of: self.nonce) { _, _ in self.showFlash() }
             .onDisappear {
+                self.opacity = 0
                 self.dismissGate.cancel()
             }
     }
