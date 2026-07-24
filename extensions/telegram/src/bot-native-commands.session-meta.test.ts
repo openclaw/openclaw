@@ -4,7 +4,7 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createDeferred,
@@ -15,6 +15,12 @@ import {
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import {
+  resetTopicNameCacheForTest,
+  resolveTopicNameCacheScope,
+  setTelegramTopicNameStoreFactoryForTest,
+  updateTopicName,
+} from "./topic-name-cache.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -37,6 +43,11 @@ type LoadModelCatalogFn = typeof import("openclaw/plugin-sdk/agent-runtime").loa
 type ResolveDefaultModelForAgentFn =
   typeof import("openclaw/plugin-sdk/agent-runtime").resolveDefaultModelForAgent;
 type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
+type TopicNameStoreFactory = NonNullable<
+  Parameters<typeof setTelegramTopicNameStoreFactoryForTest>[0]
+>;
+type TopicNamePersistentStore = ReturnType<TopicNameStoreFactory>;
+type TopicNameEntry = Awaited<ReturnType<TopicNamePersistentStore["entries"]>>[number]["value"];
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
   queuedFinal: false,
@@ -95,6 +106,28 @@ const conversationStoreMocks = vi.hoisted(() => ({
   readChannelAllowFromStore: vi.fn(async () => []),
   upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
 }));
+
+function installTopicNameStoreForTest() {
+  const stores = new Map<string, Map<string, TopicNameEntry>>();
+  setTelegramTopicNameStoreFactoryForTest((namespace) => {
+    const entries = stores.get(namespace) ?? new Map<string, TopicNameEntry>();
+    stores.set(namespace, entries);
+    return {
+      async register(key, value) {
+        entries.set(key, value);
+      },
+      async entries() {
+        return Array.from(entries, ([key, value]) => ({ key, value }));
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async clear() {
+        entries.clear();
+      },
+    };
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
@@ -658,7 +691,16 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     agentRuntimeMocks.resolveDefaultModelForAgent({ cfg: {}, agentId: "main" });
   });
 
-  beforeEach(resetSessionMetaMocks);
+  beforeEach(() => {
+    resetSessionMetaMocks();
+    installTopicNameStoreForTest();
+    resetTopicNameCacheForTest();
+  });
+
+  afterEach(() => {
+    setTelegramTopicNameStoreFactoryForTest(undefined);
+    resetTopicNameCacheForTest();
+  });
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
     const cfg: OpenClawConfig = {};
@@ -1371,6 +1413,41 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sessionMetaCall?.sessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:42");
     expect(sessionMetaCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:42");
     expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
+  });
+
+  it("records forum topic labels for native command session metadata without replacing group labels", async () => {
+    await updateTopicName(
+      -1001234567890,
+      42,
+      { name: "Deployments" },
+      resolveTopicNameCacheScope("/tmp/openclaw-sessions.json"),
+    );
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(createTelegramTopicCommandContext());
+
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              ConversationLabel?: string;
+              GroupSubject?: string;
+              ThreadLabel?: string;
+              TopicName?: string;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.ctx?.ConversationLabel).toBe("OpenClaw id:-1001234567890");
+    expect(sessionMetaCall?.ctx?.GroupSubject).toBe("OpenClaw");
+    expect(sessionMetaCall?.ctx?.TopicName).toBe("Deployments");
+    expect(sessionMetaCall?.ctx?.ThreadLabel).toBe("Deployments");
   });
 
   it("does not mark paired Telegram DM allowlist entries as native group command owners", async () => {

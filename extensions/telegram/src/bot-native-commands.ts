@@ -1646,6 +1646,7 @@ export const registerTelegramNativeCommands = ({
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
           TopicName: isForum && topicName ? topicName : undefined,
+          ThreadLabel: isForum && topicName ? topicName : undefined,
           // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,
